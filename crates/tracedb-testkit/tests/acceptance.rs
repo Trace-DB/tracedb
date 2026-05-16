@@ -271,6 +271,186 @@ fn vector_module_codecs_and_wal_decoders_roundtrip_payloads() {
 }
 
 #[test]
+fn bm25_rare_symbols_rank_deterministically() {
+    let docs = vec![
+        (
+            "id-exact".to_string(),
+            "user_id tenant_id trace_id request_id".to_string(),
+        ),
+        (
+            "route-exact".to_string(),
+            "app/api/chat/route.ts POST /api/chat handleChatRoute".to_string(),
+        ),
+        (
+            "path-exact".to_string(),
+            "crates/tracedb-query/src/lib.rs query_access_paths".to_string(),
+        ),
+        (
+            "error-exact".to_string(),
+            "ERR_VECTOR_DIMENSION_MISMATCH invalid vector dimensions".to_string(),
+        ),
+        (
+            "function-exact".to_string(),
+            "score_corpus cosine_similarity vector_only_query_orders_by_exact_similarity"
+                .to_string(),
+        ),
+        (
+            "config-exact".to_string(),
+            "TRACEDB_VECTOR_DIMENSIONS trace.vector.dimensions".to_string(),
+        ),
+        (
+            "distractor".to_string(),
+            "chat vector query dimensions tenant route source corpus".to_string(),
+        ),
+    ];
+
+    for (query, expected_id) in [
+        ("trace_id", "id-exact"),
+        ("/api/chat", "route-exact"),
+        ("crates/tracedb-query/src/lib.rs", "path-exact"),
+        ("ERR_VECTOR_DIMENSION_MISMATCH", "error-exact"),
+        ("cosine_similarity", "function-exact"),
+        ("trace.vector.dimensions", "config-exact"),
+    ] {
+        let mut scores = tracedb_text::score_corpus(query, &docs);
+        scores.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .expect("BM25 scores should be finite")
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        let top = scores
+            .first()
+            .unwrap_or_else(|| panic!("expected scores for rare-symbol query {query:?}"));
+        assert_eq!(
+            top.0, expected_id,
+            "rare-symbol query {query:?} should rank its exact symbol document first; scores: {scores:?}"
+        );
+    }
+
+    assert!(
+        tracedb_text::score_corpus(" ./---_ ", &docs).is_empty(),
+        "empty lexical query should return no scores"
+    );
+}
+
+#[test]
+fn exact_vector_cosine_orders_candidates() {
+    let query = [1.0, 0.0, 0.0];
+    let mut scores = vec![
+        (
+            "far",
+            tracedb_vector::cosine_similarity(&query, &[0.2, 0.98, 0.0])
+                .expect("far vector should score"),
+        ),
+        (
+            "orthogonal",
+            tracedb_vector::cosine_similarity(&query, &[0.0, 1.0, 0.0])
+                .expect("orthogonal vector should score"),
+        ),
+        (
+            "near",
+            tracedb_vector::cosine_similarity(&query, &[0.99, 0.01, 0.0])
+                .expect("near vector should score"),
+        ),
+    ];
+    scores.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .expect("cosine scores should be finite")
+            .then_with(|| left.0.cmp(right.0))
+    });
+
+    assert_eq!(
+        scores.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec!["near", "far", "orthogonal"],
+        "exact cosine scoring should order near above far and orthogonal; scores: {scores:?}"
+    );
+    assert!(
+        scores[0].1 > scores[1].1 && scores[1].1 > scores[2].1,
+        "cosine scores should be strictly descending for the fixture; scores: {scores:?}"
+    );
+}
+
+#[test]
+fn exact_vector_rejects_invalid_vectors() {
+    assert_eq!(
+        tracedb_vector::cosine_similarity(&[1.0, 0.0, 0.0], &[1.0, 0.0]),
+        None,
+        "dimension mismatch should produce no vector score"
+    );
+    assert_eq!(
+        tracedb_vector::cosine_similarity(&[0.0, 0.0, 0.0], &[1.0, 0.0, 0.0]),
+        None,
+        "zero query vector should produce no vector score"
+    );
+    assert_eq!(
+        tracedb_vector::cosine_similarity(&[1.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+        None,
+        "zero candidate vector should produce no vector score"
+    );
+}
+
+#[test]
+fn vector_only_query_orders_by_exact_similarity() {
+    let (_temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    db.insert(record(
+        "far",
+        "tenant-a",
+        "far vector inserted before near vector",
+        [0.2, 0.98, 0.0],
+    ))
+    .expect("insert far");
+    db.insert(record(
+        "near",
+        "tenant-a",
+        "near vector should rank first",
+        [0.99, 0.01, 0.0],
+    ))
+    .expect("insert near");
+    db.insert(record(
+        "orthogonal",
+        "tenant-a",
+        "orthogonal vector should rank last",
+        [0.0, 1.0, 0.0],
+    ))
+    .expect("insert orthogonal");
+
+    let result = db
+        .query(HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: None,
+            vector: Some(vec![1.0, 0.0, 0.0]),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 3,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query");
+
+    assert_eq!(
+        result
+            .results
+            .iter()
+            .map(|row| row.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["near", "far", "orthogonal"],
+        "vector-only query should preserve exact cosine ordering; results: {:?}",
+        result.results
+    );
+    assert!(
+        result.results.iter().all(|row| row.score.vector.is_some()),
+        "vector-only fixture should return vector-scored rows; results: {:?}",
+        result.results
+    );
+}
+
+#[test]
 fn text_candidate_stream_explain() {
     let (_temp, db) = seeded_db();
     let result = db.query(query()).expect("query");

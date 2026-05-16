@@ -577,7 +577,10 @@ impl TraceDb {
         }
         explain.planner_candidates = planner_candidates;
 
-        let fused = fuse_rrf(&streams);
+        let mut fused = fuse_rrf(&streams);
+        if query.text.is_none() && query.vector.is_some() {
+            fused.sort_by(vector_first_order);
+        }
         explain.deduped_candidate_count = fused.len();
         let visible_ids = visible
             .iter()
@@ -1085,6 +1088,18 @@ fn fuse_rrf(streams: &[RankedStream]) -> Vec<FusedCandidate> {
             .then_with(|| left.record_id.cmp(&right.record_id))
     });
     values
+}
+
+fn vector_first_order(left: &FusedCandidate, right: &FusedCandidate) -> Ordering {
+    match (left.vector, right.vector) {
+        (Some(left_vector), Some(right_vector)) => score_order(left_vector, right_vector)
+            .then_with(|| score_order(left.final_score, right.final_score))
+            .then_with(|| left.record_id.cmp(&right.record_id)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => score_order(left.final_score, right.final_score)
+            .then_with(|| left.record_id.cmp(&right.record_id)),
+    }
 }
 
 fn ranked_stream_from_candidates(name: &'static str, candidates: &[Candidate]) -> RankedStream {
