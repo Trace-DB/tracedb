@@ -11,7 +11,8 @@ use tracedb_core::{
 use tracedb_log::{CommitRecord, Wal};
 use tracedb_modules::{AccessPathDescriptor, ModuleRegistry, TraceDbModule};
 use tracedb_query::{
-    FreshnessMode, HybridQuery, RecordInput, TableSchema, TraceDb, VectorColumnSchema,
+    FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
+    RecordScanRequest, TableSchema, TraceDb, VectorColumnSchema,
 };
 
 fn db() -> (TempDir, TraceDb) {
@@ -870,6 +871,74 @@ fn sealed_segment_text_and_vector_search_participates_in_query() {
     assert!(result.explain.segments_scanned > 0);
     assert!(result.explain.text_candidates >= 2);
     assert!(result.explain.vector_candidates > 2);
+}
+
+#[test]
+fn delete_hides_record_from_hot_text_vector_feature_and_sealed_candidates() {
+    let (temp, mut db) = seeded_db();
+
+    let before_delete = db.query(query()).expect("query before delete");
+    assert!(before_delete
+        .results
+        .iter()
+        .any(|row| row.record_id.as_str() == "a"));
+    assert!(before_delete.explain.text_candidates > 0);
+    assert!(before_delete.explain.vector_candidates > 0);
+
+    db.publish_segment("sealed-before-delete")
+        .expect("publish segment");
+    db.delete(RecordDeleteRequest::new("docs", "tenant-a", "a").tombstone("user_delete"))
+        .expect("delete a");
+
+    assert!(db
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("get deleted")
+        .is_none());
+    let scan = db
+        .scan(RecordScanRequest::new("docs", "tenant-a").limit(10))
+        .expect("scan after delete");
+    assert!(scan.records.iter().all(|row| row.id.as_str() != "a"));
+
+    let after_delete = db.query(query()).expect("query after delete");
+    assert!(after_delete
+        .results
+        .iter()
+        .all(|row| row.record_id.as_str() != "a"));
+    assert!(after_delete.explain.segments_scanned > 0);
+    assert!(after_delete.explain.text_candidates > 0);
+    assert!(after_delete.explain.vector_candidates > 0);
+    assert!(after_delete
+        .explain
+        .planner_candidates
+        .iter()
+        .any(|candidate| candidate.record_id == "a" && candidate.source == "LexicalPath"));
+    assert!(after_delete
+        .explain
+        .planner_candidates
+        .iter()
+        .any(|candidate| candidate.record_id == "a" && candidate.source == "VectorPath"));
+    assert!(
+        after_delete.explain.final_visibility_guard_removed > 0,
+        "stale sealed candidates should reach the final guard and be removed: {:?}",
+        after_delete.explain
+    );
+    assert!(db
+        .feature_state("docs", "tenant-a", "a", "embedding")
+        .is_err());
+
+    drop(db);
+    let recovered = TraceDb::open(temp.path()).expect("reopen db");
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("recovered get deleted")
+        .is_none());
+    let recovered_query = recovered.query(query()).expect("recovered query");
+    assert!(recovered_query
+        .results
+        .iter()
+        .all(|row| row.record_id.as_str() != "a"));
+    assert!(recovered_query.explain.segments_scanned > 0);
+    assert!(recovered_query.explain.final_visibility_guard_removed > 0);
 }
 
 #[test]
