@@ -1,0 +1,517 @@
+#![forbid(unsafe_code)]
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+use tracedb_core::{
+    source_hash, value_as_f32_vec, DerivedFeatureState, Epoch, FeatureStatus, RecordDeletion,
+    RecordInput, Result, TableSchema, TraceDbError, VersionId,
+};
+use tracedb_log::CommitRecord;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RecordHeader {
+    pub record_id: String,
+    pub table_id: String,
+    pub tenant_id: String,
+    pub schema_version: u64,
+    pub begin_epoch: Epoch,
+    pub end_epoch: Option<Epoch>,
+    pub version_id: VersionId,
+    pub tombstone: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoredRecord {
+    pub header: RecordHeader,
+    pub fields: Map<String, Value>,
+    pub features: BTreeMap<String, DerivedFeatureState>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RecordStore {
+    versions: BTreeMap<String, Vec<StoredRecord>>,
+}
+
+impl RecordStore {
+    pub fn validate_mutation(schema: &TableSchema, mutation: &RecordInput) -> Result<()> {
+        validate_record_identity(schema, mutation, None)?;
+        validate_vector_dimensions(schema, mutation)
+    }
+
+    pub fn from_commits(schemas: &[TableSchema], commits: &[CommitRecord]) -> Result<Self> {
+        let mut store = Self::default();
+        for commit in commits {
+            for replacement in &commit.replacements {
+                let schema = schemas
+                    .iter()
+                    .find(|schema| schema.name == replacement.table)
+                    .ok_or_else(|| TraceDbError::UnknownTable(replacement.table.clone()))?;
+                store.apply_replacement(schema, replacement, commit.epoch)?;
+            }
+            for mutation in &commit.mutations {
+                let schema = schemas
+                    .iter()
+                    .find(|schema| schema.name == mutation.table)
+                    .ok_or_else(|| TraceDbError::UnknownTable(mutation.table.clone()))?;
+                store.apply_mutation(schema, mutation, commit.epoch)?;
+            }
+            for deletion in &commit.deletions {
+                let schema = schemas
+                    .iter()
+                    .find(|schema| schema.name == deletion.table)
+                    .ok_or_else(|| TraceDbError::UnknownTable(deletion.table.clone()))?;
+                store.apply_delete(schema, deletion, commit.epoch)?;
+            }
+        }
+        Ok(store)
+    }
+
+    pub fn apply_replacement(
+        &mut self,
+        schema: &TableSchema,
+        input: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<StoredRecord> {
+        validate_record_identity(schema, input, None)?;
+        validate_vector_dimensions(schema, input)?;
+        let tenant_id = if input.tenant_id.is_empty() {
+            return Err(TraceDbError::InvalidRecord(
+                "tenant id cannot be empty".to_string(),
+            ));
+        } else {
+            input.tenant_id.clone()
+        };
+        let key = record_key(&input.table, &tenant_id, &input.id);
+        let versions = self.versions.entry(key).or_default();
+
+        if let Some(current) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none())
+        {
+            current.header.end_epoch = Some(epoch);
+        }
+
+        let mut fields = input.fields.clone();
+        fields.insert(
+            schema.primary_id_column.clone(),
+            Value::String(input.id.clone()),
+        );
+        fields.insert(
+            schema.tenant_id_column.clone(),
+            Value::String(tenant_id.clone()),
+        );
+        validate_record_identity(schema, input, Some(&fields))?;
+
+        let features = build_features(schema, input, &fields, None, epoch);
+        let record = StoredRecord {
+            header: RecordHeader {
+                record_id: input.id.clone(),
+                table_id: input.table.clone(),
+                tenant_id,
+                schema_version: 1,
+                begin_epoch: epoch,
+                end_epoch: None,
+                version_id: VersionId::new(epoch.get()),
+                tombstone: None,
+            },
+            fields,
+            features,
+        };
+        versions.push(record.clone());
+        Ok(record)
+    }
+
+    pub fn apply_mutation(
+        &mut self,
+        schema: &TableSchema,
+        mutation: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<StoredRecord> {
+        validate_record_identity(schema, mutation, None)?;
+        validate_vector_dimensions(schema, mutation)?;
+        let tenant_id = if mutation.tenant_id.is_empty() {
+            return Err(TraceDbError::InvalidRecord(
+                "tenant id cannot be empty".to_string(),
+            ));
+        } else {
+            mutation.tenant_id.clone()
+        };
+        let key = record_key(&mutation.table, &tenant_id, &mutation.id);
+        let versions = self.versions.entry(key).or_default();
+        let previous = versions
+            .iter()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+            .cloned();
+
+        if let Some(current) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none())
+        {
+            current.header.end_epoch = Some(epoch);
+        }
+
+        let mut merged_fields = previous
+            .as_ref()
+            .map(|record| record.fields.clone())
+            .unwrap_or_default();
+        for (key, value) in &mutation.fields {
+            merged_fields.insert(key.clone(), value.clone());
+        }
+
+        if !merged_fields.contains_key(&schema.primary_id_column) {
+            merged_fields.insert(
+                schema.primary_id_column.clone(),
+                Value::String(mutation.id.clone()),
+            );
+        }
+        if !merged_fields.contains_key(&schema.tenant_id_column) {
+            merged_fields.insert(
+                schema.tenant_id_column.clone(),
+                Value::String(tenant_id.clone()),
+            );
+        }
+        validate_record_identity(schema, mutation, Some(&merged_fields))?;
+
+        let features = build_features(schema, mutation, &merged_fields, previous.as_ref(), epoch);
+        let record = StoredRecord {
+            header: RecordHeader {
+                record_id: mutation.id.clone(),
+                table_id: mutation.table.clone(),
+                tenant_id,
+                schema_version: 1,
+                begin_epoch: epoch,
+                end_epoch: None,
+                version_id: VersionId::new(epoch.get()),
+                tombstone: None,
+            },
+            fields: merged_fields,
+            features,
+        };
+        versions.push(record.clone());
+        Ok(record)
+    }
+
+    pub fn apply_delete(
+        &mut self,
+        schema: &TableSchema,
+        deletion: &RecordDeletion,
+        epoch: Epoch,
+    ) -> Result<StoredRecord> {
+        validate_deletion_identity(schema, deletion)?;
+        let key = record_key(&deletion.table, &deletion.tenant_id, &deletion.id);
+        let Some(versions) = self.versions.get_mut(&key) else {
+            return Err(TraceDbError::NotFound(format!(
+                "{}:{}:{}",
+                deletion.table, deletion.tenant_id, deletion.id
+            )));
+        };
+        let previous = versions
+            .iter()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+            .cloned()
+            .ok_or_else(|| {
+                TraceDbError::NotFound(format!(
+                    "{}:{}:{}",
+                    deletion.table, deletion.tenant_id, deletion.id
+                ))
+            })?;
+
+        if let Some(current) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+        {
+            current.header.end_epoch = Some(epoch);
+        }
+
+        let record = StoredRecord {
+            header: RecordHeader {
+                record_id: deletion.id.clone(),
+                table_id: deletion.table.clone(),
+                tenant_id: deletion.tenant_id.clone(),
+                schema_version: previous.header.schema_version,
+                begin_epoch: epoch,
+                end_epoch: None,
+                version_id: VersionId::new(epoch.get()),
+                tombstone: Some(if deletion.tombstone.trim().is_empty() {
+                    "user_delete".to_string()
+                } else {
+                    deletion.tombstone.clone()
+                }),
+            },
+            fields: previous.fields,
+            features: previous.features,
+        };
+        versions.push(record.clone());
+        Ok(record)
+    }
+
+    pub fn get_record(
+        &self,
+        table: &str,
+        tenant_id: &str,
+        record_id: &str,
+        epoch: Epoch,
+    ) -> Option<StoredRecord> {
+        self.versions
+            .get(&record_key(table, tenant_id, record_id))
+            .and_then(|versions| visible_record_at(versions, epoch))
+    }
+
+    pub fn scan_records(
+        &self,
+        table: &str,
+        tenant_id: &str,
+        limit: usize,
+        epoch: Epoch,
+    ) -> Vec<StoredRecord> {
+        let mut records = self.snapshot(epoch).visible_records(table, tenant_id);
+        records.sort_by(|left, right| left.header.record_id.cmp(&right.header.record_id));
+        records.truncate(limit);
+        records
+    }
+
+    pub fn snapshot(&self, epoch: Epoch) -> ReadSnapshot {
+        let mut records = Vec::new();
+        for versions in self.versions.values() {
+            if let Some(record) = versions.iter().rev().find(|record| {
+                record.header.begin_epoch <= epoch
+                    && record
+                        .header
+                        .end_epoch
+                        .map(|end| end > epoch)
+                        .unwrap_or(true)
+                    && record.header.tombstone.is_none()
+            }) {
+                records.push(record.clone());
+            }
+        }
+        ReadSnapshot { epoch, records }
+    }
+
+    pub fn feature_state(
+        &self,
+        table: &str,
+        tenant_id: &str,
+        record_id: &str,
+        feature: &str,
+        epoch: Epoch,
+    ) -> Option<DerivedFeatureState> {
+        self.versions.values().find_map(|versions| {
+            versions
+                .iter()
+                .rev()
+                .find(|record| {
+                    record.header.table_id == table
+                        && record.header.tenant_id == tenant_id
+                        && record.header.record_id == record_id
+                        && record.header.tombstone.is_none()
+                        && record.header.begin_epoch <= epoch
+                        && record
+                            .header
+                            .end_epoch
+                            .map(|end| end > epoch)
+                            .unwrap_or(true)
+                })
+                .and_then(|record| record.features.get(feature).cloned())
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadSnapshot {
+    pub epoch: Epoch,
+    records: Vec<StoredRecord>,
+}
+
+impl ReadSnapshot {
+    pub fn visible_records(&self, table: &str, tenant_id: &str) -> Vec<StoredRecord> {
+        self.records
+            .iter()
+            .filter(|record| {
+                record.header.table_id == table && record.header.tenant_id == tenant_id
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn all_visible_records(&self, table: &str) -> Vec<StoredRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.header.table_id == table)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_record(
+        &self,
+        table: &str,
+        tenant_id: &str,
+        record_id: &str,
+    ) -> Option<StoredRecord> {
+        self.records
+            .iter()
+            .find(|record| {
+                record.header.table_id == table
+                    && record.header.tenant_id == tenant_id
+                    && record.header.record_id == record_id
+            })
+            .cloned()
+    }
+}
+
+fn visible_record_at(versions: &[StoredRecord], epoch: Epoch) -> Option<StoredRecord> {
+    versions
+        .iter()
+        .rev()
+        .find(|record| {
+            record.header.begin_epoch <= epoch
+                && record
+                    .header
+                    .end_epoch
+                    .map(|end| end > epoch)
+                    .unwrap_or(true)
+                && record.header.tombstone.is_none()
+        })
+        .cloned()
+}
+
+fn build_features(
+    schema: &TableSchema,
+    mutation: &RecordInput,
+    merged_fields: &Map<String, Value>,
+    previous: Option<&StoredRecord>,
+    epoch: Epoch,
+) -> BTreeMap<String, DerivedFeatureState> {
+    let mut features = previous
+        .map(|record| record.features.clone())
+        .unwrap_or_default();
+
+    for vector in &schema.vector_columns {
+        let source_changed = vector
+            .source_columns
+            .iter()
+            .any(|source| mutation.fields.contains_key(source));
+        let vector_changed = mutation.fields.contains_key(&vector.name);
+        let state = if vector_changed {
+            DerivedFeatureState::ready(
+                vector.source_columns.clone(),
+                source_hash(merged_fields, &vector.source_columns),
+                epoch,
+            )
+        } else if source_changed {
+            let new_source_hash = source_hash(merged_fields, &vector.source_columns);
+            features
+                .get(&vector.name)
+                .map(|state| DerivedFeatureState::dirty_from(state, new_source_hash, epoch))
+                .unwrap_or_else(|| {
+                    let mut state =
+                        DerivedFeatureState::missing(vector.source_columns.clone(), epoch);
+                    state.source_hash = new_source_hash;
+                    state.status = FeatureStatus::Dirty;
+                    state
+                })
+        } else {
+            features.get(&vector.name).cloned().unwrap_or_else(|| {
+                if merged_fields
+                    .get(&vector.name)
+                    .and_then(value_as_f32_vec)
+                    .is_some()
+                {
+                    DerivedFeatureState::ready(
+                        vector.source_columns.clone(),
+                        source_hash(merged_fields, &vector.source_columns),
+                        epoch,
+                    )
+                } else {
+                    DerivedFeatureState::missing(vector.source_columns.clone(), epoch)
+                }
+            })
+        };
+        features.insert(vector.name.clone(), state);
+    }
+
+    features
+}
+
+fn validate_vector_dimensions(schema: &TableSchema, mutation: &RecordInput) -> Result<()> {
+    for vector in &schema.vector_columns {
+        if let Some(value) = mutation.fields.get(&vector.name) {
+            let actual = value_as_f32_vec(value)
+                .map(|values| values.len())
+                .unwrap_or(0);
+            if actual != vector.dimensions {
+                return Err(TraceDbError::InvalidVectorDimensions {
+                    column: vector.name.clone(),
+                    expected: vector.dimensions,
+                    actual,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_record_identity(
+    schema: &TableSchema,
+    mutation: &RecordInput,
+    fields: Option<&Map<String, Value>>,
+) -> Result<()> {
+    if mutation.id.is_empty() {
+        return Err(TraceDbError::InvalidRecord(
+            "record id cannot be empty".to_string(),
+        ));
+    }
+    if mutation.tenant_id.is_empty() {
+        return Err(TraceDbError::InvalidRecord(
+            "tenant id cannot be empty".to_string(),
+        ));
+    }
+    let fields = fields.unwrap_or(&mutation.fields);
+    if let Some(value) = fields.get(&schema.primary_id_column) {
+        if value.as_str() != Some(mutation.id.as_str()) {
+            return Err(TraceDbError::InvalidRecord(format!(
+                "primary id field {} must match record id",
+                schema.primary_id_column
+            )));
+        }
+    }
+    if let Some(value) = fields.get(&schema.tenant_id_column) {
+        if value.as_str() != Some(mutation.tenant_id.as_str()) {
+            return Err(TraceDbError::InvalidRecord(format!(
+                "tenant field {} must match tenant id",
+                schema.tenant_id_column
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_deletion_identity(schema: &TableSchema, deletion: &RecordDeletion) -> Result<()> {
+    if deletion.table != schema.name {
+        return Err(TraceDbError::InvalidRecord(format!(
+            "record table {} does not match schema {}",
+            deletion.table, schema.name
+        )));
+    }
+    if deletion.id.trim().is_empty() {
+        return Err(TraceDbError::InvalidRecord(
+            "record id cannot be empty".to_string(),
+        ));
+    }
+    if deletion.tenant_id.trim().is_empty() {
+        return Err(TraceDbError::InvalidRecord(
+            "tenant id cannot be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn record_key(table: &str, tenant: &str, id: &str) -> String {
+    format!("{table}\u{0}{tenant}\u{0}{id}")
+}

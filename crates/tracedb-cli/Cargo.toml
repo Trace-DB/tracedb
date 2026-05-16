@@ -1,0 +1,16 @@
+[package]
+name = "tracedb-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "tracedb"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+tracedb-bench = { path = "../tracedb-bench" }
+tracedb-catalog = { path = "../tracedb-catalog" }
+tracedb-query = { path = "../tracedb-query" }
+tracedb-server = { path = "../tracedb-server" }

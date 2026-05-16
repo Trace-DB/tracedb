@@ -1,0 +1,14 @@
+target
+.git
+.tracedb
+.env
+.env.local
+benchmarks/realworld/.env.local
+benchmarks/realworld/.cache
+benchmarks/realworld/.venv
+benchmarks/realworld/reports
+benchmarks/realworld/run-data
+benchmarks/realworld/report-bundles
+**/*.tmp
+**/*.twal.lock
+**/engine.write.lock

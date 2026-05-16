@@ -1,0 +1,10 @@
+[package]
+name = "tracedb-planner"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracedb-core = { path = "../tracedb-core" }

@@ -1,0 +1,10 @@
+[package]
+name = "tracedb-graph"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+tracedb-policy = { path = "../tracedb-policy" }
+tracedb-modules = { path = "../tracedb-modules" }

@@ -1,0 +1,14 @@
+[package]
+name = "tracedb-worker"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+serde.workspace = true
+tracedb-jobs = { path = "../tracedb-jobs" }
+
+[[bin]]
+name = "tracedb-worker"
+path = "src/main.rs"

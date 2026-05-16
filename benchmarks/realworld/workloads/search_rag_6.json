@@ -1,0 +1,39 @@
+{
+  "name": "search_rag_6",
+  "baselines": [
+    "tracedb",
+    "postgres",
+    "pgvector",
+    "mongodb",
+    "qdrant",
+    "opensearch"
+  ],
+  "workloads": [
+    "postgres_relational_filters_updates_scans",
+    "pgvector_metadata_filtered_semantic_search",
+    "mongodb_nested_sparse_document_retrieval",
+    "qdrant_vector_payload_filter_search",
+    "opensearch_bm25_full_text_search",
+    "tracedb_freshness_policy_snapshot_falsification"
+  ],
+  "metrics": [
+    "setup_status",
+    "ingest_count",
+    "query_count",
+    "failure_count",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "latency_p99_ms",
+    "recall_at_5",
+    "disk_bytes",
+    "notes"
+  ],
+  "datasets": {
+    "default": "generated",
+    "optional": [
+      "MongoDB/embedded_movies",
+      "irds/beir_scifact",
+      "mteb/CodeSearchNetRetrieval"
+    ]
+  }
+}

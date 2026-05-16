@@ -1,0 +1,10 @@
+[package]
+name = "tracedb-module"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+tracedb-modules = { path = "../tracedb-modules" }
+

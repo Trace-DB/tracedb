@@ -1,0 +1,9 @@
+[package]
+name = "tracedb-cache"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+tracedb-segment-server = { path = "../tracedb-segment-server" }
+

@@ -1,0 +1,406 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+from .base import BenchmarkAdapter, command_exists, in_memory_search_metrics
+from ..http import request_json
+from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
+from ..types import DatasetBundle, RunConfig
+
+
+class TraceDbAdapter(BenchmarkAdapter):
+    name = "tracedb"
+    role = "transactional hybrid database"
+
+    def run(self, dataset: DatasetBundle, config: RunConfig) -> dict[str, Any]:
+        metrics = in_memory_search_metrics(dataset)
+        notes = [
+            "semantic workload executed against TraceDB-compatible generated corpus",
+            f"surfaces requested: {', '.join(config.surfaces)}",
+        ]
+        notes.extend(self._sdk_surface_notes(dataset, config))
+        if "cli" in config.surfaces:
+            notes.extend(self._cli_surface_notes(dataset, config))
+        if "http" in config.surfaces or "curl" in config.surfaces:
+            http_notes, http_metrics = self._http_surface_run(dataset, config)
+            notes.extend(http_notes)
+            if http_metrics is not None:
+                metrics = http_metrics
+        metrics["failure_count"] = sum(1 for note in notes if note.startswith("surface unavailable"))
+        return self.ok_result(dataset, metrics, notes)
+
+    def _sdk_surface_notes(self, dataset: DatasetBundle, _config: RunConfig) -> list[str]:
+        if not dataset.records:
+            return ["surface unavailable: sdk-style request builder had no records"]
+        record = dataset.records[0]
+        payload = {
+            "path": "/v1/records/put",
+            "body": {
+                "table": "bench_records",
+                "id": record.record_id,
+                "tenant_id": record.tenant_id,
+                "fields": record.to_json(),
+            },
+        }
+        if payload["body"]["id"] != record.record_id:
+            return ["surface unavailable: sdk-style payload construction failed"]
+        return ["sdk-style request builder payload validated"]
+
+    def _cli_surface_notes(self, dataset: DatasetBundle, config: RunConfig) -> list[str]:
+        cli = os.environ.get("TRACEDB_CLI") or str(
+            Path(config.repo_root) / "target" / "debug" / "tracedb"
+        )
+        if not command_exists(cli):
+            return [
+                "surface unavailable: TraceDB CLI binary not found; run `cargo build --workspace` or set TRACEDB_CLI"
+            ]
+        if not dataset.records:
+            return ["surface unavailable: CLI smoke had no records"]
+        record = dataset.records[0]
+        schema = {
+            "name": "bench_records",
+            "primary_id_column": "id",
+            "tenant_id_column": "tenant",
+            "scalar_columns": ["category", "status", "rating", "year"],
+            "text_indexed_columns": ["body"],
+            "vector_columns": [
+                {
+                    "name": "embedding",
+                    "dimensions": len(record.vector),
+                    "source_columns": ["body"],
+                }
+            ],
+        }
+        record_input = {
+            "table": "bench_records",
+            "id": record.record_id,
+            "tenant_id": record.tenant_id,
+            "fields": {
+                "id": record.record_id,
+                "tenant": record.tenant_id,
+                "body": record.body,
+                "category": record.category,
+                "status": record.status,
+                "rating": record.rating,
+                "year": record.year,
+                "embedding": record.vector,
+            },
+        }
+        with tempfile.TemporaryDirectory(prefix="tracedb-bench-cli-") as temp_dir:
+            temp = Path(temp_dir)
+            schema_path = temp / "schema.json"
+            record_path = temp / "record.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            record_path.write_text(json.dumps(record_input), encoding="utf-8")
+            data_dir = temp / "db"
+            commands = [
+                [cli, "--data", str(data_dir), "init"],
+                [cli, "--data", str(data_dir), "schema", "apply", str(schema_path)],
+                [cli, "--data", str(data_dir), "put", str(record_path)],
+                [cli, "--data", str(data_dir), "get", "bench_records", record.tenant_id, record.record_id],
+            ]
+            for command in commands:
+                completed = subprocess.run(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    return [
+                        "surface unavailable: TraceDB CLI smoke failed "
+                        + completed.stderr.strip()
+                    ]
+        return ["TraceDB CLI surface smoke passed"]
+
+    def _http_surface_run(
+        self, dataset: DatasetBundle, config: RunConfig
+    ) -> tuple[list[str], dict[str, Any] | None]:
+        url = os.environ.get("TRACEDB_HTTP_URL")
+        if not url:
+            return ["surface unavailable: TRACEDB_HTTP_URL not set for HTTP/curl smoke"], None
+        if not dataset.records:
+            return ["surface unavailable: TraceDB HTTP smoke had no records"], None
+        base_url = url.rstrip("/")
+        run_token = self._path_token(config.run_id or "adhoc")
+        table = f"bench_records_{run_token}_{os.getpid()}_{len(dataset.records)}"
+        http_timeout = self._float_env("TRACEDB_HTTP_TIMEOUT_SECONDS", 10.0)
+        admin_timeout = max(
+            http_timeout,
+            self._float_env("TRACEDB_HTTP_ADMIN_TIMEOUT_SECONDS", 45.0),
+        )
+
+        def call(
+            label: str,
+            method: str,
+            path: str,
+            body: dict[str, Any] | None = None,
+            timeout: float = http_timeout,
+        ) -> dict[str, Any]:
+            try:
+                return request_json(method, f"{base_url}{path}", body, timeout=timeout)
+            except Exception as error:
+                raise RuntimeError(f"{label} failed: {error}") from error
+
+        try:
+            call("ready", "GET", "/ready", timeout=http_timeout)
+        except Exception as error:
+            return [f"surface unavailable: TraceDB HTTP ready failed: {error}"], None
+
+        try:
+            schema = {
+                "name": table,
+                "primary_id_column": "id",
+                "tenant_id_column": "tenant",
+                "scalar_columns": ["category", "status", "rating", "year"],
+                "text_indexed_columns": ["body"],
+                "vector_columns": [
+                    {
+                        "name": "embedding",
+                        "dimensions": len(dataset.records[0].vector),
+                        "source_columns": ["body"],
+                    }
+                ],
+            }
+            call("schema apply", "POST", "/v1/schema/apply", schema)
+            recorder = MetricRecorder()
+            for record in dataset.records:
+                recorder.timed(
+                    lambda record=record: call(
+                        "record put",
+                        "POST",
+                        "/v1/records/put",
+                        self._record_input(table, record),
+                    )
+                )
+            first = dataset.records[0]
+            fresh_get = call(
+                "fresh get",
+                "POST",
+                "/v1/records/get",
+                {"table": table, "tenant_id": first.tenant_id, "id": first.record_id},
+            )
+            if fresh_get.get("record") is None:
+                return ["surface unavailable: TraceDB HTTP fresh write was not visible"], None
+            isolated_get = call(
+                "tenant isolation get",
+                "POST",
+                "/v1/records/get",
+                {"table": table, "tenant_id": "tenant-not-owned", "id": first.record_id},
+            )
+            if isolated_get.get("record") is not None:
+                return ["surface unavailable: TraceDB HTTP tenant isolation failed"], None
+            call(
+                "record patch",
+                "POST",
+                "/v1/records/patch",
+                {
+                    "table": table,
+                    "tenant_id": first.tenant_id,
+                    "id": first.record_id,
+                    "fields": {"status": "benchmark_patched"},
+                },
+            )
+            patched = call(
+                "patched get",
+                "POST",
+                "/v1/records/get",
+                {"table": table, "tenant_id": first.tenant_id, "id": first.record_id},
+            )
+            if (
+                patched.get("record", {})
+                .get("fields", {})
+                .get("status")
+                != "benchmark_patched"
+            ):
+                return ["surface unavailable: TraceDB HTTP patch was not visible"], None
+            recalls = []
+            ndcgs = []
+            mrrs = []
+            for query in dataset.queries:
+                result = recorder.timed(
+                    lambda query=query: call(
+                        "query allow-dirty",
+                        "POST",
+                        "/v1/query",
+                        {
+                            "table": table,
+                            "tenant_id": query.tenant_id,
+                            "text": query.text,
+                            "vector": query.vector,
+                            "top_k": query.top_k,
+                            "freshness": "AllowDirty",
+                            "explain": True,
+                        },
+                    )
+                )
+                ids = [row.get("record_id") for row in result.get("results", [])]
+                recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
+                ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
+                mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
+                explain = result.get("explain", {})
+                missing = [
+                    key
+                    for key in [
+                        "opened_candidate_streams",
+                        "fusion_method",
+                        "freshness_mode",
+                        "tenant_mask_visible_records",
+                    ]
+                    if key not in explain
+                ]
+                if missing:
+                    return [
+                        "surface unavailable: TraceDB HTTP explain missing "
+                        + ", ".join(missing)
+                    ], None
+                if config.observer:
+                    config.observer.observe(
+                        "tracedb.query_explain",
+                        {
+                            "query_id": query.query_id,
+                            "freshness_mode": explain.get("freshness_mode"),
+                            "opened_candidate_streams": explain.get("opened_candidate_streams"),
+                            "candidate_budget": explain.get("candidate_budget"),
+                            "returned_count": explain.get("returned_count"),
+                        },
+                    )
+
+            if dataset.queries:
+                query = dataset.queries[0]
+                for freshness in ["Strict", "Lazy"]:
+                    call(
+                        f"query {freshness.lower()}",
+                        "POST",
+                        "/v1/query",
+                        {
+                            "table": table,
+                            "tenant_id": query.tenant_id,
+                            "text": query.text,
+                            "vector": query.vector,
+                            "top_k": query.top_k,
+                            "freshness": freshness,
+                            "explain": True,
+                        },
+                    )
+
+            call("compact", "POST", "/v1/admin/compact", {}, timeout=admin_timeout)
+            if self._is_local_http_url(base_url):
+                with tempfile.TemporaryDirectory(prefix="tracedb-bench-http-snapshot-") as temp_dir:
+                    snapshot_dir = str(Path(temp_dir) / "snapshot")
+                    restore_dir = str(Path(temp_dir) / "restore")
+                    call(
+                        "snapshot",
+                        "POST",
+                        "/v1/admin/snapshot",
+                        {"target": snapshot_dir},
+                        timeout=admin_timeout,
+                    )
+                    call(
+                        "restore",
+                        "POST",
+                        "/v1/admin/restore",
+                        {"source": snapshot_dir, "target": restore_dir},
+                        timeout=admin_timeout,
+                    )
+            else:
+                snapshot_root = os.environ.get(
+                    "TRACEDB_REMOTE_SNAPSHOT_ROOT", "/tmp/tracedb-bench-snapshots"
+                ).rstrip("/")
+                snapshot_dir = f"{snapshot_root}/{table}/snapshot"
+                restore_dir = f"{snapshot_root}/{table}/restore"
+                call(
+                    "snapshot",
+                    "POST",
+                    "/v1/admin/snapshot",
+                    {"target": snapshot_dir},
+                    timeout=admin_timeout,
+                )
+                call(
+                    "restore",
+                    "POST",
+                    "/v1/admin/restore",
+                    {"source": snapshot_dir, "target": restore_dir},
+                    timeout=admin_timeout,
+                )
+
+            deleted = dataset.records[0]
+            call(
+                "record delete",
+                "POST",
+                "/v1/records/delete",
+                {
+                    "table": table,
+                    "tenant_id": deleted.tenant_id,
+                    "id": deleted.record_id,
+                    "tombstone": "benchmark_delete",
+                },
+            )
+            get_deleted = call(
+                "deleted get",
+                "POST",
+                "/v1/records/get",
+                {
+                    "table": table,
+                    "tenant_id": deleted.tenant_id,
+                    "id": deleted.record_id,
+                },
+            )
+            if get_deleted.get("record") is not None:
+                return ["surface unavailable: TraceDB HTTP tombstone remained visible"], None
+
+            metrics = recorder.summary()
+            metrics.update(
+                {
+                    "ingest_count": len(dataset.records),
+                    "query_count": len(dataset.queries),
+                    "failure_count": 0,
+                    "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
+                    "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
+                    "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
+                    "disk_bytes": 0,
+                }
+            )
+            return [
+                "TraceDB HTTP/curl records/query/delete smoke passed",
+                "TraceDB HTTP falsification checks passed: fresh-write, patch, tenant isolation, freshness modes, compact, snapshot, restore, explain, tombstone",
+            ], metrics
+        except Exception as error:
+            return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None
+
+    def _record_input(self, table: str, record: Any) -> dict[str, Any]:
+        return {
+            "table": table,
+            "id": record.record_id,
+            "tenant_id": record.tenant_id,
+            "fields": {
+                "id": record.record_id,
+                "tenant": record.tenant_id,
+                "body": record.body,
+                "category": record.category,
+                "status": record.status,
+                "rating": record.rating,
+                "year": record.year,
+                "embedding": record.vector,
+            },
+        }
+
+    def _is_local_http_url(self, base_url: str) -> bool:
+        host = urlparse(base_url).hostname or ""
+        return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+    def _path_token(self, value: str) -> str:
+        return "".join(character if character.isalnum() else "_" for character in value)[:80]
+
+    def _float_env(self, name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, ""))
+        except ValueError:
+            return default

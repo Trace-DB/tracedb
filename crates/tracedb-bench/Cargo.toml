@@ -1,0 +1,13 @@
+[package]
+name = "tracedb-bench"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+serde.workspace = true
+
+[[bin]]
+name = "tracedb-bench"
+path = "src/main.rs"

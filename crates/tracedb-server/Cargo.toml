@@ -1,0 +1,14 @@
+[package]
+name = "tracedb-server"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "tracedb-server"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+tracedb-gateway = { path = "../tracedb-gateway" }
+tracedb-query = { path = "../tracedb-query" }

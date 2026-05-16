@@ -1,0 +1,10 @@
+[package]
+name = "tracedb-segment"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+serde.workspace = true
+tracedb-core = { path = "../tracedb-core" }

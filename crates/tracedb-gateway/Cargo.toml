@@ -1,0 +1,11 @@
+[package]
+name = "tracedb-gateway"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracedb-catalog = { path = "../tracedb-catalog" }
+tracedb-metering = { path = "../tracedb-metering" }

@@ -1,0 +1,40 @@
+[package]
+name = "tracedb-testkit"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tracedb-query = { path = "../tracedb-query" }
+
+[dev-dependencies]
+tracedb-core = { path = "../tracedb-core" }
+tracedb-log = { path = "../tracedb-log" }
+tracedb-modules = { path = "../tracedb-modules" }
+tracedb-planner = { path = "../tracedb-planner" }
+tracedb-query = { path = "../tracedb-query" }
+tracedb-segment = { path = "../tracedb-segment" }
+tracedb-server = { path = "../tracedb-server" }
+tracedb-text = { path = "../tracedb-text" }
+tracedb-vector = { path = "../tracedb-vector" }
+tracedb-schema = { path = "../tracedb-schema" }
+tracedb-policy = { path = "../tracedb-policy" }
+tracedb-provenance = { path = "../tracedb-provenance" }
+tracedb-graph = { path = "../tracedb-graph" }
+tracedb-temporal = { path = "../tracedb-temporal" }
+tracedb-features = { path = "../tracedb-features" }
+tracedb-jobs = { path = "../tracedb-jobs" }
+tracedb-retrieval-core = { path = "../tracedb-retrieval-core" }
+tracedb-memory-runtime = { path = "../tracedb-memory-runtime" }
+tracedb-std = { path = "../tracedb-std" }
+tracedb-catalog = { path = "../tracedb-catalog" }
+tracedb-keeper = { path = "../tracedb-keeper" }
+tracedb-gateway = { path = "../tracedb-gateway" }
+tracedb-worker = { path = "../tracedb-worker" }
+tracedb-segment-server = { path = "../tracedb-segment-server" }
+tracedb-cache = { path = "../tracedb-cache" }
+tracedb-metering = { path = "../tracedb-metering" }
+tracedb-sdk = { path = "../tracedb-sdk" }
+tracedb-bench = { path = "../tracedb-bench" }

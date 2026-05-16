@@ -1,0 +1,50 @@
+[workspace]
+members = [
+    "crates/tracedb-core",
+    "crates/tracedb-kernel",
+    "crates/tracedb-module",
+    "crates/tracedb-std",
+    "crates/tracedb-schema",
+    "crates/tracedb-log",
+    "crates/tracedb-store",
+    "crates/tracedb-segment",
+    "crates/tracedb-index",
+    "crates/tracedb-modules",
+    "crates/tracedb-text",
+    "crates/tracedb-vector",
+    "crates/tracedb-graph",
+    "crates/tracedb-temporal",
+    "crates/tracedb-policy",
+    "crates/tracedb-provenance",
+    "crates/tracedb-features",
+    "crates/tracedb-retrieval-core",
+    "crates/tracedb-memory-runtime",
+    "crates/tracedb-planner",
+    "crates/tracedb-query",
+    "crates/tracedb-jobs",
+    "crates/tracedb-worker",
+    "crates/tracedb-catalog",
+    "crates/tracedb-gateway",
+    "crates/tracedb-keeper",
+    "crates/tracedb-segment-server",
+    "crates/tracedb-cache",
+    "crates/tracedb-metering",
+    "crates/tracedb-server",
+    "crates/tracedb-sdk",
+    "crates/tracedb-cli",
+    "crates/tracedb-bench",
+    "crates/tracedb-testkit",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+crc32fast = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10"
+thiserror = "1.0"

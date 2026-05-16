@@ -1,0 +1,23 @@
+[package]
+name = "tracedb-query"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracedb-core = { path = "../tracedb-core" }
+tracedb-log = { path = "../tracedb-log" }
+tracedb-modules = { path = "../tracedb-modules" }
+tracedb-planner = { path = "../tracedb-planner" }
+tracedb-segment = { path = "../tracedb-segment" }
+tracedb-store = { path = "../tracedb-store" }
+tracedb-text = { path = "../tracedb-text" }
+tracedb-vector = { path = "../tracedb-vector" }
+tracedb-graph = { path = "../tracedb-graph" }
+tracedb-temporal = { path = "../tracedb-temporal" }
+tracedb-policy = { path = "../tracedb-policy" }
+tracedb-provenance = { path = "../tracedb-provenance" }
+tracedb-features = { path = "../tracedb-features" }
+tracedb-retrieval-core = { path = "../tracedb-retrieval-core" }

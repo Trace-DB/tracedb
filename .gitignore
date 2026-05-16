@@ -1,0 +1,15 @@
+target/
+.tracedb/
+.DS_Store
+.obsidian/
+.env
+__pycache__/
+*.pyc
+benchmarks/realworld/reports/*
+!benchmarks/realworld/reports/.gitkeep
+benchmarks/realworld/.cache/
+benchmarks/realworld/.venv/
+benchmarks/realworld/run-data/
+benchmarks/realworld/report-bundles/
+benchmarks/realworld/.env.local
+benchmarks/realworld/data/external/
