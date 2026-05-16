@@ -608,6 +608,67 @@ fn query_execution_uses_real_planner_access_paths_and_candidates() {
 }
 
 #[test]
+fn explain_exposes_replay_minimum_candidate_facts() {
+    let (_temp, db) = seeded_db();
+    let q = query();
+    let top_k = q.top_k;
+    let result = db.query(q).expect("query");
+    let explain = &result.explain;
+
+    assert!(explain.read_epoch.get() > 0);
+    assert!(explain.schema_epoch.get() > 0);
+    assert!(explain.policy_epoch.get() > 0);
+    assert_eq!(explain.fusion_method, "RRF");
+    assert!(explain.candidate_budget >= top_k);
+    assert!(explain
+        .opened_candidate_streams
+        .iter()
+        .any(|stream| stream == "text"));
+    assert!(explain
+        .opened_candidate_streams
+        .iter()
+        .any(|stream| stream == "vector"));
+    assert!(explain
+        .module_versions
+        .iter()
+        .any(|version| version.starts_with("tracedb-text@")));
+    assert!(explain
+        .module_versions
+        .iter()
+        .any(|version| version.starts_with("tracedb-vector@")));
+
+    assert!(!explain.access_paths.is_empty());
+    for path in &explain.access_paths {
+        assert!(!path.access_path_id.is_empty());
+        assert!(path.opened);
+        assert!(path.visibility_checked_before_open);
+    }
+
+    assert!(!explain.planner_candidates.is_empty());
+    for candidate in &explain.planner_candidates {
+        assert!(!candidate.record_id.is_empty());
+        assert!(candidate.version_id > 0);
+        assert!(!candidate.source.is_empty());
+        assert!(candidate.visibility_checked);
+        assert!(candidate.score_upper_bound.is_some());
+        assert!(candidate.score_components.final_score.is_finite());
+    }
+    assert!(explain.planner_candidates.iter().any(|candidate| {
+        candidate.source == "LexicalPath" && candidate.score_components.lexical.is_some()
+    }));
+    assert!(explain.planner_candidates.iter().any(|candidate| {
+        candidate.source == "VectorPath" && candidate.score_components.vector.is_some()
+    }));
+
+    assert_eq!(
+        explain.final_visibility_guard_count,
+        explain.deduped_candidate_count
+    );
+    assert!(explain.final_visibility_guard_count >= explain.returned_count);
+    assert_eq!(explain.final_visibility_guard_removed, 0);
+}
+
+#[test]
 fn hybrid_rrf_fusion() {
     let (_temp, db) = seeded_db();
     let result = db.query(query()).expect("query");
