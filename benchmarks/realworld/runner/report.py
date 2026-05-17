@@ -89,14 +89,14 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         provider_metrics_row(report),
         "",
-        "| baseline | available | role | ingest | queries | p50 ms | p95 ms | p99 ms | recall@5 | nDCG@5 | MRR@5 | notes |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| baseline | available | role | ingest | queries | p50 ms | p95 ms | p99 ms | recall@5 | same-file recall@5 | span gaps | nDCG@5 | MRR@5 | notes |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for baseline in report["baselines"]:
         metrics = baseline["metrics"]
         notes = "; ".join(baseline["notes"]).replace("|", "\\|")
         lines.append(
-            "| {name} | {available} | {role} | {ingest} | {queries} | {p50} | {p95} | {p99} | {recall} | {ndcg} | {mrr} | {notes} |".format(
+            "| {name} | {available} | {role} | {ingest} | {queries} | {p50} | {p95} | {p99} | {recall} | {same_file_recall} | {span_gaps} | {ndcg} | {mrr} | {notes} |".format(
                 name=baseline["name"],
                 available="yes" if baseline["available"] else "no",
                 role=baseline["role"],
@@ -106,6 +106,8 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
                 p95=metrics.get("latency_p95_ms", 0.0),
                 p99=metrics.get("latency_p99_ms", 0.0),
                 recall=metrics.get("recall_at_5", 0.0),
+                same_file_recall=metrics.get("same_file_recall_at_5", "n/a"),
+                span_gaps=metrics.get("span_gap_count", 0),
                 ndcg=metrics.get("ndcg_at_5", 0.0),
                 mrr=metrics.get("mrr_at_5", 0.0),
                 notes=notes,

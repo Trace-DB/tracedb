@@ -392,6 +392,26 @@ class AdapterHardeningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "report.md"
+            report["baselines"] = [
+                {
+                    "name": "tracedb",
+                    "available": True,
+                    "role": "transactional hybrid database",
+                    "metrics": {
+                        "ingest_count": 1,
+                        "query_count": 1,
+                        "latency_p50_ms": 1.0,
+                        "latency_p95_ms": 1.0,
+                        "latency_p99_ms": 1.0,
+                        "recall_at_5": 1.0,
+                        "same_file_recall_at_5": 1.0,
+                        "span_gap_count": 0,
+                        "ndcg_at_5": 1.0,
+                        "mrr_at_5": 1.0,
+                    },
+                    "notes": [],
+                }
+            ]
             write_markdown(report, path)
             rendered = path.read_text(encoding="utf-8")
 
@@ -399,6 +419,7 @@ class AdapterHardeningTests(unittest.TestCase):
             "Relevance labels: `synthetic_oracle_rank` (`operational_smoke_not_hybrid_quality`)",
             rendered,
         )
+        self.assertIn("same-file recall@5", rendered)
 
     def test_generated_hybrid_dataset_uses_retrieval_quality_labels(self) -> None:
         smoke = load_dataset("generated", 256, 42)
