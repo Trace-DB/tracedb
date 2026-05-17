@@ -239,6 +239,26 @@ class ModalBenchTests(unittest.TestCase):
                 "suite_id": "modal-smoke-test",
                 "control_status": "internal_only_smoke",
                 "summary": {"failure_count": 0},
+                "scenarios": [
+                    {
+                        "id": "search_rag_6",
+                        "dataset": {"digest": "digest-123", "records": 128},
+                        "baselines": [
+                            {
+                                "name": "tracedb",
+                                "available": True,
+                                "metrics": {"latency_p95_ms": 4.0, "query_count": 6},
+                                "notes": ["TraceDB ran"],
+                            },
+                            {
+                                "name": "postgres",
+                                "available": True,
+                                "metrics": {"latency_p95_ms": 5.0, "query_count": 6},
+                                "notes": ["PostgreSQL ran"],
+                            },
+                        ],
+                    }
+                ],
                 "control_ledger": {
                     "available_external_controls": [],
                     "unavailable_external_controls": [],
@@ -272,6 +292,19 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(summary["control_status"], "internal_only_smoke")
         self.assertEqual(summary["failure_count"], 0)
         self.assertEqual(summary["number_to_beat"]["query_p95_ms"]["value"], None)
+        self.assertEqual(
+            summary["scenario_baselines"]["search_rag_6"]["postgres"]["metrics"][
+                "latency_p95_ms"
+            ],
+            5.0,
+        )
+        self.assertEqual(
+            summary["scenario_baselines"]["search_rag_6"]["tracedb"]["metrics"][
+                "latency_p95_ms"
+            ],
+            4.0,
+        )
+        self.assertEqual(summary["scenario_datasets"]["search_rag_6"]["digest"], "digest-123")
 
 
 if __name__ == "__main__":

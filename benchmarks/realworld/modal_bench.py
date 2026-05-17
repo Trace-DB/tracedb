@@ -244,6 +244,7 @@ def extract_control_summary(bundle_path: Path, run_id: str) -> dict[str, Any]:
             raise FileNotFoundError(f"{suite_member} not found in {bundle_path}")
         suite = json.loads(extracted.read().decode("utf-8"))
     ledger = suite.get("control_ledger", {})
+    scenario_baselines, scenario_datasets = extract_scenario_metrics(suite)
     return {
         "run_id": suite.get("suite_id", run_id),
         "control_status": suite.get("control_status", "unknown"),
@@ -257,9 +258,30 @@ def extract_control_summary(bundle_path: Path, run_id: str) -> dict[str, Any]:
             for control in ledger.get("unavailable_external_controls", [])
         ],
         "number_to_beat": suite.get("number_to_beat", {}),
+        "scenario_baselines": scenario_baselines,
+        "scenario_datasets": scenario_datasets,
         "suite_json": suite_member,
         "bundle_path": str(bundle_path),
     }
+
+
+def extract_scenario_metrics(suite: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    baselines: dict[str, Any] = {}
+    datasets: dict[str, Any] = {}
+    for scenario in suite.get("scenarios", []):
+        scenario_id = scenario.get("id", "unknown")
+        datasets[scenario_id] = scenario.get("dataset", {})
+        baselines[scenario_id] = {}
+        for baseline in scenario.get("baselines", []):
+            name = baseline.get("name")
+            if not name:
+                continue
+            baselines[scenario_id][name] = {
+                "available": baseline.get("available", False),
+                "metrics": baseline.get("metrics", {}),
+                "notes": baseline.get("notes", []),
+            }
+    return baselines, datasets
 
 
 def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT) -> dict[str, Any]:
