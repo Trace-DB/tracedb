@@ -257,9 +257,12 @@ class TraceDbAdapter(BenchmarkAdapter):
                     )
                 )
                 ids = [row.get("record_id") for row in result.get("results", [])]
-                recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
-                ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
-                mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
+                recall = recall_at_k(query.expected_ids, ids, query.top_k)
+                ndcg = ndcg_at_k(query.expected_ids, ids, query.top_k)
+                mrr = mrr_at_k(query.expected_ids, ids, query.top_k)
+                recalls.append(recall)
+                ndcgs.append(ndcg)
+                mrrs.append(mrr)
                 explain = result.get("explain", {})
                 missing = [
                     key
@@ -284,6 +287,11 @@ class TraceDbAdapter(BenchmarkAdapter):
                             "freshness_mode": explain.get("freshness_mode"),
                             "opened_candidate_streams": explain.get("opened_candidate_streams"),
                             "candidate_budget": explain.get("candidate_budget"),
+                            "expected_ids": query.expected_ids,
+                            "actual_ids": ids,
+                            "recall_at_k": round(recall, 3),
+                            "ndcg_at_k": round(ndcg, 3),
+                            "mrr_at_k": round(mrr, 3),
                             "returned_count": explain.get("returned_count"),
                         },
                     )
@@ -372,6 +380,10 @@ class TraceDbAdapter(BenchmarkAdapter):
                 return ["surface unavailable: TraceDB HTTP tombstone remained visible"], None
 
             metrics = recorder.summary()
+            min_recall = min(recalls) if recalls else 0.0
+            min_ndcg = min(ndcgs) if ndcgs else 0.0
+            queries_below_full_recall = sum(1 for recall in recalls if recall < 1.0)
+            queries_with_zero_recall = sum(1 for recall in recalls if recall == 0.0)
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
@@ -380,12 +392,20 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
+                    "min_recall_at_5": round(min_recall, 3),
+                    "min_ndcg_at_5": round(min_ndcg, 3),
+                    "queries_below_full_recall_count": queries_below_full_recall,
+                    "queries_with_zero_recall_count": queries_with_zero_recall,
                     "disk_bytes": 0,
                 }
             )
             return [
                 "TraceDB HTTP/curl records/query/delete smoke passed",
                 "TraceDB HTTP falsification checks passed: fresh-write, patch, tenant isolation, freshness modes, compact, snapshot, restore, explain, tombstone",
+                "TraceDB HTTP retrieval diagnostics: "
+                f"min_recall_at_5={metrics['min_recall_at_5']}; "
+                f"queries_below_full_recall={queries_below_full_recall}; "
+                f"queries_with_zero_recall={queries_with_zero_recall}",
             ], metrics
         except Exception as error:
             return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None

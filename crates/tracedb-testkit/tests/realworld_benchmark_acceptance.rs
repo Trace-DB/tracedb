@@ -98,10 +98,18 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
         .expect("tracedb baseline");
     assert_eq!(tracedb["available"], true);
     assert_eq!(tracedb["metrics"]["failure_count"], 0);
+    assert!(tracedb["metrics"]["min_recall_at_5"].is_number());
+    assert!(tracedb["metrics"]["min_ndcg_at_5"].is_number());
+    assert!(tracedb["metrics"]["queries_below_full_recall_count"].is_number());
+    assert!(tracedb["metrics"]["queries_with_zero_recall_count"].is_number());
     assert!(tracedb["notes"].as_array().unwrap().iter().any(|note| note
         .as_str()
         .unwrap_or_default()
         .contains("TraceDB HTTP/curl records/query/delete smoke passed")));
+    assert!(tracedb["notes"].as_array().unwrap().iter().any(|note| note
+        .as_str()
+        .unwrap_or_default()
+        .contains("TraceDB HTTP retrieval diagnostics")));
 }
 
 #[test]
