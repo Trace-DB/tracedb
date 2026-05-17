@@ -60,6 +60,9 @@ class DatasetBundle:
     embedding_model: str = DETERMINISTIC_EMBEDDING_MODEL
     embedding_dimensions: int = VECTOR_DIMENSIONS
     embedding_source: str = "deterministic"
+    relevance_label_mode: str = "unspecified"
+    relevance_label_scope: str = "unknown"
+    relevance_label_notes: list[str] = field(default_factory=list)
     digest: str = ""
 
 

@@ -79,7 +79,16 @@ def generated_dataset(records: int, seed: int = 42) -> DatasetBundle:
         source="deterministic synthetic real-world-shaped corpus",
         records=out,
         queries=queries,
-        notes=["generated dataset is deterministic and safe for CI"],
+        notes=[
+            "generated dataset is deterministic and safe for CI",
+            "generated oracle_rank labels are operational-smoke labels; deterministic vectors are not aligned to hybrid relevance",
+        ],
+        relevance_label_mode="synthetic_oracle_rank",
+        relevance_label_scope="operational_smoke_not_hybrid_quality",
+        relevance_label_notes=[
+            "expected_ids come from oracle_rank/text-order within tenant and category",
+            "deterministic vectors are random-normalized fixtures and should not be used to tune hybrid scoring against oracle_rank recall",
+        ],
     )
 
 
@@ -117,6 +126,8 @@ def embedded_movies_dataset(records: int, seed: int) -> DatasetBundle:
         records=out[:records],
         queries=_queries_from_records(out[:records]),
         notes=["external dataset loaded from Hugging Face: MongoDB/embedded_movies"],
+        relevance_label_mode="synthetic_text_vector_similarity",
+        relevance_label_scope="synthetic_retrieval_quality",
     )
 
 
@@ -156,6 +167,8 @@ def beir_scifact_dataset(records: int, seed: int) -> DatasetBundle:
         records=out,
         queries=queries,
         notes=notes,
+        relevance_label_mode="external_qrels" if qrel_queries else "synthetic_text_vector_similarity",
+        relevance_label_scope="retrieval_quality" if qrel_queries else "synthetic_retrieval_quality",
     )
 
 
@@ -195,6 +208,8 @@ def codesearchnet_dataset(records: int, seed: int) -> DatasetBundle:
         records=out,
         queries=queries,
         notes=notes,
+        relevance_label_mode="external_qrels" if qrel_queries else "synthetic_text_vector_similarity",
+        relevance_label_scope="retrieval_quality" if qrel_queries else "synthetic_retrieval_quality",
     )
 
 
@@ -364,6 +379,9 @@ def _bundle(
     notes: list[str],
     embedding_model: str = DETERMINISTIC_EMBEDDING_MODEL,
     embedding_source: str = "deterministic",
+    relevance_label_mode: str = "unspecified",
+    relevance_label_scope: str = "unknown",
+    relevance_label_notes: list[str] | None = None,
 ) -> DatasetBundle:
     dimensions = len(records[0].vector) if records else VECTOR_DIMENSIONS
     digest = _dataset_digest(kind, source, records, queries, embedding_model, dimensions)
@@ -376,6 +394,9 @@ def _bundle(
         embedding_model=embedding_model,
         embedding_dimensions=dimensions,
         embedding_source=embedding_source,
+        relevance_label_mode=relevance_label_mode,
+        relevance_label_scope=relevance_label_scope,
+        relevance_label_notes=relevance_label_notes or [],
         digest=digest,
     )
 

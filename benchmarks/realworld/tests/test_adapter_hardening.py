@@ -16,6 +16,7 @@ from runner.adapters.qdrant import QdrantAdapter
 from runner.adapters.tracedb import TraceDbAdapter
 from runner.datasets import generated_dataset
 from runner.http import request_json
+from runner.report import build_report, write_markdown
 from runner.types import RunConfig
 
 
@@ -216,6 +217,47 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertTrue(
             any("cli_command_count=4" in note for note in result["notes"]),
             result["notes"],
+        )
+
+    def test_generated_dataset_labels_are_marked_operational_smoke(self) -> None:
+        dataset = generated_dataset(24, 42)
+        self.assertEqual(dataset.relevance_label_mode, "synthetic_oracle_rank")
+        self.assertEqual(
+            dataset.relevance_label_scope,
+            "operational_smoke_not_hybrid_quality",
+        )
+        self.assertTrue(
+            any("not aligned to hybrid relevance" in note for note in dataset.notes),
+            dataset.notes,
+        )
+
+        config = RunConfig(
+            profile="smoke",
+            target=["tracedb"],
+            surfaces=["sdk"],
+            require_services=False,
+            repo_root=".",
+        )
+        report = build_report(dataset, config, [])
+        self.assertEqual(
+            report["dataset"]["relevance_label_scope"],
+            "operational_smoke_not_hybrid_quality",
+        )
+        offline = [
+            scenario
+            for scenario in report["scenarios"]
+            if scenario["name"] == "offline_reproducible_control"
+        ][0]
+        self.assertIn("dataset.relevance_label_scope", offline["metrics"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "report.md"
+            write_markdown(report, path)
+            rendered = path.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "Relevance labels: `synthetic_oracle_rank` (`operational_smoke_not_hybrid_quality`)",
+            rendered,
         )
 
 

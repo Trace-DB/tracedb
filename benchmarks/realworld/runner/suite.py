@@ -193,6 +193,7 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
         "- `recall@5` measures whether expected relevant records appeared in the first five results.",
         "- `nDCG@5` rewards relevant records that appear earlier in the ranking.",
         "- `MRR@5` measures how quickly the first relevant result appears.",
+        "- Dataset `relevance_label_scope` controls how strongly retrieval metrics should be interpreted; generated operational-smoke labels are not definitive hybrid-search quality labels.",
         "- `p50/p95/p99` are query latency percentiles in milliseconds for completed query calls.",
         "- `failures` counts benchmark-observed adapter, API, invariant, or falsification failures.",
         "",

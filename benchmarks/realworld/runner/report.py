@@ -29,6 +29,9 @@ def build_report(
             "embedding_model": dataset.embedding_model,
             "embedding_dimensions": dataset.embedding_dimensions,
             "embedding_source": dataset.embedding_source,
+            "relevance_label_mode": dataset.relevance_label_mode,
+            "relevance_label_scope": dataset.relevance_label_scope,
+            "relevance_label_notes": dataset.relevance_label_notes,
         },
         "surfaces": config.surfaces,
         "openrouter": openrouter or {},
@@ -63,6 +66,7 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         f"- Records: `{report['summary']['record_count']}`",
         f"- Queries: `{report['summary']['query_count']}`",
         f"- Embeddings: `{report['dataset'].get('embedding_model', 'unknown')}` ({report['dataset'].get('embedding_dimensions', 0)} benchmark dimensions, {report['dataset'].get('embedding_source', 'unknown')})",
+        f"- Relevance labels: `{report['dataset'].get('relevance_label_mode', 'unspecified')}` (`{report['dataset'].get('relevance_label_scope', 'unknown')}`)",
         f"- Provider-native dimensions: `{report.get('openrouter', {}).get('provider_native_embedding_dimensions', report['dataset'].get('embedding_dimensions', 0))}`",
         f"- Requested embedding dimensions: `{report.get('openrouter', {}).get('requested_embedding_dimensions') or 'native'}`",
         f"- Surfaces: {', '.join(report['surfaces'])}",
@@ -223,10 +227,17 @@ def simulated_scenarios(
             {
                 "name": "offline_reproducible_control",
                 "description": (
-                    "The generated dataset uses deterministic oracle relevance labels and fixed vectors "
-                    "so CI can reproduce benchmark behavior without provider access."
+                    "The generated dataset uses deterministic labels and fixed vectors "
+                    "so CI can reproduce benchmark behavior without provider access. "
+                    "For generated oracle-rank labels, read recall as operational-smoke evidence, "
+                    "not definitive hybrid retrieval quality."
                 ),
-                "metrics": ["dataset.digest", "seed", "recall_at_5"],
+                "metrics": [
+                    "dataset.digest",
+                    "dataset.relevance_label_mode",
+                    "dataset.relevance_label_scope",
+                    "recall_at_5",
+                ],
             }
         )
     return scenarios

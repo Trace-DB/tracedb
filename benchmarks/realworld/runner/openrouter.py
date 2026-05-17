@@ -545,6 +545,9 @@ def maybe_apply_openrouter_embeddings(
         embedding_model=primary_model,
         embedding_dimensions=dimensions,
         embedding_source="openrouter",
+        relevance_label_mode=dataset.relevance_label_mode,
+        relevance_label_scope=dataset.relevance_label_scope,
+        relevance_label_notes=dataset.relevance_label_notes,
         digest=digest,
     )
     stats = dict(client.stats)
