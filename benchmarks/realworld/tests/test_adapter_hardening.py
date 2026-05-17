@@ -17,6 +17,7 @@ from runner.adapters.qdrant import QdrantAdapter
 from runner.adapters.tracedb import TraceDbAdapter
 from runner.datasets import generated_dataset, load_dataset
 from runner.http import request_json
+from runner.metrics import recall_at_k, same_file_recall_at_k
 from runner.report import build_report, write_markdown
 from runner.types import RunConfig
 
@@ -192,6 +193,21 @@ class AdapterHardeningTests(unittest.TestCase):
             any("code-aware lexical" in note for note in codeaware.relevance_label_notes),
             codeaware.relevance_label_notes,
         )
+
+    def test_same_file_recall_distinguishes_span_miss_from_wrong_file(self) -> None:
+        expected = [
+            "https://github.com/apache/airflow/blob/rev/airflow/models/taskinstance.py#L470-L474"
+        ]
+        same_file_actual = [
+            "https://github.com/apache/airflow/blob/rev/airflow/models/taskinstance.py#L197-L208"
+        ]
+        wrong_file_actual = [
+            "https://github.com/apache/airflow/blob/rev/airflow/models/xcom.py#L188-L218"
+        ]
+
+        self.assertEqual(recall_at_k(expected, same_file_actual, 5), 0.0)
+        self.assertEqual(same_file_recall_at_k(expected, same_file_actual, 5), 1.0)
+        self.assertEqual(same_file_recall_at_k(expected, wrong_file_actual, 5), 0.0)
 
     def test_qdrant_ingestion_is_batched(self) -> None:
         fake = FakeQdrant().start()

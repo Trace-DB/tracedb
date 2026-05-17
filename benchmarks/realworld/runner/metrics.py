@@ -50,6 +50,18 @@ def recall_at_k(expected_ids: list[str], actual_ids: list[str], k: int) -> float
     return len(expected & actual) / len(expected)
 
 
+def file_key(record_id: str) -> str:
+    return str(record_id).split("#", 1)[0]
+
+
+def same_file_recall_at_k(expected_ids: list[str], actual_ids: list[str], k: int) -> float:
+    if not expected_ids:
+        return 0.0
+    expected = {file_key(record_id) for record_id in expected_ids}
+    actual = {file_key(record_id) for record_id in actual_ids[:k]}
+    return len(expected & actual) / len(expected)
+
+
 def ndcg_at_k(expected_ids: list[str], actual_ids: list[str], k: int) -> float:
     if not expected_ids:
         return 0.0

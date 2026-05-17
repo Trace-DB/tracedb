@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from .base import BenchmarkAdapter, command_exists, in_memory_search_metrics
 from ..http import request_json
-from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
+from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k, same_file_recall_at_k
 from ..types import DatasetBundle, RunConfig
 
 
@@ -239,6 +239,8 @@ class TraceDbAdapter(BenchmarkAdapter):
             recalls = []
             ndcgs = []
             mrrs = []
+            same_file_recalls = []
+            span_gap_count = 0
             records_by_id = {record.record_id: record for record in dataset.records}
             off_category_result_count = 0
             queries_with_off_category_results = 0
@@ -274,9 +276,13 @@ class TraceDbAdapter(BenchmarkAdapter):
                 recall = recall_at_k(query.expected_ids, ids, query.top_k)
                 ndcg = ndcg_at_k(query.expected_ids, ids, query.top_k)
                 mrr = mrr_at_k(query.expected_ids, ids, query.top_k)
+                same_file_recall = same_file_recall_at_k(query.expected_ids, ids, query.top_k)
                 recalls.append(recall)
                 ndcgs.append(ndcg)
                 mrrs.append(mrr)
+                same_file_recalls.append(same_file_recall)
+                if same_file_recall > recall:
+                    span_gap_count += 1
                 explain = result.get("explain", {})
                 missing = [
                     key
@@ -316,6 +322,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                             "expected_category": query.category,
                             "off_category_actual_ids": off_category_ids,
                             "recall_at_k": round(recall, 3),
+                            "same_file_recall_at_k": round(same_file_recall, 3),
                             "ndcg_at_k": round(ndcg, 3),
                             "mrr_at_k": round(mrr, 3),
                             "returned_count": explain.get("returned_count"),
@@ -420,6 +427,8 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "query_count": len(dataset.queries),
                     "failure_count": 0,
                     "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
+                    "same_file_recall_at_5": round(sum(same_file_recalls) / len(same_file_recalls), 3) if same_file_recalls else 0.0,
+                    "span_gap_count": span_gap_count,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
                     "min_recall_at_5": round(min_recall, 3),
