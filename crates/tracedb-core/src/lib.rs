@@ -232,6 +232,8 @@ impl RecordDeletion {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FeatureInvalidation {
     pub table: String,
+    #[serde(default)]
+    pub tenant_id: String,
     pub record_id: String,
     pub feature: String,
     pub status: FeatureStatus,

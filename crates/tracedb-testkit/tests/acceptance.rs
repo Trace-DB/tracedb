@@ -5,8 +5,8 @@ use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 use tempfile::TempDir;
 use tracedb_core::{
-    checksum_bytes, compute_manifest_checksum, Epoch, FeatureStatus, IndexState, SegmentState,
-    TraceDbManifest,
+    checksum_bytes, compute_manifest_checksum, Epoch, FeatureInvalidation, FeatureStatus,
+    IndexState, SegmentState, TraceDbManifest,
 };
 use tracedb_log::{CommitRecord, Wal};
 use tracedb_modules::{AccessPathDescriptor, ModuleRegistry, TraceDbModule};
@@ -718,6 +718,180 @@ fn strict_query_skips_dirty_vector() {
         .unwrap();
     assert!(row.score.vector.is_none());
     assert!(result.explain.dirty_feature_count > 0);
+}
+
+#[test]
+fn query_explain_counts_pending_and_failed_features() {
+    let (temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    db.insert(record(
+        "pending",
+        "tenant-a",
+        "pending lifecycle vector",
+        [1.0, 0.0, 0.0],
+    ))
+    .expect("insert pending");
+    db.insert(record(
+        "failed",
+        "tenant-a",
+        "failed lifecycle vector",
+        [1.0, 0.0, 0.0],
+    ))
+    .expect("insert failed");
+
+    db.set_feature_status(
+        "docs",
+        "tenant-a",
+        "pending",
+        "embedding",
+        FeatureStatus::Pending,
+    )
+    .expect("pending status");
+    db.set_feature_status(
+        "docs",
+        "tenant-a",
+        "failed",
+        "embedding",
+        FeatureStatus::Failed,
+    )
+    .expect("failed status");
+
+    drop(db);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    let result = recovered
+        .query(HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: Some("lifecycle vector".to_string()),
+            vector: Some(vec![1.0, 0.0, 0.0]),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 5,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query");
+
+    let pending = result
+        .results
+        .iter()
+        .find(|row| row.record_id == "pending")
+        .expect("pending row");
+    let failed = result
+        .results
+        .iter()
+        .find(|row| row.record_id == "failed")
+        .expect("failed row");
+
+    assert!(pending.score.vector.is_none());
+    assert!(failed.score.vector.is_none());
+    assert_eq!(result.explain.pending_feature_count, 1);
+    assert_eq!(result.explain.failed_feature_count, 1);
+    assert_eq!(result.explain.dirty_feature_count, 0);
+    assert_eq!(result.explain.missing_feature_count, 0);
+}
+
+#[test]
+fn set_feature_status_rejects_blank_tenant_without_wal_or_feature_mutation() {
+    let (_temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    db.insert(record("same", "tenant-a", "tenant a body", [1.0, 0.0, 0.0]))
+        .expect("tenant a");
+    db.insert(record("same", "tenant-b", "tenant b body", [0.0, 1.0, 0.0]))
+        .expect("tenant b");
+    let wal_len = db.inspect_wal().unwrap().len();
+
+    for blank in ["", "   "] {
+        let err = db
+            .set_feature_status("docs", blank, "same", "embedding", FeatureStatus::Failed)
+            .unwrap_err();
+        assert!(err.to_string().contains("tenant id cannot be empty"));
+        assert_eq!(db.inspect_wal().unwrap().len(), wal_len);
+        assert_eq!(
+            db.feature_state("docs", "tenant-a", "same", "embedding")
+                .unwrap()
+                .status,
+            FeatureStatus::Ready
+        );
+        assert_eq!(
+            db.feature_state("docs", "tenant-b", "same", "embedding")
+                .unwrap()
+                .status,
+            FeatureStatus::Ready
+        );
+    }
+}
+
+#[test]
+fn old_style_feature_invalidation_replay_scopes_to_same_commit_tenant() {
+    let (temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    db.insert(record("same", "tenant-a", "tenant a body", [1.0, 0.0, 0.0]))
+        .expect("tenant a");
+    db.insert(record("same", "tenant-b", "tenant b body", [0.0, 1.0, 0.0]))
+        .expect("tenant b");
+
+    let epoch = db.inspect_manifest().unwrap().latest_epoch.next();
+    drop(db);
+    let wal = Wal::open(temp.path()).unwrap();
+    let mut mutation = record("same", "tenant-a", "tenant a changed body", [1.0, 0.0, 0.0]);
+    mutation.fields.remove("embedding");
+    let commit = CommitRecord {
+        mutations: vec![mutation],
+        feature_invalidations: vec![FeatureInvalidation {
+            table: "docs".to_string(),
+            tenant_id: String::new(),
+            record_id: "same".to_string(),
+            feature: "embedding".to_string(),
+            status: FeatureStatus::Dirty,
+        }],
+        ..CommitRecord::empty(epoch.get(), epoch)
+    };
+    wal.append_commit(&commit).unwrap();
+
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(
+        recovered
+            .feature_state("docs", "tenant-a", "same", "embedding")
+            .unwrap()
+            .status,
+        FeatureStatus::Dirty
+    );
+    assert_eq!(
+        recovered
+            .feature_state("docs", "tenant-b", "same", "embedding")
+            .unwrap()
+            .status,
+        FeatureStatus::Ready
+    );
+}
+
+#[test]
+fn old_style_feature_invalidation_replay_rejects_ambiguous_active_tenants() {
+    let (temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    db.insert(record("same", "tenant-a", "tenant a body", [1.0, 0.0, 0.0]))
+        .expect("tenant a");
+    db.insert(record("same", "tenant-b", "tenant b body", [0.0, 1.0, 0.0]))
+        .expect("tenant b");
+
+    let epoch = db.inspect_manifest().unwrap().latest_epoch.next();
+    drop(db);
+    let wal = Wal::open(temp.path()).unwrap();
+    let commit = CommitRecord {
+        feature_invalidations: vec![FeatureInvalidation {
+            table: "docs".to_string(),
+            tenant_id: String::new(),
+            record_id: "same".to_string(),
+            feature: "embedding".to_string(),
+            status: FeatureStatus::Dirty,
+        }],
+        ..CommitRecord::empty(epoch.get(), epoch)
+    };
+    wal.append_commit(&commit).unwrap();
+
+    let err = TraceDb::open(temp.path()).unwrap_err();
+    assert!(err.to_string().contains("ambiguous feature invalidation"));
 }
 
 #[test]

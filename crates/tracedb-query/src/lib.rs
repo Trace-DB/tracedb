@@ -518,6 +518,8 @@ impl TraceDb {
             for vector in &schema.vector_columns {
                 match record.features.get(&vector.name).map(|state| &state.status) {
                     Some(FeatureStatus::Dirty) => explain.dirty_feature_count += 1,
+                    Some(FeatureStatus::Pending) => explain.pending_feature_count += 1,
+                    Some(FeatureStatus::Failed) => explain.failed_feature_count += 1,
                     Some(FeatureStatus::Missing) | None => explain.missing_feature_count += 1,
                     _ => {}
                 }
@@ -646,6 +648,69 @@ impl TraceDb {
                 self.manifest.latest_epoch,
             )
             .ok_or_else(|| TraceDbError::NotFound(format!("feature {table}.{record_id}.{feature}")))
+    }
+
+    pub fn set_feature_status(
+        &mut self,
+        table: &str,
+        tenant_id: &str,
+        record_id: &str,
+        feature: &str,
+        status: FeatureStatus,
+    ) -> Result<Epoch> {
+        if tenant_id.trim().is_empty() {
+            return Err(TraceDbError::InvalidRecord(
+                "tenant id cannot be empty".to_string(),
+            ));
+        }
+
+        let _guard = WriteLock::acquire(&self.dir)?;
+        let schema = self
+            .manifest
+            .table(table)
+            .ok_or_else(|| TraceDbError::UnknownTable(table.to_string()))?
+            .clone();
+        if !schema
+            .vector_columns
+            .iter()
+            .any(|vector| vector.name == feature)
+        {
+            return Err(TraceDbError::NotFound(format!(
+                "feature {table}.{record_id}.{feature}"
+            )));
+        }
+
+        let epoch = self.manifest.latest_epoch.next();
+        let invalidation = FeatureInvalidation {
+            table: table.to_string(),
+            tenant_id: tenant_id.to_string(),
+            record_id: record_id.to_string(),
+            feature: feature.to_string(),
+            status,
+        };
+        let mut staged = self.store.clone();
+        staged.apply_feature_invalidation(&invalidation, epoch)?;
+        let commit = CommitRecord {
+            schema_epoch: self.manifest.latest_epoch,
+            policy_epoch: self.manifest.latest_epoch,
+            schema_changes: Vec::new(),
+            replacements: Vec::new(),
+            mutations: Vec::new(),
+            deletions: Vec::new(),
+            feature_invalidations: vec![invalidation],
+            module_events: vec![ModuleCommitEvent {
+                module_id: "tracedb-features".to_string(),
+                event: "feature.status.set".to_string(),
+            }],
+            ..CommitRecord::empty(epoch.get(), epoch).for_database(
+                self.manifest.database_id.clone(),
+                self.manifest.branch_id.clone(),
+            )
+        };
+        self.wal.append_commit(&commit)?;
+        self.store = staged;
+        self.bump_manifest(epoch)?;
+        Ok(epoch)
     }
 
     pub fn inspect_manifest(&self) -> Result<TraceDbManifest> {
@@ -1512,6 +1577,7 @@ fn feature_invalidations_for_mutation(
         })
         .map(|vector| FeatureInvalidation {
             table: input.table.clone(),
+            tenant_id: input.tenant_id.clone(),
             record_id: input.id.clone(),
             feature: vector.name.clone(),
             status: FeatureStatus::Dirty,

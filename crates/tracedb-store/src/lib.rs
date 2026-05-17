@@ -2,10 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tracedb_core::{
-    source_hash, value_as_f32_vec, DerivedFeatureState, Epoch, FeatureStatus, RecordDeletion,
-    RecordInput, Result, TableSchema, TraceDbError, VersionId,
+    source_hash, value_as_f32_vec, DerivedFeatureState, Epoch, FeatureInvalidation, FeatureStatus,
+    RecordDeletion, RecordInput, Result, TableSchema, TraceDbError, VersionId,
 };
 use tracedb_log::CommitRecord;
 
@@ -62,6 +62,14 @@ impl RecordStore {
                     .find(|schema| schema.name == deletion.table)
                     .ok_or_else(|| TraceDbError::UnknownTable(deletion.table.clone()))?;
                 store.apply_delete(schema, deletion, commit.epoch)?;
+            }
+            for invalidation in &commit.feature_invalidations {
+                let invalidation = if invalidation.tenant_id.trim().is_empty() {
+                    store.resolve_legacy_feature_invalidation(invalidation, commit)?
+                } else {
+                    invalidation.clone()
+                };
+                store.apply_feature_invalidation(&invalidation, commit.epoch)?;
             }
         }
         Ok(store)
@@ -292,6 +300,114 @@ impl RecordStore {
             }
         }
         ReadSnapshot { epoch, records }
+    }
+
+    pub fn apply_feature_invalidation(
+        &mut self,
+        invalidation: &FeatureInvalidation,
+        epoch: Epoch,
+    ) -> Result<DerivedFeatureState> {
+        let key = record_key(
+            &invalidation.table,
+            &invalidation.tenant_id,
+            &invalidation.record_id,
+        );
+        let Some(versions) = self.versions.get_mut(&key) else {
+            return Err(TraceDbError::NotFound(format!(
+                "{}:{}:{}",
+                invalidation.table, invalidation.tenant_id, invalidation.record_id
+            )));
+        };
+        let Some(record) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+        else {
+            return Err(TraceDbError::NotFound(format!(
+                "{}:{}:{}",
+                invalidation.table, invalidation.tenant_id, invalidation.record_id
+            )));
+        };
+        let Some(state) = record.features.get_mut(&invalidation.feature) else {
+            return Err(TraceDbError::NotFound(format!(
+                "feature {}.{}.{}",
+                invalidation.table, invalidation.record_id, invalidation.feature
+            )));
+        };
+
+        state.status = invalidation.status.clone();
+        state.valid_for_epoch = epoch;
+        Ok(state.clone())
+    }
+
+    fn resolve_legacy_feature_invalidation(
+        &self,
+        invalidation: &FeatureInvalidation,
+        commit: &CommitRecord,
+    ) -> Result<FeatureInvalidation> {
+        let mut commit_tenants = commit
+            .mutations
+            .iter()
+            .chain(commit.replacements.iter())
+            .filter(|input| input.table == invalidation.table && input.id == invalidation.record_id)
+            .filter_map(|input| {
+                let tenant_id = input.tenant_id.trim();
+                (!tenant_id.is_empty()).then(|| tenant_id.to_string())
+            })
+            .collect::<BTreeSet<_>>();
+
+        if commit_tenants.len() == 1 {
+            let mut resolved = invalidation.clone();
+            resolved.tenant_id = commit_tenants.pop_first().expect("one tenant");
+            return Ok(resolved);
+        }
+        if commit_tenants.len() > 1 {
+            return Err(TraceDbError::WalCorruption(format!(
+                "ambiguous feature invalidation for {}.{}.{} in commit {}",
+                invalidation.table,
+                invalidation.record_id,
+                invalidation.feature,
+                commit.transaction_id
+            )));
+        }
+
+        let active_tenants = self
+            .active_feature_tenants(invalidation)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if active_tenants.len() == 1 {
+            let mut resolved = invalidation.clone();
+            resolved.tenant_id = active_tenants.into_iter().next().expect("one tenant");
+            return Ok(resolved);
+        }
+        if active_tenants.is_empty() {
+            return Err(TraceDbError::NotFound(format!(
+                "feature {}.{}.{}",
+                invalidation.table, invalidation.record_id, invalidation.feature
+            )));
+        }
+
+        Err(TraceDbError::WalCorruption(format!(
+            "ambiguous feature invalidation for {}.{}.{}",
+            invalidation.table, invalidation.record_id, invalidation.feature
+        )))
+    }
+
+    fn active_feature_tenants(&self, invalidation: &FeatureInvalidation) -> Vec<String> {
+        let mut tenants = Vec::new();
+        for versions in self.versions.values() {
+            if let Some(record) = versions.iter().rev().find(|record| {
+                record.header.table_id == invalidation.table
+                    && record.header.record_id == invalidation.record_id
+                    && record.header.end_epoch.is_none()
+                    && record.header.tombstone.is_none()
+            }) {
+                if record.features.contains_key(&invalidation.feature) {
+                    tenants.push(record.header.tenant_id.clone());
+                }
+            }
+        }
+        tenants
     }
 
     pub fn feature_state(

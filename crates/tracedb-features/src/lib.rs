@@ -65,7 +65,12 @@ impl FeatureLifecycle {
             format!("{}:{target}:{}", self.feature_id, self.source_hash),
         )?;
         self.last_job_id = Some(job.job_id.clone());
+        self.status = FeatureLifecycleStatus::Pending;
         Ok(job)
+    }
+
+    pub fn mark_failed(&mut self) {
+        self.status = FeatureLifecycleStatus::Failed;
     }
 
     pub fn is_usable_for(&self, mode: FeatureFreshnessMode) -> bool {

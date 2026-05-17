@@ -270,6 +270,8 @@ pub struct ExplainOutput {
     pub hot_overlay_searched: bool,
     pub freshness_mode: String,
     pub dirty_feature_count: usize,
+    pub pending_feature_count: usize,
+    pub failed_feature_count: usize,
     pub missing_feature_count: usize,
     pub fusion_method: String,
     pub deduped_candidate_count: usize,

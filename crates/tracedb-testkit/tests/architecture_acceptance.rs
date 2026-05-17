@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::{BranchState, Catalog};
-use tracedb_features::{FeatureFreshnessMode, FeatureLifecycle};
+use tracedb_features::{FeatureFreshnessMode, FeatureLifecycle, FeatureLifecycleStatus};
 use tracedb_gateway::{Gateway, GatewayRequest, GatewayServerConfig};
 use tracedb_graph::{Edge, GraphStore};
 use tracedb_jobs::{JobCatalog, JobKind, JobStatus, WorkerId};
@@ -199,6 +199,49 @@ fn feature_lifecycle_schedules_durable_idempotent_jobs() {
         .expect("leased")
         .expect("job available");
     assert_eq!(leased.status, JobStatus::Leased);
+}
+
+#[test]
+fn feature_recompute_enqueue_marks_lifecycle_pending() {
+    let mut jobs = JobCatalog::default();
+    let mut lifecycle = FeatureLifecycle::new("embedding", vec!["content".to_string()]);
+    lifecycle.mark_dirty(2, 44);
+
+    let job = lifecycle
+        .enqueue_recompute(&mut jobs, "messages/a")
+        .expect("job");
+
+    assert_eq!(lifecycle.last_job_id.as_deref(), Some(job.job_id.as_str()));
+    assert_eq!(lifecycle.status, FeatureLifecycleStatus::Pending);
+
+    let duplicate = lifecycle
+        .enqueue_recompute(&mut jobs, "messages/a")
+        .expect("same job");
+    assert_eq!(job.job_id, duplicate.job_id);
+    assert_eq!(jobs.depth_by_status(JobStatus::Queued), 1);
+
+    let leased = jobs
+        .lease_next(WorkerId::new("worker-1"), JobKind::GenerateEmbedding)
+        .expect("leased")
+        .expect("job available");
+    assert_eq!(leased.status, JobStatus::Leased);
+}
+
+#[test]
+fn failed_feature_is_never_usable_for_retrieval_modes() {
+    let mut lifecycle = FeatureLifecycle::new("embedding", vec!["content".to_string()]);
+    lifecycle.mark_dirty(2, 44);
+    lifecycle.mark_failed();
+
+    assert_eq!(lifecycle.status, FeatureLifecycleStatus::Failed);
+    for mode in [
+        FeatureFreshnessMode::Strict,
+        FeatureFreshnessMode::Lazy,
+        FeatureFreshnessMode::OnRead,
+        FeatureFreshnessMode::AllowStale,
+    ] {
+        assert!(!lifecycle.is_usable_for(mode));
+    }
 }
 
 #[test]
