@@ -1336,6 +1336,79 @@ fn sealed_segment_text_and_vector_search_participates_in_query() {
 }
 
 #[test]
+fn compact_keeps_hot_rows_authoritative_for_segment_materialization_and_visibility() {
+    let (_temp, mut db) = seeded_db();
+
+    db.compact().expect("compact segment");
+    db.insert(record(
+        "a",
+        "tenant-a",
+        "fresh hot materialized body",
+        [0.0, 1.0, 0.0],
+    ))
+    .expect("update a after compact");
+
+    let hot_row = db
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("get hot row")
+        .expect("hot row visible");
+    assert_eq!(
+        hot_row.fields.get("body").and_then(|value| value.as_str()),
+        Some("fresh hot materialized body")
+    );
+
+    let result = db
+        .query(HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: Some("rust database kernel".to_string()),
+            vector: None,
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 5,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query stale segment text");
+
+    assert!(result.explain.segments_scanned > 0);
+    assert!(result
+        .explain
+        .planner_candidates
+        .iter()
+        .any(|candidate| candidate.record_id == "a" && candidate.source == "LexicalPath"));
+    assert!(result
+        .explain
+        .planner_candidates
+        .iter()
+        .all(|candidate| candidate.record_id != "c"));
+    assert!(result.results.iter().all(|row| row.tenant_id == "tenant-a"));
+    assert!(result.results.iter().all(|row| row.record_id != "c"));
+
+    let materialized = result
+        .results
+        .iter()
+        .find(|row| row.record_id == "a")
+        .expect("stale segment candidate should materialize visible hot row");
+    assert_eq!(materialized.version_id, hot_row.version_id);
+    assert_eq!(
+        materialized
+            .fields
+            .get("body")
+            .and_then(|value| value.as_str()),
+        Some("fresh hot materialized body")
+    );
+    assert_ne!(
+        materialized
+            .fields
+            .get("body")
+            .and_then(|value| value.as_str()),
+        Some("rust database kernel")
+    );
+    assert_eq!(result.explain.final_visibility_guard_removed, 0);
+}
+
+#[test]
 fn delete_hides_record_from_hot_text_vector_feature_and_sealed_candidates() {
     let (temp, mut db) = seeded_db();
 
