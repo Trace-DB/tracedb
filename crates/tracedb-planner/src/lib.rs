@@ -261,6 +261,19 @@ pub struct QueryRow {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct QueryPhaseTiming {
+    pub phase: String,
+    pub elapsed_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccessPathTiming {
+    pub access_path_id: String,
+    pub build_ms: f64,
+    pub open_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExplainOutput {
     pub read_epoch: Epoch,
     pub schema_epoch: Epoch,
@@ -294,6 +307,10 @@ pub struct ExplainOutput {
     pub skipped_access_paths: Vec<String>,
     pub exact_fallback_triggered: bool,
     pub early_stop_reason: Option<String>,
+    #[serde(default)]
+    pub phase_timings: Vec<QueryPhaseTiming>,
+    #[serde(default)]
+    pub access_path_timings: Vec<AccessPathTiming>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

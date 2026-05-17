@@ -18,9 +18,9 @@ use tracedb_log::{CommitRecord, TornWalTail, Wal};
 use tracedb_modules::{ModuleRegistry, RegisteredModule};
 use tracedb_planner::{
     plan_trace_query, AccessPath, AccessPathDescriptor as PlannerAccessPathDescriptor,
-    AccessPathExplain, Candidate, CandidateBatch, CandidateBudget, CostEstimate, ExplainOutput,
-    FeatureFreshness, PlannerFeedback, Predicates, QueryFragment, QueryOutput, QueryRow,
-    ScoreComponents, Stats, TraceQuery, WorkBudget,
+    AccessPathExplain, AccessPathTiming, Candidate, CandidateBatch, CandidateBudget, CostEstimate,
+    ExplainOutput, FeatureFreshness, PlannerFeedback, Predicates, QueryFragment, QueryOutput,
+    QueryPhaseTiming, QueryRow, ScoreComponents, Stats, TraceQuery, WorkBudget,
 };
 use tracedb_segment::SegmentRecord;
 use tracedb_store::{ReadSnapshot, RecordStore, StoredRecord};
@@ -525,6 +525,7 @@ impl TraceDb {
                 },
             });
         }
+        let tenant_visibility_started = Instant::now();
         let visible = self.store.visible_records_at(
             &query.table,
             &query.tenant_id,
@@ -532,9 +533,12 @@ impl TraceDb {
         );
         let sealed_records = self.sealed_segment_records(&query.table, &query.tenant_id)?;
         let tenant_mask_visible_records = visible.len();
+        let tenant_visibility_ms = elapsed_ms(tenant_visibility_started);
+        let scalar_filter_started = Instant::now();
         let scalar_filter_applied = !query.scalar_eq.is_empty();
         let visible = filter_records_by_scalar_eq(visible, &query.scalar_eq);
         let sealed_records = filter_segment_records_by_scalar_eq(sealed_records, &query.scalar_eq);
+        let scalar_filter_ms = elapsed_ms(scalar_filter_started);
         let mut explain = ExplainOutput {
             read_epoch: self.manifest.latest_epoch,
             schema_epoch: self.manifest.latest_epoch,
@@ -552,6 +556,13 @@ impl TraceDb {
             fusion_method: "RRF".to_string(),
             ..ExplainOutput::default()
         };
+        explain.phase_timings.push(query_phase_timing(
+            "tenant_visibility",
+            tenant_visibility_ms,
+        ));
+        explain
+            .phase_timings
+            .push(query_phase_timing("scalar_filter", scalar_filter_ms));
         let mut trace_query = TraceQuery::hybrid(
             &query.table,
             &query.tenant_id,
@@ -601,6 +612,7 @@ impl TraceDb {
             .map(|record| record.header.record_id.clone())
             .chain(sealed_records.iter().map(|record| record.record_id.clone()))
             .collect::<Vec<_>>();
+        let access_path_build_started = Instant::now();
         let access_paths = query_access_paths(QueryAccessInput {
             schema,
             visible: &visible,
@@ -613,10 +625,14 @@ impl TraceDb {
             fallback_candidate_limit: query_has_evidence(&query)
                 .then_some(explain.candidate_budget),
         });
+        let access_path_build_ms = elapsed_ms(access_path_build_started);
         let mut planner_candidates = Vec::<Candidate>::new();
         let mut streams = Vec::<RankedStream>::new();
-        for access_path in &access_paths {
+        let mut access_path_timings = access_paths.timings;
+        let access_path_open_started = Instant::now();
+        for (index, access_path) in access_paths.paths.iter().enumerate() {
             let descriptor = access_path.descriptor();
+            let access_path_open_started = Instant::now();
             let batch = access_path.open(
                 query_fragment.clone(),
                 &visibility,
@@ -624,6 +640,9 @@ impl TraceDb {
                     max_candidates: explain.candidate_budget,
                 },
             );
+            if let Some(timing) = access_path_timings.get_mut(index) {
+                timing.open_ms = elapsed_ms(access_path_open_started);
+            }
             let source = descriptor.access_path_id.as_str();
             if source == "LexicalPath" {
                 explain.text_candidates = batch.candidates.len();
@@ -645,8 +664,18 @@ impl TraceDb {
             planner_candidates.extend(batch.candidates);
             explain.access_paths.push(access_path.explain());
         }
+        let access_path_open_ms = elapsed_ms(access_path_open_started);
+        explain.phase_timings.push(query_phase_timing(
+            "access_path_build",
+            access_path_build_ms,
+        ));
+        explain
+            .phase_timings
+            .push(query_phase_timing("access_path_open", access_path_open_ms));
+        explain.access_path_timings = access_path_timings;
         explain.planner_candidates = planner_candidates;
 
+        let fusion_started = Instant::now();
         let mut fused = fuse_query_streams(&streams);
         if query.text.is_some() && !lexical_scores_are_tied(&fused) {
             fused.sort_by(lexical_first_order);
@@ -654,6 +683,10 @@ impl TraceDb {
             fused.sort_by(vector_first_order);
         }
         explain.deduped_candidate_count = fused.len();
+        explain
+            .phase_timings
+            .push(query_phase_timing("fusion", elapsed_ms(fusion_started)));
+        let materialization_started = Instant::now();
         let sealed_visible_records = sealed_records
             .iter()
             .filter(|record| {
@@ -706,6 +739,10 @@ impl TraceDb {
         explain.final_visibility_guard_count = checked;
         explain.final_visibility_guard_removed = removed;
         explain.returned_count = materialized.len();
+        explain.phase_timings.push(query_phase_timing(
+            "materialization",
+            elapsed_ms(materialization_started),
+        ));
         Ok(QueryOutput {
             results: materialized,
             explain,
@@ -1364,6 +1401,25 @@ fn query_has_evidence(query: &HybridQuery) -> bool {
         || query.temporal_as_of.is_some()
 }
 
+fn query_phase_timing(phase: impl Into<String>, elapsed_ms: f64) -> QueryPhaseTiming {
+    QueryPhaseTiming {
+        phase: phase.into(),
+        elapsed_ms,
+    }
+}
+
+fn access_path_timing(access_path_id: impl Into<String>, build_ms: f64) -> AccessPathTiming {
+    AccessPathTiming {
+        access_path_id: access_path_id.into(),
+        build_ms,
+        open_ms: 0.0,
+    }
+}
+
+fn elapsed_ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
+}
+
 fn lexical_scores_are_tied(candidates: &[FusedCandidate]) -> bool {
     let mut scores = candidates
         .iter()
@@ -1418,7 +1474,12 @@ struct QueryAccessInput<'a> {
     fallback_candidate_limit: Option<usize>,
 }
 
-fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
+struct QueryAccessPaths {
+    paths: Vec<MemoryAccessPath>,
+    timings: Vec<AccessPathTiming>,
+}
+
+fn query_access_paths(input: QueryAccessInput<'_>) -> QueryAccessPaths {
     let QueryAccessInput {
         schema,
         visible,
@@ -1431,7 +1492,9 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
         fallback_candidate_limit,
     } = input;
     let mut paths = Vec::new();
+    let mut timings = Vec::new();
     let fallback_candidate_limit = fallback_candidate_limit.unwrap_or(usize::MAX);
+    let path_started = Instant::now();
     paths.push(MemoryAccessPath {
         descriptor: planner_descriptor("PolicyPath", None),
         candidates: visible
@@ -1446,6 +1509,8 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
             })
             .collect(),
     });
+    timings.push(access_path_timing("PolicyPath", elapsed_ms(path_started)));
+    let path_started = Instant::now();
     paths.push(MemoryAccessPath {
         descriptor: planner_descriptor("RelationalPath", None),
         candidates: visible
@@ -1460,6 +1525,11 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
             })
             .collect(),
     });
+    timings.push(access_path_timing(
+        "RelationalPath",
+        elapsed_ms(path_started),
+    ));
+    let path_started = Instant::now();
     paths.push(MemoryAccessPath {
         descriptor: planner_descriptor("HotOverlayPath", None),
         candidates: visible
@@ -1474,7 +1544,12 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
             })
             .collect(),
     });
+    timings.push(access_path_timing(
+        "HotOverlayPath",
+        elapsed_ms(path_started),
+    ));
 
+    let path_started = Instant::now();
     let mut lexical_candidates = Vec::new();
     if let Some(text) = text {
         let mut docs = visible
@@ -1532,7 +1607,9 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
         descriptor: planner_descriptor("LexicalPath", Some("tracedb-text")),
         candidates: lexical_candidates,
     });
+    timings.push(access_path_timing("LexicalPath", elapsed_ms(path_started)));
 
+    let path_started = Instant::now();
     let mut vector_candidates = Vec::new();
     if let Some(vector_query) = vector_query {
         vector_candidates = visible
@@ -1577,8 +1654,10 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
         descriptor: planner_descriptor("VectorPath", Some("tracedb-vector")),
         candidates: vector_candidates,
     });
+    timings.push(access_path_timing("VectorPath", elapsed_ms(path_started)));
 
     if let Some(seed) = graph_seed {
+        let path_started = Instant::now();
         let candidates = visible
             .iter()
             .filter(|record| record_has_graph_seed(record, &seed))
@@ -1594,9 +1673,11 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
             descriptor: planner_descriptor("GraphPath", Some("tracedb-graph")),
             candidates,
         });
+        timings.push(access_path_timing("GraphPath", elapsed_ms(path_started)));
     }
 
     if let Some(as_of) = temporal_as_of {
+        let path_started = Instant::now();
         let candidates = visible
             .iter()
             .filter(|record| record_valid_as_of(record, as_of))
@@ -1612,9 +1693,10 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
             descriptor: planner_descriptor("TemporalPath", Some("tracedb-temporal")),
             candidates,
         });
+        timings.push(access_path_timing("TemporalPath", elapsed_ms(path_started)));
     }
 
-    paths
+    QueryAccessPaths { paths, timings }
 }
 
 fn planner_descriptor(

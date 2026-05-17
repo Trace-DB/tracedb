@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::time::Instant;
@@ -103,6 +104,12 @@ pub struct InProcessScalingReport {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TimingP95 {
+    pub name: String,
+    pub p95_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InProcessScalingPoint {
     pub records: usize,
     pub latest_epoch: u64,
@@ -111,6 +118,12 @@ pub struct InProcessScalingPoint {
     pub insert_p95_ms: f64,
     pub recent_insert_p95_ms: f64,
     pub engine_query_p95_ms: f64,
+    #[serde(default)]
+    pub query_phase_p95_ms: Vec<TimingP95>,
+    #[serde(default)]
+    pub query_access_path_build_p95_ms: Vec<TimingP95>,
+    #[serde(default)]
+    pub query_access_path_open_p95_ms: Vec<TimingP95>,
     pub query_returned_count: usize,
     pub engine_open_p95_ms: Option<f64>,
     pub checkpoint_latency_ms: Option<f64>,
@@ -118,6 +131,12 @@ pub struct InProcessScalingPoint {
     pub checkpoint_data_dir_bytes: Option<u64>,
     pub checkpoint_engine_open_p95_ms: Option<f64>,
     pub checkpoint_engine_query_p95_ms: Option<f64>,
+    #[serde(default)]
+    pub checkpoint_query_phase_p95_ms: Option<Vec<TimingP95>>,
+    #[serde(default)]
+    pub checkpoint_access_path_build_p95_ms: Option<Vec<TimingP95>>,
+    #[serde(default)]
+    pub checkpoint_access_path_open_p95_ms: Option<Vec<TimingP95>>,
 }
 
 pub fn run_inprocess_scaling(
@@ -180,10 +199,19 @@ fn measure_inprocess_point(
 ) -> Result<InProcessScalingPoint, Box<dyn Error>> {
     let query = scaling_query(records);
     let mut query_latencies = Vec::new();
+    let mut query_phase_samples = BTreeMap::<String, Vec<f64>>::new();
+    let mut query_access_path_build_samples = BTreeMap::<String, Vec<f64>>::new();
+    let mut query_access_path_open_samples = BTreeMap::<String, Vec<f64>>::new();
     let mut returned_count = 0;
     for _ in 0..config.query_repetitions {
         let output = timed_value_ms(|| db.query(query.clone()))?;
         query_latencies.push(output.1);
+        record_explain_timing_samples(
+            &output.0.explain,
+            &mut query_phase_samples,
+            &mut query_access_path_build_samples,
+            &mut query_access_path_open_samples,
+        );
         returned_count = output.0.results.len();
     }
 
@@ -204,6 +232,9 @@ fn measure_inprocess_point(
         insert_p95_ms: round_ms(percentile(insert_latencies, 95.0)),
         recent_insert_p95_ms: round_ms(percentile(&insert_latencies[recent_start..], 95.0)),
         engine_query_p95_ms: round_ms(percentile(&query_latencies, 95.0)),
+        query_phase_p95_ms: timing_p95_samples(&query_phase_samples),
+        query_access_path_build_p95_ms: timing_p95_samples(&query_access_path_build_samples),
+        query_access_path_open_p95_ms: timing_p95_samples(&query_access_path_open_samples),
         query_returned_count: returned_count,
         engine_open_p95_ms: Some(round_ms(percentile(&open_latencies, 95.0))),
         checkpoint_latency_ms: None,
@@ -211,12 +242,18 @@ fn measure_inprocess_point(
         checkpoint_data_dir_bytes: None,
         checkpoint_engine_open_p95_ms: None,
         checkpoint_engine_query_p95_ms: None,
+        checkpoint_query_phase_p95_ms: None,
+        checkpoint_access_path_build_p95_ms: None,
+        checkpoint_access_path_open_p95_ms: None,
     };
 
     if config.checkpoint_at_points {
         let checkpoint_latency = timed_ms(|| db.checkpoint())?;
         let mut checkpoint_open_latencies = Vec::new();
         let mut checkpoint_query_latencies = Vec::new();
+        let mut checkpoint_phase_samples = BTreeMap::<String, Vec<f64>>::new();
+        let mut checkpoint_access_path_build_samples = BTreeMap::<String, Vec<f64>>::new();
+        let mut checkpoint_access_path_open_samples = BTreeMap::<String, Vec<f64>>::new();
         for _ in 0..config.open_repetitions {
             let opened = timed_value_ms(|| TraceDb::open(data_dir))?;
             checkpoint_open_latencies.push(opened.1);
@@ -224,6 +261,12 @@ fn measure_inprocess_point(
             for _ in 0..config.query_repetitions {
                 let output = timed_value_ms(|| opened_db.query(query.clone()))?;
                 checkpoint_query_latencies.push(output.1);
+                record_explain_timing_samples(
+                    &output.0.explain,
+                    &mut checkpoint_phase_samples,
+                    &mut checkpoint_access_path_build_samples,
+                    &mut checkpoint_access_path_open_samples,
+                );
             }
         }
         point.checkpoint_latency_ms = Some(round_ms(checkpoint_latency));
@@ -233,6 +276,11 @@ fn measure_inprocess_point(
             Some(round_ms(percentile(&checkpoint_open_latencies, 95.0)));
         point.checkpoint_engine_query_p95_ms =
             Some(round_ms(percentile(&checkpoint_query_latencies, 95.0)));
+        point.checkpoint_query_phase_p95_ms = Some(timing_p95_samples(&checkpoint_phase_samples));
+        point.checkpoint_access_path_build_p95_ms =
+            Some(timing_p95_samples(&checkpoint_access_path_build_samples));
+        point.checkpoint_access_path_open_p95_ms =
+            Some(timing_p95_samples(&checkpoint_access_path_open_samples));
     }
 
     Ok(point)
@@ -311,6 +359,40 @@ fn timed_value_ms<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<(T, f64), E>
     f().map(|value| (value, start.elapsed().as_secs_f64() * 1000.0))
 }
 
+fn record_explain_timing_samples(
+    explain: &tracedb_query::HybridExplain,
+    phase_samples: &mut BTreeMap<String, Vec<f64>>,
+    access_path_build_samples: &mut BTreeMap<String, Vec<f64>>,
+    access_path_open_samples: &mut BTreeMap<String, Vec<f64>>,
+) {
+    for timing in &explain.phase_timings {
+        phase_samples
+            .entry(timing.phase.clone())
+            .or_default()
+            .push(timing.elapsed_ms);
+    }
+    for timing in &explain.access_path_timings {
+        access_path_build_samples
+            .entry(timing.access_path_id.clone())
+            .or_default()
+            .push(timing.build_ms);
+        access_path_open_samples
+            .entry(timing.access_path_id.clone())
+            .or_default()
+            .push(timing.open_ms);
+    }
+}
+
+fn timing_p95_samples(samples: &BTreeMap<String, Vec<f64>>) -> Vec<TimingP95> {
+    samples
+        .iter()
+        .map(|(name, values)| TimingP95 {
+            name: name.clone(),
+            p95_ms: round_ms(percentile(values, 95.0)),
+        })
+        .collect()
+}
+
 fn percentile(values: &[f64], p: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -375,7 +457,25 @@ mod tests {
         assert_eq!(point.checkpoint_wal_bytes, Some(0));
         assert!(point.engine_open_p95_ms.is_some());
         assert!(point.engine_query_p95_ms > 0.0);
+        assert!(point
+            .query_phase_p95_ms
+            .iter()
+            .any(|timing| timing.name == "access_path_build" && timing.p95_ms >= 0.0));
+        assert!(point
+            .query_access_path_build_p95_ms
+            .iter()
+            .any(|timing| timing.name == "LexicalPath" && timing.p95_ms >= 0.0));
+        assert!(point
+            .query_access_path_build_p95_ms
+            .iter()
+            .any(|timing| timing.name == "VectorPath" && timing.p95_ms >= 0.0));
         assert!(point.checkpoint_engine_open_p95_ms.unwrap() > 0.0);
         assert!(point.checkpoint_engine_query_p95_ms.unwrap() > 0.0);
+        assert!(point
+            .checkpoint_query_phase_p95_ms
+            .as_ref()
+            .expect("checkpoint query phase timings")
+            .iter()
+            .any(|timing| timing.name == "access_path_build" && timing.p95_ms >= 0.0));
     }
 }

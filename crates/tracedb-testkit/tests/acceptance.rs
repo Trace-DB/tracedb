@@ -733,6 +733,68 @@ fn evidence_queries_bound_fallback_access_path_candidates() {
 }
 
 #[test]
+fn hybrid_query_explain_reports_phase_and_access_path_timings() {
+    let (_temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    for idx in 0..25 {
+        db.insert(record(
+            &format!("timing-doc-{idx:02}"),
+            "tenant-a",
+            "agent memory vector retrieval policy freshness timing",
+            [1.0, 0.0, 0.0],
+        ))
+        .unwrap_or_else(|error| panic!("insert timing doc {idx}: {error}"));
+    }
+
+    let result = db
+        .query(HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: Some("agent memory vector timing".to_string()),
+            vector: Some(vec![1.0, 0.0, 0.0]),
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 5,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query");
+
+    for expected in [
+        "tenant_visibility",
+        "scalar_filter",
+        "access_path_build",
+        "access_path_open",
+        "fusion",
+        "materialization",
+    ] {
+        assert!(
+            result
+                .explain
+                .phase_timings
+                .iter()
+                .any(|timing| timing.phase == expected && timing.elapsed_ms >= 0.0),
+            "{expected} phase timing missing from explain: {:?}",
+            result.explain.phase_timings
+        );
+    }
+
+    for expected in ["LexicalPath", "VectorPath"] {
+        let timing = result
+            .explain
+            .access_path_timings
+            .iter()
+            .find(|timing| timing.access_path_id == expected)
+            .unwrap_or_else(|| panic!("{expected} timing missing"));
+        assert!(
+            timing.build_ms >= 0.0 && timing.open_ms >= 0.0,
+            "{expected} timing should be non-negative: {timing:?}"
+        );
+    }
+}
+
+#[test]
 fn text_candidate_stream_explain() {
     let (_temp, db) = seeded_db();
     let result = db.query(query()).expect("query");
