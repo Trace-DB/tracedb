@@ -21,3 +21,6 @@ tracedb-policy = { path = "../tracedb-policy" }
 tracedb-provenance = { path = "../tracedb-provenance" }
 tracedb-features = { path = "../tracedb-features" }
 tracedb-retrieval-core = { path = "../tracedb-retrieval-core" }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -186,8 +186,16 @@ class TraceDbAdapter(BenchmarkAdapter):
             }
             call("schema apply", "POST", "/v1/schema/apply", schema)
             recorder = MetricRecorder()
+            ingest_recorder = MetricRecorder()
+            query_recorder = MetricRecorder()
+            admin_recorder = MetricRecorder()
+
+            def timed(recorder_for_operation: MetricRecorder, operation):
+                return recorder.timed(lambda: recorder_for_operation.timed(operation))
+
             for record in dataset.records:
-                recorder.timed(
+                timed(
+                    ingest_recorder,
                     lambda record=record: call(
                         "record put",
                         "POST",
@@ -246,7 +254,8 @@ class TraceDbAdapter(BenchmarkAdapter):
             queries_with_off_category_results = 0
             scalar_filter_applied_count = 0
             for query in dataset.queries:
-                result = recorder.timed(
+                result = timed(
+                    query_recorder,
                     lambda query=query: call(
                         "query allow-dirty",
                         "POST",
@@ -332,40 +341,52 @@ class TraceDbAdapter(BenchmarkAdapter):
             if dataset.queries:
                 query = dataset.queries[0]
                 for freshness in ["Strict", "Lazy"]:
-                    call(
-                        f"query {freshness.lower()}",
-                        "POST",
-                        "/v1/query",
-                        {
-                            "table": table,
-                            "tenant_id": query.tenant_id,
-                            "scalar_eq": {"category": query.category},
-                            "text": query.text,
-                            "vector": query.vector,
-                            "top_k": query.top_k,
-                            "freshness": freshness,
-                            "explain": True,
-                        },
+                    timed(
+                        query_recorder,
+                        lambda query=query, freshness=freshness: call(
+                            f"query {freshness.lower()}",
+                            "POST",
+                            "/v1/query",
+                            {
+                                "table": table,
+                                "tenant_id": query.tenant_id,
+                                "scalar_eq": {"category": query.category},
+                                "text": query.text,
+                                "vector": query.vector,
+                                "top_k": query.top_k,
+                                "freshness": freshness,
+                                "explain": True,
+                            },
+                        ),
                     )
 
-            call("compact", "POST", "/v1/admin/compact", {}, timeout=admin_timeout)
+            timed(
+                admin_recorder,
+                lambda: call("compact", "POST", "/v1/admin/compact", {}, timeout=admin_timeout),
+            )
             if self._is_local_http_url(base_url):
                 with tempfile.TemporaryDirectory(prefix="tracedb-bench-http-snapshot-") as temp_dir:
                     snapshot_dir = str(Path(temp_dir) / "snapshot")
                     restore_dir = str(Path(temp_dir) / "restore")
-                    call(
-                        "snapshot",
-                        "POST",
-                        "/v1/admin/snapshot",
-                        {"target": snapshot_dir},
-                        timeout=admin_timeout,
+                    timed(
+                        admin_recorder,
+                        lambda: call(
+                            "snapshot",
+                            "POST",
+                            "/v1/admin/snapshot",
+                            {"target": snapshot_dir},
+                            timeout=admin_timeout,
+                        ),
                     )
-                    call(
-                        "restore",
-                        "POST",
-                        "/v1/admin/restore",
-                        {"source": snapshot_dir, "target": restore_dir},
-                        timeout=admin_timeout,
+                    timed(
+                        admin_recorder,
+                        lambda: call(
+                            "restore",
+                            "POST",
+                            "/v1/admin/restore",
+                            {"source": snapshot_dir, "target": restore_dir},
+                            timeout=admin_timeout,
+                        ),
                     )
             else:
                 snapshot_root = os.environ.get(
@@ -373,19 +394,25 @@ class TraceDbAdapter(BenchmarkAdapter):
                 ).rstrip("/")
                 snapshot_dir = f"{snapshot_root}/{table}/snapshot"
                 restore_dir = f"{snapshot_root}/{table}/restore"
-                call(
-                    "snapshot",
-                    "POST",
-                    "/v1/admin/snapshot",
-                    {"target": snapshot_dir},
-                    timeout=admin_timeout,
+                timed(
+                    admin_recorder,
+                    lambda: call(
+                        "snapshot",
+                        "POST",
+                        "/v1/admin/snapshot",
+                        {"target": snapshot_dir},
+                        timeout=admin_timeout,
+                    ),
                 )
-                call(
-                    "restore",
-                    "POST",
-                    "/v1/admin/restore",
-                    {"source": snapshot_dir, "target": restore_dir},
-                    timeout=admin_timeout,
+                timed(
+                    admin_recorder,
+                    lambda: call(
+                        "restore",
+                        "POST",
+                        "/v1/admin/restore",
+                        {"source": snapshot_dir, "target": restore_dir},
+                        timeout=admin_timeout,
+                    ),
                 )
 
             deleted = dataset.records[0]
@@ -414,6 +441,17 @@ class TraceDbAdapter(BenchmarkAdapter):
                 return ["surface unavailable: TraceDB HTTP tombstone remained visible"], None
 
             metrics = recorder.summary()
+            for prefix, operation_summary in [
+                ("ingest", ingest_recorder.summary()),
+                ("query", query_recorder.summary()),
+                ("admin", admin_recorder.summary()),
+            ]:
+                metrics.update(
+                    {
+                        f"{prefix}_{key}": value
+                        for key, value in operation_summary.items()
+                    }
+                )
             min_recall = min(recalls) if recalls else 0.0
             min_ndcg = min(ndcgs) if ndcgs else 0.0
             queries_below_full_recall = sum(1 for recall in recalls if recall < 1.0)

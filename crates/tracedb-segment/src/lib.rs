@@ -256,7 +256,54 @@ pub fn verify_segment_object(object: &SegmentObject) -> Result<()> {
 pub fn compute_segment_object_checksum(object: &SegmentObject) -> Result<u32> {
     let mut normalized = object.clone();
     normalized.object_checksum = 0;
-    Ok(checksum_bytes(&serde_json::to_vec(&normalized)?))
+    let bytes = serde_json::to_vec(&normalized)?;
+    let round_tripped: SegmentObject = serde_json::from_slice(&bytes)?;
+    Ok(checksum_bytes(&serde_json::to_vec(&round_tripped)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn segment_object_checksum_survives_provider_vector_json_roundtrip() {
+        let vector = (0..2048)
+            .map(|index| ((index as f32 + 0.5) / 2048.0).sin() / 32.0)
+            .collect::<Vec<_>>();
+        let record = SegmentRecord {
+            table: "bench_records".to_string(),
+            record_id: "github://example/repo/file.py#L1-L8".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            version_id: 42,
+            fields: BTreeMap::from([
+                (
+                    "id".to_string(),
+                    json!("github://example/repo/file.py#L1-L8"),
+                ),
+                ("tenant".to_string(), json!("tenant-a")),
+                (
+                    "body".to_string(),
+                    json!("def provider_vector_fixture(): pass"),
+                ),
+                (
+                    "embedding".to_string(),
+                    serde_json::to_value(&vector).expect("vector json"),
+                ),
+            ]),
+            text: BTreeMap::from([(
+                "body".to_string(),
+                "def provider_vector_fixture(): pass".to_string(),
+            )]),
+            vectors: BTreeMap::from([("embedding".to_string(), vector)]),
+        };
+        let object = SegmentObject::from_records("provider-vector-segment", 7, vec![record])
+            .expect("segment object");
+        let bytes = serde_json::to_vec_pretty(&object).expect("serialize");
+        let round_tripped: SegmentObject = serde_json::from_slice(&bytes).expect("parse");
+
+        verify_segment_object(&round_tripped).expect("round-tripped checksum remains valid");
+    }
 }
 
 fn publication_state_history() -> Vec<SegmentState> {

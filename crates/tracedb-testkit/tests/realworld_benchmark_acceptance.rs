@@ -100,6 +100,9 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
     assert_eq!(tracedb["metrics"]["failure_count"], 0);
     assert!(tracedb["metrics"]["min_recall_at_5"].is_number());
     assert!(tracedb["metrics"]["min_ndcg_at_5"].is_number());
+    assert!(tracedb["metrics"]["ingest_latency_p95_ms"].is_number());
+    assert!(tracedb["metrics"]["query_latency_p95_ms"].is_number());
+    assert!(tracedb["metrics"]["admin_latency_p95_ms"].is_number());
     assert!(tracedb["metrics"]["queries_below_full_recall_count"].is_number());
     assert!(tracedb["metrics"]["queries_with_zero_recall_count"].is_number());
     assert!(tracedb["metrics"]["category_filter_applied"].is_boolean());

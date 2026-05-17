@@ -601,13 +601,33 @@ impl TraceDb {
             fused.sort_by(vector_first_order);
         }
         explain.deduped_candidate_count = fused.len();
+        let sealed_visible_records = sealed_records
+            .iter()
+            .filter(|record| {
+                !self.store.is_tombstoned_at(
+                    &record.table,
+                    &record.tenant_id,
+                    &record.record_id,
+                    self.manifest.latest_epoch,
+                )
+            })
+            .collect::<Vec<_>>();
         let visible_ids = visible
             .iter()
             .map(|record| record.header.record_id.clone())
+            .chain(
+                sealed_visible_records
+                    .iter()
+                    .map(|record| record.record_id.clone()),
+            )
             .collect::<BTreeSet<_>>();
         let records_by_id = visible
             .iter()
             .map(|record| (record.header.record_id.clone(), record.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let sealed_records_by_id = sealed_visible_records
+            .into_iter()
+            .map(|record| (record.record_id.clone(), record))
             .collect::<BTreeMap<_, _>>();
 
         let mut materialized = Vec::new();
@@ -619,23 +639,13 @@ impl TraceDb {
                 removed += 1;
                 continue;
             }
+            if materialized.len() >= query.top_k {
+                continue;
+            }
             if let Some(record) = records_by_id.get(&candidate.record_id) {
-                if materialized.len() < query.top_k {
-                    materialized.push(QueryRow {
-                        record_id: record.header.record_id.clone(),
-                        version_id: record.header.version_id.get(),
-                        tenant_id: record.header.tenant_id.clone(),
-                        fields: record.fields.clone(),
-                        score: ScoreComponents {
-                            vector: candidate.vector,
-                            lexical: candidate.lexical,
-                            relational: candidate.relational,
-                            freshness_penalty: (candidate.freshness_penalty > 0.0)
-                                .then_some(candidate.freshness_penalty),
-                            final_score: candidate.final_score,
-                        },
-                    });
-                }
+                materialized.push(query_row_from_stored(record, &candidate));
+            } else if let Some(record) = sealed_records_by_id.get(&candidate.record_id) {
+                materialized.push(query_row_from_segment(record, &candidate));
             }
         }
 
@@ -866,7 +876,6 @@ impl TraceDb {
     fn bump_manifest(&mut self, epoch: Epoch) -> Result<()> {
         self.manifest.latest_epoch = epoch;
         self.manifest.durable_epoch = epoch;
-        self.manifest.checkpoint_epoch = epoch;
         self.manifest.manifest_generation += 1;
         let mut manifest = self.manifest.clone();
         let previous_checksum = manifest.checksums.manifest_checksum;
@@ -1198,6 +1207,37 @@ fn fuse_query_streams(streams: &[RankedStream]) -> Vec<FusedCandidate> {
         }
     }
     fused
+}
+
+fn query_row_from_stored(record: &StoredRecord, candidate: &FusedCandidate) -> QueryRow {
+    QueryRow {
+        record_id: record.header.record_id.clone(),
+        version_id: record.header.version_id.get(),
+        tenant_id: record.header.tenant_id.clone(),
+        fields: record.fields.clone(),
+        score: score_components_from_candidate(candidate),
+    }
+}
+
+fn query_row_from_segment(record: &SegmentRecord, candidate: &FusedCandidate) -> QueryRow {
+    QueryRow {
+        record_id: record.record_id.clone(),
+        version_id: record.version_id,
+        tenant_id: record.tenant_id.clone(),
+        fields: record.fields.clone().into_iter().collect(),
+        score: score_components_from_candidate(candidate),
+    }
+}
+
+fn score_components_from_candidate(candidate: &FusedCandidate) -> ScoreComponents {
+    ScoreComponents {
+        vector: candidate.vector,
+        lexical: candidate.lexical,
+        relational: candidate.relational,
+        freshness_penalty: (candidate.freshness_penalty > 0.0)
+            .then_some(candidate.freshness_penalty),
+        final_score: candidate.final_score,
+    }
 }
 
 fn is_evidence_stream(name: &str) -> bool {
@@ -2003,4 +2043,79 @@ pub fn value_object(fields: &[(&str, Value)]) -> Map<String, Value> {
         .iter()
         .map(|(key, value)| ((*key).to_string(), value.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn schema() -> TableSchema {
+        TableSchema {
+            name: "docs".to_string(),
+            primary_id_column: "id".to_string(),
+            tenant_id_column: "tenant".to_string(),
+            scalar_columns: vec!["category".to_string()],
+            text_indexed_columns: vec!["body".to_string()],
+            vector_columns: vec![VectorColumnSchema {
+                name: "embedding".to_string(),
+                dimensions: 3,
+                source_columns: vec!["body".to_string()],
+            }],
+        }
+    }
+
+    fn record(id: &str, body: &str) -> RecordInput {
+        RecordInput {
+            table: "docs".to_string(),
+            id: id.to_string(),
+            tenant_id: "tenant-a".to_string(),
+            fields: json!({
+                "id": id,
+                "tenant": "tenant-a",
+                "category": "code",
+                "body": body,
+                "embedding": [1.0, 0.0, 0.0],
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+        }
+    }
+
+    #[test]
+    fn sealed_segment_records_materialize_without_hot_store_copy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        db.insert(record("sealed-only", "rare sealed segment evidence"))
+            .expect("insert");
+        db.compact().expect("compact");
+        db.store = RecordStore::default();
+
+        let output = db
+            .query(HybridQuery {
+                table: "docs".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                text: Some("sealed evidence".to_string()),
+                vector: Some(vec![1.0, 0.0, 0.0]),
+                scalar_eq: Default::default(),
+                graph_seed: None,
+                temporal_as_of: None,
+                top_k: 5,
+                freshness: FreshnessMode::Strict,
+                explain: true,
+            })
+            .expect("query");
+
+        assert_eq!(
+            output
+                .results
+                .iter()
+                .map(|row| row.record_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sealed-only"]
+        );
+        assert_eq!(output.explain.final_visibility_guard_removed, 0);
+    }
 }

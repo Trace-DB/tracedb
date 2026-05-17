@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracedb_core::{
@@ -97,6 +98,14 @@ pub struct WalScan {
 #[derive(Clone, Debug)]
 pub struct Wal {
     path: PathBuf,
+    tail: Arc<Mutex<WalTail>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct WalTail {
+    last_lsn: Option<Lsn>,
+    last_checksum: u32,
+    file_len: u64,
 }
 
 impl Wal {
@@ -107,7 +116,12 @@ impl Wal {
         if !path.exists() {
             File::create(&path)?;
         }
-        Ok(Self { path })
+        let scan = scan_file(&path)?;
+        let tail = tail_from_scan(&path, &scan)?;
+        Ok(Self {
+            path,
+            tail: Arc::new(Mutex::new(tail)),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -116,15 +130,30 @@ impl Wal {
 
     pub fn append_commit(&self, commit: &CommitRecord) -> Result<Lsn> {
         let _guard = WalWriteLock::acquire(&self.path)?;
-        let entries = self.scan()?;
-        let last = entries.last();
-        let lsn = last
-            .map(|entry| entry.lsn.next())
+        let mut tail = self
+            .tail
+            .lock()
+            .map_err(|_| TraceDbError::WalCorruption("wal tail cache lock poisoned".to_string()))?;
+        let file_len = fs::metadata(&self.path)?.len();
+        if file_len != tail.file_len {
+            let scan = scan_file(&self.path)?;
+            *tail = tail_from_scan(&self.path, &scan)?;
+        }
+        let lsn = tail
+            .last_lsn
+            .map(|last_lsn| last_lsn.next())
             .unwrap_or_else(|| Lsn::new(1));
-        let prev_checksum = last.map(|entry| entry.checksum).unwrap_or_default();
+        let prev_checksum = tail.last_checksum;
         let mut commit = commit.clone();
         commit.previous_commit_hash = prev_checksum;
         let payload = serde_json::to_vec(&commit)?;
+        if payload.len() > MAX_PAYLOAD_LEN {
+            return Err(TraceDbError::WalCorruption(format!(
+                "payload length {} exceeds max {MAX_PAYLOAD_LEN} at lsn {}",
+                payload.len(),
+                lsn.get()
+            )));
+        }
         let payload_checksum = checksum_bytes(&payload);
 
         let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
@@ -141,6 +170,9 @@ impl Wal {
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
         file.write_all(&frame)?;
         file.sync_data()?;
+        tail.last_lsn = Some(lsn);
+        tail.last_checksum = payload_checksum;
+        tail.file_len += frame.len() as u64;
         Ok(lsn)
     }
 
@@ -149,138 +181,151 @@ impl Wal {
     }
 
     pub fn scan_with_metadata(&self) -> Result<WalScan> {
-        let mut file = File::open(&self.path)?;
-        let mut entries: Vec<WalEntry> = Vec::new();
-        let mut offset = 0u64;
+        scan_file(&self.path)
+    }
+}
 
-        loop {
-            let mut header = [0u8; HEADER_LEN];
-            let read = read_some(&mut file, &mut header)?;
-            if read == 0 {
-                break;
-            }
-            if read < HEADER_LEN {
-                return Ok(WalScan {
-                    entries,
-                    torn_tail: Some(TornWalTail {
-                        offset,
-                        lsn: None,
-                        reason: "short_header".to_string(),
-                        expected_len: HEADER_LEN,
-                        actual_len: read,
-                    }),
-                });
-            }
-            offset += HEADER_LEN as u64;
+fn tail_from_scan(path: &Path, scan: &WalScan) -> Result<WalTail> {
+    let last = scan.entries.last();
+    Ok(WalTail {
+        last_lsn: last.map(|entry| entry.lsn),
+        last_checksum: last.map(|entry| entry.checksum).unwrap_or_default(),
+        file_len: fs::metadata(path)?.len(),
+    })
+}
 
-            let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
-            let version = u32::from_le_bytes(header[4..8].try_into().unwrap());
-            let lsn = u64::from_le_bytes(header[8..16].try_into().unwrap());
-            let prev_checksum = u32::from_le_bytes(header[16..20].try_into().unwrap());
-            let kind = u32::from_le_bytes(header[20..24].try_into().unwrap());
-            let payload_len = u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize;
-            let payload_checksum = u32::from_le_bytes(header[28..32].try_into().unwrap());
+fn scan_file(path: &Path) -> Result<WalScan> {
+    let mut file = File::open(path)?;
+    let mut entries: Vec<WalEntry> = Vec::new();
+    let mut offset = 0u64;
 
-            if magic != WAL_MAGIC {
-                return Err(TraceDbError::WalCorruption("invalid magic".to_string()));
-            }
-            if version != WAL_FORMAT_VERSION {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "unsupported wal version {version}"
-                )));
-            }
-            if kind != 1 {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "unsupported frame kind {kind}"
-                )));
-            }
-            let expected_prev = entries
-                .last()
-                .map(|entry| entry.checksum)
-                .unwrap_or_default();
-            if prev_checksum != expected_prev {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "prev checksum mismatch at lsn {lsn}"
-                )));
-            }
-            if payload_len > MAX_PAYLOAD_LEN {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "payload length {payload_len} exceeds max {MAX_PAYLOAD_LEN} at lsn {lsn}"
-                )));
-            }
-
-            let mut payload = vec![0u8; payload_len];
-            let read = read_some(&mut file, &mut payload)?;
-            if read < payload_len {
-                return Ok(WalScan {
-                    entries,
-                    torn_tail: Some(TornWalTail {
-                        offset,
-                        lsn: Some(Lsn::new(lsn)),
-                        reason: "short_payload".to_string(),
-                        expected_len: payload_len + std::mem::size_of::<u32>(),
-                        actual_len: read,
-                    }),
-                });
-            }
-            offset += payload_len as u64;
-            let actual_checksum = checksum_bytes(&payload);
-            if actual_checksum != payload_checksum {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "payload checksum mismatch at lsn {lsn}"
-                )));
-            }
-            let mut footer = [0u8; std::mem::size_of::<u32>()];
-            let read = read_some(&mut file, &mut footer)?;
-            if read < footer.len() {
-                return Ok(WalScan {
-                    entries,
-                    torn_tail: Some(TornWalTail {
-                        offset,
-                        lsn: Some(Lsn::new(lsn)),
-                        reason: "missing_commit_footer".to_string(),
-                        expected_len: footer.len(),
-                        actual_len: read,
-                    }),
-                });
-            }
-            offset += footer.len() as u64;
-            let footer = u32::from_le_bytes(footer);
-            if footer != COMMIT_FOOTER {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "commit footer mismatch at lsn {lsn}"
-                )));
-            }
-            let commit: CommitRecord = serde_json::from_slice(&payload)?;
-            if commit.commit_marker != "COMMITTED" {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "missing commit marker at lsn {lsn}"
-                )));
-            }
-            if commit.epoch.get() == 0 || commit.parent_epoch >= commit.epoch {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "invalid parent epoch {} for epoch {} at lsn {lsn}",
-                    commit.parent_epoch.get(),
-                    commit.epoch.get()
-                )));
-            }
-            if commit.previous_commit_hash != prev_checksum {
-                return Err(TraceDbError::WalCorruption(format!(
-                    "previous commit hash mismatch at lsn {lsn}"
-                )));
-            }
-            entries.push(WalEntry {
-                lsn: Lsn::new(lsn),
-                checksum: payload_checksum,
-                commit,
+    loop {
+        let mut header = [0u8; HEADER_LEN];
+        let read = read_some(&mut file, &mut header)?;
+        if read == 0 {
+            break;
+        }
+        if read < HEADER_LEN {
+            return Ok(WalScan {
+                entries,
+                torn_tail: Some(TornWalTail {
+                    offset,
+                    lsn: None,
+                    reason: "short_header".to_string(),
+                    expected_len: HEADER_LEN,
+                    actual_len: read,
+                }),
             });
         }
+        offset += HEADER_LEN as u64;
 
-        Ok(WalScan {
-            entries,
-            torn_tail: None,
-        })
+        let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
+        let version = u32::from_le_bytes(header[4..8].try_into().unwrap());
+        let lsn = u64::from_le_bytes(header[8..16].try_into().unwrap());
+        let prev_checksum = u32::from_le_bytes(header[16..20].try_into().unwrap());
+        let kind = u32::from_le_bytes(header[20..24].try_into().unwrap());
+        let payload_len = u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize;
+        let payload_checksum = u32::from_le_bytes(header[28..32].try_into().unwrap());
+
+        if magic != WAL_MAGIC {
+            return Err(TraceDbError::WalCorruption("invalid magic".to_string()));
+        }
+        if version != WAL_FORMAT_VERSION {
+            return Err(TraceDbError::WalCorruption(format!(
+                "unsupported wal version {version}"
+            )));
+        }
+        if kind != 1 {
+            return Err(TraceDbError::WalCorruption(format!(
+                "unsupported frame kind {kind}"
+            )));
+        }
+        let expected_prev = entries
+            .last()
+            .map(|entry| entry.checksum)
+            .unwrap_or_default();
+        if prev_checksum != expected_prev {
+            return Err(TraceDbError::WalCorruption(format!(
+                "prev checksum mismatch at lsn {lsn}"
+            )));
+        }
+        if payload_len > MAX_PAYLOAD_LEN {
+            return Err(TraceDbError::WalCorruption(format!(
+                "payload length {payload_len} exceeds max {MAX_PAYLOAD_LEN} at lsn {lsn}"
+            )));
+        }
+
+        let mut payload = vec![0u8; payload_len];
+        let read = read_some(&mut file, &mut payload)?;
+        if read < payload_len {
+            return Ok(WalScan {
+                entries,
+                torn_tail: Some(TornWalTail {
+                    offset,
+                    lsn: Some(Lsn::new(lsn)),
+                    reason: "short_payload".to_string(),
+                    expected_len: payload_len + std::mem::size_of::<u32>(),
+                    actual_len: read,
+                }),
+            });
+        }
+        offset += payload_len as u64;
+        let actual_checksum = checksum_bytes(&payload);
+        if actual_checksum != payload_checksum {
+            return Err(TraceDbError::WalCorruption(format!(
+                "payload checksum mismatch at lsn {lsn}"
+            )));
+        }
+        let mut footer = [0u8; std::mem::size_of::<u32>()];
+        let read = read_some(&mut file, &mut footer)?;
+        if read < footer.len() {
+            return Ok(WalScan {
+                entries,
+                torn_tail: Some(TornWalTail {
+                    offset,
+                    lsn: Some(Lsn::new(lsn)),
+                    reason: "missing_commit_footer".to_string(),
+                    expected_len: footer.len(),
+                    actual_len: read,
+                }),
+            });
+        }
+        offset += footer.len() as u64;
+        let footer = u32::from_le_bytes(footer);
+        if footer != COMMIT_FOOTER {
+            return Err(TraceDbError::WalCorruption(format!(
+                "commit footer mismatch at lsn {lsn}"
+            )));
+        }
+        let commit: CommitRecord = serde_json::from_slice(&payload)?;
+        if commit.commit_marker != "COMMITTED" {
+            return Err(TraceDbError::WalCorruption(format!(
+                "missing commit marker at lsn {lsn}"
+            )));
+        }
+        if commit.epoch.get() == 0 || commit.parent_epoch >= commit.epoch {
+            return Err(TraceDbError::WalCorruption(format!(
+                "invalid parent epoch {} for epoch {} at lsn {lsn}",
+                commit.parent_epoch.get(),
+                commit.epoch.get()
+            )));
+        }
+        if commit.previous_commit_hash != prev_checksum {
+            return Err(TraceDbError::WalCorruption(format!(
+                "previous commit hash mismatch at lsn {lsn}"
+            )));
+        }
+        entries.push(WalEntry {
+            lsn: Lsn::new(lsn),
+            checksum: payload_checksum,
+            commit,
+        });
     }
+
+    Ok(WalScan {
+        entries,
+        torn_tail: None,
+    })
 }
 
 struct WalWriteLock {

@@ -89,14 +89,14 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         provider_metrics_row(report),
         "",
-        "| baseline | available | role | ingest | queries | p50 ms | p95 ms | p99 ms | recall@5 | same-file recall@5 | span gaps | nDCG@5 | MRR@5 | notes |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| baseline | available | role | ingest | queries | p50 ms | p95 ms | p99 ms | ingest p95 ms | query p95 ms | admin p95 ms | recall@5 | same-file recall@5 | span gaps | nDCG@5 | MRR@5 | notes |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for baseline in report["baselines"]:
         metrics = baseline["metrics"]
         notes = "; ".join(baseline["notes"]).replace("|", "\\|")
         lines.append(
-            "| {name} | {available} | {role} | {ingest} | {queries} | {p50} | {p95} | {p99} | {recall} | {same_file_recall} | {span_gaps} | {ndcg} | {mrr} | {notes} |".format(
+            "| {name} | {available} | {role} | {ingest} | {queries} | {p50} | {p95} | {p99} | {ingest_p95} | {query_p95} | {admin_p95} | {recall} | {same_file_recall} | {span_gaps} | {ndcg} | {mrr} | {notes} |".format(
                 name=baseline["name"],
                 available="yes" if baseline["available"] else "no",
                 role=baseline["role"],
@@ -105,6 +105,9 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
                 p50=metrics.get("latency_p50_ms", 0.0),
                 p95=metrics.get("latency_p95_ms", 0.0),
                 p99=metrics.get("latency_p99_ms", 0.0),
+                ingest_p95=metrics.get("ingest_latency_p95_ms", "n/a"),
+                query_p95=metrics.get("query_latency_p95_ms", "n/a"),
+                admin_p95=metrics.get("admin_latency_p95_ms", "n/a"),
                 recall=metrics.get("recall_at_5", 0.0),
                 same_file_recall=metrics.get("same_file_recall_at_5", "n/a"),
                 span_gaps=metrics.get("span_gap_count", 0),

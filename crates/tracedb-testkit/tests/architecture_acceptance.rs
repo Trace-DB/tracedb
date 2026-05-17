@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::{BranchState, Catalog};
+use tracedb_core::Epoch;
 use tracedb_features::{FeatureFreshnessMode, FeatureLifecycle, FeatureLifecycleStatus};
 use tracedb_gateway::{Gateway, GatewayRequest, GatewayServerConfig};
 use tracedb_graph::{Edge, GraphStore};
@@ -120,7 +121,7 @@ fn local_manifest_and_wal_carry_branch_and_managed_authority_fields() {
 
     let manifest = db.inspect_manifest().expect("manifest");
     assert_eq!(manifest.branch_id, "main");
-    assert_eq!(manifest.checkpoint_epoch, manifest.latest_epoch);
+    assert_eq!(manifest.checkpoint_epoch, Epoch::new(0));
     assert!(manifest
         .job_queues
         .contains(&"tracedb.embedding.generate".to_string()));

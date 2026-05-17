@@ -261,7 +261,16 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
         })
         .unwrap_or(0);
     let body_start = header_end + delimiter_len;
-    while buffer.len() < body_start + content_length {
+    if content_length > 16 * 1024 * 1024 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "request body exceeds 16MiB",
+        ));
+    }
+    let expected_len = body_start
+        .checked_add(content_length)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "request too large"))?;
+    while buffer.len() < expected_len {
         let read = stream.read(&mut chunk)?;
         if read == 0 {
             return Err(std::io::Error::new(
@@ -270,14 +279,8 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
             ));
         }
         buffer.extend_from_slice(&chunk[..read]);
-        if content_length > 16 * 1024 * 1024 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "request body exceeds 16MiB",
-            ));
-        }
     }
-    Ok(String::from_utf8_lossy(&buffer[..body_start + content_length]).to_string())
+    Ok(String::from_utf8_lossy(&buffer[..expected_len]).to_string())
 }
 
 fn find_header_end(buffer: &[u8]) -> Option<(usize, usize)> {

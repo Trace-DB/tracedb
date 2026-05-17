@@ -437,6 +437,29 @@ impl RecordStore {
                 .and_then(|record| record.features.get(feature).cloned())
         })
     }
+
+    pub fn is_tombstoned_at(
+        &self,
+        table: &str,
+        tenant_id: &str,
+        record_id: &str,
+        epoch: Epoch,
+    ) -> bool {
+        self.versions
+            .get(&record_key(table, tenant_id, record_id))
+            .and_then(|versions| {
+                versions.iter().rev().find(|record| {
+                    record.header.begin_epoch <= epoch
+                        && record
+                            .header
+                            .end_epoch
+                            .map(|end| end > epoch)
+                            .unwrap_or(true)
+                })
+            })
+            .map(|record| record.header.tombstone.is_some())
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Clone, Debug)]

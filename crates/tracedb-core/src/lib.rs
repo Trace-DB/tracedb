@@ -409,16 +409,23 @@ pub fn checksum_bytes(bytes: &[u8]) -> u32 {
 }
 
 pub fn source_hash(fields: &Map<String, Value>, source_columns: &[String]) -> u64 {
-    let mut bytes = Vec::new();
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for column in source_columns {
-        bytes.extend_from_slice(column.as_bytes());
-        bytes.push(b'=');
+        fnv1a_update(&mut hash, column.as_bytes());
+        fnv1a_update(&mut hash, b"=");
         if let Some(value) = fields.get(column) {
-            bytes.extend_from_slice(value.to_string().as_bytes());
+            fnv1a_update(&mut hash, value.to_string().as_bytes());
         }
-        bytes.push(0);
+        fnv1a_update(&mut hash, &[0]);
     }
-    checksum_bytes(&bytes) as u64
+    hash
+}
+
+fn fnv1a_update(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
 }
 
 pub fn value_as_f32_vec(value: &Value) -> Option<Vec<f32>> {

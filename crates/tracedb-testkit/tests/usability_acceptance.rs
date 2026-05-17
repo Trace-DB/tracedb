@@ -234,6 +234,34 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
 }
 
 #[test]
+fn http_server_rejects_oversized_content_length_before_body_read() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    let mut stream = TcpStream::connect(addr).expect("connect");
+    stream
+        .write_all(
+            b"POST /v1/query HTTP/1.1\r\nHost: localhost\r\nContent-Length: 16777217\r\n\r\n",
+        )
+        .expect("write headers");
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    assert!(
+        response.contains("request body exceeds 16MiB"),
+        "response should reject oversized body before reading it, got {response:?}"
+    );
+}
+
+#[test]
 fn sdk_builds_stable_usability_requests() {
     let client = TraceDbClient::new(TraceDbClientConfig::managed(
         "http://localhost:18081",

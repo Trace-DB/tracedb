@@ -5,8 +5,8 @@ use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 use tempfile::TempDir;
 use tracedb_core::{
-    checksum_bytes, compute_manifest_checksum, Epoch, FeatureInvalidation, FeatureStatus,
-    IndexState, SegmentState, TraceDbManifest,
+    checksum_bytes, compute_manifest_checksum, source_hash, Epoch, FeatureInvalidation,
+    FeatureStatus, IndexState, SegmentState, TraceDbManifest,
 };
 use tracedb_log::{CommitRecord, Wal};
 use tracedb_modules::{AccessPathDescriptor, ModuleRegistry, TraceDbModule};
@@ -112,6 +112,24 @@ fn create_table_manifest() {
     let manifest = db.inspect_manifest().expect("manifest");
     assert_eq!(manifest.schemas[0].name, "docs");
     assert_eq!(manifest.schemas[0].text_indexed_columns, vec!["body"]);
+}
+
+#[test]
+fn source_hash_uses_full_width_change_detection_bits() {
+    let fields = json!({
+        "body": "embedding source text that should not be reduced to a 32-bit checksum"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    let hash = source_hash(&fields, &["body".to_string()]);
+
+    assert_ne!(
+        hash >> 32,
+        0,
+        "source_hash should use more than CRC32-width entropy"
+    );
 }
 
 #[test]
