@@ -25,8 +25,11 @@ use tracedb_planner::{
 use tracedb_segment::SegmentRecord;
 use tracedb_store::{ReadSnapshot, RecordStore, StoredRecord};
 
-const CHECKPOINT_BINARY_MAGIC: &[u8; 8] = b"TDBCHK01";
-const CHECKPOINT_FORMAT_VERSION: u32 = 2;
+const CHECKPOINT_MAGIC_V2: &[u8; 8] = b"TDBCHK01";
+const CHECKPOINT_MAGIC_V3: &[u8; 8] = b"TDBCHK02";
+const CHECKPOINT_FORMAT_VERSION: u32 = 3;
+const CHECKPOINT_LEGACY_COMPACT_FORMAT_VERSION: u32 = 2;
+const CHECKPOINT_LEGACY_JSON_FORMAT_VERSION: u32 = 1;
 
 pub use tracedb_core::{
     FeatureInvalidation, ModuleManifest, RecordDeletion, RecordInput, TableSchema,
@@ -228,6 +231,14 @@ struct CheckpointFile {
     schemas: Vec<TableSchema>,
     records: Vec<StoredRecord>,
     checksum: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CheckpointPayload {
+    format_version: u32,
+    epoch: Epoch,
+    schemas: Vec<TableSchema>,
+    records: Vec<StoredRecord>,
 }
 
 impl TraceDb {
@@ -2015,17 +2026,17 @@ fn write_checkpoint_file(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut checkpoint = CheckpointFile {
+    let payload = CheckpointPayload {
         format_version: CHECKPOINT_FORMAT_VERSION,
         epoch,
         schemas,
         records,
-        checksum: 0,
     };
-    checkpoint.checksum = compute_checkpoint_checksum(&checkpoint)?;
-    let payload = serde_json::to_vec(&checkpoint)?;
-    let mut body = Vec::with_capacity(CHECKPOINT_BINARY_MAGIC.len() + payload.len());
-    body.extend_from_slice(CHECKPOINT_BINARY_MAGIC);
+    let payload = serde_json::to_vec(&payload)?;
+    let checksum = checksum_bytes(&payload);
+    let mut body = Vec::with_capacity(CHECKPOINT_MAGIC_V3.len() + 4 + payload.len());
+    body.extend_from_slice(CHECKPOINT_MAGIC_V3);
+    body.extend_from_slice(&checksum.to_le_bytes());
     body.extend_from_slice(&payload);
     let tmp_path = path.with_extension("tchk.tmp");
     let mut file = File::create(&tmp_path)?;
@@ -2054,22 +2065,85 @@ fn read_binary_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
             path.display()
         ))
     })?;
-    if body.len() <= CHECKPOINT_BINARY_MAGIC.len()
-        || &body[..CHECKPOINT_BINARY_MAGIC.len()] != CHECKPOINT_BINARY_MAGIC
-    {
+    if body.starts_with(CHECKPOINT_MAGIC_V3) {
+        return read_framed_checkpoint_file(path, &body);
+    }
+    if body.starts_with(CHECKPOINT_MAGIC_V2) {
+        return read_legacy_binary_checkpoint_file(path, &body);
+    }
+    Err(TraceDbError::ManifestCorruption(format!(
+        "checkpoint magic mismatch at {}",
+        path.display()
+    )))
+}
+
+fn read_framed_checkpoint_file(path: &Path, body: &[u8]) -> Result<CheckpointFile> {
+    if body.len() <= CHECKPOINT_MAGIC_V3.len() + 4 {
         return Err(TraceDbError::ManifestCorruption(format!(
-            "checkpoint magic mismatch at {}",
+            "checkpoint payload missing at {}",
             path.display()
         )));
     }
-    let checkpoint: CheckpointFile = serde_json::from_slice(&body[CHECKPOINT_BINARY_MAGIC.len()..])
+    let expected = u32::from_le_bytes(
+        body[CHECKPOINT_MAGIC_V3.len()..CHECKPOINT_MAGIC_V3.len() + 4]
+            .try_into()
+            .map_err(|_| {
+                TraceDbError::ManifestCorruption(format!(
+                    "checkpoint checksum frame is invalid at {}",
+                    path.display()
+                ))
+            })?,
+    );
+    if expected == 0 {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "missing checkpoint checksum at {}",
+            path.display()
+        )));
+    }
+    let payload = &body[CHECKPOINT_MAGIC_V3.len() + 4..];
+    let actual = checksum_bytes(payload);
+    if actual != expected {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "checkpoint checksum mismatch at {}: expected {expected}, got {actual}",
+            path.display()
+        )));
+    }
+    let payload: CheckpointPayload = serde_json::from_slice(payload).map_err(|err| {
+        TraceDbError::ManifestCorruption(format!(
+            "failed to parse checkpoint file at {}: {err}",
+            path.display()
+        ))
+    })?;
+    if payload.format_version != CHECKPOINT_FORMAT_VERSION {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "unsupported checkpoint format version {}",
+            payload.format_version
+        )));
+    }
+    Ok(CheckpointFile {
+        format_version: payload.format_version,
+        epoch: payload.epoch,
+        schemas: payload.schemas,
+        records: payload.records,
+        checksum: expected,
+    })
+}
+
+fn read_legacy_binary_checkpoint_file(path: &Path, body: &[u8]) -> Result<CheckpointFile> {
+    if body.len() <= CHECKPOINT_MAGIC_V2.len() {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "checkpoint payload missing at {}",
+            path.display()
+        )));
+    }
+    let checkpoint: CheckpointFile = serde_json::from_slice(&body[CHECKPOINT_MAGIC_V2.len()..])
         .map_err(|err| {
             TraceDbError::ManifestCorruption(format!(
                 "failed to parse checkpoint file at {}: {err}",
                 path.display()
             ))
         })?;
-    verify_checkpoint_file(path, checkpoint, CHECKPOINT_FORMAT_VERSION)
+    verify_checkpoint_file(path, checkpoint, CHECKPOINT_LEGACY_COMPACT_FORMAT_VERSION)
 }
 
 fn read_json_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
@@ -2085,7 +2159,7 @@ fn read_json_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
             path.display()
         ))
     })?;
-    verify_checkpoint_file(path, checkpoint, 1)
+    verify_checkpoint_file(path, checkpoint, CHECKPOINT_LEGACY_JSON_FORMAT_VERSION)
 }
 
 fn verify_checkpoint_file(
@@ -2328,5 +2402,28 @@ mod tests {
             vec!["sealed-only"]
         );
         assert_eq!(output.explain.final_visibility_guard_removed, 0);
+    }
+
+    #[test]
+    fn checkpoint_file_uses_framed_payload_checksum() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        db.insert(record("a", "checkpoint payload"))
+            .expect("insert");
+
+        let epoch = db.checkpoint().expect("checkpoint");
+        let relative = checkpoint_relative_path(epoch);
+        let body = fs::read(temp.path().join(relative)).expect("checkpoint bytes");
+
+        assert_eq!(&body[..CHECKPOINT_MAGIC_V3.len()], CHECKPOINT_MAGIC_V3);
+        assert!(body.len() > CHECKPOINT_MAGIC_V3.len() + 4);
+        let expected = u32::from_le_bytes(
+            body[CHECKPOINT_MAGIC_V3.len()..CHECKPOINT_MAGIC_V3.len() + 4]
+                .try_into()
+                .expect("checksum bytes"),
+        );
+        let payload = &body[CHECKPOINT_MAGIC_V3.len() + 4..];
+        assert_eq!(expected, checksum_bytes(payload));
     }
 }
