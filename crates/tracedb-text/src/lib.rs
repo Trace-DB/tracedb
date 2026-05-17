@@ -99,6 +99,7 @@ pub struct PreparedTextCorpus {
     doc_count: usize,
     avg_len: f32,
     documents: Vec<PreparedTextDocument>,
+    postings: BTreeMap<String, Vec<PreparedTextPosting>>,
 }
 
 impl PreparedTextCorpus {
@@ -122,6 +123,7 @@ impl PreparedTextCorpus {
             doc_count: docs.len(),
             avg_len: total_len as f32 / docs.len() as f32,
             documents,
+            postings: BTreeMap::new(),
         }
     }
 
@@ -139,7 +141,7 @@ impl PreparedTextCorpus {
         let mut documents = Vec::with_capacity(docs.len());
         let mut df = BTreeMap::<String, usize>::new();
         let mut matching_docs = Vec::<QueryScopedDoc>::new();
-        for (id, body) in docs {
+        for (document_index, (id, body)) in docs.iter().enumerate() {
             let tokens = tokenize(body);
             total_len += tokens.len();
             if !query_terms.is_empty() {
@@ -156,6 +158,7 @@ impl PreparedTextCorpus {
                     matching_docs.push(QueryScopedDoc {
                         id: id.clone(),
                         doc_len: tokens.len(),
+                        document_index,
                         tf,
                     });
                 }
@@ -171,6 +174,7 @@ impl PreparedTextCorpus {
             doc_count: docs.len(),
             avg_len,
             documents,
+            postings: selective_postings(&matching_docs, &df, docs.len()),
         };
         let score_report = if query_terms.is_empty() {
             TextScoreReport::default()
@@ -192,6 +196,7 @@ impl PreparedTextCorpus {
             TextScoreReport {
                 scored_documents: scores.len(),
                 tokenized_documents: docs.len(),
+                term_postings_visited: 0,
                 scores,
             }
         };
@@ -210,9 +215,70 @@ impl PreparedTextCorpus {
         }
 
         let query_term_set = query_terms.iter().cloned().collect::<BTreeSet<_>>();
+        if query_term_set
+            .iter()
+            .all(|term| self.postings.contains_key(term))
+        {
+            return self.score_query_from_postings(&query_terms, &query_term_set);
+        }
+
+        self.score_query_by_scanning_tokens(&query_terms, &query_term_set)
+    }
+
+    fn score_query_from_postings(
+        &self,
+        query_terms: &[String],
+        query_term_set: &BTreeSet<String>,
+    ) -> TextScoreReport {
+        let mut df = BTreeMap::<String, usize>::new();
+        let mut term_postings_visited = 0usize;
+        let mut tf_by_doc = BTreeMap::<usize, BTreeMap<String, usize>>::new();
+        for term in query_term_set {
+            let Some(postings) = self.postings.get(term) else {
+                continue;
+            };
+            term_postings_visited += postings.len();
+            df.insert(term.clone(), postings.len());
+            for posting in postings {
+                tf_by_doc
+                    .entry(posting.document_index)
+                    .or_default()
+                    .insert(term.clone(), posting.term_frequency);
+            }
+        }
+
+        let scores = tf_by_doc
+            .iter()
+            .filter_map(|(document_index, tf)| {
+                let doc = &self.documents[*document_index];
+                let score = bm25_from_term_frequency(
+                    query_terms,
+                    tf,
+                    doc.tokens.len(),
+                    self.doc_count,
+                    self.avg_len,
+                    &df,
+                );
+                (score > 0.0).then(|| (doc.id.clone(), score))
+            })
+            .collect::<Vec<_>>();
+
+        TextScoreReport {
+            scored_documents: scores.len(),
+            tokenized_documents: 0,
+            term_postings_visited,
+            scores,
+        }
+    }
+
+    fn score_query_by_scanning_tokens(
+        &self,
+        query_terms: &[String],
+        query_term_set: &BTreeSet<String>,
+    ) -> TextScoreReport {
         let mut df = BTreeMap::<String, usize>::new();
         let mut matching_docs = Vec::<QueryScopedDoc>::new();
-        for doc in &self.documents {
+        for (document_index, doc) in self.documents.iter().enumerate() {
             let mut tf = BTreeMap::<String, usize>::new();
             for token in &doc.tokens {
                 if query_term_set.contains(token) {
@@ -226,6 +292,7 @@ impl PreparedTextCorpus {
                 matching_docs.push(QueryScopedDoc {
                     id: doc.id.clone(),
                     doc_len: doc.tokens.len(),
+                    document_index,
                     tf,
                 });
             }
@@ -235,7 +302,7 @@ impl PreparedTextCorpus {
             .iter()
             .filter_map(|doc| {
                 let score = bm25_from_term_frequency(
-                    &query_terms,
+                    query_terms,
                     &doc.tf,
                     doc.doc_len,
                     self.doc_count,
@@ -249,6 +316,7 @@ impl PreparedTextCorpus {
         TextScoreReport {
             scored_documents: scores.len(),
             tokenized_documents: 0,
+            term_postings_visited: 0,
             scores,
         }
     }
@@ -261,10 +329,18 @@ struct PreparedTextDocument {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct PreparedTextPosting {
+    document_index: usize,
+    term_frequency: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TextScoreReport {
     pub scores: Vec<(String, f32)>,
     pub tokenized_documents: usize,
     pub scored_documents: usize,
+    #[serde(default)]
+    pub term_postings_visited: usize,
 }
 
 pub fn score_corpus_with_stats(query: &str, docs: &[(String, String)]) -> TextScoreReport {
@@ -277,7 +353,7 @@ pub fn score_corpus_with_stats(query: &str, docs: &[(String, String)]) -> TextSc
     let mut total_len = 0usize;
     let mut df = BTreeMap::<String, usize>::new();
     let mut matching_docs = Vec::<QueryScopedDoc>::new();
-    for (id, body) in docs {
+    for (document_index, (id, body)) in docs.iter().enumerate() {
         let tokens = tokenize(body);
         total_len += tokens.len();
         let mut tf = BTreeMap::<String, usize>::new();
@@ -293,6 +369,7 @@ pub fn score_corpus_with_stats(query: &str, docs: &[(String, String)]) -> TextSc
             matching_docs.push(QueryScopedDoc {
                 id: id.clone(),
                 doc_len: tokens.len(),
+                document_index,
                 tf,
             });
         }
@@ -316,6 +393,7 @@ pub fn score_corpus_with_stats(query: &str, docs: &[(String, String)]) -> TextSc
     TextScoreReport {
         scored_documents: scores.len(),
         tokenized_documents: docs.len(),
+        term_postings_visited: 0,
         scores,
     }
 }
@@ -324,7 +402,31 @@ pub fn score_corpus_with_stats(query: &str, docs: &[(String, String)]) -> TextSc
 struct QueryScopedDoc {
     id: String,
     doc_len: usize,
+    document_index: usize,
     tf: BTreeMap<String, usize>,
+}
+
+fn selective_postings(
+    matching_docs: &[QueryScopedDoc],
+    df: &BTreeMap<String, usize>,
+    doc_count: usize,
+) -> BTreeMap<String, Vec<PreparedTextPosting>> {
+    let cutoff = (doc_count / 4).max(1);
+    let mut postings = BTreeMap::<String, Vec<PreparedTextPosting>>::new();
+    for doc in matching_docs {
+        for (term, term_frequency) in &doc.tf {
+            if df.get(term).is_some_and(|doc_freq| *doc_freq <= cutoff) {
+                postings
+                    .entry(term.clone())
+                    .or_default()
+                    .push(PreparedTextPosting {
+                        document_index: doc.document_index,
+                        term_frequency: *term_frequency,
+                    });
+            }
+        }
+    }
+    postings
 }
 
 fn bm25_from_term_frequency(
@@ -414,6 +516,35 @@ mod tests {
         assert_eq!(
             prepared.score_query_with_stats("alpha raretoken").scores,
             direct
+        );
+    }
+
+    #[test]
+    fn prepared_text_corpus_uses_postings_for_rare_query_terms() {
+        let docs = (0..128)
+            .map(|index| {
+                let body = if index == 42 {
+                    "common memory policy raretoken".to_string()
+                } else {
+                    "common memory policy".to_string()
+                };
+                (format!("doc-{index}"), body)
+            })
+            .collect::<Vec<_>>();
+        let (prepared, _) =
+            PreparedTextCorpus::from_documents_with_initial_score("raretoken", &docs);
+
+        let report = prepared.score_query_with_stats("raretoken");
+
+        assert_eq!(report.tokenized_documents, 0);
+        assert_eq!(report.scored_documents, 1);
+        assert_eq!(report.term_postings_visited, 1);
+        assert_eq!(
+            report
+                .scores
+                .first()
+                .map(|(record_id, _)| record_id.as_str()),
+            Some("doc-42")
         );
     }
 }

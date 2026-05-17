@@ -123,6 +123,12 @@ pub struct InProcessScalingPoint {
     #[serde(default)]
     pub engine_query_p99_ms: f64,
     #[serde(default)]
+    pub rare_lexical_query_p50_ms: f64,
+    #[serde(default)]
+    pub rare_lexical_query_p95_ms: f64,
+    #[serde(default)]
+    pub rare_lexical_query_p99_ms: f64,
+    #[serde(default)]
     pub query_phase_p95_ms: Vec<TimingP95>,
     #[serde(default)]
     pub query_access_path_build_p95_ms: Vec<TimingP95>,
@@ -141,6 +147,9 @@ pub struct InProcessScalingPoint {
     pub checkpoint_engine_query_p50_ms: Option<f64>,
     pub checkpoint_engine_query_p95_ms: Option<f64>,
     pub checkpoint_engine_query_p99_ms: Option<f64>,
+    pub checkpoint_rare_lexical_query_p50_ms: Option<f64>,
+    pub checkpoint_rare_lexical_query_p95_ms: Option<f64>,
+    pub checkpoint_rare_lexical_query_p99_ms: Option<f64>,
     pub checkpoint_lexical_cache_hits: Option<usize>,
     pub checkpoint_lexical_cache_misses: Option<usize>,
     pub checkpoint_lexical_indexed_documents: Option<usize>,
@@ -212,7 +221,9 @@ fn measure_inprocess_point(
     config: &InProcessScalingConfig,
 ) -> Result<InProcessScalingPoint, Box<dyn Error>> {
     let query = scaling_query(records);
+    let rare_lexical_query = rare_lexical_scaling_query(records);
     let mut query_latencies = Vec::new();
+    let mut rare_lexical_query_latencies = Vec::new();
     let mut query_phase_samples = BTreeMap::<String, Vec<f64>>::new();
     let mut query_access_path_build_samples = BTreeMap::<String, Vec<f64>>::new();
     let mut query_access_path_open_samples = BTreeMap::<String, Vec<f64>>::new();
@@ -238,6 +249,9 @@ fn measure_inprocess_point(
         lexical_scored_documents =
             lexical_scored_documents.max(output.0.explain.lexical_scored_documents);
     }
+    for _ in 0..config.query_repetitions {
+        rare_lexical_query_latencies.push(timed_ms(|| db.query(rare_lexical_query.clone()))?);
+    }
 
     let mut open_latencies = Vec::new();
     for _ in 0..config.open_repetitions {
@@ -258,6 +272,9 @@ fn measure_inprocess_point(
         engine_query_p50_ms: round_ms(percentile(&query_latencies, 50.0)),
         engine_query_p95_ms: round_ms(percentile(&query_latencies, 95.0)),
         engine_query_p99_ms: round_ms(percentile(&query_latencies, 99.0)),
+        rare_lexical_query_p50_ms: round_ms(percentile(&rare_lexical_query_latencies, 50.0)),
+        rare_lexical_query_p95_ms: round_ms(percentile(&rare_lexical_query_latencies, 95.0)),
+        rare_lexical_query_p99_ms: round_ms(percentile(&rare_lexical_query_latencies, 99.0)),
         query_phase_p95_ms: timing_p95_samples(&query_phase_samples),
         query_access_path_build_p95_ms: timing_p95_samples(&query_access_path_build_samples),
         query_access_path_open_p95_ms: timing_p95_samples(&query_access_path_open_samples),
@@ -274,6 +291,9 @@ fn measure_inprocess_point(
         checkpoint_engine_query_p50_ms: None,
         checkpoint_engine_query_p95_ms: None,
         checkpoint_engine_query_p99_ms: None,
+        checkpoint_rare_lexical_query_p50_ms: None,
+        checkpoint_rare_lexical_query_p95_ms: None,
+        checkpoint_rare_lexical_query_p99_ms: None,
         checkpoint_lexical_cache_hits: None,
         checkpoint_lexical_cache_misses: None,
         checkpoint_lexical_indexed_documents: None,
@@ -287,6 +307,7 @@ fn measure_inprocess_point(
         let checkpoint_latency = timed_ms(|| db.checkpoint())?;
         let mut checkpoint_open_latencies = Vec::new();
         let mut checkpoint_query_latencies = Vec::new();
+        let mut checkpoint_rare_lexical_query_latencies = Vec::new();
         let mut checkpoint_phase_samples = BTreeMap::<String, Vec<f64>>::new();
         let mut checkpoint_access_path_build_samples = BTreeMap::<String, Vec<f64>>::new();
         let mut checkpoint_access_path_open_samples = BTreeMap::<String, Vec<f64>>::new();
@@ -314,6 +335,10 @@ fn measure_inprocess_point(
                 checkpoint_lexical_scored_documents = checkpoint_lexical_scored_documents
                     .max(output.0.explain.lexical_scored_documents);
             }
+            for _ in 0..config.query_repetitions {
+                checkpoint_rare_lexical_query_latencies
+                    .push(timed_ms(|| opened_db.query(rare_lexical_query.clone()))?);
+            }
         }
         point.checkpoint_latency_ms = Some(round_ms(checkpoint_latency));
         point.checkpoint_wal_bytes = Some(wal_bytes(data_dir));
@@ -326,6 +351,18 @@ fn measure_inprocess_point(
             Some(round_ms(percentile(&checkpoint_query_latencies, 95.0)));
         point.checkpoint_engine_query_p99_ms =
             Some(round_ms(percentile(&checkpoint_query_latencies, 99.0)));
+        point.checkpoint_rare_lexical_query_p50_ms = Some(round_ms(percentile(
+            &checkpoint_rare_lexical_query_latencies,
+            50.0,
+        )));
+        point.checkpoint_rare_lexical_query_p95_ms = Some(round_ms(percentile(
+            &checkpoint_rare_lexical_query_latencies,
+            95.0,
+        )));
+        point.checkpoint_rare_lexical_query_p99_ms = Some(round_ms(percentile(
+            &checkpoint_rare_lexical_query_latencies,
+            99.0,
+        )));
         point.checkpoint_lexical_cache_hits = Some(checkpoint_lexical_cache_hits);
         point.checkpoint_lexical_cache_misses = Some(checkpoint_lexical_cache_misses);
         point.checkpoint_lexical_indexed_documents = Some(checkpoint_lexical_indexed_documents);
@@ -394,6 +431,21 @@ fn scaling_query(records: usize) -> HybridQuery {
             "agent memory vector retrieval policy freshness record {records}"
         )),
         vector: Some(vec![0.1, 0.2, 0.3, 0.4, 0.1, 0.2, 0.3, 0.4]),
+        scalar_eq: Default::default(),
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k: 5,
+        freshness: FreshnessMode::AllowDirty,
+        explain: true,
+    }
+}
+
+fn rare_lexical_scaling_query(records: usize) -> HybridQuery {
+    HybridQuery {
+        table: "scaling_records".to_string(),
+        tenant_id: "tenant-a".to_string(),
+        text: Some(records.to_string()),
+        vector: None,
         scalar_eq: Default::default(),
         graph_seed: None,
         temporal_as_of: None,
@@ -513,10 +565,18 @@ mod tests {
         assert!(point.engine_query_p50_ms > 0.0);
         assert!(point.engine_query_p95_ms > 0.0);
         assert!(point.engine_query_p99_ms >= point.engine_query_p95_ms);
+        assert!(point.rare_lexical_query_p50_ms > 0.0);
+        assert!(point.rare_lexical_query_p95_ms > 0.0);
+        assert!(point.rare_lexical_query_p99_ms >= point.rare_lexical_query_p95_ms);
         assert!(point.checkpoint_engine_query_p50_ms.unwrap() > 0.0);
         assert!(
             point.checkpoint_engine_query_p99_ms.unwrap()
                 >= point.checkpoint_engine_query_p95_ms.unwrap()
+        );
+        assert!(point.checkpoint_rare_lexical_query_p50_ms.unwrap() > 0.0);
+        assert!(
+            point.checkpoint_rare_lexical_query_p99_ms.unwrap()
+                >= point.checkpoint_rare_lexical_query_p95_ms.unwrap()
         );
         assert!(point
             .query_phase_p95_ms
