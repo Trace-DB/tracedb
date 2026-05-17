@@ -91,55 +91,90 @@ pub fn tokenize(input: &str) -> Vec<String> {
 }
 
 pub fn score_corpus(query: &str, docs: &[(String, String)]) -> Vec<(String, f32)> {
-    let query_terms = tokenize(query);
-    if query_terms.is_empty() || docs.is_empty() {
-        return Vec::new();
-    }
-
-    let tokenized_docs: Vec<(String, Vec<String>)> = docs
-        .iter()
-        .map(|(id, body)| (id.clone(), tokenize(body)))
-        .collect();
-    let avg_len = tokenized_docs
-        .iter()
-        .map(|(_, tokens)| tokens.len() as f32)
-        .sum::<f32>()
-        / tokenized_docs.len() as f32;
-    let mut df = BTreeMap::<String, usize>::new();
-    for (_, tokens) in &tokenized_docs {
-        let unique = tokens.iter().cloned().collect::<BTreeSet<_>>();
-        for token in unique {
-            *df.entry(token).or_default() += 1;
-        }
-    }
-
-    tokenized_docs
-        .iter()
-        .filter_map(|(id, tokens)| {
-            let score = bm25(&query_terms, tokens, tokenized_docs.len(), avg_len, &df);
-            (score > 0.0).then(|| (id.clone(), score))
-        })
-        .collect()
+    score_corpus_with_stats(query, docs).scores
 }
 
-fn bm25(
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TextScoreReport {
+    pub scores: Vec<(String, f32)>,
+    pub tokenized_documents: usize,
+    pub scored_documents: usize,
+}
+
+pub fn score_corpus_with_stats(query: &str, docs: &[(String, String)]) -> TextScoreReport {
+    let query_terms = tokenize(query);
+    if query_terms.is_empty() || docs.is_empty() {
+        return TextScoreReport::default();
+    }
+
+    let query_term_set = query_terms.iter().cloned().collect::<BTreeSet<_>>();
+    let mut total_len = 0usize;
+    let mut df = BTreeMap::<String, usize>::new();
+    let mut matching_docs = Vec::<QueryScopedDoc>::new();
+    for (id, body) in docs {
+        let tokens = tokenize(body);
+        total_len += tokens.len();
+        let mut tf = BTreeMap::<String, usize>::new();
+        for token in &tokens {
+            if query_term_set.contains(token) {
+                *tf.entry(token.clone()).or_default() += 1;
+            }
+        }
+        if !tf.is_empty() {
+            for term in tf.keys() {
+                *df.entry(term.clone()).or_default() += 1;
+            }
+            matching_docs.push(QueryScopedDoc {
+                id: id.clone(),
+                doc_len: tokens.len(),
+                tf,
+            });
+        }
+    }
+    let avg_len = total_len as f32 / docs.len() as f32;
+    let scores = matching_docs
+        .iter()
+        .filter_map(|doc| {
+            let score = bm25_from_term_frequency(
+                &query_terms,
+                &doc.tf,
+                doc.doc_len,
+                docs.len(),
+                avg_len,
+                &df,
+            );
+            (score > 0.0).then(|| (doc.id.clone(), score))
+        })
+        .collect::<Vec<_>>();
+
+    TextScoreReport {
+        scored_documents: scores.len(),
+        tokenized_documents: docs.len(),
+        scores,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct QueryScopedDoc {
+    id: String,
+    doc_len: usize,
+    tf: BTreeMap<String, usize>,
+}
+
+fn bm25_from_term_frequency(
     query_terms: &[String],
-    tokens: &[String],
+    tf: &BTreeMap<String, usize>,
+    doc_len: usize,
     doc_count: usize,
     avg_len: f32,
     df: &BTreeMap<String, usize>,
 ) -> f32 {
-    let mut tf = BTreeMap::<&str, usize>::new();
-    for token in tokens {
-        *tf.entry(token.as_str()).or_default() += 1;
-    }
-
     let k1 = 1.5;
     let b = 0.75;
-    let doc_len = tokens.len() as f32;
+    let doc_len = doc_len as f32;
     let mut score = 0.0;
     for term in query_terms {
-        let freq = *tf.get(term.as_str()).unwrap_or(&0) as f32;
+        let freq = *tf.get(term).unwrap_or(&0) as f32;
         if freq == 0.0 {
             continue;
         }
@@ -149,4 +184,30 @@ fn bm25(
         score += idf * (freq * (k1 + 1.0)) / denom;
     }
     score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn score_corpus_with_stats_reports_only_matching_documents_scored() {
+        let docs = vec![
+            ("target".to_string(), "alpha beta raretoken".to_string()),
+            ("distractor-1".to_string(), "alpha beta gamma".to_string()),
+            ("distractor-2".to_string(), "delta epsilon zeta".to_string()),
+        ];
+
+        let report = score_corpus_with_stats("raretoken", &docs);
+
+        assert_eq!(report.tokenized_documents, 3);
+        assert_eq!(report.scored_documents, 1);
+        assert_eq!(
+            report
+                .scores
+                .first()
+                .map(|(record_id, _)| record_id.as_str()),
+            Some("target")
+        );
+    }
 }
