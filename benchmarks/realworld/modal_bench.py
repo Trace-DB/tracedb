@@ -26,6 +26,8 @@ DEFAULT_REPORTS_DIR = "/tmp/tracedb-modal-reports"
 DEFAULT_BUNDLE_DIR = "/tmp/tracedb-modal-bundles"
 DEFAULT_MAX_RECORDS = 1000
 MODAL_MIN_EPHEMERAL_DISK_MB = 524_288
+DEFAULT_MODAL_APP_NAME = "tracedb-realworld-smoke"
+MODAL_APP_NAME_ENV = "TRACEDB_MODAL_APP_NAME"
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
 EXTERNAL_CONTROL_TARGETS = {
     "postgres",
@@ -83,6 +85,7 @@ class ModalSmokeConfig:
     require_services: bool = False
     postgres_control: bool = False
     postgres_port: int = 25_432
+    modal_app_name: str = DEFAULT_MODAL_APP_NAME
 
 
 def validate_config(config: ModalSmokeConfig) -> None:
@@ -105,6 +108,10 @@ def validate_config(config: ModalSmokeConfig) -> None:
         raise ValueError("postgres_control needs target including postgres or all")
     if config.min_free_mb < 1_000:
         raise ValueError("min_free_mb is too low for reproducible report artifact runs")
+
+
+def modal_app_name() -> str:
+    return os.environ.get(MODAL_APP_NAME_ENV, DEFAULT_MODAL_APP_NAME)
 
 
 def requested_targets(target: str) -> set[str]:
@@ -195,6 +202,7 @@ def build_manifest(
         "kind": "tracedb_modal_smoke",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "run_id": config.run_id,
+        "modal_app_name": config.modal_app_name,
         "repo_root": str(repo_root),
         "suite_command": suite_command,
         "modal_resource_class": {
@@ -446,6 +454,7 @@ def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
         require_services=args.require_services,
         postgres_control=args.postgres_control,
         postgres_port=args.postgres_port,
+        modal_app_name=modal_app_name(),
     )
 
 
@@ -475,7 +484,7 @@ if modal is not None:
 
     image = modal_image()
     postgres_image = modal_image("postgresql", "postgresql-client")
-    app = modal.App("tracedb-realworld-smoke")
+    app = modal.App(modal_app_name())
 
     @app.function(
         image=image,
@@ -528,6 +537,7 @@ if modal is not None:
             postgres_control=postgres_control,
             allow_large=allow_large,
             allow_provider=allow_provider,
+            modal_app_name=modal_app_name(),
         )
         print(json.dumps(result, indent=2, sort_keys=True))
 else:

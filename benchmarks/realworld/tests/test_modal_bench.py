@@ -192,6 +192,27 @@ class ModalBenchTests(unittest.TestCase):
         self.assertNotIn("secret", manifest_text)
         self.assertEqual(manifest["runner_env"]["BENCH_POSTGRES_DSN"], "[redacted]")
 
+    def test_modal_app_identity_can_be_overridden_for_variance_runs(self) -> None:
+        from modal_bench import ModalSmokeConfig, _parse_args, build_manifest, modal_app_name
+
+        with patch.dict(os.environ, {"TRACEDB_MODAL_APP_NAME": "tracedb-postgres-a"}, clear=False):
+            self.assertEqual(modal_app_name(), "tracedb-postgres-a")
+            config = _parse_args(["--run-id", "variance-a"])
+            manifest = build_manifest(
+                config,
+                ["python3", "-m", "runner", "suite"],
+            )
+
+        self.assertEqual(config.modal_app_name, "tracedb-postgres-a")
+        self.assertEqual(manifest["modal_app_name"], "tracedb-postgres-a")
+        self.assertEqual(
+            build_manifest(
+                ModalSmokeConfig(run_id="explicit", modal_app_name="tracedb-postgres-b"),
+                ["python3", "-m", "runner", "suite"],
+            )["modal_app_name"],
+            "tracedb-postgres-b",
+        )
+
     def test_cli_config_can_override_min_free_for_tiny_local_smoke(self) -> None:
         from modal_bench import _parse_args
 
