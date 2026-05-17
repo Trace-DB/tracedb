@@ -610,6 +610,8 @@ impl TraceDb {
             graph_seed: query.graph_seed.clone(),
             temporal_as_of: query.temporal_as_of,
             freshness: &query.freshness,
+            fallback_candidate_limit: query_has_evidence(&query)
+                .then_some(explain.candidate_budget),
         });
         let mut planner_candidates = Vec::<Candidate>::new();
         let mut streams = Vec::<RankedStream>::new();
@@ -1352,6 +1354,16 @@ fn vector_first_order(left: &FusedCandidate, right: &FusedCandidate) -> Ordering
     }
 }
 
+fn query_has_evidence(query: &HybridQuery) -> bool {
+    query
+        .text
+        .as_ref()
+        .is_some_and(|text| !text.trim().is_empty())
+        || query.vector.is_some()
+        || query.graph_seed.is_some()
+        || query.temporal_as_of.is_some()
+}
+
 fn lexical_scores_are_tied(candidates: &[FusedCandidate]) -> bool {
     let mut scores = candidates
         .iter()
@@ -1403,6 +1415,7 @@ struct QueryAccessInput<'a> {
     graph_seed: Option<String>,
     temporal_as_of: Option<u64>,
     freshness: &'a FreshnessMode,
+    fallback_candidate_limit: Option<usize>,
 }
 
 fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
@@ -1415,12 +1428,15 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
         graph_seed,
         temporal_as_of,
         freshness,
+        fallback_candidate_limit,
     } = input;
     let mut paths = Vec::new();
+    let fallback_candidate_limit = fallback_candidate_limit.unwrap_or(usize::MAX);
     paths.push(MemoryAccessPath {
         descriptor: planner_descriptor("PolicyPath", None),
         candidates: visible
             .iter()
+            .take(fallback_candidate_limit)
             .map(|record| {
                 planner_candidate(record, "PolicyPath", 1.0, |score| ScoreComponents {
                     relational: Some(score),
@@ -1434,6 +1450,7 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
         descriptor: planner_descriptor("RelationalPath", None),
         candidates: visible
             .iter()
+            .take(fallback_candidate_limit)
             .map(|record| {
                 planner_candidate(record, "RelationalPath", 0.75, |score| ScoreComponents {
                     relational: Some(score),
@@ -1447,6 +1464,7 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> Vec<MemoryAccessPath> {
         descriptor: planner_descriptor("HotOverlayPath", None),
         candidates: visible
             .iter()
+            .take(fallback_candidate_limit)
             .map(|record| {
                 planner_candidate(record, "HotOverlayPath", 1.0, |score| ScoreComponents {
                     relational: Some(score),
