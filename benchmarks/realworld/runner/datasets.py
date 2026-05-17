@@ -23,6 +23,8 @@ TOPICS = [
 def load_dataset(kind: str, records: int, seed: int = 42) -> DatasetBundle:
     if kind == "generated":
         return generated_dataset(records, seed)
+    if kind == "generated_hybrid":
+        return generated_hybrid_dataset(records, seed)
     if kind == "embedded_movies":
         return embedded_movies_dataset(records, seed)
     if kind in {"beir_scifact", "scifact"}:
@@ -30,11 +32,53 @@ def load_dataset(kind: str, records: int, seed: int = 42) -> DatasetBundle:
     if kind in {"codesearchnet", "code_search_net"}:
         return codesearchnet_dataset(records, seed)
     raise ValueError(
-        f"unknown dataset {kind}; expected generated, embedded_movies, beir_scifact, or codesearchnet"
+        f"unknown dataset {kind}; expected generated, generated_hybrid, embedded_movies, beir_scifact, or codesearchnet"
     )
 
 
 def generated_dataset(records: int, seed: int = 42) -> DatasetBundle:
+    out = _generated_records(records, seed)
+    queries = _queries_from_records(out)
+    return _bundle(
+        kind="generated",
+        source="deterministic synthetic real-world-shaped corpus",
+        records=out,
+        queries=queries,
+        notes=[
+            "generated dataset is deterministic and safe for CI",
+            "generated oracle_rank labels are operational-smoke labels; deterministic vectors are not aligned to hybrid relevance",
+        ],
+        relevance_label_mode="synthetic_oracle_rank",
+        relevance_label_scope="operational_smoke_not_hybrid_quality",
+        relevance_label_notes=[
+            "expected_ids come from oracle_rank/text-order within tenant and category",
+            "deterministic vectors are random-normalized fixtures and should not be used to tune hybrid scoring against oracle_rank recall",
+        ],
+    )
+
+
+def generated_hybrid_dataset(records: int, seed: int = 42) -> DatasetBundle:
+    out = _generated_records(records, seed)
+    queries = _queries_from_records(out, prefer_oracle_rank=False)
+    return _bundle(
+        kind="generated_hybrid",
+        source="deterministic synthetic hybrid-relevance corpus",
+        records=out,
+        queries=queries,
+        notes=[
+            "generated_hybrid reuses the deterministic generated corpus but labels expected_ids with local text+vector similarity",
+            "generated_hybrid is a no-provider retrieval-quality lane for comparing hybrid scoring behavior",
+        ],
+        relevance_label_mode="synthetic_text_vector_similarity",
+        relevance_label_scope="synthetic_retrieval_quality",
+        relevance_label_notes=[
+            "expected_ids come from text+vector scoring: text_score(query, record.text) + cosine(query.vector, record.vector) within tenant and category",
+            "this lane is suitable for local hybrid scoring diagnosis but is still synthetic, not external qrels ground truth",
+        ],
+    )
+
+
+def _generated_records(records: int, seed: int) -> list[BenchRecord]:
     rng = random.Random(seed)
     tenants = ["tenant-a", "tenant-b", "tenant-c", "tenant-rare"]
     statuses = ["draft", "published", "archived"]
@@ -73,23 +117,7 @@ def generated_dataset(records: int, seed: int = 42) -> DatasetBundle:
                 },
             )
         )
-    queries = _queries_from_records(out)
-    return _bundle(
-        kind="generated",
-        source="deterministic synthetic real-world-shaped corpus",
-        records=out,
-        queries=queries,
-        notes=[
-            "generated dataset is deterministic and safe for CI",
-            "generated oracle_rank labels are operational-smoke labels; deterministic vectors are not aligned to hybrid relevance",
-        ],
-        relevance_label_mode="synthetic_oracle_rank",
-        relevance_label_scope="operational_smoke_not_hybrid_quality",
-        relevance_label_notes=[
-            "expected_ids come from oracle_rank/text-order within tenant and category",
-            "deterministic vectors are random-normalized fixtures and should not be used to tune hybrid scoring against oracle_rank recall",
-        ],
-    )
+    return out
 
 
 def embedded_movies_dataset(records: int, seed: int) -> DatasetBundle:
@@ -247,7 +275,11 @@ def _year_from_value(value: Any) -> int | None:
     return None
 
 
-def _queries_from_records(records: list[BenchRecord]) -> list[BenchQuery]:
+def _queries_from_records(
+    records: list[BenchRecord],
+    *,
+    prefer_oracle_rank: bool = True,
+) -> list[BenchQuery]:
     queries = []
     for category, phrase in TOPICS:
         candidates = [record for record in records if record.category == category]
@@ -257,7 +289,7 @@ def _queries_from_records(records: list[BenchRecord]) -> list[BenchQuery]:
         tenant_candidates = [
             record for record in candidates if record.tenant_id == first.tenant_id
         ]
-        if all(_oracle_rank(record) is not None for record in tenant_candidates):
+        if prefer_oracle_rank and all(_oracle_rank(record) is not None for record in tenant_candidates):
             scored = [
                 (-float(_oracle_rank(record) or 0), record.record_id)
                 for record in tenant_candidates

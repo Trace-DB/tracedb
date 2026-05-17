@@ -14,7 +14,7 @@ sys.path.insert(0, str(LAB_ROOT))
 
 from runner.adapters.qdrant import QdrantAdapter
 from runner.adapters.tracedb import TraceDbAdapter
-from runner.datasets import generated_dataset
+from runner.datasets import generated_dataset, load_dataset
 from runner.http import request_json
 from runner.report import build_report, write_markdown
 from runner.types import RunConfig
@@ -258,6 +258,22 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn(
             "Relevance labels: `synthetic_oracle_rank` (`operational_smoke_not_hybrid_quality`)",
             rendered,
+        )
+
+    def test_generated_hybrid_dataset_uses_retrieval_quality_labels(self) -> None:
+        smoke = load_dataset("generated", 256, 42)
+        hybrid = load_dataset("generated_hybrid", 256, 42)
+
+        self.assertEqual(hybrid.kind, "generated_hybrid")
+        self.assertEqual(hybrid.relevance_label_mode, "synthetic_text_vector_similarity")
+        self.assertEqual(hybrid.relevance_label_scope, "synthetic_retrieval_quality")
+        self.assertTrue(
+            any("text+vector" in note for note in hybrid.relevance_label_notes),
+            hybrid.relevance_label_notes,
+        )
+        self.assertNotEqual(
+            smoke.queries[0].expected_ids,
+            hybrid.queries[0].expected_ids,
         )
 
 

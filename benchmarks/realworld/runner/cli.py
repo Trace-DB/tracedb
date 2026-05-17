@@ -72,6 +72,7 @@ def add_benchmark_args(parser: argparse.ArgumentParser) -> None:
         default="generated",
         choices=[
             "generated",
+            "generated_hybrid",
             "embedded_movies",
             "beir_scifact",
             "scifact",
@@ -416,6 +417,8 @@ def build_manifest(
             "embedding_model": dataset.embedding_model,
             "embedding_dimensions": dataset.embedding_dimensions,
             "embedding_source": dataset.embedding_source,
+            "relevance_label_mode": dataset.relevance_label_mode,
+            "relevance_label_scope": dataset.relevance_label_scope,
         },
         "targets": config.target,
         "surfaces": config.surfaces,
