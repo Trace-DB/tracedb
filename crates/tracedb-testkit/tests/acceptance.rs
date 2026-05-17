@@ -159,6 +159,54 @@ fn wal_replay_recovers_committed_epoch() {
 }
 
 #[test]
+fn checkpoint_recovery_does_not_require_pre_checkpoint_wal_entries() {
+    let (temp, mut db) = seeded_db();
+    db.delete(RecordDeleteRequest::new("docs", "tenant-a", "a").tombstone("user_delete"))
+        .expect("delete before checkpoint");
+    let checkpoint_epoch = db.checkpoint().expect("checkpoint");
+    let manifest = db.inspect_manifest().expect("manifest");
+    assert_eq!(manifest.latest_epoch, checkpoint_epoch);
+    assert_eq!(manifest.checkpoint_epoch, checkpoint_epoch);
+    assert!(temp
+        .path()
+        .join("checkpoints")
+        .join(format!("checkpoint-{}.json", checkpoint_epoch.get()))
+        .exists());
+    assert_eq!(
+        db.inspect_wal().expect("wal after checkpoint").len(),
+        0,
+        "checkpoint should truncate WAL entries covered by the durable checkpoint"
+    );
+
+    drop(db);
+    let mut recovered = TraceDb::open(temp.path()).expect("recover from checkpoint");
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("get deleted")
+        .is_none());
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "b"))
+        .expect("get live")
+        .is_some());
+    let next_epoch = recovered
+        .insert(record(
+            "d",
+            "tenant-a",
+            "post checkpoint row",
+            [0.8, 0.2, 0.0],
+        ))
+        .expect("post-checkpoint insert");
+    assert_eq!(next_epoch, checkpoint_epoch.next());
+
+    drop(recovered);
+    let recovered = TraceDb::open(temp.path()).expect("recover post-checkpoint WAL");
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "d"))
+        .expect("get post-checkpoint row")
+        .is_some());
+}
+
+#[test]
 fn partial_wal_frame_is_not_committed() {
     let (temp, db) = seeded_db();
     drop(db);

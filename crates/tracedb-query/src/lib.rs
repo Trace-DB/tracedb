@@ -218,6 +218,15 @@ pub struct TraceDb {
     last_recovery_torn_tail: Option<TornWalTail>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CheckpointFile {
+    format_version: u32,
+    epoch: Epoch,
+    schemas: Vec<TableSchema>,
+    records: Vec<StoredRecord>,
+    checksum: u32,
+}
+
 impl TraceDb {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
@@ -235,16 +244,41 @@ impl TraceDb {
         let wal = Wal::open(&dir)?;
         let wal_scan = wal.scan_with_metadata()?;
         let entries = wal_scan.entries;
-        let commits = entries
+        let all_commits = entries
             .iter()
             .map(|entry| entry.commit.clone())
+            .collect::<Vec<_>>();
+        if manifest.checkpoint_epoch > manifest.latest_epoch {
+            return Err(TraceDbError::ManifestCorruption(format!(
+                "checkpoint epoch {} exceeds latest epoch {}",
+                manifest.checkpoint_epoch, manifest.latest_epoch
+            )));
+        }
+        let mut store = if manifest.checkpoint_epoch.get() > 0 {
+            let checkpoint = read_checkpoint_file(&dir, manifest.checkpoint_epoch)?;
+            if checkpoint.epoch != manifest.checkpoint_epoch {
+                return Err(TraceDbError::ManifestCorruption(format!(
+                    "checkpoint epoch mismatch: manifest {}, file {}",
+                    manifest.checkpoint_epoch, checkpoint.epoch
+                )));
+            }
+            if manifest.schemas.is_empty() {
+                manifest.schemas = checkpoint.schemas.clone();
+            }
+            RecordStore::from_checkpoint_records(checkpoint.records)?
+        } else {
+            RecordStore::default()
+        };
+        let commits = all_commits
+            .into_iter()
+            .filter(|commit| commit.epoch > manifest.checkpoint_epoch)
             .collect::<Vec<_>>();
         for commit in &commits {
             for schema in &commit.schema_changes {
                 upsert_schema(&mut manifest.schemas, schema.clone());
             }
         }
-        let store = RecordStore::from_commits(&manifest.schemas, &commits)?;
+        store.apply_commits(&manifest.schemas, &commits)?;
         if let Some(last_commit) = commits.last() {
             if last_commit.epoch > manifest.latest_epoch {
                 manifest.latest_epoch = last_commit.epoch;
@@ -737,6 +771,33 @@ impl TraceDb {
         self.wal.append_commit(&commit)?;
         self.store = staged;
         self.bump_manifest(epoch)?;
+        Ok(epoch)
+    }
+
+    pub fn checkpoint(&mut self) -> Result<Epoch> {
+        let _guard = WriteLock::acquire(&self.dir)?;
+        let epoch = self.manifest.latest_epoch;
+        write_checkpoint_file(
+            &self.dir,
+            epoch,
+            self.manifest.schemas.clone(),
+            self.store.checkpoint_records(epoch),
+        )?;
+        let mut manifest = read_manifest(self.dir.join("manifest.tdb"))?;
+        if manifest.latest_epoch != epoch {
+            return Err(TraceDbError::ManifestCorruption(format!(
+                "checkpoint handle is stale: handle epoch {}, manifest epoch {}",
+                epoch, manifest.latest_epoch
+            )));
+        }
+        manifest.checkpoint_epoch = epoch;
+        manifest.manifest_generation += 1;
+        let previous_checksum = manifest.checksums.manifest_checksum;
+        manifest.checksums.parent_checksum = previous_checksum;
+        write_manifest(self.dir.join("manifest.tdb"), &mut manifest)?;
+        truncate_active_wal(&self.dir)?;
+        self.wal = Wal::open(&self.dir)?;
+        self.manifest = manifest;
         Ok(epoch)
     }
 
@@ -1833,6 +1894,7 @@ fn initialize_layout(dir: &Path) -> Result<()> {
         "hot/features",
         "segments",
         "indexes",
+        "checkpoints",
         "snapshots",
         "jobs",
     ] {
@@ -1918,6 +1980,86 @@ fn write_manifest(path: impl AsRef<Path>, manifest: &mut TraceDbManifest) -> Res
     Ok(())
 }
 
+fn checkpoint_relative_path(epoch: Epoch) -> String {
+    format!("checkpoints/checkpoint-{}.json", epoch.get())
+}
+
+fn compute_checkpoint_checksum(checkpoint: &CheckpointFile) -> Result<u32> {
+    let mut normalized = checkpoint.clone();
+    normalized.checksum = 0;
+    Ok(checksum_bytes(&serde_json::to_vec(&normalized)?))
+}
+
+fn write_checkpoint_file(
+    dir: &Path,
+    epoch: Epoch,
+    schemas: Vec<TableSchema>,
+    records: Vec<StoredRecord>,
+) -> Result<String> {
+    let relative = checkpoint_relative_path(epoch);
+    let path = dir.join(&relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut checkpoint = CheckpointFile {
+        format_version: 1,
+        epoch,
+        schemas,
+        records,
+        checksum: 0,
+    };
+    checkpoint.checksum = compute_checkpoint_checksum(&checkpoint)?;
+    let body = serde_json::to_vec_pretty(&checkpoint)?;
+    let tmp_path = path.with_extension("json.tmp");
+    let mut file = File::create(&tmp_path)?;
+    file.write_all(&body)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp_path, &path)?;
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(relative)
+}
+
+fn read_checkpoint_file(dir: &Path, epoch: Epoch) -> Result<CheckpointFile> {
+    let path = dir.join(checkpoint_relative_path(epoch));
+    let body = fs::read(&path)?;
+    let checkpoint: CheckpointFile = serde_json::from_slice(&body)?;
+    if checkpoint.format_version != 1 {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "unsupported checkpoint format version {}",
+            checkpoint.format_version
+        )));
+    }
+    let expected = checkpoint.checksum;
+    if expected == 0 {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "missing checkpoint checksum at {}",
+            path.display()
+        )));
+    }
+    let actual = compute_checkpoint_checksum(&checkpoint)?;
+    if actual != expected {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "checkpoint checksum mismatch at {}: expected {expected}, got {actual}",
+            path.display()
+        )));
+    }
+    Ok(checkpoint)
+}
+
+fn truncate_active_wal(dir: &Path) -> Result<()> {
+    let path = dir.join("wal").join("000001.twal");
+    let file = File::create(&path)?;
+    file.sync_all()?;
+    drop(file);
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
 fn backup_dir(source: &Path, target: &Path) -> Result<()> {
     validate_copy_paths(source, target)?;
     if target.exists() {
@@ -1931,6 +2073,7 @@ fn backup_dir(source: &Path, target: &Path) -> Result<()> {
         "hot",
         "segments",
         "indexes",
+        "checkpoints",
         "snapshots",
         "jobs",
     ] {
@@ -1963,6 +2106,7 @@ fn snapshot_dir(source: &Path, target: &Path) -> Result<()> {
         "hot",
         "segments",
         "indexes",
+        "checkpoints",
         "jobs",
     ] {
         let from = source.join(entry);

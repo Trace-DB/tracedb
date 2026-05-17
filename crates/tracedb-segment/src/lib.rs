@@ -261,6 +261,24 @@ pub fn compute_segment_object_checksum(object: &SegmentObject) -> Result<u32> {
     Ok(checksum_bytes(&serde_json::to_vec(&round_tripped)?))
 }
 
+fn publication_state_history() -> Vec<SegmentState> {
+    vec![
+        SegmentState::Building,
+        SegmentState::Built,
+        SegmentState::Verifying,
+        SegmentState::Verified,
+        SegmentState::Publishing,
+        SegmentState::Published,
+    ]
+}
+
+fn sorted_unique(values: impl Iterator<Item = String>) -> Vec<String> {
+    let mut values = values.collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,22 +322,4 @@ mod tests {
 
         verify_segment_object(&round_tripped).expect("round-tripped checksum remains valid");
     }
-}
-
-fn publication_state_history() -> Vec<SegmentState> {
-    vec![
-        SegmentState::Building,
-        SegmentState::Built,
-        SegmentState::Verifying,
-        SegmentState::Verified,
-        SegmentState::Publishing,
-        SegmentState::Published,
-    ]
-}
-
-fn sorted_unique(values: impl Iterator<Item = String>) -> Vec<String> {
-    let mut values = values.collect::<Vec<_>>();
-    values.sort();
-    values.dedup();
-    values
 }

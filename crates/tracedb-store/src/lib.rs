@@ -34,6 +34,19 @@ pub struct RecordStore {
 }
 
 impl RecordStore {
+    pub fn from_checkpoint_records(records: Vec<StoredRecord>) -> Result<Self> {
+        let mut store = Self::default();
+        for record in records {
+            let key = record_key(
+                &record.header.table_id,
+                &record.header.tenant_id,
+                &record.header.record_id,
+            );
+            store.versions.entry(key).or_default().push(record);
+        }
+        Ok(store)
+    }
+
     pub fn validate_mutation(schema: &TableSchema, mutation: &RecordInput) -> Result<()> {
         validate_record_identity(schema, mutation, None)?;
         validate_vector_dimensions(schema, mutation)
@@ -41,38 +54,64 @@ impl RecordStore {
 
     pub fn from_commits(schemas: &[TableSchema], commits: &[CommitRecord]) -> Result<Self> {
         let mut store = Self::default();
+        store.apply_commits(schemas, commits)?;
+        Ok(store)
+    }
+
+    pub fn apply_commits(
+        &mut self,
+        schemas: &[TableSchema],
+        commits: &[CommitRecord],
+    ) -> Result<()> {
         for commit in commits {
             for replacement in &commit.replacements {
                 let schema = schemas
                     .iter()
                     .find(|schema| schema.name == replacement.table)
                     .ok_or_else(|| TraceDbError::UnknownTable(replacement.table.clone()))?;
-                store.apply_replacement(schema, replacement, commit.epoch)?;
+                self.apply_replacement(schema, replacement, commit.epoch)?;
             }
             for mutation in &commit.mutations {
                 let schema = schemas
                     .iter()
                     .find(|schema| schema.name == mutation.table)
                     .ok_or_else(|| TraceDbError::UnknownTable(mutation.table.clone()))?;
-                store.apply_mutation(schema, mutation, commit.epoch)?;
+                self.apply_mutation(schema, mutation, commit.epoch)?;
             }
             for deletion in &commit.deletions {
                 let schema = schemas
                     .iter()
                     .find(|schema| schema.name == deletion.table)
                     .ok_or_else(|| TraceDbError::UnknownTable(deletion.table.clone()))?;
-                store.apply_delete(schema, deletion, commit.epoch)?;
+                self.apply_delete(schema, deletion, commit.epoch)?;
             }
             for invalidation in &commit.feature_invalidations {
                 let invalidation = if invalidation.tenant_id.trim().is_empty() {
-                    store.resolve_legacy_feature_invalidation(invalidation, commit)?
+                    self.resolve_legacy_feature_invalidation(invalidation, commit)?
                 } else {
                     invalidation.clone()
                 };
-                store.apply_feature_invalidation(&invalidation, commit.epoch)?;
+                self.apply_feature_invalidation(&invalidation, commit.epoch)?;
             }
         }
-        Ok(store)
+        Ok(())
+    }
+
+    pub fn checkpoint_records(&self, epoch: Epoch) -> Vec<StoredRecord> {
+        let mut records = Vec::new();
+        for versions in self.versions.values() {
+            if let Some(record) = versions.iter().rev().find(|record| {
+                record.header.begin_epoch <= epoch
+                    && record
+                        .header
+                        .end_epoch
+                        .map(|end| end > epoch)
+                        .unwrap_or(true)
+            }) {
+                records.push(record.clone());
+            }
+        }
+        records
     }
 
     pub fn apply_replacement(

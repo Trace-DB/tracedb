@@ -216,6 +216,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "index_count": manifest.indexes.len(),
             }));
         }
+        "checkpoint" => {
+            let mut db = TraceDb::open(&data_dir)?;
+            let epoch = db.checkpoint()?;
+            print_json(json!({ "checkpoint_epoch": epoch.get() }));
+        }
         "snapshot" if args.get(1).map(String::as_str) == Some("create") => {
             let target = args.get(2).ok_or("missing snapshot target directory")?;
             let db = TraceDb::open(&data_dir)?;
@@ -504,6 +509,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
