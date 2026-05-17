@@ -239,6 +239,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             recalls = []
             ndcgs = []
             mrrs = []
+            records_by_id = {record.record_id: record for record in dataset.records}
+            off_category_result_count = 0
+            queries_with_off_category_results = 0
             for query in dataset.queries:
                 result = recorder.timed(
                     lambda query=query: call(
@@ -257,6 +260,15 @@ class TraceDbAdapter(BenchmarkAdapter):
                     )
                 )
                 ids = [row.get("record_id") for row in result.get("results", [])]
+                off_category_ids = [
+                    record_id
+                    for record_id in ids
+                    if records_by_id.get(str(record_id)) is not None
+                    and records_by_id[str(record_id)].category != query.category
+                ]
+                off_category_result_count += len(off_category_ids)
+                if off_category_ids:
+                    queries_with_off_category_results += 1
                 recall = recall_at_k(query.expected_ids, ids, query.top_k)
                 ndcg = ndcg_at_k(query.expected_ids, ids, query.top_k)
                 mrr = mrr_at_k(query.expected_ids, ids, query.top_k)
@@ -289,6 +301,8 @@ class TraceDbAdapter(BenchmarkAdapter):
                             "candidate_budget": explain.get("candidate_budget"),
                             "expected_ids": query.expected_ids,
                             "actual_ids": ids,
+                            "expected_category": query.category,
+                            "off_category_actual_ids": off_category_ids,
                             "recall_at_k": round(recall, 3),
                             "ndcg_at_k": round(ndcg, 3),
                             "mrr_at_k": round(mrr, 3),
@@ -396,6 +410,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "min_ndcg_at_5": round(min_ndcg, 3),
                     "queries_below_full_recall_count": queries_below_full_recall,
                     "queries_with_zero_recall_count": queries_with_zero_recall,
+                    "category_filter_applied": False,
+                    "off_category_result_count": off_category_result_count,
+                    "queries_with_off_category_results_count": queries_with_off_category_results,
                     "disk_bytes": 0,
                 }
             )
@@ -406,6 +423,10 @@ class TraceDbAdapter(BenchmarkAdapter):
                 f"min_recall_at_5={metrics['min_recall_at_5']}; "
                 f"queries_below_full_recall={queries_below_full_recall}; "
                 f"queries_with_zero_recall={queries_with_zero_recall}",
+                "TraceDB HTTP filter parity diagnostics: "
+                "category_filter_applied=false; "
+                f"off_category_result_count={off_category_result_count}; "
+                f"queries_with_off_category_results={queries_with_off_category_results}",
             ], metrics
         except Exception as error:
             return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None

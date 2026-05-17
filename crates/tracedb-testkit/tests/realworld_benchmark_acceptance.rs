@@ -102,6 +102,9 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
     assert!(tracedb["metrics"]["min_ndcg_at_5"].is_number());
     assert!(tracedb["metrics"]["queries_below_full_recall_count"].is_number());
     assert!(tracedb["metrics"]["queries_with_zero_recall_count"].is_number());
+    assert!(tracedb["metrics"]["category_filter_applied"].is_boolean());
+    assert!(tracedb["metrics"]["off_category_result_count"].is_number());
+    assert!(tracedb["metrics"]["queries_with_off_category_results_count"].is_number());
     assert!(tracedb["notes"].as_array().unwrap().iter().any(|note| note
         .as_str()
         .unwrap_or_default()
@@ -110,6 +113,10 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
         .as_str()
         .unwrap_or_default()
         .contains("TraceDB HTTP retrieval diagnostics")));
+    assert!(tracedb["notes"].as_array().unwrap().iter().any(|note| note
+        .as_str()
+        .unwrap_or_default()
+        .contains("TraceDB HTTP filter parity diagnostics")));
 }
 
 #[test]
