@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -69,6 +70,61 @@ class FakeQdrant:
 
 
 class AdapterHardeningTests(unittest.TestCase):
+    def test_external_qrels_loaders_use_current_hf_configs(self) -> None:
+        class FakeDataset(list):
+            def shuffle(self, seed: int) -> "FakeDataset":
+                return self
+
+            def select(self, indexes) -> "FakeDataset":
+                return FakeDataset([self[index] for index in indexes])
+
+        calls: list[tuple[str, tuple[str, ...], str]] = []
+
+        def fake_load_dataset(name: str, *configs: str, split: str):
+            calls.append((name, configs, split))
+            fixtures = {
+                ("mteb/scifact", ("corpus",), "corpus"): FakeDataset(
+                    [{"_id": "sci-1", "title": "SciFact", "text": "claim evidence"}]
+                ),
+                ("mteb/scifact", ("queries",), "queries"): FakeDataset(
+                    [{"_id": "sci-q", "text": "claim"}]
+                ),
+                ("mteb/scifact", ("default",), "test"): FakeDataset(
+                    [{"query-id": "sci-q", "corpus-id": "sci-1", "score": 1.0}]
+                ),
+                ("mteb/CodeSearchNetRetrieval", ("python-corpus",), "test"): FakeDataset(
+                    [{"id": "code-1", "title": "", "text": "def parse_trace(): pass"}]
+                ),
+                ("mteb/CodeSearchNetRetrieval", ("python-queries",), "test"): FakeDataset(
+                    [{"id": "code-q", "text": "parse a trace"}]
+                ),
+                ("mteb/CodeSearchNetRetrieval", ("python-qrels",), "test"): FakeDataset(
+                    [{"query-id": "code-q", "corpus-id": "code-1", "score": 1}]
+                ),
+            }
+            key = (name, configs, split)
+            if key not in fixtures:
+                raise AssertionError(f"unexpected load_dataset call {key!r}")
+            return fixtures[key]
+
+        old_datasets = sys.modules.get("datasets")
+        sys.modules["datasets"] = types.SimpleNamespace(load_dataset=fake_load_dataset)
+        try:
+            scifact = load_dataset("beir_scifact", 1, 42)
+            codesearch = load_dataset("codesearchnet", 1, 42)
+        finally:
+            if old_datasets is None:
+                sys.modules.pop("datasets", None)
+            else:
+                sys.modules["datasets"] = old_datasets
+
+        self.assertEqual(scifact.relevance_label_mode, "external_qrels")
+        self.assertEqual(scifact.queries[0].expected_ids, ["sci-1"])
+        self.assertEqual(codesearch.relevance_label_mode, "external_qrels")
+        self.assertEqual(codesearch.queries[0].expected_ids, ["code-1"])
+        self.assertIn(("mteb/scifact", ("default",), "test"), calls)
+        self.assertIn(("mteb/CodeSearchNetRetrieval", ("python-qrels",), "test"), calls)
+
     def test_qdrant_ingestion_is_batched(self) -> None:
         fake = FakeQdrant().start()
         old_url = os.environ.get("BENCH_QDRANT_URL")

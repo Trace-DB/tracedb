@@ -160,7 +160,7 @@ def embedded_movies_dataset(records: int, seed: int) -> DatasetBundle:
 
 
 def beir_scifact_dataset(records: int, seed: int) -> DatasetBundle:
-    rows = _load_hf_rows("irds/beir_scifact", "corpus", records, seed)
+    rows = _load_hf_rows("mteb/scifact", "corpus", records, seed, config="corpus")
     out = [
         BenchRecord(
             record_id=str(item.get("doc_id") or item.get("_id") or f"scifact-{idx}"),
@@ -178,20 +178,22 @@ def beir_scifact_dataset(records: int, seed: int) -> DatasetBundle:
     ]
     qrel_queries = _queries_from_qrels(
         out,
-        dataset_name="irds/beir_scifact",
+        dataset_name="mteb/scifact",
         query_split="queries",
-        qrels_split="qrels",
+        qrels_split="test",
+        query_config="queries",
+        qrels_config="default",
         limit=records,
         seed=seed,
         category="scientific_claim",
     )
     queries = qrel_queries or _queries_from_records(out)
-    notes = ["external retrieval dataset loaded from Hugging Face: irds/beir_scifact"]
+    notes = ["external retrieval dataset loaded from Hugging Face: mteb/scifact"]
     if qrel_queries:
         notes.append("qrels were used when available for relevance labels")
     return _bundle(
         kind="beir_scifact",
-        source="irds/beir_scifact",
+        source="mteb/scifact",
         records=out,
         queries=queries,
         notes=notes,
@@ -201,7 +203,13 @@ def beir_scifact_dataset(records: int, seed: int) -> DatasetBundle:
 
 
 def codesearchnet_dataset(records: int, seed: int) -> DatasetBundle:
-    rows = _load_hf_rows("mteb/CodeSearchNetRetrieval", "corpus", records, seed)
+    rows = _load_hf_rows(
+        "mteb/CodeSearchNetRetrieval",
+        "test",
+        records,
+        seed,
+        config="python-corpus",
+    )
     out = [
         BenchRecord(
             record_id=str(item.get("_id") or item.get("id") or f"code-{idx}"),
@@ -220,8 +228,10 @@ def codesearchnet_dataset(records: int, seed: int) -> DatasetBundle:
     qrel_queries = _queries_from_qrels(
         out,
         dataset_name="mteb/CodeSearchNetRetrieval",
-        query_split="queries",
-        qrels_split="qrels",
+        query_split="test",
+        qrels_split="test",
+        query_config="python-queries",
+        qrels_config="python-qrels",
         limit=records,
         seed=seed,
         category="code_search",
@@ -241,14 +251,24 @@ def codesearchnet_dataset(records: int, seed: int) -> DatasetBundle:
     )
 
 
-def _load_hf_rows(dataset_name: str, split: str, records: int, seed: int) -> list[dict[str, Any]]:
+def _load_hf_rows(
+    dataset_name: str,
+    split: str,
+    records: int,
+    seed: int,
+    *,
+    config: str | None = None,
+) -> list[dict[str, Any]]:
     try:
         from datasets import load_dataset
     except ImportError as error:
         raise RuntimeError(
             "external datasets require `pip install -r benchmarks/realworld/requirements.txt`"
         ) from error
-    dataset = load_dataset(dataset_name, split=split)
+    args = [dataset_name]
+    if config is not None:
+        args.append(config)
+    dataset = load_dataset(*args, split=split)
     if hasattr(dataset, "shuffle"):
         dataset = dataset.shuffle(seed=seed)
     return [dict(row) for row in dataset.select(range(min(records, len(dataset))))]
@@ -335,6 +355,8 @@ def _queries_from_qrels(
     dataset_name: str,
     query_split: str,
     qrels_split: str,
+    query_config: str | None = None,
+    qrels_config: str | None = None,
     limit: int,
     seed: int,
     category: str,
@@ -343,8 +365,14 @@ def _queries_from_qrels(
     if not corpus_ids:
         return []
     try:
-        query_rows = _load_hf_rows(dataset_name, query_split, limit, seed)
-        qrel_rows = _load_hf_rows(dataset_name, qrels_split, limit * 10, seed)
+        query_rows = _load_hf_rows(dataset_name, query_split, limit, seed, config=query_config)
+        qrel_rows = _load_hf_rows(
+            dataset_name,
+            qrels_split,
+            limit * 10,
+            seed,
+            config=qrels_config,
+        )
     except Exception:
         return []
     query_text = {
@@ -356,7 +384,9 @@ def _queries_from_qrels(
     relevant: dict[str, list[str]] = {}
     for row in qrel_rows:
         query_id = _first_present(row, ["query_id", "query-id", "qid", "id"])
-        doc_id = _first_present(row, ["doc_id", "doc-id", "corpus_id", "document_id"])
+        doc_id = _first_present(
+            row, ["doc_id", "doc-id", "corpus_id", "corpus-id", "document_id"]
+        )
         score = _first_present(row, ["relevance", "score", "label"])
         if query_id is None or doc_id is None or str(doc_id) not in corpus_ids:
             continue
