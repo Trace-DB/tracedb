@@ -594,8 +594,10 @@ impl TraceDb {
         }
         explain.planner_candidates = planner_candidates;
 
-        let mut fused = fuse_rrf(&streams);
-        if query.vector.is_some() && (query.text.is_none() || lexical_scores_are_tied(&fused)) {
+        let mut fused = fuse_query_streams(&streams);
+        if query.text.is_some() && !lexical_scores_are_tied(&fused) {
+            fused.sort_by(lexical_first_order);
+        } else if query.vector.is_some() {
             fused.sort_by(vector_first_order);
         }
         explain.deduped_candidate_count = fused.len();
@@ -1168,6 +1170,56 @@ fn fuse_rrf(streams: &[RankedStream]) -> Vec<FusedCandidate> {
             .then_with(|| left.record_id.cmp(&right.record_id))
     });
     values
+}
+
+fn fuse_query_streams(streams: &[RankedStream]) -> Vec<FusedCandidate> {
+    let evidence_streams = streams
+        .iter()
+        .filter(|stream| is_evidence_stream(stream.name) && !stream.candidates.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    if evidence_streams.is_empty() {
+        return fuse_rrf(streams);
+    }
+
+    let mut fused = fuse_rrf(&evidence_streams);
+    let mut seen = fused
+        .iter()
+        .map(|candidate| candidate.record_id.clone())
+        .collect::<BTreeSet<_>>();
+    let fallback_streams = streams
+        .iter()
+        .filter(|stream| !is_evidence_stream(stream.name) && !stream.candidates.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    for candidate in fuse_rrf(&fallback_streams) {
+        if seen.insert(candidate.record_id.clone()) {
+            fused.push(candidate);
+        }
+    }
+    fused
+}
+
+fn is_evidence_stream(name: &str) -> bool {
+    matches!(name, "text" | "vector" | "graph" | "temporal")
+}
+
+fn lexical_first_order(left: &FusedCandidate, right: &FusedCandidate) -> Ordering {
+    match (left.lexical, right.lexical) {
+        (Some(left_lexical), Some(right_lexical)) => score_order(left_lexical, right_lexical)
+            .then_with(|| match (left.vector, right.vector) {
+                (Some(left_vector), Some(right_vector)) => score_order(left_vector, right_vector),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            })
+            .then_with(|| score_order(left.final_score, right.final_score))
+            .then_with(|| left.record_id.cmp(&right.record_id)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => score_order(left.final_score, right.final_score)
+            .then_with(|| left.record_id.cmp(&right.record_id)),
+    }
 }
 
 fn vector_first_order(left: &FusedCandidate, right: &FusedCandidate) -> Ordering {

@@ -544,6 +544,50 @@ fn hybrid_query_preserves_rare_symbol_lexical_winner() {
 }
 
 #[test]
+fn hybrid_query_does_not_let_fallback_streams_swamp_lexical_hits() {
+    let (_temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    for idx in 0..25 {
+        db.insert(record(
+            &format!("early-vector-distractor-{idx:02}"),
+            "tenant-a",
+            "api contract ordinary helper",
+            [1.0, 0.0, 0.0],
+        ))
+        .unwrap_or_else(|error| panic!("insert distractor {idx}: {error}"));
+    }
+    db.insert(record(
+        "rare-lexical-hit",
+        "tenant-a",
+        "ultrarare api contract exact implementation",
+        [0.0, 1.0, 0.0],
+    ))
+    .expect("insert rare lexical hit");
+
+    let result = db
+        .query(HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: Some("ultrarare api contract".to_string()),
+            vector: Some(vec![1.0, 0.0, 0.0]),
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 5,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query");
+
+    assert_eq!(
+        result.results.first().map(|row| row.record_id.as_str()),
+        Some("rare-lexical-hit"),
+        "strong lexical hits should rank ahead of policy/relational/hot fallback distractors; results: {:?}",
+        result.results
+    );
+}
+
+#[test]
 fn text_candidate_stream_explain() {
     let (_temp, db) = seeded_db();
     let result = db.query(query()).expect("query");
