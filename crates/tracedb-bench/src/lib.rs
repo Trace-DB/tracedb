@@ -117,7 +117,11 @@ pub struct InProcessScalingPoint {
     pub data_dir_bytes: u64,
     pub insert_p95_ms: f64,
     pub recent_insert_p95_ms: f64,
+    #[serde(default)]
+    pub engine_query_p50_ms: f64,
     pub engine_query_p95_ms: f64,
+    #[serde(default)]
+    pub engine_query_p99_ms: f64,
     #[serde(default)]
     pub query_phase_p95_ms: Vec<TimingP95>,
     #[serde(default)]
@@ -134,7 +138,9 @@ pub struct InProcessScalingPoint {
     pub checkpoint_wal_bytes: Option<u64>,
     pub checkpoint_data_dir_bytes: Option<u64>,
     pub checkpoint_engine_open_p95_ms: Option<f64>,
+    pub checkpoint_engine_query_p50_ms: Option<f64>,
     pub checkpoint_engine_query_p95_ms: Option<f64>,
+    pub checkpoint_engine_query_p99_ms: Option<f64>,
     pub checkpoint_lexical_cache_hits: Option<usize>,
     pub checkpoint_lexical_cache_misses: Option<usize>,
     pub checkpoint_lexical_indexed_documents: Option<usize>,
@@ -249,7 +255,9 @@ fn measure_inprocess_point(
         data_dir_bytes,
         insert_p95_ms: round_ms(percentile(insert_latencies, 95.0)),
         recent_insert_p95_ms: round_ms(percentile(&insert_latencies[recent_start..], 95.0)),
+        engine_query_p50_ms: round_ms(percentile(&query_latencies, 50.0)),
         engine_query_p95_ms: round_ms(percentile(&query_latencies, 95.0)),
+        engine_query_p99_ms: round_ms(percentile(&query_latencies, 99.0)),
         query_phase_p95_ms: timing_p95_samples(&query_phase_samples),
         query_access_path_build_p95_ms: timing_p95_samples(&query_access_path_build_samples),
         query_access_path_open_p95_ms: timing_p95_samples(&query_access_path_open_samples),
@@ -263,7 +271,9 @@ fn measure_inprocess_point(
         checkpoint_wal_bytes: None,
         checkpoint_data_dir_bytes: None,
         checkpoint_engine_open_p95_ms: None,
+        checkpoint_engine_query_p50_ms: None,
         checkpoint_engine_query_p95_ms: None,
+        checkpoint_engine_query_p99_ms: None,
         checkpoint_lexical_cache_hits: None,
         checkpoint_lexical_cache_misses: None,
         checkpoint_lexical_indexed_documents: None,
@@ -310,8 +320,12 @@ fn measure_inprocess_point(
         point.checkpoint_data_dir_bytes = Some(directory_size(data_dir));
         point.checkpoint_engine_open_p95_ms =
             Some(round_ms(percentile(&checkpoint_open_latencies, 95.0)));
+        point.checkpoint_engine_query_p50_ms =
+            Some(round_ms(percentile(&checkpoint_query_latencies, 50.0)));
         point.checkpoint_engine_query_p95_ms =
             Some(round_ms(percentile(&checkpoint_query_latencies, 95.0)));
+        point.checkpoint_engine_query_p99_ms =
+            Some(round_ms(percentile(&checkpoint_query_latencies, 99.0)));
         point.checkpoint_lexical_cache_hits = Some(checkpoint_lexical_cache_hits);
         point.checkpoint_lexical_cache_misses = Some(checkpoint_lexical_cache_misses);
         point.checkpoint_lexical_indexed_documents = Some(checkpoint_lexical_indexed_documents);
@@ -496,7 +510,14 @@ mod tests {
         assert_eq!(point.query_returned_count, 5);
         assert_eq!(point.checkpoint_wal_bytes, Some(0));
         assert!(point.engine_open_p95_ms.is_some());
+        assert!(point.engine_query_p50_ms > 0.0);
         assert!(point.engine_query_p95_ms > 0.0);
+        assert!(point.engine_query_p99_ms >= point.engine_query_p95_ms);
+        assert!(point.checkpoint_engine_query_p50_ms.unwrap() > 0.0);
+        assert!(
+            point.checkpoint_engine_query_p99_ms.unwrap()
+                >= point.checkpoint_engine_query_p95_ms.unwrap()
+        );
         assert!(point
             .query_phase_p95_ms
             .iter()
