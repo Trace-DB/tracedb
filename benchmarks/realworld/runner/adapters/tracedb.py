@@ -26,7 +26,9 @@ class TraceDbAdapter(BenchmarkAdapter):
         ]
         notes.extend(self._sdk_surface_notes(dataset, config))
         if "cli" in config.surfaces:
-            notes.extend(self._cli_surface_notes(dataset, config))
+            cli_notes, cli_metrics = self._cli_surface_run(dataset, config)
+            notes.extend(cli_notes)
+            metrics.update(cli_metrics)
         if "http" in config.surfaces or "curl" in config.surfaces:
             http_notes, http_metrics = self._http_surface_run(dataset, config)
             notes.extend(http_notes)
@@ -52,16 +54,18 @@ class TraceDbAdapter(BenchmarkAdapter):
             return ["surface unavailable: sdk-style payload construction failed"]
         return ["sdk-style request builder payload validated"]
 
-    def _cli_surface_notes(self, dataset: DatasetBundle, config: RunConfig) -> list[str]:
+    def _cli_surface_run(
+        self, dataset: DatasetBundle, config: RunConfig
+    ) -> tuple[list[str], dict[str, Any]]:
         cli = os.environ.get("TRACEDB_CLI") or str(
             Path(config.repo_root) / "target" / "debug" / "tracedb"
         )
         if not command_exists(cli):
             return [
                 "surface unavailable: TraceDB CLI binary not found; run `cargo build --workspace` or set TRACEDB_CLI"
-            ]
+            ], {}
         if not dataset.records:
-            return ["surface unavailable: CLI smoke had no records"]
+            return ["surface unavailable: CLI smoke had no records"], {}
         record = dataset.records[0]
         schema = {
             "name": "bench_records",
@@ -105,20 +109,31 @@ class TraceDbAdapter(BenchmarkAdapter):
                 [cli, "--data", str(data_dir), "put", str(record_path)],
                 [cli, "--data", str(data_dir), "get", "bench_records", record.tenant_id, record.record_id],
             ]
+            recorder = MetricRecorder()
             for command in commands:
-                completed = subprocess.run(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False,
+                completed = recorder.timed(
+                    lambda command=command: subprocess.run(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        check=False,
+                    )
                 )
                 if completed.returncode != 0:
                     return [
                         "surface unavailable: TraceDB CLI smoke failed "
                         + completed.stderr.strip()
-                    ]
-        return ["TraceDB CLI surface smoke passed"]
+                    ], {}
+            cli_metrics = {
+                f"cli_{key}": value for key, value in recorder.summary().items()
+            }
+            cli_metrics["cli_command_count"] = len(commands)
+        return [
+            "TraceDB CLI surface smoke passed; "
+            f"cli_command_count={cli_metrics['cli_command_count']}; "
+            f"cli_latency_p95_ms={cli_metrics['cli_latency_p95_ms']}"
+        ], cli_metrics
 
     def _http_surface_run(
         self, dataset: DatasetBundle, config: RunConfig

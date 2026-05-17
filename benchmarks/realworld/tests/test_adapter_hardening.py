@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -181,6 +182,41 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertTrue(adapter._is_local_http_url("http://localhost:8080"))
         self.assertFalse(adapter._is_local_http_url("https://tracedb-engine-production.up.railway.app"))
         self.assertEqual(adapter._path_token("railway/run:alpha"), "railway_run_alpha")
+
+    def test_tracedb_cli_surface_reports_measured_command_metrics(self) -> None:
+        old_cli = os.environ.get("TRACEDB_CLI")
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                cli = Path(temp_dir) / "tracedb"
+                cli.write_text("#!/bin/sh\nprintf '{\"ok\":true}\\n'\n", encoding="utf-8")
+                cli.chmod(0o755)
+                os.environ["TRACEDB_CLI"] = str(cli)
+
+                result = TraceDbAdapter().run(
+                    generated_dataset(8, 42),
+                    RunConfig(
+                        profile="smoke",
+                        target=["tracedb"],
+                        surfaces=["cli"],
+                        require_services=False,
+                        repo_root=".",
+                    ),
+                )
+        finally:
+            if old_cli is None:
+                os.environ.pop("TRACEDB_CLI", None)
+            else:
+                os.environ["TRACEDB_CLI"] = old_cli
+
+        self.assertTrue(result["available"], result["notes"])
+        self.assertEqual(result["metrics"]["cli_command_count"], 4)
+        self.assertIn("cli_latency_p50_ms", result["metrics"])
+        self.assertIn("cli_latency_p95_ms", result["metrics"])
+        self.assertIn("cli_latency_p99_ms", result["metrics"])
+        self.assertTrue(
+            any("cli_command_count=4" in note for note in result["notes"]),
+            result["notes"],
+        )
 
 
 if __name__ == "__main__":
