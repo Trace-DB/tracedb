@@ -171,6 +171,30 @@ This defaults to the TraceDB HTTP falsification scenario against the remote URL.
 Use `SCENARIOS=all TARGET=all` only when the competitor services are also
 reachable through the `BENCH_*` environment variables.
 
+## Modal CPU/RAM Smoke
+
+Use this lane to verify that the benchmark suite can run on Modal and return a
+bundled report artifact before starting large-scale or external-control runs.
+The default is intentionally small, CPU/RAM only, OpenRouter off, no GPU, and
+TraceDB-only SDK surface:
+
+```bash
+modal run benchmarks/realworld/modal_bench.py --run-id modal-remote-smoke-16 --records 16
+```
+
+Local dry run without Modal:
+
+```bash
+python3 benchmarks/realworld/modal_bench.py \
+  --run-id modal-local-smoke \
+  --records 16 \
+  --min-free-mb 1000
+```
+
+Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
+`manifest.json`. By default this lane reports `control_status=internal_only_smoke`;
+it is development evidence, not a product benchmark claim.
+
 ## Reports
 
 Reports are written to `reports/` by default:
