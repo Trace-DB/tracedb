@@ -121,6 +121,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let epoch = db.delete(request)?;
             print_json(json!({ "deleted": true, "epoch": epoch.get() }));
         }
+        "feature"
+            if args.get(1).map(String::as_str) == Some("status")
+                && args.get(2).map(String::as_str) == Some("set") =>
+        {
+            let table = args.get(3).ok_or("missing table")?;
+            let tenant_id = args.get(4).ok_or("missing tenant id")?;
+            let record_id = args.get(5).ok_or("missing record id")?;
+            let feature = args.get(6).ok_or("missing feature name")?;
+            let status = serde_json::from_value(json!(canonical_feature_status(
+                args.get(7).ok_or("missing feature status")?
+            )?))?;
+            let mut db = TraceDb::open(&data_dir)?;
+            let epoch = db.set_feature_status(table, tenant_id, record_id, feature, status)?;
+            let state = db.feature_state(table, tenant_id, record_id, feature)?;
+            print_json(json!({
+                "table": table,
+                "tenant_id": tenant_id,
+                "record_id": record_id,
+                "feature": feature,
+                "status": state.status,
+                "epoch": epoch.get(),
+            }));
+        }
         "scan" => {
             let request = record_scan_from_args_or_json(&args)?;
             let db = TraceDb::open(&data_dir)?;
@@ -454,6 +477,20 @@ fn read_arg_or_stdin(arg: Option<&String>) -> Result<String, Box<dyn std::error:
     Ok(input)
 }
 
+fn canonical_feature_status(status: &str) -> Result<&'static str, Box<dyn std::error::Error>> {
+    match status {
+        "Ready" | "ready" => Ok("Ready"),
+        "Dirty" | "dirty" => Ok("Dirty"),
+        "Pending" | "pending" => Ok("Pending"),
+        "Failed" | "failed" => Ok("Failed"),
+        "Missing" | "missing" => Ok("Missing"),
+        other => Err(format!(
+            "unknown feature status {other}; expected Ready, Dirty, Pending, Failed, or Missing"
+        )
+        .into()),
+    }
+}
+
 fn print_json(value: Value) {
     println!("{}", serde_json::to_string_pretty(&value).unwrap());
 }
@@ -467,6 +504,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import all_adapters
+from .chat_demo import run_chat_demo
 from .datasets import load_dataset
 from .experiment import ExperimentRecorder, new_run_id, redact, service_environment
 from .openrouter import (
@@ -43,6 +44,12 @@ def main(argv: list[str] | None = None) -> int:
     add_benchmark_args(suite)
     suite.add_argument("--scenarios", default="all")
 
+    chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
+    chat_demo.add_argument("--data-dir", default="")
+    chat_demo.add_argument("--tracedb-cli", default="")
+    chat_demo.add_argument("--output-json", default="reports/chat-demo/latest.json")
+    chat_demo.add_argument("--output-md", default="reports/chat-demo/latest.md")
+
     args = parser.parse_args(argv)
     if args.command == "run":
         return run_benchmark(args)
@@ -52,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
         return doctor_openrouter(args)
     if args.command == "suite":
         return run_suite(args)
+    if args.command == "chat-demo":
+        return run_chat_demo(args)
     parser.error(f"unknown command {args.command}")
     return 2
 
