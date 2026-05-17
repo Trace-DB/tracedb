@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 LAB_ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +72,125 @@ class ModalBenchTests(unittest.TestCase):
             validate_config(ModalSmokeConfig(openrouter_mode="required"))
         with self.assertRaisesRegex(ValueError, "target=all"):
             validate_config(ModalSmokeConfig(target="all"))
+        with self.assertRaisesRegex(ValueError, "external controls"):
+            validate_config(ModalSmokeConfig(target="tracedb,postgres"))
+
+    def test_postgres_external_control_command_requires_explicit_guardrails(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_suite_command, validate_config
+
+        config = ModalSmokeConfig(
+            target="postgres",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+        )
+
+        validate_config(config)
+        command = build_suite_command(config)
+
+        self.assertIn("--target", command)
+        self.assertEqual(command[command.index("--target") + 1], "postgres")
+        self.assertIn("--scenarios", command)
+        self.assertEqual(command[command.index("--scenarios") + 1], "search_rag_6")
+        self.assertIn("--require-services", command)
+        self.assertIn("--openrouter-mode", command)
+        self.assertEqual(command[command.index("--openrouter-mode") + 1], "off")
+
+        default_command = build_suite_command(ModalSmokeConfig())
+        self.assertNotIn("--require-services", default_command)
+
+    def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_runner_env
+
+        config = ModalSmokeConfig(
+            target="postgres",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "BENCH_POSTGRES_DSN"):
+            build_runner_env(config, base_env={})
+
+    def test_run_suite_passes_postgres_dsn_env_without_live_postgres(self) -> None:
+        from modal_bench import ModalSmokeConfig, run_suite_and_bundle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            run_dir = reports / "modal-postgres-smoke"
+            run_dir.mkdir(parents=True)
+            suite_json = {
+                "suite_id": "modal-postgres-smoke",
+                "control_status": "external_control_available",
+                "summary": {"failure_count": 0},
+                "control_ledger": {
+                    "available_external_controls": [{"name": "PostgreSQL"}],
+                    "unavailable_external_controls": [],
+                },
+                "number_to_beat": {
+                    "query_p95_ms": {"baseline": "PostgreSQL", "value": 5.0},
+                },
+            }
+            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
+
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": "ok", "stderr": ""},
+            )()
+            config = ModalSmokeConfig(
+                run_id="modal-postgres-smoke",
+                target="postgres",
+                scenarios="search_rag_6",
+                reports_dir=str(reports),
+                bundle_dir=str(root / "bundles"),
+                min_free_mb=1_000,
+                allow_external_controls=True,
+                require_services=True,
+            )
+            base_env = {
+                "PATH": os.environ.get("PATH", ""),
+                "BENCH_POSTGRES_DSN": "postgresql://user:secret@127.0.0.1:25432/db",
+            }
+            with patch.dict(os.environ, base_env, clear=True), patch(
+                "subprocess.run", return_value=completed
+            ) as run:
+                summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
+
+            self.assertEqual(summary["control_status"], "external_control_available")
+            self.assertEqual(summary["available_external_controls"], ["PostgreSQL"])
+            self.assertEqual(
+                summary["number_to_beat"]["query_p95_ms"]["baseline"], "PostgreSQL"
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_POSTGRES_DSN"],
+                "postgresql://user:secret@127.0.0.1:25432/db",
+            )
+            self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
+            self.assertIn("--require-services", run.call_args.args[0])
+
+    def test_manifest_redacts_postgres_dsn(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_manifest
+
+        config = ModalSmokeConfig(
+            run_id="redaction",
+            target="postgres",
+            allow_external_controls=True,
+            require_services=True,
+        )
+        manifest = build_manifest(
+            config,
+            ["python3", "-m", "runner", "suite"],
+            runner_env={"BENCH_POSTGRES_DSN": "postgresql://user:secret@127.0.0.1/db"},
+        )
+
+        manifest_text = json.dumps(manifest)
+
+        self.assertIn("BENCH_POSTGRES_DSN", manifest_text)
+        self.assertNotIn("secret", manifest_text)
+        self.assertEqual(manifest["runner_env"]["BENCH_POSTGRES_DSN"], "[redacted]")
 
     def test_cli_config_can_override_min_free_for_tiny_local_smoke(self) -> None:
         from modal_bench import _parse_args
