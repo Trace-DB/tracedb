@@ -455,6 +455,95 @@ fn vector_only_query_orders_by_exact_similarity() {
 }
 
 #[test]
+fn hybrid_query_uses_vector_order_when_lexical_scores_are_tied() {
+    let (_temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    for (id, vector) in [
+        ("early-orthogonal", [0.0, 1.0, 0.0]),
+        ("early-far", [0.2, 0.98, 0.0]),
+        ("target-near", [0.99, 0.01, 0.0]),
+        ("target-exact", [1.0, 0.0, 0.0]),
+        ("target-close", [0.98, 0.02, 0.0]),
+    ] {
+        db.insert(record(
+            id,
+            "tenant-a",
+            "shared lexical topic repeated",
+            vector,
+        ))
+        .unwrap_or_else(|error| panic!("insert {id}: {error}"));
+    }
+
+    let result = db
+        .query(HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: Some("shared lexical topic".to_string()),
+            vector: Some(vec![1.0, 0.0, 0.0]),
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 3,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query");
+
+    assert_eq!(
+        result
+            .results
+            .iter()
+            .map(|row| row.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["target-exact", "target-near", "target-close"],
+        "when lexical scores tie, vector similarity should decide hybrid ordering; results: {:?}",
+        result.results
+    );
+}
+
+#[test]
+fn hybrid_query_preserves_rare_symbol_lexical_winner() {
+    let (_temp, mut db) = db();
+    db.apply_schema(schema()).expect("schema");
+    db.insert(record(
+        "vector-distractor",
+        "tenant-a",
+        "ordinary semantic vector document",
+        [1.0, 0.0, 0.0],
+    ))
+    .expect("insert vector distractor");
+    db.insert(record(
+        "rare-symbol",
+        "tenant-a",
+        "ERR_VECTOR_DIMENSION_MISMATCH invalid vector dimensions",
+        [0.0, 1.0, 0.0],
+    ))
+    .expect("insert rare symbol");
+
+    let result = db
+        .query(HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: Some("ERR_VECTOR_DIMENSION_MISMATCH".to_string()),
+            vector: Some(vec![1.0, 0.0, 0.0]),
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 1,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query");
+
+    assert_eq!(
+        result.results.first().map(|row| row.record_id.as_str()),
+        Some("rare-symbol"),
+        "rare exact lexical symbol should beat a vector-only distractor; results: {:?}",
+        result.results
+    );
+}
+
+#[test]
 fn text_candidate_stream_explain() {
     let (_temp, db) = seeded_db();
     let result = db.query(query()).expect("query");

@@ -595,7 +595,7 @@ impl TraceDb {
         explain.planner_candidates = planner_candidates;
 
         let mut fused = fuse_rrf(&streams);
-        if query.text.is_none() && query.vector.is_some() {
+        if query.vector.is_some() && (query.text.is_none() || lexical_scores_are_tied(&fused)) {
             fused.sort_by(vector_first_order);
         }
         explain.deduped_candidate_count = fused.len();
@@ -1180,6 +1180,20 @@ fn vector_first_order(left: &FusedCandidate, right: &FusedCandidate) -> Ordering
         (None, None) => score_order(left.final_score, right.final_score)
             .then_with(|| left.record_id.cmp(&right.record_id)),
     }
+}
+
+fn lexical_scores_are_tied(candidates: &[FusedCandidate]) -> bool {
+    let mut scores = candidates
+        .iter()
+        .filter_map(|candidate| candidate.lexical)
+        .filter(|score| score.is_finite());
+    let Some(first) = scores.next() else {
+        return true;
+    };
+    let (min, max) = scores.fold((first, first), |(min, max), score| {
+        (min.min(score), max.max(score))
+    });
+    (max - min).abs() <= 1e-6
 }
 
 fn ranked_stream_from_candidates(name: &'static str, candidates: &[Candidate]) -> RankedStream {
