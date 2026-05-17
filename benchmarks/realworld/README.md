@@ -101,6 +101,25 @@ python3 -m runner loop \
 Loop mode varies the seed per iteration, reuses cached embeddings, and writes a
 minimized `failure-iteration-<n>.json` case on the first invariant failure.
 
+## TraceDB CLI Open/Recovery Scaling
+
+Use this lane when Docker or external baselines are unavailable, or when the
+question is specifically local WAL replay/open-time pressure. It drives the
+real `tracedb` CLI against a fresh data directory and records write, reopen, and
+query p95 at multiple record counts.
+
+```bash
+cargo build -p tracedb-cli
+python3 -m runner tracedb-scaling \
+  --records 128,256,512 \
+  --data-dir /tmp/tracedb-cli-scaling-db \
+  --output-json /tmp/tracedb-cli-scaling/summary.json \
+  --output-md /tmp/tracedb-cli-scaling/report.md
+```
+
+The numbers include process startup plus `TraceDb::open` WAL replay. Use the
+HTTP falsification lane for in-process server query/write latency.
+
 ## Local Compose Lab
 
 ```bash

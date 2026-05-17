@@ -19,6 +19,7 @@ from .openrouter import (
     maybe_apply_openrouter_embeddings,
 )
 from .report import build_report, write_json, write_markdown
+from .scaling import run_tracedb_scaling
 from .suite import build_suite_report, selected_scenarios, write_suite_json, write_suite_markdown
 from .types import RunConfig
 
@@ -50,6 +51,15 @@ def main(argv: list[str] | None = None) -> int:
     chat_demo.add_argument("--output-json", default="reports/chat-demo/latest.json")
     chat_demo.add_argument("--output-md", default="reports/chat-demo/latest.md")
 
+    scaling = subcommands.add_parser("tracedb-scaling", help="measure local TraceDB CLI open/recovery scaling")
+    scaling.add_argument("--data-dir", default="")
+    scaling.add_argument("--tracedb-cli", default="")
+    scaling.add_argument("--records", default="128,512,1024")
+    scaling.add_argument("--inspect-repetitions", type=int, default=5)
+    scaling.add_argument("--query-repetitions", type=int, default=3)
+    scaling.add_argument("--output-json", default="reports/scaling/latest.json")
+    scaling.add_argument("--output-md", default="reports/scaling/latest.md")
+
     args = parser.parse_args(argv)
     if args.command == "run":
         return run_benchmark(args)
@@ -61,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_suite(args)
     if args.command == "chat-demo":
         return run_chat_demo(args)
+    if args.command == "tracedb-scaling":
+        return run_tracedb_scaling(args)
     parser.error(f"unknown command {args.command}")
     return 2
 

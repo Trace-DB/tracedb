@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from .datasets import generated_dataset
+from .metrics import MetricRecorder, percentile
+
+
+TABLE = "scaling_records"
+FEATURE = "embedding"
+CommandRunner = Callable[[list[str]], tuple[int, str, str]]
+
+
+@dataclass
+class TraceDbScalingRunner:
+    repo_root: Path
+    tracedb_cli: Path
+    data_dir: Path
+    output_json: Path
+    output_md: Path
+    record_targets: list[int]
+    inspect_repetitions: int = 5
+    query_repetitions: int = 3
+    run_command: CommandRunner | None = None
+
+    def run(self) -> dict[str, Any]:
+        if not self.record_targets:
+            raise ValueError("at least one record target is required")
+        if any(target <= 0 for target in self.record_targets):
+            raise ValueError("record targets must be positive")
+        targets = sorted(set(self.record_targets))
+        max_records = targets[-1]
+        self.output_json.parent.mkdir(parents=True, exist_ok=True)
+        self.output_md.parent.mkdir(parents=True, exist_ok=True)
+        if self.data_dir.exists():
+            shutil.rmtree(self.data_dir)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        dataset = generated_dataset(max_records, seed=42)
+        commands: list[dict[str, Any]] = []
+        put_latencies: list[float] = []
+        points: list[dict[str, Any]] = []
+
+        with tempfile.TemporaryDirectory(prefix="tracedb-scaling-payloads-") as temp_dir:
+            payload_dir = Path(temp_dir)
+            self._call(["init"], commands)
+            schema_path = self._write_payload(payload_dir, "schema.json", scaling_schema())
+            self._call(["schema", "apply", str(schema_path)], commands)
+
+            next_target_idx = 0
+            for index, record in enumerate(dataset.records, start=1):
+                record_path = self._write_payload(
+                    payload_dir,
+                    f"record-{index:06d}.json",
+                    record_payload(record),
+                )
+                put_recorder = MetricRecorder()
+                put_recorder.timed(lambda record_path=record_path: self._call(["put", str(record_path)], commands))
+                put_latencies.extend(put_recorder.latencies_ms)
+
+                while next_target_idx < len(targets) and index == targets[next_target_idx]:
+                    points.append(
+                        self._measure_point(
+                            records=index,
+                            put_latencies=put_latencies,
+                            recent_put_latencies=put_latencies[-min(64, len(put_latencies)) :],
+                            payload_dir=payload_dir,
+                            commands=commands,
+                        )
+                    )
+                    next_target_idx += 1
+
+        report = {
+            "benchmark": "tracedb-cli-open-recovery-scaling",
+            "repo_root": str(self.repo_root),
+            "data_dir": str(self.data_dir),
+            "record_targets": targets,
+            "inspect_repetitions": self.inspect_repetitions,
+            "query_repetitions": self.query_repetitions,
+            "points": points,
+            "summary": {
+                "max_records": max_records,
+                "point_count": len(points),
+                "failures": [],
+                "interpretation": "CLI measurements include process startup plus TraceDb::open WAL replay. Use HTTP/server metrics for in-process write latency.",
+            },
+            "commands": commands,
+        }
+        self.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.output_md.write_text(render_scaling_markdown(report), encoding="utf-8")
+        return report
+
+    def _measure_point(
+        self,
+        *,
+        records: int,
+        put_latencies: list[float],
+        recent_put_latencies: list[float],
+        payload_dir: Path,
+        commands: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        inspect_recorder = MetricRecorder()
+        latest_epoch = 0
+        for _ in range(self.inspect_repetitions):
+            manifest = inspect_recorder.timed(lambda: self._call(["inspect", "manifest"], commands))
+            latest_epoch = manifest.get("latest_epoch", latest_epoch)
+
+        query = scaling_query(records)
+        query_path = self._write_payload(payload_dir, f"query-{records}.json", query)
+        query_recorder = MetricRecorder()
+        returned_count = 0
+        for _ in range(self.query_repetitions):
+            result = query_recorder.timed(lambda: self._call(["query", str(query_path)], commands))
+            returned_count = len(result.get("results", []))
+
+        wal_path = self.data_dir / "wal" / "000001.twal"
+        wal_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+        return {
+            "records": records,
+            "latest_epoch": latest_epoch,
+            "wal_bytes": wal_bytes,
+            "data_dir_bytes": directory_size(self.data_dir),
+            "put_latency_p50_ms": round(percentile(put_latencies, 50), 3),
+            "put_latency_p95_ms": round(percentile(put_latencies, 95), 3),
+            "recent_put_latency_p95_ms": round(percentile(recent_put_latencies, 95), 3),
+            "reopen_latency_p50_ms": inspect_recorder.summary()["latency_p50_ms"],
+            "reopen_latency_p95_ms": inspect_recorder.summary()["latency_p95_ms"],
+            "query_latency_p50_ms": query_recorder.summary()["latency_p50_ms"],
+            "query_latency_p95_ms": query_recorder.summary()["latency_p95_ms"],
+            "query_returned_count": returned_count,
+        }
+
+    def _write_payload(self, payload_dir: Path, name: str, value: dict[str, Any]) -> Path:
+        path = payload_dir / name
+        path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
+
+    def _call(self, args: list[str], commands: list[dict[str, Any]]) -> dict[str, Any]:
+        command = [str(self.tracedb_cli), "--data", str(self.data_dir), *args]
+        runner = self.run_command or run_subprocess
+        code, stdout, stderr = runner(command)
+        commands.append(
+            {
+                "command": command,
+                "exit_code": code,
+                "stdout": stdout.strip(),
+                "stderr": stderr.strip(),
+            }
+        )
+        if code != 0:
+            raise RuntimeError(f"command failed: {' '.join(command)}\n{stderr}")
+        return json.loads(stdout) if stdout.strip() else {}
+
+
+def scaling_schema() -> dict[str, Any]:
+    return {
+        "name": TABLE,
+        "primary_id_column": "id",
+        "tenant_id_column": "tenant",
+        "scalar_columns": ["category", "status"],
+        "text_indexed_columns": ["title", "body"],
+        "vector_columns": [{"name": FEATURE, "dimensions": 8, "source_columns": ["body"]}],
+    }
+
+
+def record_payload(record) -> dict[str, Any]:
+    return {
+        "table": TABLE,
+        "id": record.record_id,
+        "tenant_id": record.tenant_id,
+        "fields": {
+            "id": record.record_id,
+            "tenant": record.tenant_id,
+            "title": record.title,
+            "body": record.body,
+            "category": record.category,
+            "status": record.status,
+            "rating": record.rating,
+            "year": record.year,
+            "embedding": record.vector,
+        },
+    }
+
+
+def scaling_query(records: int) -> dict[str, Any]:
+    return {
+        "table": TABLE,
+        "tenant_id": "tenant-a",
+        "text": f"agent memory vector retrieval policy freshness record {records}",
+        "vector": [0.1, 0.2, 0.3, 0.4, 0.1, 0.2, 0.3, 0.4],
+        "top_k": 5,
+        "freshness": "AllowDirty",
+        "explain": True,
+    }
+
+
+def render_scaling_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# TraceDB CLI Open/Recovery Scaling",
+        "",
+        f"- Max records: `{report['summary']['max_records']}`",
+        f"- Data dir: `{report['data_dir']}`",
+        "",
+        "> CLI measurements include process startup plus TraceDb::open WAL replay. Use HTTP/server metrics for in-process write latency.",
+        "",
+        "| records | latest epoch | WAL bytes | put p95 ms | recent put p95 ms | reopen p95 ms | query p95 ms | returned |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for point in report["points"]:
+        lines.append(
+            "| {records} | {latest_epoch} | {wal_bytes} | {put_latency_p95_ms} | {recent_put_latency_p95_ms} | {reopen_latency_p95_ms} | {query_latency_p95_ms} | {query_returned_count} |".format(
+                **point
+            )
+        )
+    lines.extend(["", "## Next Use", "", "Use this curve to decide whether checkpoint files, WAL rotation, or store-clone reduction should be the next implementation target."])
+    return "\n".join(lines) + "\n"
+
+
+def directory_size(path: Path) -> int:
+    total = 0
+    for child in path.rglob("*"):
+        if child.is_file():
+            total += child.stat().st_size
+    return total
+
+
+def run_subprocess(command: list[str]) -> tuple[int, str, str]:
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+def parse_record_targets(raw: str) -> list[int]:
+    targets = [int(part.strip()) for part in raw.split(",") if part.strip()]
+    if not targets:
+        raise ValueError("at least one target is required")
+    return sorted(set(targets))
+
+
+def resolve_tracedb_cli(repo_root: Path, explicit: str) -> Path:
+    if explicit:
+        return Path(explicit)
+    return repo_root / "target" / "debug" / "tracedb"
+
+
+def run_tracedb_scaling(args) -> int:
+    lab_root = Path.cwd()
+    repo_root = lab_root.parent.parent
+    tracedb_cli = resolve_tracedb_cli(repo_root, args.tracedb_cli)
+    if not tracedb_cli.exists():
+        raise SystemExit(f"TraceDB CLI not found at {tracedb_cli}; run cargo build -p tracedb-cli")
+    data_dir = Path(args.data_dir) if args.data_dir else Path(tempfile.mkdtemp(prefix="tracedb-scaling-db-"))
+    runner = TraceDbScalingRunner(
+        repo_root=repo_root,
+        tracedb_cli=tracedb_cli,
+        data_dir=data_dir,
+        output_json=Path(args.output_json),
+        output_md=Path(args.output_md),
+        record_targets=parse_record_targets(args.records),
+        inspect_repetitions=args.inspect_repetitions,
+        query_repetitions=args.query_repetitions,
+    )
+    runner.run()
+    print(f"wrote {args.output_json}")
+    print(f"wrote {args.output_md}")
+    return 0
