@@ -2024,8 +2024,18 @@ fn write_checkpoint_file(
 
 fn read_checkpoint_file(dir: &Path, epoch: Epoch) -> Result<CheckpointFile> {
     let path = dir.join(checkpoint_relative_path(epoch));
-    let body = fs::read(&path)?;
-    let checkpoint: CheckpointFile = serde_json::from_slice(&body)?;
+    let body = fs::read(&path).map_err(|err| {
+        TraceDbError::ManifestCorruption(format!(
+            "failed to read checkpoint file at {}: {err}",
+            path.display()
+        ))
+    })?;
+    let checkpoint: CheckpointFile = serde_json::from_slice(&body).map_err(|err| {
+        TraceDbError::ManifestCorruption(format!(
+            "failed to parse checkpoint file at {}: {err}",
+            path.display()
+        ))
+    })?;
     if checkpoint.format_version != 1 {
         return Err(TraceDbError::ManifestCorruption(format!(
             "unsupported checkpoint format version {}",

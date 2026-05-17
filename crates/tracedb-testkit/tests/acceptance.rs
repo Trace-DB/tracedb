@@ -6,7 +6,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tracedb_core::{
     checksum_bytes, compute_manifest_checksum, source_hash, Epoch, FeatureInvalidation,
-    FeatureStatus, IndexState, SegmentState, TraceDbManifest,
+    FeatureStatus, IndexState, SegmentState, TraceDbError, TraceDbManifest,
 };
 use tracedb_log::{CommitRecord, Wal};
 use tracedb_modules::{AccessPathDescriptor, ModuleRegistry, TraceDbModule};
@@ -204,6 +204,42 @@ fn checkpoint_recovery_does_not_require_pre_checkpoint_wal_entries() {
         .get(RecordGetRequest::new("docs", "tenant-a", "d"))
         .expect("get post-checkpoint row")
         .is_some());
+}
+
+#[test]
+fn checkpoint_recovery_reports_structured_corruption_for_bad_checkpoint_files() {
+    let (temp, mut db) = seeded_db();
+    let checkpoint_epoch = db.checkpoint().expect("checkpoint");
+    let checkpoint_path = temp
+        .path()
+        .join("checkpoints")
+        .join(format!("checkpoint-{}.json", checkpoint_epoch.get()));
+    drop(db);
+
+    std::fs::write(&checkpoint_path, b"{\"format_version\":1").expect("write torn checkpoint");
+    let err = TraceDb::open(temp.path()).expect_err("torn checkpoint should fail closed");
+    assert!(
+        matches!(err, TraceDbError::ManifestCorruption(ref message) if message.contains("checkpoint")),
+        "expected checkpoint manifest corruption, got {err:?}"
+    );
+
+    let (missing_temp, mut missing_db) = seeded_db();
+    let missing_epoch = missing_db.checkpoint().expect("checkpoint");
+    std::fs::remove_file(
+        missing_temp
+            .path()
+            .join("checkpoints")
+            .join(format!("checkpoint-{}.json", missing_epoch.get())),
+    )
+    .expect("remove checkpoint");
+    drop(missing_db);
+
+    let err =
+        TraceDb::open(missing_temp.path()).expect_err("missing checkpoint should fail closed");
+    assert!(
+        matches!(err, TraceDbError::ManifestCorruption(ref message) if message.contains("checkpoint")),
+        "expected checkpoint manifest corruption, got {err:?}"
+    );
 }
 
 #[test]
