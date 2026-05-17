@@ -10,6 +10,7 @@ use tracedb_core::{
 };
 use tracedb_log::{CommitRecord, Wal};
 use tracedb_modules::{AccessPathDescriptor, ModuleRegistry, TraceDbModule};
+use tracedb_planner::QueryOutput;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordScanRequest, TableSchema, TraceDb, VectorColumnSchema,
@@ -666,6 +667,232 @@ fn explain_exposes_replay_minimum_candidate_facts() {
     );
     assert!(explain.final_visibility_guard_count >= explain.returned_count);
     assert_eq!(explain.final_visibility_guard_removed, 0);
+}
+
+#[test]
+fn policy_epoch_tracks_visibility_boundary() {
+    let (_temp, mut db) = db();
+    let schema_epoch = db.apply_schema(schema()).expect("schema");
+    assert_policy_boundary_explain(
+        &db,
+        db.query(policy_boundary_query())
+            .expect("query after schema"),
+        schema_epoch,
+        "after schema",
+        PolicyBoundaryExpectation::EpochOnly,
+    );
+
+    let insert_a_epoch = db
+        .insert(record(
+            "tenant-a-policy",
+            "tenant-a",
+            "policy boundary shared vector",
+            [1.0, 0.0, 0.0],
+        ))
+        .expect("insert tenant a");
+    db.insert(record(
+        "tenant-b-policy",
+        "tenant-b",
+        "policy boundary shared vector",
+        [1.0, 0.0, 0.0],
+    ))
+    .expect("insert tenant b");
+    db.insert(record(
+        "tenant-a-replaced",
+        "tenant-a",
+        "draft text before replacement",
+        [0.0, 1.0, 0.0],
+    ))
+    .expect("insert replaced");
+    let insert_delete_epoch = db
+        .insert(record(
+            "tenant-a-deleted",
+            "tenant-a",
+            "temporary row",
+            [0.0, 0.0, 1.0],
+        ))
+        .expect("insert deleted");
+
+    let after_insert = db
+        .query(policy_boundary_query())
+        .expect("query after insert");
+    assert_policy_boundary_explain(
+        &db,
+        after_insert,
+        insert_delete_epoch,
+        "after insert",
+        PolicyBoundaryExpectation::RetrievalCandidates,
+    );
+
+    let update_epoch = db
+        .insert(record(
+            "tenant-a-replaced",
+            "tenant-a",
+            "policy boundary replacement vector",
+            [0.98, 0.02, 0.0],
+        ))
+        .expect("replace tenant a");
+    let after_update = db
+        .query(policy_boundary_query())
+        .expect("query after update");
+    assert_policy_boundary_explain(
+        &db,
+        after_update,
+        update_epoch,
+        "after update",
+        PolicyBoundaryExpectation::RetrievalCandidates,
+    );
+
+    let delete_epoch = db
+        .delete(RecordDeleteRequest::new(
+            "docs",
+            "tenant-a",
+            "tenant-a-deleted",
+        ))
+        .expect("delete tenant a");
+    let after_delete = db
+        .query(policy_boundary_query())
+        .expect("query after delete");
+    assert_policy_boundary_explain(
+        &db,
+        after_delete,
+        delete_epoch,
+        "after delete",
+        PolicyBoundaryExpectation::RetrievalCandidates,
+    );
+
+    assert!(delete_epoch > insert_a_epoch);
+}
+
+fn policy_boundary_query() -> HybridQuery {
+    HybridQuery {
+        table: "docs".to_string(),
+        tenant_id: "tenant-a".to_string(),
+        text: Some("policy boundary vector".to_string()),
+        vector: Some(vec![1.0, 0.0, 0.0]),
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k: 10,
+        freshness: FreshnessMode::Strict,
+        explain: true,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PolicyBoundaryExpectation {
+    EpochOnly,
+    RetrievalCandidates,
+}
+
+fn assert_policy_boundary_explain(
+    db: &TraceDb,
+    result: QueryOutput,
+    expected_epoch: Epoch,
+    context: &str,
+    expectation: PolicyBoundaryExpectation,
+) {
+    let explain = result.explain;
+    let manifest_epoch = db.inspect_manifest().expect("manifest").latest_epoch;
+    assert_eq!(manifest_epoch, expected_epoch, "{context}: operation epoch");
+    assert_eq!(explain.read_epoch, manifest_epoch, "{context}: read epoch");
+    assert_eq!(
+        explain.schema_epoch, manifest_epoch,
+        "{context}: v0 exposes the manifest/latest epoch as schema_epoch"
+    );
+    assert_eq!(
+        explain.policy_epoch, manifest_epoch,
+        "{context}: v0 has no independent policy store; policy_epoch tracks manifest/latest epoch"
+    );
+    if expectation == PolicyBoundaryExpectation::EpochOnly {
+        return;
+    }
+
+    for stream in ["text", "vector"] {
+        assert!(
+            explain
+                .opened_candidate_streams
+                .iter()
+                .any(|opened| opened == stream),
+            "{context}: {stream} candidate stream should open after records exist"
+        );
+    }
+    assert!(
+        result.results.iter().all(|row| row.tenant_id == "tenant-a"),
+        "{context}: tenant-a query must not return tenant-b rows"
+    );
+    assert!(
+        result
+            .results
+            .iter()
+            .all(|row| row.record_id != "tenant-b-policy"),
+        "{context}: matching tenant-b text/vector row must stay hidden"
+    );
+
+    let candidate_ids = explain
+        .planner_candidates
+        .iter()
+        .map(|candidate| candidate.record_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !candidate_ids.contains("tenant-b-policy"),
+        "{context}: tenant-b-only matching row must not become a planner candidate"
+    );
+    assert!(
+        explain
+            .planner_candidates
+            .iter()
+            .filter(|candidate| candidate.source == "VectorPath")
+            .all(|candidate| candidate.record_id != "tenant-b-policy"),
+        "{context}: vector candidates must not include tenant-b-only ids"
+    );
+    let lexical_path_candidates = explain
+        .planner_candidates
+        .iter()
+        .filter(|candidate| candidate.source == "LexicalPath")
+        .count();
+    let vector_path_candidates = explain
+        .planner_candidates
+        .iter()
+        .filter(|candidate| candidate.source == "VectorPath")
+        .count();
+    assert!(
+        lexical_path_candidates > 0,
+        "{context}: LexicalPath should produce candidates after records exist"
+    );
+    assert!(
+        vector_path_candidates > 0,
+        "{context}: VectorPath should produce candidates after records exist"
+    );
+    assert_eq!(
+        lexical_path_candidates, explain.text_candidates,
+        "{context}: lexical candidate count should match exposed planner candidates"
+    );
+    assert_eq!(
+        vector_path_candidates, explain.vector_candidates,
+        "{context}: vector candidate count should match exposed planner candidates"
+    );
+    assert!(
+        explain.vector_candidates <= explain.tenant_mask_visible_records,
+        "{context}: vector candidate count should stay within tenant-visible records"
+    );
+    assert!(explain
+        .planner_candidates
+        .iter()
+        .filter(|candidate| candidate.source == "LexicalPath" || candidate.source == "VectorPath")
+        .all(|candidate| candidate.visibility_checked));
+    assert!(explain
+        .access_paths
+        .iter()
+        .filter(|path| path.access_path_id == "LexicalPath" || path.access_path_id == "VectorPath")
+        .all(|path| path.visibility_checked_before_open));
+    assert!(
+        explain.final_visibility_guard_count >= explain.returned_count,
+        "{context}: final guard must check at least returned rows"
+    );
+    assert_eq!(
+        explain.final_visibility_guard_removed, 0,
+        "{context}: normal tenant-mask-safe query should not rely on final guard removals"
+    );
 }
 
 #[test]
