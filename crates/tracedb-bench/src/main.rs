@@ -1,8 +1,28 @@
 #![forbid(unsafe_code)]
 
-use tracedb_bench::{BenchmarkTarget, WorkloadKind};
+use tracedb_bench::{run_inprocess_scaling, BenchmarkTarget, InProcessScalingConfig, WorkloadKind};
 
 fn main() {
+    if std::env::var("TRACEDB_BENCH_MODE").as_deref() == Ok("inprocess-scaling") {
+        let report = run_inprocess_scaling(InProcessScalingConfig {
+            record_targets: parse_record_targets(
+                &std::env::var("TRACEDB_BENCH_RECORD_TARGETS")
+                    .unwrap_or_else(|_| "128,512,1024".to_string()),
+            ),
+            open_repetitions: parse_usize_env("TRACEDB_BENCH_OPEN_REPETITIONS", 5),
+            query_repetitions: parse_usize_env("TRACEDB_BENCH_QUERY_REPETITIONS", 3),
+            checkpoint_at_points: std::env::var("TRACEDB_BENCH_CHECKPOINT_AT_POINTS")
+                .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
+        })
+        .expect("inprocess scaling benchmark");
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("json report")
+        );
+        return;
+    }
+
     let workload =
         std::env::var("TRACEDB_BENCH_WORKLOAD").unwrap_or_else(|_| "ai-chat-memory".to_string());
     let records = std::env::var("TRACEDB_BENCH_RECORDS")
@@ -19,6 +39,19 @@ fn main() {
             "baselines": target.baselines(),
         })
     );
+}
+
+fn parse_record_targets(raw: &str) -> Vec<usize> {
+    raw.split(',')
+        .filter_map(|part| part.trim().parse::<usize>().ok())
+        .collect()
+}
+
+fn parse_usize_env(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
 }
 
 fn workload_kind(workload: &str) -> WorkloadKind {

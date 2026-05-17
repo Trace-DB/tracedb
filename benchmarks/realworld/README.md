@@ -120,6 +120,25 @@ python3 -m runner tracedb-scaling \
 The numbers include process startup plus `TraceDb::open` WAL replay. Use the
 HTTP falsification lane for in-process server query/write latency.
 
+## TraceDB In-Process Engine Scaling
+
+Use this lane when the CLI scaling curve is too coarse and you need to separate
+process startup from engine costs. It runs inserts, opens, checkpoints, and
+queries inside the `tracedb-bench` process and writes one JSON report to stdout.
+
+```bash
+TRACEDB_BENCH_MODE=inprocess-scaling \
+TRACEDB_BENCH_RECORD_TARGETS=1024,2048,4096 \
+TRACEDB_BENCH_OPEN_REPETITIONS=5 \
+TRACEDB_BENCH_QUERY_REPETITIONS=3 \
+TRACEDB_BENCH_CHECKPOINT_AT_POINTS=1 \
+cargo run -p tracedb-bench > /tmp/tracedb-inprocess-scaling.json
+```
+
+Use this before changing checkpoint layout or store internals. It captures
+engine insert p95, engine open p95, engine query p95, checkpoint latency, and
+checkpointed open/query p95 without paying a new process startup per operation.
+
 ## Local Compose Lab
 
 ```bash
