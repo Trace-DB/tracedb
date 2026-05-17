@@ -25,6 +25,9 @@ use tracedb_planner::{
 use tracedb_segment::SegmentRecord;
 use tracedb_store::{ReadSnapshot, RecordStore, StoredRecord};
 
+const CHECKPOINT_BINARY_MAGIC: &[u8; 8] = b"TDBCHK01";
+const CHECKPOINT_FORMAT_VERSION: u32 = 2;
+
 pub use tracedb_core::{
     FeatureInvalidation, ModuleManifest, RecordDeletion, RecordInput, TableSchema,
     VectorColumnSchema,
@@ -1984,6 +1987,14 @@ fn write_manifest(path: impl AsRef<Path>, manifest: &mut TraceDbManifest) -> Res
 }
 
 fn checkpoint_relative_path(epoch: Epoch) -> String {
+    checkpoint_binary_relative_path(epoch)
+}
+
+fn checkpoint_binary_relative_path(epoch: Epoch) -> String {
+    format!("checkpoints/checkpoint-{}.tchk", epoch.get())
+}
+
+fn checkpoint_json_relative_path(epoch: Epoch) -> String {
     format!("checkpoints/checkpoint-{}.json", epoch.get())
 }
 
@@ -2005,15 +2016,18 @@ fn write_checkpoint_file(
         fs::create_dir_all(parent)?;
     }
     let mut checkpoint = CheckpointFile {
-        format_version: 1,
+        format_version: CHECKPOINT_FORMAT_VERSION,
         epoch,
         schemas,
         records,
         checksum: 0,
     };
     checkpoint.checksum = compute_checkpoint_checksum(&checkpoint)?;
-    let body = serde_json::to_vec_pretty(&checkpoint)?;
-    let tmp_path = path.with_extension("json.tmp");
+    let payload = serde_json::to_vec(&checkpoint)?;
+    let mut body = Vec::with_capacity(CHECKPOINT_BINARY_MAGIC.len() + payload.len());
+    body.extend_from_slice(CHECKPOINT_BINARY_MAGIC);
+    body.extend_from_slice(&payload);
+    let tmp_path = path.with_extension("tchk.tmp");
     let mut file = File::create(&tmp_path)?;
     file.write_all(&body)?;
     file.sync_all()?;
@@ -2026,8 +2040,40 @@ fn write_checkpoint_file(
 }
 
 fn read_checkpoint_file(dir: &Path, epoch: Epoch) -> Result<CheckpointFile> {
-    let path = dir.join(checkpoint_relative_path(epoch));
-    let body = fs::read(&path).map_err(|err| {
+    let path = dir.join(checkpoint_binary_relative_path(epoch));
+    if path.exists() {
+        return read_binary_checkpoint_file(&path);
+    }
+    read_json_checkpoint_file(&dir.join(checkpoint_json_relative_path(epoch)))
+}
+
+fn read_binary_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
+    let body = fs::read(path).map_err(|err| {
+        TraceDbError::ManifestCorruption(format!(
+            "failed to read checkpoint file at {}: {err}",
+            path.display()
+        ))
+    })?;
+    if body.len() <= CHECKPOINT_BINARY_MAGIC.len()
+        || &body[..CHECKPOINT_BINARY_MAGIC.len()] != CHECKPOINT_BINARY_MAGIC
+    {
+        return Err(TraceDbError::ManifestCorruption(format!(
+            "checkpoint magic mismatch at {}",
+            path.display()
+        )));
+    }
+    let checkpoint: CheckpointFile = serde_json::from_slice(&body[CHECKPOINT_BINARY_MAGIC.len()..])
+        .map_err(|err| {
+            TraceDbError::ManifestCorruption(format!(
+                "failed to parse checkpoint file at {}: {err}",
+                path.display()
+            ))
+        })?;
+    verify_checkpoint_file(path, checkpoint, CHECKPOINT_FORMAT_VERSION)
+}
+
+fn read_json_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
+    let body = fs::read(path).map_err(|err| {
         TraceDbError::ManifestCorruption(format!(
             "failed to read checkpoint file at {}: {err}",
             path.display()
@@ -2039,7 +2085,15 @@ fn read_checkpoint_file(dir: &Path, epoch: Epoch) -> Result<CheckpointFile> {
             path.display()
         ))
     })?;
-    if checkpoint.format_version != 1 {
+    verify_checkpoint_file(path, checkpoint, 1)
+}
+
+fn verify_checkpoint_file(
+    path: &Path,
+    checkpoint: CheckpointFile,
+    expected_format_version: u32,
+) -> Result<CheckpointFile> {
+    if checkpoint.format_version != expected_format_version {
         return Err(TraceDbError::ManifestCorruption(format!(
             "unsupported checkpoint format version {}",
             checkpoint.format_version

@@ -170,7 +170,7 @@ fn checkpoint_recovery_does_not_require_pre_checkpoint_wal_entries() {
     assert!(temp
         .path()
         .join("checkpoints")
-        .join(format!("checkpoint-{}.json", checkpoint_epoch.get()))
+        .join(format!("checkpoint-{}.tchk", checkpoint_epoch.get()))
         .exists());
     assert_eq!(
         db.inspect_wal().expect("wal after checkpoint").len(),
@@ -213,10 +213,10 @@ fn checkpoint_recovery_reports_structured_corruption_for_bad_checkpoint_files() 
     let checkpoint_path = temp
         .path()
         .join("checkpoints")
-        .join(format!("checkpoint-{}.json", checkpoint_epoch.get()));
+        .join(format!("checkpoint-{}.tchk", checkpoint_epoch.get()));
     drop(db);
 
-    std::fs::write(&checkpoint_path, b"{\"format_version\":1").expect("write torn checkpoint");
+    std::fs::write(&checkpoint_path, b"TDBCHK").expect("write torn checkpoint");
     let err = TraceDb::open(temp.path()).expect_err("torn checkpoint should fail closed");
     assert!(
         matches!(err, TraceDbError::ManifestCorruption(ref message) if message.contains("checkpoint")),
@@ -229,7 +229,7 @@ fn checkpoint_recovery_reports_structured_corruption_for_bad_checkpoint_files() 
         missing_temp
             .path()
             .join("checkpoints")
-            .join(format!("checkpoint-{}.json", missing_epoch.get())),
+            .join(format!("checkpoint-{}.tchk", missing_epoch.get())),
     )
     .expect("remove checkpoint");
     drop(missing_db);
