@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
 LAB_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(LAB_ROOT))
+
+from runner.suite import SCENARIOS, build_suite_report, write_suite_markdown
 
 
 class SuiteReportingTests(unittest.TestCase):
@@ -59,7 +63,17 @@ class SuiteReportingTests(unittest.TestCase):
 
         self.assertEqual(payload["suite_id"], "suite-test")
         self.assertGreaterEqual(len(payload["scenarios"]), 2)
+        self.assertEqual(payload["control_status"], "internal_only_smoke")
+        self.assertIn("control_ledger", payload)
+        self.assertIn("number_to_beat", payload)
+        self.assertTrue(
+            all("control_status" in scenario for scenario in payload["scenarios"]),
+            payload["scenarios"],
+        )
         self.assertIn("## Executive Summary", markdown)
+        self.assertIn("Control status: `internal_only_smoke`", markdown)
+        self.assertIn("## Control Ledger", markdown)
+        self.assertIn("Number to beat", markdown)
         self.assertIn("## How to Read This Report", markdown)
         self.assertIn("## Database Roles Compared", markdown)
         self.assertIn("## What We Simulated", markdown)
@@ -72,6 +86,75 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("Side-by-side Search/RAG 6 database comparison", markdown)
         self.assertIn("TraceDB result: available", markdown)
         self.assertNotIn("TraceDB was not requested", markdown)
+
+    def test_suite_report_marks_unavailable_external_controls(self) -> None:
+        child_report = {
+            "summary": {
+                "failure_count": 0,
+                "control_status": "external_control_unavailable",
+            },
+            "dataset": {"kind": "generated", "source": "test"},
+            "surfaces": ["sdk"],
+            "openrouter": {},
+            "baselines": [
+                {
+                    "name": "TraceDB",
+                    "available": True,
+                    "role": "target under test",
+                    "metrics": {
+                        "ingest_count": 16,
+                        "query_count": 4,
+                        "latency_p95_ms": 4.0,
+                        "recall_at_5": 1.0,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+                {
+                    "name": "PostgreSQL",
+                    "available": False,
+                    "role": "relational control",
+                    "metrics": {
+                        "ingest_count": 0,
+                        "query_count": 0,
+                        "latency_p95_ms": 0.0,
+                        "recall_at_5": 0.0,
+                        "failure_count": 0,
+                    },
+                    "notes": ["service not configured"],
+                },
+            ],
+        }
+        suite = build_suite_report(
+            suite_id="suite-controls",
+            profile="smoke",
+            dataset="generated",
+            records=16,
+            reports=[
+                {
+                    "spec": SCENARIOS["search_rag_6"],
+                    "report": child_report,
+                    "artifact_dir": "/tmp/search_rag_6",
+                }
+            ],
+        )
+
+        self.assertEqual(suite["control_status"], "external_control_unavailable")
+        self.assertEqual(suite["summary"]["control_status"], "external_control_unavailable")
+        self.assertEqual(
+            suite["control_ledger"]["unavailable_external_controls"][0]["name"],
+            "PostgreSQL",
+        )
+        self.assertIsNone(suite["number_to_beat"]["query_p95_ms"]["value"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "suite.md"
+            write_suite_markdown(suite, path)
+            markdown = path.read_text()
+
+        self.assertIn("Control status: `external_control_unavailable`", markdown)
+        self.assertIn("no product-language conclusion is valid", markdown)
+        self.assertIn("`search_rag_6` / `PostgreSQL`: service not configured", markdown)
 
 
 if __name__ == "__main__":

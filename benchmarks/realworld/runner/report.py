@@ -15,6 +15,7 @@ def build_report(
     openrouter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenarios = simulated_scenarios(dataset, config, openrouter or {})
+    control_ledger = build_control_ledger(baselines)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "profile": config.profile,
@@ -36,12 +37,20 @@ def build_report(
         "surfaces": config.surfaces,
         "openrouter": openrouter or {},
         "scenarios": scenarios,
+        "control": {
+            "control_status": control_ledger["control_status"],
+            "number_to_beat": control_ledger["number_to_beat"],
+        },
+        "control_status": control_ledger["control_status"],
+        "control_ledger": control_ledger,
+        "number_to_beat": control_ledger["number_to_beat"],
         "summary": {
             "baseline_count": len(baselines),
             "available_count": sum(1 for baseline in baselines if baseline["available"]),
             "unavailable_count": sum(1 for baseline in baselines if not baseline["available"]),
             "record_count": len(dataset.records),
             "query_count": len(dataset.queries),
+            "control_status": control_ledger["control_status"],
             "failure_count": sum(
                 int(baseline["metrics"].get("failure_count", 0)) for baseline in baselines
             ),
@@ -71,6 +80,17 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         f"- Requested embedding dimensions: `{report.get('openrouter', {}).get('requested_embedding_dimensions') or 'native'}`",
         f"- Surfaces: {', '.join(report['surfaces'])}",
         f"- OpenRouter requests: `{report.get('openrouter', {}).get('request_count', 0)}`",
+        f"- Control status: `{report.get('control_status', 'unknown')}`",
+        "",
+        "## Control Ledger",
+        "",
+        _control_status_sentence(report),
+        "",
+        "### Number to beat",
+        "",
+        "| metric | baseline | value |",
+        "| --- | --- | ---: |",
+        *_number_to_beat_rows(report.get("number_to_beat", {})),
         "",
         "## Simulated Scenarios",
         "",
@@ -125,6 +145,112 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         ]
     )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def build_control_ledger(baselines: list[dict[str, Any]]) -> dict[str, Any]:
+    external = [baseline for baseline in baselines if not is_tracedb_baseline(baseline)]
+    available_external = [baseline for baseline in external if baseline.get("available")]
+    unavailable_external = [baseline for baseline in external if not baseline.get("available")]
+    if available_external:
+        control_status = "external_control_available"
+    elif unavailable_external:
+        control_status = "external_control_unavailable"
+    else:
+        control_status = "internal_only_smoke"
+    return {
+        "control_status": control_status,
+        "external_controls": [_control_entry(baseline) for baseline in external],
+        "available_external_controls": [
+            _control_entry(baseline) for baseline in available_external
+        ],
+        "unavailable_external_controls": [
+            _control_entry(baseline) for baseline in unavailable_external
+        ],
+        "number_to_beat": {
+            "query_p95_ms": _best_metric(
+                available_external,
+                "latency_p95_ms",
+                lower_is_better=True,
+                require_queries=True,
+            ),
+            "recall_at_5": _best_metric(
+                available_external,
+                "recall_at_5",
+                lower_is_better=False,
+                require_queries=True,
+            ),
+            "ingest_p95_ms": _best_metric(
+                available_external,
+                "ingest_latency_p95_ms",
+                lower_is_better=True,
+            ),
+            "storage_bytes": _best_metric(
+                available_external,
+                "disk_bytes",
+                lower_is_better=True,
+                require_positive=True,
+            ),
+        },
+    }
+
+
+def is_tracedb_baseline(baseline: dict[str, Any]) -> bool:
+    return str(baseline.get("name", "")).lower() in {"tracedb", "trace_db", "trace-db"}
+
+
+def _control_entry(baseline: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": baseline.get("name", "unknown"),
+        "role": baseline.get("role", "unknown"),
+        "available": bool(baseline.get("available")),
+        "notes": baseline.get("notes", []),
+    }
+
+
+def _best_metric(
+    baselines: list[dict[str, Any]],
+    metric: str,
+    *,
+    lower_is_better: bool,
+    require_queries: bool = False,
+    require_positive: bool = False,
+) -> dict[str, Any]:
+    candidates = []
+    for baseline in baselines:
+        metrics = baseline.get("metrics", {})
+        if require_queries and int(metrics.get("query_count", 0)) <= 0:
+            continue
+        value = metrics.get(metric)
+        if value is None:
+            continue
+        numeric = float(value)
+        if require_positive and numeric <= 0:
+            continue
+        candidates.append((numeric, baseline.get("name", "unknown")))
+    if not candidates:
+        return {"baseline": None, "value": None}
+    value, name = (min if lower_is_better else max)(candidates, key=lambda item: item[0])
+    return {"baseline": name, "value": value}
+
+
+def _control_status_sentence(report: dict[str, Any]) -> str:
+    status = report.get("control_status", "unknown")
+    if status == "external_control_available":
+        return "At least one external control produced metrics; this run has a number to beat."
+    if status == "external_control_unavailable":
+        return "External controls were requested but unavailable; no product-language conclusion is valid until a control produces metrics."
+    if status == "internal_only_smoke":
+        return "This TraceDB-only run is development evidence, not product evidence."
+    return "Control status is unknown; do not promote this report as product evidence."
+
+
+def _number_to_beat_rows(number_to_beat: dict[str, Any]) -> list[str]:
+    rows = []
+    for metric, entry in number_to_beat.items():
+        baseline = entry.get("baseline") if isinstance(entry, dict) else None
+        value = entry.get("value") if isinstance(entry, dict) else None
+        rows.append(f"| {metric} | {baseline or 'n/a'} | {value if value is not None else 'n/a'} |")
+    return rows
 
 
 def provider_metrics_row(report: dict[str, Any]) -> str:

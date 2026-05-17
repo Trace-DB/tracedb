@@ -421,6 +421,113 @@ class AdapterHardeningTests(unittest.TestCase):
         )
         self.assertIn("same-file recall@5", rendered)
 
+    def test_trace_db_only_report_is_marked_internal_smoke(self) -> None:
+        dataset = generated_dataset(24, 42)
+        config = RunConfig(
+            profile="smoke",
+            target=["tracedb"],
+            surfaces=["sdk"],
+            require_services=False,
+            repo_root=".",
+        )
+        report = build_report(
+            dataset,
+            config,
+            [
+                {
+                    "name": "TraceDB",
+                    "available": True,
+                    "role": "transactional hybrid database",
+                    "metrics": {
+                        "ingest_count": 1,
+                        "query_count": 1,
+                        "latency_p50_ms": 1.0,
+                        "latency_p95_ms": 2.0,
+                        "latency_p99_ms": 3.0,
+                        "recall_at_5": 1.0,
+                        "ndcg_at_5": 1.0,
+                        "mrr_at_5": 1.0,
+                    },
+                    "notes": [],
+                }
+            ],
+        )
+
+        self.assertEqual(report["control_status"], "internal_only_smoke")
+        self.assertEqual(report["summary"]["control_status"], "internal_only_smoke")
+        self.assertIsNone(report["number_to_beat"]["query_p95_ms"]["value"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "report.md"
+            write_markdown(report, path)
+            rendered = path.read_text(encoding="utf-8")
+
+        self.assertIn("Control status: `internal_only_smoke`", rendered)
+        self.assertIn("development evidence, not product evidence", rendered)
+
+    def test_report_records_external_number_to_beat(self) -> None:
+        dataset = generated_dataset(24, 42)
+        config = RunConfig(
+            profile="smoke",
+            target=["all"],
+            surfaces=["sdk"],
+            require_services=False,
+            repo_root=".",
+        )
+        report = build_report(
+            dataset,
+            config,
+            [
+                {
+                    "name": "TraceDB",
+                    "available": True,
+                    "role": "target under test",
+                    "metrics": {
+                        "ingest_count": 24,
+                        "query_count": 4,
+                        "latency_p95_ms": 7.0,
+                        "recall_at_5": 0.75,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+                {
+                    "name": "PostgreSQL",
+                    "available": True,
+                    "role": "relational control",
+                    "metrics": {
+                        "ingest_count": 24,
+                        "query_count": 4,
+                        "latency_p95_ms": 5.0,
+                        "ingest_latency_p95_ms": 1.5,
+                        "recall_at_5": 0.5,
+                        "disk_bytes": 1024,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+                {
+                    "name": "Qdrant",
+                    "available": False,
+                    "role": "vector control",
+                    "metrics": {
+                        "ingest_count": 0,
+                        "query_count": 0,
+                        "latency_p95_ms": 0.0,
+                        "recall_at_5": 0.0,
+                        "failure_count": 0,
+                    },
+                    "notes": ["service not configured"],
+                },
+            ],
+        )
+
+        self.assertEqual(report["control_status"], "external_control_available")
+        self.assertEqual(report["number_to_beat"]["query_p95_ms"]["value"], 5.0)
+        self.assertEqual(report["number_to_beat"]["query_p95_ms"]["baseline"], "PostgreSQL")
+        self.assertEqual(report["number_to_beat"]["recall_at_5"]["value"], 0.5)
+        self.assertEqual(report["control_ledger"]["unavailable_external_controls"][0]["name"], "Qdrant")
+
     def test_generated_hybrid_dataset_uses_retrieval_quality_labels(self) -> None:
         smoke = load_dataset("generated", 256, 42)
         hybrid = load_dataset("generated_hybrid", 256, 42)

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .report import build_control_ledger, is_tracedb_baseline
+
 
 ROLE_DESCRIPTIONS = {
     "TraceDB": (
@@ -114,9 +116,11 @@ def build_suite_report(
     reports: list[dict[str, Any]],
 ) -> dict[str, Any]:
     scenarios = []
+    all_baselines = []
     for item in reports:
         spec: ScenarioSpec = item["spec"]
         report = item["report"]
+        all_baselines.extend(report["baselines"])
         scenarios.append(
             {
                 "id": spec.scenario_id,
@@ -129,9 +133,14 @@ def build_suite_report(
                 "dataset": report["dataset"],
                 "surfaces": report["surfaces"],
                 "openrouter": report.get("openrouter", {}),
+                "control": report.get("control", {}),
+                "control_status": report.get("control_status", "unknown"),
+                "control_ledger": report.get("control_ledger", {}),
+                "number_to_beat": report.get("number_to_beat", {}),
                 "baselines": report["baselines"],
             }
         )
+    control_ledger = build_control_ledger(all_baselines)
     return {
         "suite_id": suite_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -139,6 +148,13 @@ def build_suite_report(
         "dataset": dataset,
         "records": records,
         "scenarios": scenarios,
+        "control": {
+            "control_status": control_ledger["control_status"],
+            "number_to_beat": control_ledger["number_to_beat"],
+        },
+        "control_status": control_ledger["control_status"],
+        "control_ledger": control_ledger,
+        "number_to_beat": control_ledger["number_to_beat"],
         "summary": {
             "scenario_count": len(scenarios),
             "baseline_observations": sum(len(scenario["baselines"]) for scenario in scenarios),
@@ -157,6 +173,7 @@ def build_suite_report(
             "failure_count": sum(
                 int(scenario["summary"].get("failure_count", 0)) for scenario in scenarios
             ),
+            "control_status": control_ledger["control_status"],
         },
     }
 
@@ -182,10 +199,21 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
         f"- Available observations: `{report['summary']['available_observations']}`",
         f"- Unavailable observations: `{report['summary']['unavailable_observations']}`",
         f"- Failure count: `{report['summary']['failure_count']}`",
+        f"- Control status: `{report.get('control_status', 'unknown')}`",
         "",
         "This report is intended to falsify TraceDB behavior against concrete database workloads, "
         "not to prove success from health checks. Each scenario below states what is simulated, "
         "which surfaces are exercised, and which metrics should be read.",
+        "",
+        "## Control Ledger",
+        "",
+        _control_status_sentence(report),
+        "",
+        "### Number to beat",
+        "",
+        "| metric | baseline | value |",
+        "| --- | --- | ---: |",
+        *_number_to_beat_rows(report.get("number_to_beat", {})),
         "",
         "## How to Read This Report",
         "",
@@ -234,6 +262,7 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
                 f"### {scenario['id']} - {scenario['name']}",
                 "",
                 f"- Status: `{_scenario_status(scenario)}`",
+                f"- Control status: `{scenario.get('control_status', 'unknown')}`",
                 f"- Available baselines: {_baseline_names(scenario, available=True)}",
                 f"- Unavailable baselines: {_baseline_names(scenario, available=False)}",
                 f"- Fastest p95 latency: {_best_latency(scenario)}",
@@ -402,4 +431,24 @@ def _tracedb_result(scenario: dict[str, Any]) -> str:
 
 
 def _is_tracedb(baseline: dict[str, Any]) -> bool:
-    return str(baseline.get("name", "")).lower() in {"tracedb", "trace_db", "trace-db"}
+    return is_tracedb_baseline(baseline)
+
+
+def _control_status_sentence(report: dict[str, Any]) -> str:
+    status = report.get("control_status", "unknown")
+    if status == "external_control_available":
+        return "At least one external control produced metrics; this suite has a number to beat."
+    if status == "external_control_unavailable":
+        return "External controls were requested but unavailable; no product-language conclusion is valid until a control produces metrics."
+    if status == "internal_only_smoke":
+        return "This TraceDB-only suite is development evidence, not product evidence."
+    return "Control status is unknown; do not promote this suite as product evidence."
+
+
+def _number_to_beat_rows(number_to_beat: dict[str, Any]) -> list[str]:
+    rows = []
+    for metric, entry in number_to_beat.items():
+        baseline = entry.get("baseline") if isinstance(entry, dict) else None
+        value = entry.get("value") if isinstance(entry, dict) else None
+        rows.append(f"| {metric} | {baseline or 'n/a'} | {value if value is not None else 'n/a'} |")
+    return rows
