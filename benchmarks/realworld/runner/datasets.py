@@ -4,6 +4,7 @@ import itertools
 import hashlib
 import json
 import random
+import re
 from typing import Any
 
 from .mathutil import cosine, deterministic_vector, text_score
@@ -29,10 +30,13 @@ def load_dataset(kind: str, records: int, seed: int = 42) -> DatasetBundle:
         return embedded_movies_dataset(records, seed)
     if kind in {"beir_scifact", "scifact"}:
         return beir_scifact_dataset(records, seed)
-    if kind in {"codesearchnet", "code_search_net"}:
-        return codesearchnet_dataset(records, seed)
+    if kind in {"codesearchnet", "code_search_net", "codesearchnet_body"}:
+        dataset_kind = "codesearchnet_body" if kind == "codesearchnet_body" else "codesearchnet"
+        return codesearchnet_dataset(records, seed, kind=dataset_kind)
+    if kind == "codesearchnet_codeaware":
+        return codesearchnet_dataset(records, seed, kind="codesearchnet_codeaware", codeaware=True)
     raise ValueError(
-        f"unknown dataset {kind}; expected generated, generated_hybrid, embedded_movies, beir_scifact, or codesearchnet"
+        f"unknown dataset {kind}; expected generated, generated_hybrid, embedded_movies, beir_scifact, codesearchnet_body, or codesearchnet_codeaware"
     )
 
 
@@ -202,7 +206,13 @@ def beir_scifact_dataset(records: int, seed: int) -> DatasetBundle:
     )
 
 
-def codesearchnet_dataset(records: int, seed: int) -> DatasetBundle:
+def codesearchnet_dataset(
+    records: int,
+    seed: int,
+    *,
+    kind: str = "codesearchnet",
+    codeaware: bool = False,
+) -> DatasetBundle:
     rows = _load_hf_rows(
         "mteb/CodeSearchNetRetrieval",
         "test",
@@ -210,21 +220,34 @@ def codesearchnet_dataset(records: int, seed: int) -> DatasetBundle:
         seed,
         config="python-corpus",
     )
-    out = [
-        BenchRecord(
-            record_id=str(item.get("_id") or item.get("id") or f"code-{idx}"),
-            tenant_id=f"tenant-{idx % 4}",
-            title=str(item.get("title") or item.get("metadata", {}).get("language") or f"Code {idx}"),
-            body=str(item.get("text") or item.get("contents") or ""),
-            category="code_search",
-            status="published",
-            rating=0.0,
-            year=2024,
-            vector=deterministic_vector(str(item.get("text") or item.get("contents") or idx)),
-            metadata={"source": "mteb/CodeSearchNetRetrieval"},
+    out = []
+    for idx, item in enumerate(rows):
+        record_id = str(item.get("_id") or item.get("id") or f"code-{idx}")
+        title = str(item.get("title") or item.get("metadata", {}).get("language") or f"Code {idx}")
+        original_body = str(item.get("text") or item.get("contents") or "")
+        body = (
+            _codeaware_lexical_text(record_id, title, original_body)
+            if codeaware
+            else original_body
         )
-        for idx, item in enumerate(rows)
-    ]
+        out.append(
+            BenchRecord(
+                record_id=record_id,
+                tenant_id=f"tenant-{idx % 4}",
+                title=title,
+                body=body,
+                category="code_search",
+                status="published",
+                rating=0.0,
+                year=2024,
+                vector=deterministic_vector(body or str(idx)),
+                metadata={
+                    "source": "mteb/CodeSearchNetRetrieval",
+                    "codesearchnet_variant": "codeaware" if codeaware else "body",
+                    "original_body": original_body if codeaware else None,
+                },
+            )
+        )
     qrel_queries = _queries_from_qrels(
         out,
         dataset_name="mteb/CodeSearchNetRetrieval",
@@ -235,19 +258,27 @@ def codesearchnet_dataset(records: int, seed: int) -> DatasetBundle:
         limit=records,
         seed=seed,
         category="code_search",
+        query_transform=_codeaware_lexical_text if codeaware else None,
     )
     queries = qrel_queries or _queries_from_records(out)
     notes = ["external code retrieval dataset loaded from Hugging Face"]
+    relevance_label_notes = []
+    if codeaware:
+        notes.append("code-aware lexical lane materializes record id/path, title, body, and normalized identifier terms")
+        relevance_label_notes.append(
+            "code-aware lexical benchmark variant expands query and document text with simple identifier morphology terms"
+        )
     if qrel_queries:
         notes.append("qrels were used when available for relevance labels")
     return _bundle(
-        kind="codesearchnet",
+        kind=kind,
         source="mteb/CodeSearchNetRetrieval",
         records=out,
         queries=queries,
         notes=notes,
         relevance_label_mode="external_qrels" if qrel_queries else "synthetic_text_vector_similarity",
         relevance_label_scope="retrieval_quality" if qrel_queries else "synthetic_retrieval_quality",
+        relevance_label_notes=relevance_label_notes,
     )
 
 
@@ -360,6 +391,7 @@ def _queries_from_qrels(
     limit: int,
     seed: int,
     category: str,
+    query_transform=None,
 ) -> list[BenchQuery]:
     corpus_ids = {record.record_id for record in records}
     if not corpus_ids:
@@ -403,13 +435,16 @@ def _queries_from_qrels(
         if not expected_ids or query_id not in query_text:
             continue
         first = by_id[expected_ids[0]]
+        text = query_text[query_id]
+        if query_transform is not None:
+            text = query_transform(text)
         queries.append(
             BenchQuery(
                 query_id=f"qrel-{query_id}",
                 tenant_id=first.tenant_id,
-                text=query_text[query_id],
+                text=text,
                 category=category,
-                vector=deterministic_vector(query_text[query_id]),
+                vector=deterministic_vector(text),
                 expected_ids=expected_ids[:5],
             )
         )
@@ -423,6 +458,36 @@ def _first_present(row: dict[str, Any], keys: list[str]) -> Any:
         if key in row and row[key] is not None:
             return row[key]
     return None
+
+
+def _codeaware_lexical_text(*parts: str) -> str:
+    text = "\n".join(part for part in parts if part)
+    terms = _codeaware_terms(text)
+    if not terms:
+        return text
+    return " ".join(terms)
+
+
+def _codeaware_terms(text: str) -> list[str]:
+    terms = []
+    seen = set()
+    for token in [item.lower() for item in re.split(r"[^A-Za-z0-9]+", text) if item]:
+        variants = {token}
+        if len(token) > 3 and token.endswith("s"):
+            variants.add(token[:-1])
+        if len(token) > 4 and token.endswith("ed"):
+            variants.add(token[:-2])
+        if len(token) > 5 and token.endswith("ing"):
+            variants.add(token[:-3])
+        if len(token) > 6 and token.endswith("ion"):
+            variants.add(token[:-3])
+        if len(token) > 7 and token.endswith("tion"):
+            variants.add(token[:-4])
+        for variant in sorted(variants):
+            if variant not in seen:
+                seen.add(variant)
+                terms.append(variant)
+    return terms
 
 
 def _oracle_rank(record: BenchRecord) -> int | None:

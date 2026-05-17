@@ -125,6 +125,74 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn(("mteb/scifact", ("default",), "test"), calls)
         self.assertIn(("mteb/CodeSearchNetRetrieval", ("python-qrels",), "test"), calls)
 
+    def test_codesearchnet_codeaware_variant_materializes_path_and_identifier_terms(self) -> None:
+        class FakeDataset(list):
+            def shuffle(self, seed: int) -> "FakeDataset":
+                return self
+
+            def select(self, indexes) -> "FakeDataset":
+                return FakeDataset([self[index] for index in indexes])
+
+        def fake_load_dataset(name: str, *configs: str, split: str):
+            fixtures = {
+                ("mteb/CodeSearchNetRetrieval", ("python-corpus",), "test"): FakeDataset(
+                    [
+                        {
+                            "id": "repo/optimizer/nelder_mead.py#L459-L470",
+                            "title": "",
+                            "text": "def _accept_reflected_fn(simplex): pass",
+                        }
+                    ]
+                ),
+                ("mteb/CodeSearchNetRetrieval", ("python-queries",), "test"): FakeDataset(
+                    [
+                        {
+                            "id": "code-q",
+                            "text": "Creates the condition function pair for a reflection to be accepted.",
+                        }
+                    ]
+                ),
+                ("mteb/CodeSearchNetRetrieval", ("python-qrels",), "test"): FakeDataset(
+                    [
+                        {
+                            "query-id": "code-q",
+                            "corpus-id": "repo/optimizer/nelder_mead.py#L459-L470",
+                            "score": 1,
+                        }
+                    ]
+                ),
+            }
+            key = (name, configs, split)
+            if key not in fixtures:
+                raise AssertionError(f"unexpected load_dataset call {key!r}")
+            return fixtures[key]
+
+        old_datasets = sys.modules.get("datasets")
+        sys.modules["datasets"] = types.SimpleNamespace(load_dataset=fake_load_dataset)
+        try:
+            body = load_dataset("codesearchnet_body", 1, 42)
+            codeaware = load_dataset("codesearchnet_codeaware", 1, 42)
+        finally:
+            if old_datasets is None:
+                sys.modules.pop("datasets", None)
+            else:
+                sys.modules["datasets"] = old_datasets
+
+        self.assertEqual(body.kind, "codesearchnet_body")
+        self.assertEqual(codeaware.kind, "codesearchnet_codeaware")
+        self.assertEqual(body.queries[0].expected_ids, codeaware.queries[0].expected_ids)
+        self.assertNotIn("nelder_mead.py", body.records[0].body)
+        self.assertIn("nelder", codeaware.records[0].body)
+        self.assertIn("mead", codeaware.records[0].body)
+        self.assertIn("accept", codeaware.records[0].body)
+        self.assertIn("reflect", codeaware.records[0].body)
+        self.assertIn("accept", codeaware.queries[0].text)
+        self.assertIn("reflect", codeaware.queries[0].text)
+        self.assertTrue(
+            any("code-aware lexical" in note for note in codeaware.relevance_label_notes),
+            codeaware.relevance_label_notes,
+        )
+
     def test_qdrant_ingestion_is_batched(self) -> None:
         fake = FakeQdrant().start()
         old_url = os.environ.get("BENCH_QDRANT_URL")

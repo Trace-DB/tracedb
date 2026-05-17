@@ -14,6 +14,15 @@ The CI-safe path uses deterministic generated data and does not require network
 downloads. Larger local runs can opt into pinned Hugging Face datasets such as
 `MongoDB/embedded_movies`, BEIR/SciFact, and CodeSearchNet retrieval.
 
+CodeSearchNet has two explicit local lanes:
+
+- `codesearchnet_body`: body-only external-qrels retrieval, matching the plain
+  source-text baseline.
+- `codesearchnet_codeaware`: benchmark-only code-aware lexical materialization
+  that indexes normalized record id/path, title, and source body terms. This is
+  for measuring code-retrieval modeling effects before changing the canonical
+  TraceDB tokenizer.
+
 ## Smoke Run
 
 ```bash

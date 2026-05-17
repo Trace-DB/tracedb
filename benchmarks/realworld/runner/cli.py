@@ -78,6 +78,8 @@ def add_benchmark_args(parser: argparse.ArgumentParser) -> None:
             "scifact",
             "codesearchnet",
             "code_search_net",
+            "codesearchnet_body",
+            "codesearchnet_codeaware",
         ],
     )
     parser.add_argument("--records", type=int, default=1000)
