@@ -70,6 +70,7 @@ class ModalSmokeConfig:
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
     embedding_dimensions: str | None = None
+    seed: int = 42
     reports_dir: str = DEFAULT_REPORTS_DIR
     bundle_dir: str = DEFAULT_BUNDLE_DIR
     min_free_mb: int = 20_000
@@ -86,6 +87,10 @@ class ModalSmokeConfig:
     postgres_control: bool = False
     postgres_port: int = 25_432
     modal_app_name: str = DEFAULT_MODAL_APP_NAME
+    source_commit: str | None = None
+    source_dirty: bool | None = None
+    source_status_short: str | None = None
+    source_git_error: str | None = None
 
 
 def validate_config(config: ModalSmokeConfig) -> None:
@@ -149,6 +154,8 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         config.openrouter_mode,
         "--openrouter-cap",
         config.openrouter_cap,
+        "--seed",
+        str(config.seed),
         "--run-id",
         config.run_id,
         "--reports-dir",
@@ -191,6 +198,54 @@ def redacted_env(env: Mapping[str, str]) -> dict[str, str]:
     return redacted
 
 
+def git_identity(repo_root: Path) -> dict[str, Any]:
+    def git_output(*args: str) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.strip() or completed.stdout.strip())
+        return completed.stdout.strip()
+
+    try:
+        commit = git_output("rev-parse", "HEAD")
+        status_short = git_output("status", "--short")
+    except (OSError, RuntimeError) as error:
+        return {
+            "commit": None,
+            "dirty": None,
+            "status_short": None,
+            "error": str(error),
+        }
+    return {
+        "commit": commit,
+        "dirty": bool(status_short),
+        "status_short": status_short,
+    }
+
+
+def config_git_identity(config: ModalSmokeConfig, repo_root: Path) -> dict[str, Any]:
+    if (
+        config.source_commit is not None
+        or config.source_dirty is not None
+        or config.source_status_short is not None
+        or config.source_git_error is not None
+    ):
+        identity = {
+            "commit": config.source_commit,
+            "dirty": config.source_dirty,
+            "status_short": config.source_status_short,
+        }
+        if config.source_git_error is not None:
+            identity["error"] = config.source_git_error
+        return identity
+    return git_identity(repo_root)
+
+
 def build_manifest(
     config: ModalSmokeConfig,
     suite_command: list[str],
@@ -204,6 +259,7 @@ def build_manifest(
         "run_id": config.run_id,
         "modal_app_name": config.modal_app_name,
         "repo_root": str(repo_root),
+        "git": config_git_identity(config, repo_root),
         "suite_command": suite_command,
         "modal_resource_class": {
             "cpu": config.cpu,
@@ -442,7 +498,7 @@ def _ensure_free_space(path: Path, min_free_mb: int) -> None:
         raise RuntimeError(f"free disk {free_mb} MiB is below required {min_free_mb} MiB")
 
 
-def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a cost-guarded TraceDB Modal smoke benchmark")
     parser.add_argument("--run-id", default="modal-smoke")
     parser.add_argument("--records", type=int, default=128)
@@ -452,6 +508,7 @@ def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
     parser.add_argument("--scenarios", default="sdk_cli_surface")
     parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
     parser.add_argument("--openrouter-cap", default="moderate")
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-free-mb", type=int, default=20_000)
     parser.add_argument("--allow-large", action="store_true")
     parser.add_argument("--allow-external-controls", action="store_true")
@@ -459,7 +516,14 @@ def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
     parser.add_argument("--require-services", action="store_true")
     parser.add_argument("--postgres-control", action="store_true")
     parser.add_argument("--postgres-port", type=int, default=25_432)
-    args = parser.parse_args(argv)
+    parser.add_argument(
+        "--summary-json",
+        help="Write the returned Modal benchmark summary to a clean local JSON file.",
+    )
+    return parser
+
+
+def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
     return ModalSmokeConfig(
         run_id=args.run_id,
         records=args.records,
@@ -469,6 +533,7 @@ def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
         scenarios=args.scenarios,
         openrouter_mode=args.openrouter_mode,
         openrouter_cap=args.openrouter_cap,
+        seed=args.seed,
         min_free_mb=args.min_free_mb,
         allow_large=args.allow_large,
         allow_external_controls=args.allow_external_controls,
@@ -480,9 +545,40 @@ def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
     )
 
 
+def _parse_args_with_summary_output(
+    argv: list[str] | None = None,
+) -> tuple[ModalSmokeConfig, str | None]:
+    args = _build_parser().parse_args(argv)
+    return _config_from_args(args), args.summary_json
+
+
+def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
+    config, _summary_json = _parse_args_with_summary_output(argv)
+    return config
+
+
+def write_summary_json(summary: dict[str, Any], summary_json: str | None) -> None:
+    if not summary_json:
+        return
+    output_path = Path(summary_json).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def source_git_kwargs(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
+    identity = git_identity(repo_root)
+    return {
+        "source_commit": identity.get("commit"),
+        "source_dirty": identity.get("dirty"),
+        "source_status_short": identity.get("status_short"),
+        "source_git_error": identity.get("error"),
+    }
+
+
 def run_local(argv: list[str] | None = None) -> int:
-    config = _parse_args(argv)
+    config, summary_json = _parse_args_with_summary_output(argv)
     summary = run_suite_and_bundle(config)
+    write_summary_json(summary, summary_json)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
@@ -539,11 +635,13 @@ if modal is not None:
         surface: str = "sdk",
         scenarios: str = "sdk_cli_surface",
         openrouter_mode: str = "off",
+        seed: int = 42,
         allow_external_controls: bool = False,
         require_services: bool = False,
         postgres_control: bool = False,
         allow_large: bool = False,
         allow_provider: bool = False,
+        summary_json: str = "",
     ) -> None:
         remote_function = run_smoke_with_postgres if postgres_control else run_smoke
         result = remote_function.remote(
@@ -554,13 +652,16 @@ if modal is not None:
             surface=surface,
             scenarios=scenarios,
             openrouter_mode=openrouter_mode,
+            seed=seed,
             allow_external_controls=allow_external_controls,
             require_services=require_services,
             postgres_control=postgres_control,
             allow_large=allow_large,
             allow_provider=allow_provider,
             modal_app_name=modal_app_name(),
+            **source_git_kwargs(),
         )
+        write_summary_json(result, summary_json)
         print(json.dumps(result, indent=2, sort_keys=True))
 else:
     app = None

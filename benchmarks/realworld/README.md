@@ -179,7 +179,11 @@ The default is intentionally small, CPU/RAM only, OpenRouter off, no GPU, and
 TraceDB-only SDK surface:
 
 ```bash
-modal run benchmarks/realworld/modal_bench.py --run-id modal-remote-smoke-16 --records 16
+modal run benchmarks/realworld/modal_bench.py \
+  --run-id modal-remote-smoke-16 \
+  --records 16 \
+  --seed 42 \
+  --summary-json /tmp/tracedb-modal-summaries/modal-remote-smoke-16.json
 ```
 
 Local dry run without Modal:
@@ -188,12 +192,34 @@ Local dry run without Modal:
 python3 benchmarks/realworld/modal_bench.py \
   --run-id modal-local-smoke \
   --records 16 \
+  --seed 42 \
+  --summary-json /tmp/tracedb-modal-summaries/modal-local-smoke.json \
   --min-free-mb 1000
 ```
 
+PostgreSQL external-control smoke on Modal:
+
+```bash
+TRACEDB_MODAL_APP_NAME=tracedb-postgres-smoke-a \
+modal run benchmarks/realworld/modal_bench.py \
+  --run-id modal-postgres-smoke-a \
+  --records 128 \
+  --seed 42 \
+  --target tracedb,postgres \
+  --surface sdk \
+  --scenarios search_rag_6 \
+  --allow-external-controls \
+  --require-services \
+  --postgres-control \
+  --summary-json /tmp/tracedb-modal-summaries/modal-postgres-smoke-a.json
+```
+
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
-`manifest.json`. By default this lane reports `control_status=internal_only_smoke`;
-it is development evidence, not a product benchmark claim.
+`manifest.json`. The manifest records the run config, seed, Modal app name,
+resource class, redacted benchmark environment, and git commit/dirty state. Use
+`--summary-json` for clean local per-run evidence instead of scraping Modal logs.
+By default this lane reports `control_status=internal_only_smoke`; it is
+development evidence, not a product benchmark claim.
 
 ## Reports
 

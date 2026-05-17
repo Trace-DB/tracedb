@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import io
 import json
 import os
 import sys
@@ -50,6 +51,8 @@ class ModalBenchTests(unittest.TestCase):
                 "off",
                 "--openrouter-cap",
                 "moderate",
+                "--seed",
+                "42",
                 "--run-id",
                 "modal-smoke-test",
                 "--reports-dir",
@@ -155,8 +158,9 @@ class ModalBenchTests(unittest.TestCase):
                 "BENCH_POSTGRES_DSN": "postgresql://user:secret@127.0.0.1:25432/db",
             }
             with patch.dict(os.environ, base_env, clear=True), patch(
-                "subprocess.run", return_value=completed
-            ) as run:
+                "modal_bench.git_identity",
+                return_value={"commit": "test", "dirty": False, "status_short": ""},
+            ), patch("subprocess.run", return_value=completed) as run:
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             self.assertEqual(summary["control_status"], "external_control_available")
@@ -192,6 +196,50 @@ class ModalBenchTests(unittest.TestCase):
         self.assertNotIn("secret", manifest_text)
         self.assertEqual(manifest["runner_env"]["BENCH_POSTGRES_DSN"], "[redacted]")
 
+    def test_manifest_records_git_identity_for_reproducibility(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_manifest
+
+        with patch("modal_bench.git_identity") as identity:
+            identity.return_value = {
+                "commit": "abc123",
+                "dirty": True,
+                "status_short": " M benchmarks/realworld/modal_bench.py",
+            }
+            manifest = build_manifest(
+                ModalSmokeConfig(run_id="git-id"),
+                ["python3", "-m", "runner", "suite"],
+                repo_root=LAB_ROOT.parent.parent,
+            )
+
+        identity.assert_called_once_with(LAB_ROOT.parent.parent)
+        self.assertEqual(manifest["git"]["commit"], "abc123")
+        self.assertTrue(manifest["git"]["dirty"])
+        self.assertEqual(
+            manifest["git"]["status_short"], " M benchmarks/realworld/modal_bench.py"
+        )
+
+    def test_manifest_prefers_source_git_identity_when_remote_mount_has_no_git_dir(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_manifest
+
+        config = ModalSmokeConfig(
+            run_id="source-git-id",
+            source_commit="def456",
+            source_dirty=False,
+            source_status_short="",
+            source_git_error=None,
+        )
+        with patch("modal_bench.git_identity") as identity:
+            manifest = build_manifest(
+                config,
+                ["python3", "-m", "runner", "suite"],
+                repo_root=Path("/workspace/TraceDB"),
+            )
+
+        identity.assert_not_called()
+        self.assertEqual(manifest["git"]["commit"], "def456")
+        self.assertFalse(manifest["git"]["dirty"])
+        self.assertEqual(manifest["git"]["status_short"], "")
+
     def test_modal_app_identity_can_be_overridden_for_variance_runs(self) -> None:
         from modal_bench import ModalSmokeConfig, _parse_args, build_manifest, modal_app_name
 
@@ -214,13 +262,58 @@ class ModalBenchTests(unittest.TestCase):
         )
 
     def test_cli_config_can_override_min_free_for_tiny_local_smoke(self) -> None:
-        from modal_bench import _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
-        config = _parse_args(["--run-id", "tiny", "--records", "16", "--min-free-mb", "512"])
+        config = _parse_args(
+            [
+                "--run-id",
+                "tiny",
+                "--records",
+                "16",
+                "--min-free-mb",
+                "512",
+                "--seed",
+                "777",
+            ]
+        )
 
         self.assertEqual(config.run_id, "tiny")
         self.assertEqual(config.records, 16)
         self.assertEqual(config.min_free_mb, 512)
+        self.assertIn("--seed", build_suite_command(config))
+        command = build_suite_command(config)
+        self.assertEqual(command[command.index("--seed") + 1], "777")
+
+    def test_run_local_writes_clean_summary_json(self) -> None:
+        from modal_bench import run_local
+
+        summary = {
+            "run_id": "summary-json-test",
+            "control_status": "external_control_available",
+            "scenario_baselines": {
+                "search_rag_6": {
+                    "postgres": {"metrics": {"latency_p95_ms": 2.5}},
+                    "tracedb": {"metrics": {"latency_p95_ms": 0.02}},
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "nested" / "summary.json"
+            with patch("modal_bench.run_suite_and_bundle", return_value=summary), patch(
+                "sys.stdout", new=io.StringIO()
+            ):
+                exit_code = run_local(
+                    [
+                        "--run-id",
+                        "summary-json-test",
+                        "--summary-json",
+                        str(summary_path),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8")), summary)
+            self.assertTrue(summary_path.read_text(encoding="utf-8").endswith("\n"))
 
     def test_bundles_report_artifacts_and_extracts_control_summary(self) -> None:
         from modal_bench import (
