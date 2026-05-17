@@ -95,6 +95,172 @@ pub fn score_corpus(query: &str, docs: &[(String, String)]) -> Vec<(String, f32)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PreparedTextCorpus {
+    doc_count: usize,
+    avg_len: f32,
+    documents: Vec<PreparedTextDocument>,
+}
+
+impl PreparedTextCorpus {
+    pub fn from_documents(docs: &[(String, String)]) -> Self {
+        if docs.is_empty() {
+            return Self::default();
+        }
+
+        let mut total_len = 0usize;
+        let mut documents = Vec::with_capacity(docs.len());
+        for (id, body) in docs {
+            let tokens = tokenize(body);
+            total_len += tokens.len();
+            documents.push(PreparedTextDocument {
+                id: id.clone(),
+                tokens,
+            });
+        }
+
+        Self {
+            doc_count: docs.len(),
+            avg_len: total_len as f32 / docs.len() as f32,
+            documents,
+        }
+    }
+
+    pub fn from_documents_with_initial_score(
+        query: &str,
+        docs: &[(String, String)],
+    ) -> (Self, TextScoreReport) {
+        if docs.is_empty() {
+            return (Self::default(), TextScoreReport::default());
+        }
+
+        let query_terms = tokenize(query);
+        let query_term_set = query_terms.iter().cloned().collect::<BTreeSet<_>>();
+        let mut total_len = 0usize;
+        let mut documents = Vec::with_capacity(docs.len());
+        let mut df = BTreeMap::<String, usize>::new();
+        let mut matching_docs = Vec::<QueryScopedDoc>::new();
+        for (id, body) in docs {
+            let tokens = tokenize(body);
+            total_len += tokens.len();
+            if !query_terms.is_empty() {
+                let mut tf = BTreeMap::<String, usize>::new();
+                for token in &tokens {
+                    if query_term_set.contains(token) {
+                        *tf.entry(token.clone()).or_default() += 1;
+                    }
+                }
+                if !tf.is_empty() {
+                    for term in tf.keys() {
+                        *df.entry(term.clone()).or_default() += 1;
+                    }
+                    matching_docs.push(QueryScopedDoc {
+                        id: id.clone(),
+                        doc_len: tokens.len(),
+                        tf,
+                    });
+                }
+            }
+            documents.push(PreparedTextDocument {
+                id: id.clone(),
+                tokens,
+            });
+        }
+
+        let avg_len = total_len as f32 / docs.len() as f32;
+        let corpus = Self {
+            doc_count: docs.len(),
+            avg_len,
+            documents,
+        };
+        let score_report = if query_terms.is_empty() {
+            TextScoreReport::default()
+        } else {
+            let scores = matching_docs
+                .iter()
+                .filter_map(|doc| {
+                    let score = bm25_from_term_frequency(
+                        &query_terms,
+                        &doc.tf,
+                        doc.doc_len,
+                        docs.len(),
+                        avg_len,
+                        &df,
+                    );
+                    (score > 0.0).then(|| (doc.id.clone(), score))
+                })
+                .collect::<Vec<_>>();
+            TextScoreReport {
+                scored_documents: scores.len(),
+                tokenized_documents: docs.len(),
+                scores,
+            }
+        };
+
+        (corpus, score_report)
+    }
+
+    pub fn document_count(&self) -> usize {
+        self.doc_count
+    }
+
+    pub fn score_query_with_stats(&self, query: &str) -> TextScoreReport {
+        let query_terms = tokenize(query);
+        if query_terms.is_empty() || self.doc_count == 0 {
+            return TextScoreReport::default();
+        }
+
+        let query_term_set = query_terms.iter().cloned().collect::<BTreeSet<_>>();
+        let mut df = BTreeMap::<String, usize>::new();
+        let mut matching_docs = Vec::<QueryScopedDoc>::new();
+        for doc in &self.documents {
+            let mut tf = BTreeMap::<String, usize>::new();
+            for token in &doc.tokens {
+                if query_term_set.contains(token) {
+                    *tf.entry(token.clone()).or_default() += 1;
+                }
+            }
+            if !tf.is_empty() {
+                for term in tf.keys() {
+                    *df.entry(term.clone()).or_default() += 1;
+                }
+                matching_docs.push(QueryScopedDoc {
+                    id: doc.id.clone(),
+                    doc_len: doc.tokens.len(),
+                    tf,
+                });
+            }
+        }
+
+        let scores = matching_docs
+            .iter()
+            .filter_map(|doc| {
+                let score = bm25_from_term_frequency(
+                    &query_terms,
+                    &doc.tf,
+                    doc.doc_len,
+                    self.doc_count,
+                    self.avg_len,
+                    &df,
+                );
+                (score > 0.0).then(|| (doc.id.clone(), score))
+            })
+            .collect::<Vec<_>>();
+
+        TextScoreReport {
+            scored_documents: scores.len(),
+            tokenized_documents: 0,
+            scores,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct PreparedTextDocument {
+    id: String,
+    tokens: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TextScoreReport {
     pub scores: Vec<(String, f32)>,
     pub tokenized_documents: usize,
@@ -208,6 +374,46 @@ mod tests {
                 .first()
                 .map(|(record_id, _)| record_id.as_str()),
             Some("target")
+        );
+    }
+
+    #[test]
+    fn prepared_text_corpus_matches_score_corpus_without_query_time_tokenization() {
+        let docs = vec![
+            ("target".to_string(), "alpha beta raretoken".to_string()),
+            ("distractor-1".to_string(), "alpha beta gamma".to_string()),
+            ("distractor-2".to_string(), "delta epsilon zeta".to_string()),
+        ];
+        let prepared = PreparedTextCorpus::from_documents(&docs);
+
+        let report = prepared.score_query_with_stats("alpha raretoken");
+        let direct = score_corpus("alpha raretoken", &docs);
+
+        assert_eq!(prepared.document_count(), 3);
+        assert_eq!(report.tokenized_documents, 0);
+        assert_eq!(report.scored_documents, direct.len());
+        assert_eq!(report.scores, direct);
+    }
+
+    #[test]
+    fn prepared_text_corpus_scores_initial_query_during_construction() {
+        let docs = vec![
+            ("target".to_string(), "alpha beta raretoken".to_string()),
+            ("distractor-1".to_string(), "alpha beta gamma".to_string()),
+            ("distractor-2".to_string(), "delta epsilon zeta".to_string()),
+        ];
+
+        let (prepared, report) =
+            PreparedTextCorpus::from_documents_with_initial_score("alpha raretoken", &docs);
+        let direct = score_corpus("alpha raretoken", &docs);
+
+        assert_eq!(prepared.document_count(), 3);
+        assert_eq!(report.tokenized_documents, 3);
+        assert_eq!(report.scored_documents, direct.len());
+        assert_eq!(report.scores, direct);
+        assert_eq!(
+            prepared.score_query_with_stats("alpha raretoken").scores,
+            direct
         );
     }
 }

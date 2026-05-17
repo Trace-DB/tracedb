@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -30,6 +31,7 @@ const CHECKPOINT_MAGIC_V3: &[u8; 8] = b"TDBCHK02";
 const CHECKPOINT_FORMAT_VERSION: u32 = 3;
 const CHECKPOINT_LEGACY_COMPACT_FORMAT_VERSION: u32 = 2;
 const CHECKPOINT_LEGACY_JSON_FORMAT_VERSION: u32 = 1;
+const MIN_LEXICAL_CACHE_DOCUMENTS: usize = 2_048;
 
 pub use tracedb_core::{
     FeatureInvalidation, ModuleManifest, RecordDeletion, RecordInput, TableSchema,
@@ -222,6 +224,22 @@ pub struct TraceDb {
     store: RecordStore,
     wal: Wal,
     last_recovery_torn_tail: Option<TornWalTail>,
+    lexical_cache: RefCell<LexicalCorpusCache>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LexicalCorpusCache {
+    entries: BTreeMap<LexicalCacheKey, tracedb_text::PreparedTextCorpus>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct LexicalCacheKey {
+    table: String,
+    tenant_id: String,
+    read_epoch: u64,
+    manifest_generation: u64,
+    scalar_eq: String,
+    text_columns: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -308,6 +326,7 @@ impl TraceDb {
             store,
             wal,
             last_recovery_torn_tail: wal_scan.torn_tail,
+            lexical_cache: RefCell::new(LexicalCorpusCache::default()),
         })
     }
 
@@ -331,6 +350,7 @@ impl TraceDb {
         self.wal.append_commit(&commit)?;
         upsert_schema(&mut self.manifest.schemas, schema);
         self.bump_manifest(epoch)?;
+        self.clear_lexical_cache();
         Ok(epoch)
     }
 
@@ -360,6 +380,7 @@ impl TraceDb {
         self.wal.append_commit(&commit)?;
         self.store = staged;
         self.bump_manifest(epoch)?;
+        self.clear_lexical_cache();
         Ok(epoch)
     }
 
@@ -392,6 +413,7 @@ impl TraceDb {
         self.wal.append_commit(&commit)?;
         self.store = staged;
         self.bump_manifest(epoch)?;
+        self.clear_lexical_cache();
         Ok(epoch)
     }
 
@@ -428,6 +450,7 @@ impl TraceDb {
         self.wal.append_commit(&commit)?;
         self.store = staged;
         self.bump_manifest(epoch)?;
+        self.clear_lexical_cache();
         Ok(epoch)
     }
 
@@ -459,6 +482,7 @@ impl TraceDb {
         self.wal.append_commit(&commit)?;
         self.store = staged;
         self.bump_manifest(epoch)?;
+        self.clear_lexical_cache();
         Ok(epoch)
     }
 
@@ -613,18 +637,23 @@ impl TraceDb {
             .chain(sealed_records.iter().map(|record| record.record_id.clone()))
             .collect::<Vec<_>>();
         let access_path_build_started = Instant::now();
-        let access_paths = query_access_paths(QueryAccessInput {
-            schema,
-            visible: &visible,
-            sealed_records: &sealed_records,
-            text: query.text.clone(),
-            vector_query: query.vector.clone(),
-            graph_seed: query.graph_seed.clone(),
-            temporal_as_of: query.temporal_as_of,
-            freshness: &query.freshness,
-            fallback_candidate_limit: query_has_evidence(&query)
-                .then_some(explain.candidate_budget),
-        });
+        let access_paths = query_access_paths(
+            self,
+            QueryAccessInput {
+                schema,
+                visible: &visible,
+                sealed_records: &sealed_records,
+                tenant_id: &query.tenant_id,
+                scalar_eq_key: scalar_eq_cache_key(&query.scalar_eq),
+                text: query.text.clone(),
+                vector_query: query.vector.clone(),
+                graph_seed: query.graph_seed.clone(),
+                temporal_as_of: query.temporal_as_of,
+                freshness: &query.freshness,
+                fallback_candidate_limit: query_has_evidence(&query)
+                    .then_some(explain.candidate_budget),
+            },
+        );
         let access_path_build_ms = elapsed_ms(access_path_build_started);
         let mut planner_candidates = Vec::<Candidate>::new();
         let mut streams = Vec::<RankedStream>::new();
@@ -673,6 +702,10 @@ impl TraceDb {
             .phase_timings
             .push(query_phase_timing("access_path_open", access_path_open_ms));
         explain.access_path_timings = access_path_timings;
+        explain.lexical_cache_hits = access_paths.lexical_cache_hits;
+        explain.lexical_cache_misses = access_paths.lexical_cache_misses;
+        explain.lexical_indexed_documents = access_paths.lexical_indexed_documents;
+        explain.lexical_scored_documents = access_paths.lexical_scored_documents;
         explain.planner_candidates = planner_candidates;
 
         let fusion_started = Instant::now();
@@ -827,6 +860,7 @@ impl TraceDb {
         self.wal.append_commit(&commit)?;
         self.store = staged;
         self.bump_manifest(epoch)?;
+        self.clear_lexical_cache();
         Ok(epoch)
     }
 
@@ -854,6 +888,7 @@ impl TraceDb {
         truncate_active_wal(&self.dir)?;
         self.wal = Wal::open(&self.dir)?;
         self.manifest = manifest;
+        self.clear_lexical_cache();
         Ok(epoch)
     }
 
@@ -949,6 +984,7 @@ impl TraceDb {
                 )));
             }
             self.manifest = durable_manifest;
+            self.clear_lexical_cache();
             return Ok(());
         }
         let generation = durable_manifest.segments.len() as u64 + 1;
@@ -969,6 +1005,7 @@ impl TraceDb {
         manifest.checksums.parent_checksum = previous_checksum;
         write_manifest(manifest_path, &mut manifest)?;
         self.manifest = manifest;
+        self.clear_lexical_cache();
         Ok(())
     }
 
@@ -1466,6 +1503,8 @@ struct QueryAccessInput<'a> {
     schema: &'a TableSchema,
     visible: &'a [StoredRecord],
     sealed_records: &'a [SegmentRecord],
+    tenant_id: &'a str,
+    scalar_eq_key: String,
     text: Option<String>,
     vector_query: Option<Vec<f32>>,
     graph_seed: Option<String>,
@@ -1477,13 +1516,26 @@ struct QueryAccessInput<'a> {
 struct QueryAccessPaths {
     paths: Vec<MemoryAccessPath>,
     timings: Vec<AccessPathTiming>,
+    lexical_cache_hits: usize,
+    lexical_cache_misses: usize,
+    lexical_indexed_documents: usize,
+    lexical_scored_documents: usize,
 }
 
-fn query_access_paths(input: QueryAccessInput<'_>) -> QueryAccessPaths {
+struct LexicalQueryReport {
+    cache_hit: bool,
+    cache_miss: bool,
+    indexed_documents: usize,
+    score_report: tracedb_text::TextScoreReport,
+}
+
+fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessPaths {
     let QueryAccessInput {
         schema,
         visible,
         sealed_records,
+        tenant_id,
+        scalar_eq_key,
         text,
         vector_query,
         graph_seed,
@@ -1551,22 +1603,11 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> QueryAccessPaths {
 
     let path_started = Instant::now();
     let mut lexical_candidates = Vec::new();
+    let mut lexical_cache_hits = 0;
+    let mut lexical_cache_misses = 0;
+    let mut lexical_indexed_documents = 0;
+    let mut lexical_scored_documents = 0;
     if let Some(text) = text {
-        let mut docs = visible
-            .iter()
-            .map(|record| {
-                (
-                    record.header.record_id.clone(),
-                    text_body(schema, record).unwrap_or_default(),
-                )
-            })
-            .collect::<Vec<_>>();
-        docs.extend(sealed_records.iter().map(|record| {
-            (
-                record.record_id.clone(),
-                segment_text_body(record).unwrap_or_default(),
-            )
-        }));
         let records_by_id = visible
             .iter()
             .map(|record| (record.header.record_id.as_str(), record))
@@ -1575,7 +1616,19 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> QueryAccessPaths {
             .iter()
             .map(|record| (record.record_id.as_str(), record))
             .collect::<BTreeMap<_, _>>();
-        let mut scored = tracedb_text::score_corpus(&text, &docs);
+        let lexical_report = db.score_prepared_lexical_corpus(
+            schema,
+            tenant_id,
+            &scalar_eq_key,
+            visible,
+            sealed_records,
+            &text,
+        );
+        lexical_cache_hits = usize::from(lexical_report.cache_hit);
+        lexical_cache_misses = usize::from(lexical_report.cache_miss);
+        lexical_indexed_documents = lexical_report.indexed_documents;
+        lexical_scored_documents = lexical_report.score_report.scored_documents;
+        let mut scored = lexical_report.score_report.scores;
         scored.sort_by(|left, right| score_order(left.1, right.1));
         lexical_candidates = scored
             .into_iter()
@@ -1696,7 +1749,73 @@ fn query_access_paths(input: QueryAccessInput<'_>) -> QueryAccessPaths {
         timings.push(access_path_timing("TemporalPath", elapsed_ms(path_started)));
     }
 
-    QueryAccessPaths { paths, timings }
+    QueryAccessPaths {
+        paths,
+        timings,
+        lexical_cache_hits,
+        lexical_cache_misses,
+        lexical_indexed_documents,
+        lexical_scored_documents,
+    }
+}
+
+impl TraceDb {
+    fn score_prepared_lexical_corpus(
+        &self,
+        schema: &TableSchema,
+        tenant_id: &str,
+        scalar_eq_key: &str,
+        visible: &[StoredRecord],
+        sealed_records: &[SegmentRecord],
+        query: &str,
+    ) -> LexicalQueryReport {
+        let indexed_documents = visible.len() + sealed_records.len();
+        if indexed_documents < MIN_LEXICAL_CACHE_DOCUMENTS {
+            let docs = lexical_documents(schema, visible, sealed_records);
+            return LexicalQueryReport {
+                cache_hit: false,
+                cache_miss: false,
+                indexed_documents,
+                score_report: tracedb_text::score_corpus_with_stats(query, &docs),
+            };
+        }
+
+        let key = LexicalCacheKey {
+            table: schema.name.clone(),
+            tenant_id: tenant_id.to_string(),
+            read_epoch: self.manifest.latest_epoch.get(),
+            manifest_generation: self.manifest.manifest_generation,
+            scalar_eq: scalar_eq_key.to_string(),
+            text_columns: schema.text_indexed_columns.clone(),
+        };
+
+        if let Some(corpus) = self.lexical_cache.borrow().entries.get(&key) {
+            return LexicalQueryReport {
+                cache_hit: true,
+                cache_miss: false,
+                indexed_documents: corpus.document_count(),
+                score_report: corpus.score_query_with_stats(query),
+            };
+        }
+
+        let (corpus, score_report) =
+            tracedb_text::PreparedTextCorpus::from_documents_with_initial_score(
+                query,
+                &lexical_documents(schema, visible, sealed_records),
+            );
+        let indexed_documents = corpus.document_count();
+        self.lexical_cache.borrow_mut().entries.insert(key, corpus);
+        LexicalQueryReport {
+            cache_hit: false,
+            cache_miss: true,
+            indexed_documents,
+            score_report,
+        }
+    }
+
+    fn clear_lexical_cache(&self) {
+        self.lexical_cache.borrow_mut().entries.clear();
+    }
 }
 
 fn planner_descriptor(
@@ -1895,11 +2014,42 @@ fn scalar_filter_predicates(scalar_eq: &Map<String, Value>) -> Vec<String> {
         .collect()
 }
 
+fn scalar_eq_cache_key(scalar_eq: &Map<String, Value>) -> String {
+    let ordered = scalar_eq
+        .iter()
+        .map(|(column, value)| (column.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    serde_json::to_string(&ordered).unwrap_or_else(|_| "{}".to_string())
+}
+
 fn scalar_value_label(value: &Value) -> String {
     value
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| value.to_string())
+}
+
+fn lexical_documents(
+    schema: &TableSchema,
+    visible: &[StoredRecord],
+    sealed_records: &[SegmentRecord],
+) -> Vec<(String, String)> {
+    let mut docs = visible
+        .iter()
+        .map(|record| {
+            (
+                record.header.record_id.clone(),
+                text_body(schema, record).unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    docs.extend(sealed_records.iter().map(|record| {
+        (
+            record.record_id.clone(),
+            segment_text_body(record).unwrap_or_default(),
+        )
+    }));
+    docs
 }
 
 fn text_body(schema: &TableSchema, record: &StoredRecord) -> Option<String> {
@@ -2434,6 +2584,8 @@ pub fn value_object(fields: &[(&str, Value)]) -> Map<String, Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tracedb_core::VersionId;
+    use tracedb_store::RecordHeader;
 
     fn schema() -> TableSchema {
         TableSchema {
@@ -2466,6 +2618,91 @@ mod tests {
             .expect("object")
             .clone(),
         }
+    }
+
+    fn stored_record(id: &str, body: &str) -> StoredRecord {
+        StoredRecord {
+            header: RecordHeader {
+                record_id: id.to_string(),
+                table_id: "docs".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                schema_version: 1,
+                begin_epoch: Epoch::new(1),
+                end_epoch: None,
+                version_id: VersionId::new(1),
+                tombstone: None,
+            },
+            fields: json!({
+                "id": id,
+                "tenant": "tenant-a",
+                "category": "code",
+                "body": body,
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+            features: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn lexical_cache_admits_only_large_prepared_corpora() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = TraceDb::open(temp.path()).expect("open");
+        let schema = schema();
+        let small_records = (0..4)
+            .map(|idx| stored_record(&format!("small-{idx}"), "agent memory lexical cache"))
+            .collect::<Vec<_>>();
+
+        let first_small = db.score_prepared_lexical_corpus(
+            &schema,
+            "tenant-a",
+            "{}",
+            &small_records,
+            &[],
+            "lexical cache",
+        );
+        let second_small = db.score_prepared_lexical_corpus(
+            &schema,
+            "tenant-a",
+            "{}",
+            &small_records,
+            &[],
+            "lexical cache",
+        );
+
+        assert!(!first_small.cache_hit);
+        assert!(!first_small.cache_miss);
+        assert_eq!(first_small.indexed_documents, small_records.len());
+        assert!(!second_small.cache_hit);
+        assert!(!second_small.cache_miss);
+
+        let large_records = (0..MIN_LEXICAL_CACHE_DOCUMENTS)
+            .map(|idx| stored_record(&format!("large-{idx}"), "agent memory lexical cache"))
+            .collect::<Vec<_>>();
+        let first_large = db.score_prepared_lexical_corpus(
+            &schema,
+            "tenant-a",
+            "large",
+            &large_records,
+            &[],
+            "lexical cache",
+        );
+        let second_large = db.score_prepared_lexical_corpus(
+            &schema,
+            "tenant-a",
+            "large",
+            &large_records,
+            &[],
+            "lexical cache",
+        );
+
+        assert!(!first_large.cache_hit);
+        assert!(first_large.cache_miss);
+        assert_eq!(first_large.indexed_documents, MIN_LEXICAL_CACHE_DOCUMENTS);
+        assert!(second_large.cache_hit);
+        assert!(!second_large.cache_miss);
+        assert_eq!(second_large.indexed_documents, MIN_LEXICAL_CACHE_DOCUMENTS);
     }
 
     #[test]

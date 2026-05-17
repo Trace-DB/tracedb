@@ -125,12 +125,20 @@ pub struct InProcessScalingPoint {
     #[serde(default)]
     pub query_access_path_open_p95_ms: Vec<TimingP95>,
     pub query_returned_count: usize,
+    pub lexical_cache_hits: usize,
+    pub lexical_cache_misses: usize,
+    pub lexical_indexed_documents: usize,
+    pub lexical_scored_documents: usize,
     pub engine_open_p95_ms: Option<f64>,
     pub checkpoint_latency_ms: Option<f64>,
     pub checkpoint_wal_bytes: Option<u64>,
     pub checkpoint_data_dir_bytes: Option<u64>,
     pub checkpoint_engine_open_p95_ms: Option<f64>,
     pub checkpoint_engine_query_p95_ms: Option<f64>,
+    pub checkpoint_lexical_cache_hits: Option<usize>,
+    pub checkpoint_lexical_cache_misses: Option<usize>,
+    pub checkpoint_lexical_indexed_documents: Option<usize>,
+    pub checkpoint_lexical_scored_documents: Option<usize>,
     #[serde(default)]
     pub checkpoint_query_phase_p95_ms: Option<Vec<TimingP95>>,
     #[serde(default)]
@@ -203,6 +211,10 @@ fn measure_inprocess_point(
     let mut query_access_path_build_samples = BTreeMap::<String, Vec<f64>>::new();
     let mut query_access_path_open_samples = BTreeMap::<String, Vec<f64>>::new();
     let mut returned_count = 0;
+    let mut lexical_cache_hits = 0;
+    let mut lexical_cache_misses = 0;
+    let mut lexical_indexed_documents = 0;
+    let mut lexical_scored_documents = 0;
     for _ in 0..config.query_repetitions {
         let output = timed_value_ms(|| db.query(query.clone()))?;
         query_latencies.push(output.1);
@@ -213,6 +225,12 @@ fn measure_inprocess_point(
             &mut query_access_path_open_samples,
         );
         returned_count = output.0.results.len();
+        lexical_cache_hits += output.0.explain.lexical_cache_hits;
+        lexical_cache_misses += output.0.explain.lexical_cache_misses;
+        lexical_indexed_documents =
+            lexical_indexed_documents.max(output.0.explain.lexical_indexed_documents);
+        lexical_scored_documents =
+            lexical_scored_documents.max(output.0.explain.lexical_scored_documents);
     }
 
     let mut open_latencies = Vec::new();
@@ -236,12 +254,20 @@ fn measure_inprocess_point(
         query_access_path_build_p95_ms: timing_p95_samples(&query_access_path_build_samples),
         query_access_path_open_p95_ms: timing_p95_samples(&query_access_path_open_samples),
         query_returned_count: returned_count,
+        lexical_cache_hits,
+        lexical_cache_misses,
+        lexical_indexed_documents,
+        lexical_scored_documents,
         engine_open_p95_ms: Some(round_ms(percentile(&open_latencies, 95.0))),
         checkpoint_latency_ms: None,
         checkpoint_wal_bytes: None,
         checkpoint_data_dir_bytes: None,
         checkpoint_engine_open_p95_ms: None,
         checkpoint_engine_query_p95_ms: None,
+        checkpoint_lexical_cache_hits: None,
+        checkpoint_lexical_cache_misses: None,
+        checkpoint_lexical_indexed_documents: None,
+        checkpoint_lexical_scored_documents: None,
         checkpoint_query_phase_p95_ms: None,
         checkpoint_access_path_build_p95_ms: None,
         checkpoint_access_path_open_p95_ms: None,
@@ -254,6 +280,10 @@ fn measure_inprocess_point(
         let mut checkpoint_phase_samples = BTreeMap::<String, Vec<f64>>::new();
         let mut checkpoint_access_path_build_samples = BTreeMap::<String, Vec<f64>>::new();
         let mut checkpoint_access_path_open_samples = BTreeMap::<String, Vec<f64>>::new();
+        let mut checkpoint_lexical_cache_hits = 0;
+        let mut checkpoint_lexical_cache_misses = 0;
+        let mut checkpoint_lexical_indexed_documents = 0;
+        let mut checkpoint_lexical_scored_documents = 0;
         for _ in 0..config.open_repetitions {
             let opened = timed_value_ms(|| TraceDb::open(data_dir))?;
             checkpoint_open_latencies.push(opened.1);
@@ -267,6 +297,12 @@ fn measure_inprocess_point(
                     &mut checkpoint_access_path_build_samples,
                     &mut checkpoint_access_path_open_samples,
                 );
+                checkpoint_lexical_cache_hits += output.0.explain.lexical_cache_hits;
+                checkpoint_lexical_cache_misses += output.0.explain.lexical_cache_misses;
+                checkpoint_lexical_indexed_documents = checkpoint_lexical_indexed_documents
+                    .max(output.0.explain.lexical_indexed_documents);
+                checkpoint_lexical_scored_documents = checkpoint_lexical_scored_documents
+                    .max(output.0.explain.lexical_scored_documents);
             }
         }
         point.checkpoint_latency_ms = Some(round_ms(checkpoint_latency));
@@ -276,6 +312,10 @@ fn measure_inprocess_point(
             Some(round_ms(percentile(&checkpoint_open_latencies, 95.0)));
         point.checkpoint_engine_query_p95_ms =
             Some(round_ms(percentile(&checkpoint_query_latencies, 95.0)));
+        point.checkpoint_lexical_cache_hits = Some(checkpoint_lexical_cache_hits);
+        point.checkpoint_lexical_cache_misses = Some(checkpoint_lexical_cache_misses);
+        point.checkpoint_lexical_indexed_documents = Some(checkpoint_lexical_indexed_documents);
+        point.checkpoint_lexical_scored_documents = Some(checkpoint_lexical_scored_documents);
         point.checkpoint_query_phase_p95_ms = Some(timing_p95_samples(&checkpoint_phase_samples));
         point.checkpoint_access_path_build_p95_ms =
             Some(timing_p95_samples(&checkpoint_access_path_build_samples));
@@ -469,8 +509,13 @@ mod tests {
             .query_access_path_build_p95_ms
             .iter()
             .any(|timing| timing.name == "VectorPath" && timing.p95_ms >= 0.0));
+        assert_eq!(point.lexical_cache_hits, 0);
+        assert_eq!(point.lexical_cache_misses, 0);
+        assert_eq!(point.lexical_indexed_documents, 5);
         assert!(point.checkpoint_engine_open_p95_ms.unwrap() > 0.0);
         assert!(point.checkpoint_engine_query_p95_ms.unwrap() > 0.0);
+        assert_eq!(point.checkpoint_lexical_cache_hits.unwrap(), 0);
+        assert_eq!(point.checkpoint_lexical_cache_misses.unwrap(), 0);
         assert!(point
             .checkpoint_query_phase_p95_ms
             .as_ref()

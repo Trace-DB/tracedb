@@ -308,6 +308,14 @@ pub struct ExplainOutput {
     pub exact_fallback_triggered: bool,
     pub early_stop_reason: Option<String>,
     #[serde(default)]
+    pub lexical_cache_hits: usize,
+    #[serde(default)]
+    pub lexical_cache_misses: usize,
+    #[serde(default)]
+    pub lexical_indexed_documents: usize,
+    #[serde(default)]
+    pub lexical_scored_documents: usize,
+    #[serde(default)]
     pub phase_timings: Vec<QueryPhaseTiming>,
     #[serde(default)]
     pub access_path_timings: Vec<AccessPathTiming>,
