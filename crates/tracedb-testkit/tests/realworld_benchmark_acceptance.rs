@@ -105,6 +105,20 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
     assert!(tracedb["metrics"]["category_filter_applied"].is_boolean());
     assert!(tracedb["metrics"]["off_category_result_count"].is_number());
     assert!(tracedb["metrics"]["queries_with_off_category_results_count"].is_number());
+    assert_eq!(tracedb["metrics"]["category_filter_applied"], true);
+    assert_eq!(tracedb["metrics"]["off_category_result_count"], 0);
+    assert_eq!(
+        tracedb["metrics"]["queries_with_off_category_results_count"],
+        0
+    );
+    assert!(
+        tracedb["metrics"]["recall_at_5"]
+            .as_f64()
+            .unwrap_or_default()
+            >= 0.8,
+        "recall_at_5 should meet scalar-filter KPI floor: {}",
+        tracedb["metrics"]["recall_at_5"]
+    );
     assert!(tracedb["notes"].as_array().unwrap().iter().any(|note| note
         .as_str()
         .unwrap_or_default()

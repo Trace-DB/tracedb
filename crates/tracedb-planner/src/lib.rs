@@ -8,6 +8,8 @@ use tracedb_core::Epoch;
 pub struct Predicates {
     pub table: String,
     pub tenant_id: String,
+    #[serde(default)]
+    pub scalar_eq: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -45,6 +47,8 @@ pub enum PlannerStrategy {
 pub struct TraceQuery {
     pub target_table: String,
     pub tenant_id: String,
+    #[serde(default)]
+    pub scalar_eq: Map<String, Value>,
     pub text_terms: Vec<String>,
     pub vector_dimensions: Option<usize>,
     pub graph_seeds: Vec<String>,
@@ -64,6 +68,7 @@ impl TraceQuery {
         Self {
             target_table: target_table.into(),
             tenant_id: tenant_id.into(),
+            scalar_eq: Map::new(),
             text_terms: text
                 .map(|value| value.split_whitespace().map(str::to_string).collect())
                 .unwrap_or_default(),
@@ -261,6 +266,10 @@ pub struct ExplainOutput {
     pub schema_epoch: Epoch,
     pub policy_epoch: Epoch,
     pub tenant_mask_visible_records: usize,
+    pub scalar_filter_applied: bool,
+    pub scalar_filter_predicates: Vec<String>,
+    pub scalar_filter_visible_records: usize,
+    pub scalar_filter_removed_records: usize,
     pub opened_candidate_streams: Vec<String>,
     pub access_paths: Vec<AccessPathExplain>,
     pub planner_candidates: Vec<Candidate>,

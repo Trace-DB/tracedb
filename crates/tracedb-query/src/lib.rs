@@ -55,6 +55,8 @@ pub struct HybridQuery {
     pub text: Option<String>,
     pub vector: Option<Vec<f32>>,
     #[serde(default)]
+    pub scalar_eq: Map<String, Value>,
+    #[serde(default)]
     pub graph_seed: Option<String>,
     #[serde(default)]
     pub temporal_as_of: Option<u64>,
@@ -459,6 +461,7 @@ impl TraceDb {
             .table(&query.table)
             .ok_or_else(|| TraceDbError::UnknownTable(query.table.clone()))?;
         validate_vector_query_dimensions(schema, query.vector.as_deref())?;
+        validate_scalar_eq_predicates(schema, &query.scalar_eq)?;
         if query.top_k == 0 {
             return Ok(QueryOutput {
                 results: Vec::new(),
@@ -466,6 +469,8 @@ impl TraceDb {
                     read_epoch: self.manifest.latest_epoch,
                     schema_epoch: self.manifest.latest_epoch,
                     policy_epoch: self.manifest.latest_epoch,
+                    scalar_filter_applied: !query.scalar_eq.is_empty(),
+                    scalar_filter_predicates: scalar_filter_predicates(&query.scalar_eq),
                     freshness_mode: query.freshness.as_str().to_string(),
                     fusion_method: "RRF".to_string(),
                     ..ExplainOutput::default()
@@ -475,11 +480,20 @@ impl TraceDb {
         let snapshot = self.store.snapshot(self.manifest.latest_epoch);
         let visible = snapshot.visible_records(&query.table, &query.tenant_id);
         let sealed_records = self.sealed_segment_records(&query.table, &query.tenant_id)?;
+        let tenant_mask_visible_records = visible.len();
+        let scalar_filter_applied = !query.scalar_eq.is_empty();
+        let visible = filter_records_by_scalar_eq(visible, &query.scalar_eq);
+        let sealed_records = filter_segment_records_by_scalar_eq(sealed_records, &query.scalar_eq);
         let mut explain = ExplainOutput {
             read_epoch: self.manifest.latest_epoch,
             schema_epoch: self.manifest.latest_epoch,
             policy_epoch: self.manifest.latest_epoch,
-            tenant_mask_visible_records: visible.len(),
+            tenant_mask_visible_records,
+            scalar_filter_applied,
+            scalar_filter_predicates: scalar_filter_predicates(&query.scalar_eq),
+            scalar_filter_visible_records: visible.len(),
+            scalar_filter_removed_records: tenant_mask_visible_records
+                .saturating_sub(visible.len()),
             candidate_budget: query.top_k.saturating_mul(4).max(query.top_k).max(1),
             hot_overlay_searched: true,
             segments_scanned: sealed_records.len(),
@@ -494,6 +508,7 @@ impl TraceDb {
             query.vector.as_ref().map(Vec::len),
             query.top_k,
         );
+        trace_query.scalar_eq = query.scalar_eq.clone();
         if let Some(seed) = &query.graph_seed {
             trace_query.graph_seeds.push(seed.clone());
         }
@@ -1521,6 +1536,86 @@ fn validate_vector_query_dimensions(schema: &TableSchema, query: Option<&[f32]>)
         });
     }
     Ok(())
+}
+
+fn validate_scalar_eq_predicates(
+    schema: &TableSchema,
+    scalar_eq: &Map<String, Value>,
+) -> Result<()> {
+    for column in scalar_eq.keys() {
+        if !schema
+            .scalar_columns
+            .iter()
+            .any(|scalar_column| scalar_column == column)
+        {
+            return Err(TraceDbError::InvalidCommand(format!(
+                "invalid scalar predicate column {column}: not in schema scalar columns"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn filter_records_by_scalar_eq(
+    records: Vec<StoredRecord>,
+    scalar_eq: &Map<String, Value>,
+) -> Vec<StoredRecord> {
+    if scalar_eq.is_empty() {
+        return records;
+    }
+    records
+        .into_iter()
+        .filter(|record| record_matches_scalar_eq(&record.fields, scalar_eq))
+        .collect()
+}
+
+fn filter_segment_records_by_scalar_eq(
+    records: Vec<SegmentRecord>,
+    scalar_eq: &Map<String, Value>,
+) -> Vec<SegmentRecord> {
+    if scalar_eq.is_empty() {
+        return records;
+    }
+    records
+        .into_iter()
+        .filter(|record| record_matches_scalar_eq(&record.fields, scalar_eq))
+        .collect()
+}
+
+fn record_matches_scalar_eq(fields: &impl ScalarFields, scalar_eq: &Map<String, Value>) -> bool {
+    scalar_eq
+        .iter()
+        .all(|(column, expected)| fields.scalar_value(column) == Some(expected))
+}
+
+trait ScalarFields {
+    fn scalar_value(&self, column: &str) -> Option<&Value>;
+}
+
+impl ScalarFields for Map<String, Value> {
+    fn scalar_value(&self, column: &str) -> Option<&Value> {
+        self.get(column)
+    }
+}
+
+impl ScalarFields for BTreeMap<String, Value> {
+    fn scalar_value(&self, column: &str) -> Option<&Value> {
+        self.get(column)
+    }
+}
+
+fn scalar_filter_predicates(scalar_eq: &Map<String, Value>) -> Vec<String> {
+    scalar_eq
+        .iter()
+        .map(|(column, value)| format!("{column} = {}", scalar_value_label(value)))
+        .collect()
+}
+
+fn scalar_value_label(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 fn text_body(schema: &TableSchema, record: &StoredRecord) -> Option<String> {

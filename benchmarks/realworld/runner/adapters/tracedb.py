@@ -242,6 +242,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             records_by_id = {record.record_id: record for record in dataset.records}
             off_category_result_count = 0
             queries_with_off_category_results = 0
+            scalar_filter_applied_count = 0
             for query in dataset.queries:
                 result = recorder.timed(
                     lambda query=query: call(
@@ -251,6 +252,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                         {
                             "table": table,
                             "tenant_id": query.tenant_id,
+                            "scalar_eq": {"category": query.category},
                             "text": query.text,
                             "vector": query.vector,
                             "top_k": query.top_k,
@@ -282,6 +284,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                         "opened_candidate_streams",
                         "fusion_method",
                         "freshness_mode",
+                        "scalar_filter_applied",
                         "tenant_mask_visible_records",
                     ]
                     if key not in explain
@@ -291,12 +294,21 @@ class TraceDbAdapter(BenchmarkAdapter):
                         "surface unavailable: TraceDB HTTP explain missing "
                         + ", ".join(missing)
                     ], None
+                if explain.get("scalar_filter_applied") is True:
+                    scalar_filter_applied_count += 1
                 if config.observer:
                     config.observer.observe(
                         "tracedb.query_explain",
                         {
                             "query_id": query.query_id,
                             "freshness_mode": explain.get("freshness_mode"),
+                            "scalar_filter_applied": explain.get("scalar_filter_applied"),
+                            "scalar_filter_visible_records": explain.get(
+                                "scalar_filter_visible_records"
+                            ),
+                            "scalar_filter_removed_records": explain.get(
+                                "scalar_filter_removed_records"
+                            ),
                             "opened_candidate_streams": explain.get("opened_candidate_streams"),
                             "candidate_budget": explain.get("candidate_budget"),
                             "expected_ids": query.expected_ids,
@@ -320,6 +332,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                         {
                             "table": table,
                             "tenant_id": query.tenant_id,
+                            "scalar_eq": {"category": query.category},
                             "text": query.text,
                             "vector": query.vector,
                             "top_k": query.top_k,
@@ -398,6 +411,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             min_ndcg = min(ndcgs) if ndcgs else 0.0
             queries_below_full_recall = sum(1 for recall in recalls if recall < 1.0)
             queries_with_zero_recall = sum(1 for recall in recalls if recall == 0.0)
+            category_filter_applied = bool(dataset.queries) and scalar_filter_applied_count == len(
+                dataset.queries
+            )
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
@@ -410,7 +426,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "min_ndcg_at_5": round(min_ndcg, 3),
                     "queries_below_full_recall_count": queries_below_full_recall,
                     "queries_with_zero_recall_count": queries_with_zero_recall,
-                    "category_filter_applied": False,
+                    "category_filter_applied": category_filter_applied,
                     "off_category_result_count": off_category_result_count,
                     "queries_with_off_category_results_count": queries_with_off_category_results,
                     "disk_bytes": 0,
@@ -424,7 +440,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 f"queries_below_full_recall={queries_below_full_recall}; "
                 f"queries_with_zero_recall={queries_with_zero_recall}",
                 "TraceDB HTTP filter parity diagnostics: "
-                "category_filter_applied=false; "
+                f"category_filter_applied={str(category_filter_applied).lower()}; "
                 f"off_category_result_count={off_category_result_count}; "
                 f"queries_with_off_category_results={queries_with_off_category_results}",
             ], metrics

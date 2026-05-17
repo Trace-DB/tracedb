@@ -50,6 +50,7 @@ fn query() -> HybridQuery {
         tenant_id: "tenant-a".to_string(),
         text: Some("rust".to_string()),
         vector: Some(vec![1.0, 0.0, 0.0]),
+        scalar_eq: Default::default(),
         graph_seed: None,
         temporal_as_of: None,
         top_k: 10,
