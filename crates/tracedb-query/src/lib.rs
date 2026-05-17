@@ -511,8 +511,11 @@ impl TraceDb {
                 },
             });
         }
-        let snapshot = self.store.snapshot(self.manifest.latest_epoch);
-        let visible = snapshot.visible_records(&query.table, &query.tenant_id);
+        let visible = self.store.visible_records_at(
+            &query.table,
+            &query.tenant_id,
+            self.manifest.latest_epoch,
+        );
         let sealed_records = self.sealed_segment_records(&query.table, &query.tenant_id)?;
         let tenant_mask_visible_records = visible.len();
         let scalar_filter_applied = !query.scalar_eq.is_empty();

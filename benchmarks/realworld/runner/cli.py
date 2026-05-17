@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     scaling.add_argument("--records", default="128,512,1024")
     scaling.add_argument("--inspect-repetitions", type=int, default=5)
     scaling.add_argument("--query-repetitions", type=int, default=3)
+    scaling.add_argument("--checkpoint-at-points", action="store_true")
     scaling.add_argument("--output-json", default="reports/scaling/latest.json")
     scaling.add_argument("--output-md", default="reports/scaling/latest.md")
 

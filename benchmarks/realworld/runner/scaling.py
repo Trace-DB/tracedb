@@ -27,6 +27,7 @@ class TraceDbScalingRunner:
     record_targets: list[int]
     inspect_repetitions: int = 5
     query_repetitions: int = 3
+    checkpoint_at_points: bool = False
     run_command: CommandRunner | None = None
 
     def run(self) -> dict[str, Any]:
@@ -88,7 +89,8 @@ class TraceDbScalingRunner:
                 "max_records": max_records,
                 "point_count": len(points),
                 "failures": [],
-                "interpretation": "CLI measurements include process startup plus TraceDb::open WAL replay. Use HTTP/server metrics for in-process write latency.",
+                "interpretation": "CLI measurements include process startup plus TraceDb::open. Checkpoint metrics measure the same data directory after tracedb checkpoint truncates covered WAL entries.",
+                "checkpoint_at_points": self.checkpoint_at_points,
             },
             "commands": commands,
         }
@@ -121,7 +123,7 @@ class TraceDbScalingRunner:
 
         wal_path = self.data_dir / "wal" / "000001.twal"
         wal_bytes = wal_path.stat().st_size if wal_path.exists() else 0
-        return {
+        point = {
             "records": records,
             "latest_epoch": latest_epoch,
             "wal_bytes": wal_bytes,
@@ -134,6 +136,51 @@ class TraceDbScalingRunner:
             "query_latency_p50_ms": query_recorder.summary()["latency_p50_ms"],
             "query_latency_p95_ms": query_recorder.summary()["latency_p95_ms"],
             "query_returned_count": returned_count,
+        }
+        if self.checkpoint_at_points:
+            point.update(
+                self._measure_checkpointed_point(
+                    query_path=query_path,
+                    commands=commands,
+                )
+            )
+        return point
+
+    def _measure_checkpointed_point(
+        self,
+        *,
+        query_path: Path,
+        commands: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        checkpoint_recorder = MetricRecorder()
+        checkpoint = checkpoint_recorder.timed(lambda: self._call(["checkpoint"], commands))
+        inspect_recorder = MetricRecorder()
+        checkpoint_epoch = checkpoint.get("checkpoint_epoch", 0)
+        latest_epoch = checkpoint_epoch
+        for _ in range(self.inspect_repetitions):
+            manifest = inspect_recorder.timed(lambda: self._call(["inspect", "manifest"], commands))
+            latest_epoch = manifest.get("latest_epoch", latest_epoch)
+            checkpoint_epoch = manifest.get("checkpoint_epoch", checkpoint_epoch)
+
+        query_recorder = MetricRecorder()
+        returned_count = 0
+        for _ in range(self.query_repetitions):
+            result = query_recorder.timed(lambda: self._call(["query", str(query_path)], commands))
+            returned_count = len(result.get("results", []))
+
+        wal_path = self.data_dir / "wal" / "000001.twal"
+        wal_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+        return {
+            "checkpoint_epoch": checkpoint_epoch,
+            "checkpoint_latest_epoch": latest_epoch,
+            "checkpoint_wal_bytes": wal_bytes,
+            "checkpoint_data_dir_bytes": directory_size(self.data_dir),
+            "checkpoint_latency_ms": checkpoint_recorder.summary()["latency_p50_ms"],
+            "checkpoint_reopen_latency_p50_ms": inspect_recorder.summary()["latency_p50_ms"],
+            "checkpoint_reopen_latency_p95_ms": inspect_recorder.summary()["latency_p95_ms"],
+            "checkpoint_query_latency_p50_ms": query_recorder.summary()["latency_p50_ms"],
+            "checkpoint_query_latency_p95_ms": query_recorder.summary()["latency_p95_ms"],
+            "checkpoint_query_returned_count": returned_count,
         }
 
     def _write_payload(self, payload_dir: Path, name: str, value: dict[str, Any]) -> Path:
@@ -207,15 +254,21 @@ def render_scaling_markdown(report: dict[str, Any]) -> str:
         f"- Max records: `{report['summary']['max_records']}`",
         f"- Data dir: `{report['data_dir']}`",
         "",
-        "> CLI measurements include process startup plus TraceDb::open WAL replay. Use HTTP/server metrics for in-process write latency.",
+        "> CLI measurements include process startup plus TraceDb::open. Checkpoint metrics measure the same data directory after `tracedb checkpoint` truncates covered WAL entries.",
         "",
-        "| records | latest epoch | WAL bytes | put p95 ms | recent put p95 ms | reopen p95 ms | query p95 ms | returned |",
-        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| records | latest epoch | WAL bytes | put p95 ms | recent put p95 ms | reopen p95 ms | query p95 ms | returned | checkpoint WAL bytes | checkpoint reopen p95 ms | checkpoint query p95 ms |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for point in report["points"]:
+        display = {
+            "checkpoint_wal_bytes": "n/a",
+            "checkpoint_reopen_latency_p95_ms": "n/a",
+            "checkpoint_query_latency_p95_ms": "n/a",
+            **point,
+        }
         lines.append(
-            "| {records} | {latest_epoch} | {wal_bytes} | {put_latency_p95_ms} | {recent_put_latency_p95_ms} | {reopen_latency_p95_ms} | {query_latency_p95_ms} | {query_returned_count} |".format(
-                **point
+            "| {records} | {latest_epoch} | {wal_bytes} | {put_latency_p95_ms} | {recent_put_latency_p95_ms} | {reopen_latency_p95_ms} | {query_latency_p95_ms} | {query_returned_count} | {checkpoint_wal_bytes} | {checkpoint_reopen_latency_p95_ms} | {checkpoint_query_latency_p95_ms} |".format(
+                **display,
             )
         )
     lines.extend(["", "## Next Use", "", "Use this curve to decide whether checkpoint files, WAL rotation, or store-clone reduction should be the next implementation target."])
@@ -270,6 +323,7 @@ def run_tracedb_scaling(args) -> int:
         record_targets=parse_record_targets(args.records),
         inspect_repetitions=args.inspect_repetitions,
         query_repetitions=args.query_repetitions,
+        checkpoint_at_points=args.checkpoint_at_points,
     )
     runner.run()
     print(f"wrote {args.output_json}")

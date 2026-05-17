@@ -317,10 +317,24 @@ impl RecordStore {
         limit: usize,
         epoch: Epoch,
     ) -> Vec<StoredRecord> {
-        let mut records = self.snapshot(epoch).visible_records(table, tenant_id);
+        let mut records = self.visible_records_at(table, tenant_id, epoch);
         records.sort_by(|left, right| left.header.record_id.cmp(&right.header.record_id));
         records.truncate(limit);
         records
+    }
+
+    pub fn visible_records_at(
+        &self,
+        table: &str,
+        tenant_id: &str,
+        epoch: Epoch,
+    ) -> Vec<StoredRecord> {
+        let prefix = record_key_prefix(table, tenant_id);
+        self.versions
+            .range(prefix.clone()..)
+            .take_while(|(key, _)| key.starts_with(&prefix))
+            .filter_map(|(_, versions)| visible_record_at(versions, epoch))
+            .collect()
     }
 
     pub fn snapshot(&self, epoch: Epoch) -> ReadSnapshot {
@@ -691,5 +705,82 @@ fn validate_deletion_identity(schema: &TableSchema, deletion: &RecordDeletion) -
 }
 
 fn record_key(table: &str, tenant: &str, id: &str) -> String {
-    format!("{table}\u{0}{tenant}\u{0}{id}")
+    format!("{}{id}", record_key_prefix(table, tenant))
+}
+
+fn record_key_prefix(table: &str, tenant: &str) -> String {
+    format!("{table}\u{0}{tenant}\u{0}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tracedb_core::VectorColumnSchema;
+
+    fn schema() -> TableSchema {
+        TableSchema {
+            name: "docs".to_string(),
+            primary_id_column: "id".to_string(),
+            tenant_id_column: "tenant".to_string(),
+            scalar_columns: vec![],
+            text_indexed_columns: vec!["body".to_string()],
+            vector_columns: vec![VectorColumnSchema {
+                name: "embedding".to_string(),
+                dimensions: 2,
+                source_columns: vec!["body".to_string()],
+            }],
+        }
+    }
+
+    fn record(id: &str, tenant: &str) -> RecordInput {
+        RecordInput {
+            table: "docs".to_string(),
+            id: id.to_string(),
+            tenant_id: tenant.to_string(),
+            fields: json!({
+                "id": id,
+                "tenant": tenant,
+                "body": format!("{tenant} {id}"),
+                "embedding": [0.1, 0.2],
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+        }
+    }
+
+    #[test]
+    fn visible_records_at_uses_table_tenant_partition_prefix() {
+        let schema = schema();
+        let mut store = RecordStore::default();
+        store
+            .apply_mutation(&schema, &record("a", "tenant-a"), Epoch::new(1))
+            .expect("insert tenant a");
+        store
+            .apply_mutation(&schema, &record("b", "tenant-b"), Epoch::new(2))
+            .expect("insert tenant b");
+        store
+            .apply_delete(
+                &schema,
+                &RecordDeletion {
+                    table: "docs".to_string(),
+                    tenant_id: "tenant-a".to_string(),
+                    id: "a".to_string(),
+                    tombstone: "delete".to_string(),
+                },
+                Epoch::new(3),
+            )
+            .expect("delete tenant a");
+
+        let tenant_a = store.visible_records_at("docs", "tenant-a", Epoch::new(2));
+        assert_eq!(tenant_a.len(), 1);
+        assert_eq!(tenant_a[0].header.record_id, "a");
+        assert!(store
+            .visible_records_at("docs", "tenant-a", Epoch::new(3))
+            .is_empty());
+        let tenant_b = store.visible_records_at("docs", "tenant-b", Epoch::new(3));
+        assert_eq!(tenant_b.len(), 1);
+        assert_eq!(tenant_b[0].header.record_id, "b");
+    }
 }
