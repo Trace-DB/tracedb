@@ -14,6 +14,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from runner.adapters.qdrant import QdrantAdapter
+from runner.adapters.pgvector import PgVectorAdapter
 from runner.adapters.tracedb import TraceDbAdapter
 from runner.datasets import generated_dataset, load_dataset
 from runner.http import request_json
@@ -190,6 +191,83 @@ class FakeTraceDb:
         return Handler
 
 
+class FakePsycopg:
+    def __init__(self, storage_bytes: int = 49_152) -> None:
+        self.storage_bytes = storage_bytes
+        self.connection = FakePsycopgConnection(storage_bytes)
+        self.connect_calls: list[tuple[str, int]] = []
+
+    def connect(self, dsn: str, connect_timeout: int):
+        self.connect_calls.append((dsn, connect_timeout))
+        return self.connection
+
+
+class FakePsycopgConnection:
+    def __init__(self, storage_bytes: int) -> None:
+        self.storage_bytes = storage_bytes
+        self.records: list[tuple[str, str, str, str, str]] = []
+        self.commit_count = 0
+        self.cursor_instance = FakePsycopgCursor(self)
+
+    def __enter__(self) -> "FakePsycopgConnection":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def cursor(self) -> "FakePsycopgCursor":
+        return self.cursor_instance
+
+    def commit(self) -> None:
+        self.commit_count += 1
+
+
+class FakePsycopgCursor:
+    def __init__(self, connection: FakePsycopgConnection) -> None:
+        self.connection = connection
+        self.executed_sql: list[str] = []
+        self.last_rows: list[tuple] = []
+
+    def __enter__(self) -> "FakePsycopgCursor":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple | None = None) -> "FakePsycopgCursor":
+        normalized = " ".join(sql.split())
+        self.executed_sql.append(normalized)
+        if "pg_total_relation_size" in normalized:
+            self.last_rows = [(self.connection.storage_bytes,)]
+            return self
+        if normalized.startswith("SELECT id FROM bench_vectors"):
+            tenant_id, category, _vector, top_k = params or ("", "", "", 0)
+            matches = [
+                (record_id,)
+                for record_id, record_tenant, record_category, _body, _embedding in self.connection.records
+                if record_tenant == tenant_id and record_category == category
+            ]
+            self.last_rows = matches[: int(top_k)]
+            return self
+        if normalized.startswith("INSERT INTO bench_vectors"):
+            if params is not None:
+                self.connection.records.append(params)
+            self.last_rows = []
+            return self
+        self.last_rows = []
+        return self
+
+    def executemany(self, sql: str, rows: list[tuple[str, str, str, str, str]]) -> None:
+        self.executed_sql.append(" ".join(sql.split()))
+        self.connection.records.extend(rows)
+
+    def fetchall(self) -> list[tuple]:
+        return self.last_rows
+
+    def fetchone(self) -> tuple | None:
+        return self.last_rows[0] if self.last_rows else None
+
+
 class AdapterHardeningTests(unittest.TestCase):
     def test_external_qrels_loaders_use_current_hf_configs(self) -> None:
         class FakeDataset(list):
@@ -360,6 +438,55 @@ class AdapterHardeningTests(unittest.TestCase):
 
         self.assertTrue(result["available"], result["notes"])
         self.assertEqual(fake.batch_sizes, [50, 50, 30])
+
+    def test_pgvector_reports_ingest_query_and_storage_metrics(self) -> None:
+        fake_psycopg = FakePsycopg(storage_bytes=65_536)
+        old_psycopg = sys.modules.get("psycopg")
+        old_dsn = os.environ.get("BENCH_PGVECTOR_DSN")
+        sys.modules["psycopg"] = fake_psycopg
+        os.environ["BENCH_PGVECTOR_DSN"] = "postgresql://bench:bench@127.0.0.1:25433/bench"
+        try:
+            result = PgVectorAdapter().run(
+                generated_dataset(16, 42),
+                RunConfig(
+                    profile="smoke",
+                    target=["pgvector"],
+                    surfaces=["sdk"],
+                    require_services=True,
+                    repo_root=".",
+                ),
+            )
+        finally:
+            if old_psycopg is None:
+                sys.modules.pop("psycopg", None)
+            else:
+                sys.modules["psycopg"] = old_psycopg
+            if old_dsn is None:
+                os.environ.pop("BENCH_PGVECTOR_DSN", None)
+            else:
+                os.environ["BENCH_PGVECTOR_DSN"] = old_dsn
+
+        self.assertTrue(result["available"], result["notes"])
+        self.assertEqual(result["metrics"]["ingest_count"], 16)
+        self.assertEqual(result["metrics"]["ingest_transaction_count"], 1)
+        self.assertEqual(result["metrics"]["disk_bytes"], 65_536)
+        self.assertIn("ingest_latency_p95_ms", result["metrics"])
+        self.assertIn("ingest_commit_latency_p95_ms", result["metrics"])
+        self.assertIn("setup_latency_p95_ms", result["metrics"])
+        self.assertIn("query_latency_p95_ms", result["metrics"])
+        self.assertEqual(result["metrics"]["latency_p95_ms"], result["metrics"]["query_latency_p95_ms"])
+        self.assertEqual(fake_psycopg.connection.commit_count, 1)
+        self.assertTrue(
+            any("bulk transaction" in note for note in result["notes"]),
+            result["notes"],
+        )
+        self.assertTrue(
+            any(
+                "pg_total_relation_size" in sql
+                for sql in fake_psycopg.connection.cursor_instance.executed_sql
+            )
+        )
+        self.assertEqual(fake_psycopg.connect_calls[0][1], 2)
 
     def test_request_json_sends_optional_bearer_token(self) -> None:
         seen_headers: list[str] = []
