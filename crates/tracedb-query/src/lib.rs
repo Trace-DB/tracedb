@@ -15,7 +15,7 @@ use tracedb_core::{
     value_as_f32_vec, DerivedFeatureState, Epoch, FeatureStatus, IndexManifest, IndexState,
     ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
 };
-use tracedb_log::{CommitRecord, TornWalTail, Wal};
+use tracedb_log::{CommitRecord, TornWalTail, Wal, WalAppendTiming};
 use tracedb_modules::{ModuleRegistry, RegisteredModule};
 use tracedb_planner::{
     plan_trace_query, AccessPath, AccessPathDescriptor as PlannerAccessPathDescriptor,
@@ -208,6 +208,34 @@ pub struct RecordScanOutput {
     pub returned_count: usize,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WritePathTiming {
+    pub total_ms: f64,
+    pub lock_ms: f64,
+    pub schema_lookup_ms: f64,
+    pub store_clone_ms: f64,
+    pub store_apply_ms: f64,
+    pub feature_invalidation_ms: f64,
+    pub commit_build_ms: f64,
+    pub wal_total_ms: f64,
+    pub wal_lock_tail_ms: f64,
+    pub wal_frame_build_ms: f64,
+    pub wal_write_ms: f64,
+    pub wal_sync_data_ms: f64,
+    pub wal_tail_update_ms: f64,
+    pub store_install_ms: f64,
+    pub manifest_total_ms: f64,
+    pub manifest_clone_ms: f64,
+    pub manifest_write_total_ms: f64,
+    pub manifest_checksum_ms: f64,
+    pub manifest_serialize_ms: f64,
+    pub manifest_write_ms: f64,
+    pub manifest_sync_file_ms: f64,
+    pub manifest_rename_ms: f64,
+    pub manifest_sync_dir_ms: f64,
+    pub cache_clear_ms: f64,
+}
+
 fn default_tombstone() -> String {
     "user_delete".to_string()
 }
@@ -257,6 +285,68 @@ struct CheckpointPayload {
     epoch: Epoch,
     schemas: Vec<TableSchema>,
     records: Vec<StoredRecord>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ManifestWriteTiming {
+    total_ms: f64,
+    checksum_ms: f64,
+    serialize_ms: f64,
+    write_ms: f64,
+    sync_file_ms: f64,
+    rename_ms: f64,
+    sync_dir_ms: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ManifestBumpTiming {
+    total_ms: f64,
+    clone_ms: f64,
+    write: ManifestWriteTiming,
+}
+
+impl WritePathTiming {
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts(
+        total_ms: f64,
+        lock_ms: f64,
+        schema_lookup_ms: f64,
+        store_clone_ms: f64,
+        store_apply_ms: f64,
+        feature_invalidation_ms: f64,
+        commit_build_ms: f64,
+        wal: WalAppendTiming,
+        store_install_ms: f64,
+        manifest: ManifestBumpTiming,
+        cache_clear_ms: f64,
+    ) -> Self {
+        Self {
+            total_ms,
+            lock_ms,
+            schema_lookup_ms,
+            store_clone_ms,
+            store_apply_ms,
+            feature_invalidation_ms,
+            commit_build_ms,
+            wal_total_ms: wal.total_ms,
+            wal_lock_tail_ms: wal.lock_tail_ms,
+            wal_frame_build_ms: wal.frame_build_ms,
+            wal_write_ms: wal.write_ms,
+            wal_sync_data_ms: wal.sync_data_ms,
+            wal_tail_update_ms: wal.tail_update_ms,
+            store_install_ms,
+            manifest_total_ms: manifest.total_ms,
+            manifest_clone_ms: manifest.clone_ms,
+            manifest_write_total_ms: manifest.write.total_ms,
+            manifest_checksum_ms: manifest.write.checksum_ms,
+            manifest_serialize_ms: manifest.write.serialize_ms,
+            manifest_write_ms: manifest.write.write_ms,
+            manifest_sync_file_ms: manifest.write.sync_file_ms,
+            manifest_rename_ms: manifest.write.rename_ms,
+            manifest_sync_dir_ms: manifest.write.sync_dir_ms,
+            cache_clear_ms,
+        }
+    }
 }
 
 impl TraceDb {
@@ -415,6 +505,79 @@ impl TraceDb {
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
+    }
+
+    pub fn put_with_write_timing(
+        &mut self,
+        request: RecordPutRequest,
+    ) -> Result<(Epoch, WritePathTiming)> {
+        let total_started = Instant::now();
+        let lock_started = Instant::now();
+        let _guard = WriteLock::acquire(&self.dir)?;
+        let lock_ms = elapsed_ms(lock_started);
+
+        let input = request.record;
+        let schema_lookup_started = Instant::now();
+        let schema = self
+            .manifest
+            .table(&input.table)
+            .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
+            .clone();
+        let schema_lookup_ms = elapsed_ms(schema_lookup_started);
+
+        let epoch = self.manifest.latest_epoch.next();
+        let store_clone_started = Instant::now();
+        let mut staged = self.store.clone();
+        let store_clone_ms = elapsed_ms(store_clone_started);
+        let store_apply_started = Instant::now();
+        staged.apply_replacement(&schema, &input, epoch)?;
+        let store_apply_ms = elapsed_ms(store_apply_started);
+        let feature_invalidation_started = Instant::now();
+        let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
+        let feature_invalidation_ms = elapsed_ms(feature_invalidation_started);
+
+        let commit_build_started = Instant::now();
+        let commit = CommitRecord {
+            schema_epoch: self.manifest.latest_epoch,
+            policy_epoch: self.manifest.latest_epoch,
+            schema_changes: Vec::new(),
+            replacements: vec![input.clone()],
+            mutations: Vec::new(),
+            deletions: Vec::new(),
+            feature_invalidations,
+            module_events: module_events_for_schema("record.put", &schema),
+            ..CommitRecord::empty(epoch.get(), epoch).for_database(
+                self.manifest.database_id.clone(),
+                self.manifest.branch_id.clone(),
+            )
+        };
+        let commit_build_ms = elapsed_ms(commit_build_started);
+
+        let (_lsn, wal_timing) = self.wal.append_commit_with_timing(&commit)?;
+        let store_install_started = Instant::now();
+        self.store = staged;
+        let store_install_ms = elapsed_ms(store_install_started);
+        let manifest_timing = self.bump_manifest_with_timing(epoch)?;
+        let cache_clear_started = Instant::now();
+        self.clear_lexical_cache();
+        let cache_clear_ms = elapsed_ms(cache_clear_started);
+
+        Ok((
+            epoch,
+            WritePathTiming::from_parts(
+                elapsed_ms(total_started),
+                lock_ms,
+                schema_lookup_ms,
+                store_clone_ms,
+                store_apply_ms,
+                feature_invalidation_ms,
+                commit_build_ms,
+                wal_timing,
+                store_install_ms,
+                manifest_timing,
+                cache_clear_ms,
+            ),
+        ))
     }
 
     pub fn replace(&mut self, request: RecordPutRequest) -> Result<Epoch> {
@@ -1037,6 +1200,25 @@ impl TraceDb {
         write_manifest(self.dir.join("manifest.tdb"), &mut manifest)?;
         self.manifest = manifest;
         Ok(())
+    }
+
+    fn bump_manifest_with_timing(&mut self, epoch: Epoch) -> Result<ManifestBumpTiming> {
+        let total_started = Instant::now();
+        self.manifest.latest_epoch = epoch;
+        self.manifest.durable_epoch = epoch;
+        self.manifest.manifest_generation += 1;
+        let clone_started = Instant::now();
+        let mut manifest = self.manifest.clone();
+        let previous_checksum = manifest.checksums.manifest_checksum;
+        manifest.checksums.parent_checksum = previous_checksum;
+        let clone_ms = elapsed_ms(clone_started);
+        let write = write_manifest_with_timing(self.dir.join("manifest.tdb"), &mut manifest)?;
+        self.manifest = manifest;
+        Ok(ManifestBumpTiming {
+            total_ms: elapsed_ms(total_started),
+            clone_ms,
+            write,
+        })
     }
 
     fn validate_schema_compatible(&self, schema: &TableSchema) -> Result<()> {
@@ -2255,6 +2437,47 @@ fn write_manifest(path: impl AsRef<Path>, manifest: &mut TraceDbManifest) -> Res
         File::open(parent)?.sync_all()?;
     }
     Ok(())
+}
+
+fn write_manifest_with_timing(
+    path: impl AsRef<Path>,
+    manifest: &mut TraceDbManifest,
+) -> Result<ManifestWriteTiming> {
+    let total_started = Instant::now();
+    let checksum_started = Instant::now();
+    manifest.checksums.manifest_checksum = 0;
+    manifest.checksums.manifest_checksum = compute_manifest_checksum(manifest)?;
+    let checksum_ms = elapsed_ms(checksum_started);
+    let serialize_started = Instant::now();
+    let body = serde_json::to_vec_pretty(manifest)?;
+    let serialize_ms = elapsed_ms(serialize_started);
+    let path = path.as_ref();
+    let tmp_path = path.with_extension("tdb.tmp");
+    let write_started = Instant::now();
+    let mut file = File::create(&tmp_path)?;
+    file.write_all(&body)?;
+    let write_ms = elapsed_ms(write_started);
+    let sync_file_started = Instant::now();
+    file.sync_all()?;
+    let sync_file_ms = elapsed_ms(sync_file_started);
+    drop(file);
+    let rename_started = Instant::now();
+    fs::rename(&tmp_path, path)?;
+    let rename_ms = elapsed_ms(rename_started);
+    let sync_dir_started = Instant::now();
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    let sync_dir_ms = elapsed_ms(sync_dir_started);
+    Ok(ManifestWriteTiming {
+        total_ms: elapsed_ms(total_started),
+        checksum_ms,
+        serialize_ms,
+        write_ms,
+        sync_file_ms,
+        rename_ms,
+        sync_dir_ms,
+    })
 }
 
 fn checkpoint_relative_path(epoch: Epoch) -> String {

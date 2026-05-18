@@ -18,6 +18,16 @@ const HEADER_LEN: usize = 32;
 const MAX_PAYLOAD_LEN: usize = 16 * 1024 * 1024;
 const COMMIT_FOOTER: u32 = 0x5444_434d;
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WalAppendTiming {
+    pub total_ms: f64,
+    pub lock_tail_ms: f64,
+    pub frame_build_ms: f64,
+    pub write_ms: f64,
+    pub sync_data_ms: f64,
+    pub tail_update_ms: f64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CommitRecord {
     pub database_id: String,
@@ -176,6 +186,79 @@ impl Wal {
         Ok(lsn)
     }
 
+    pub fn append_commit_with_timing(
+        &self,
+        commit: &CommitRecord,
+    ) -> Result<(Lsn, WalAppendTiming)> {
+        let total_started = Instant::now();
+        let lock_tail_started = Instant::now();
+        let _guard = WalWriteLock::acquire(&self.path)?;
+        let mut tail = self
+            .tail
+            .lock()
+            .map_err(|_| TraceDbError::WalCorruption("wal tail cache lock poisoned".to_string()))?;
+        let file_len = fs::metadata(&self.path)?.len();
+        if file_len != tail.file_len {
+            let scan = scan_file(&self.path)?;
+            *tail = tail_from_scan(&self.path, &scan)?;
+        }
+        let lsn = tail
+            .last_lsn
+            .map(|last_lsn| last_lsn.next())
+            .unwrap_or_else(|| Lsn::new(1));
+        let prev_checksum = tail.last_checksum;
+        let lock_tail_ms = elapsed_ms(lock_tail_started);
+
+        let frame_build_started = Instant::now();
+        let mut commit = commit.clone();
+        commit.previous_commit_hash = prev_checksum;
+        let payload = serde_json::to_vec(&commit)?;
+        if payload.len() > MAX_PAYLOAD_LEN {
+            return Err(TraceDbError::WalCorruption(format!(
+                "payload length {} exceeds max {MAX_PAYLOAD_LEN} at lsn {}",
+                payload.len(),
+                lsn.get()
+            )));
+        }
+        let payload_checksum = checksum_bytes(&payload);
+
+        let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
+        frame.extend_from_slice(&WAL_MAGIC.to_le_bytes());
+        frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
+        frame.extend_from_slice(&lsn.get().to_le_bytes());
+        frame.extend_from_slice(&prev_checksum.to_le_bytes());
+        frame.extend_from_slice(&1u32.to_le_bytes());
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&payload_checksum.to_le_bytes());
+        frame.extend_from_slice(&payload);
+        frame.extend_from_slice(&COMMIT_FOOTER.to_le_bytes());
+        let frame_build_ms = elapsed_ms(frame_build_started);
+
+        let write_started = Instant::now();
+        let mut file = OpenOptions::new().append(true).open(&self.path)?;
+        file.write_all(&frame)?;
+        let write_ms = elapsed_ms(write_started);
+        let sync_data_started = Instant::now();
+        file.sync_data()?;
+        let sync_data_ms = elapsed_ms(sync_data_started);
+        let tail_update_started = Instant::now();
+        tail.last_lsn = Some(lsn);
+        tail.last_checksum = payload_checksum;
+        tail.file_len += frame.len() as u64;
+        let tail_update_ms = elapsed_ms(tail_update_started);
+        Ok((
+            lsn,
+            WalAppendTiming {
+                total_ms: elapsed_ms(total_started),
+                lock_tail_ms,
+                frame_build_ms,
+                write_ms,
+                sync_data_ms,
+                tail_update_ms,
+            },
+        ))
+    }
+
     pub fn scan(&self) -> Result<Vec<WalEntry>> {
         Ok(self.scan_with_metadata()?.entries)
     }
@@ -183,6 +266,10 @@ impl Wal {
     pub fn scan_with_metadata(&self) -> Result<WalScan> {
         scan_file(&self.path)
     }
+}
+
+fn elapsed_ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
 }
 
 fn tail_from_scan(path: &Path, scan: &WalScan) -> Result<WalTail> {

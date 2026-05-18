@@ -8,6 +8,7 @@ use std::fs;
 use std::time::Instant;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordInput, TableSchema, TraceDb, VectorColumnSchema,
+    WritePathTiming,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -140,6 +141,10 @@ pub struct InProcessScalingPoint {
     pub query_access_path_build_p95_ms: Vec<TimingP95>,
     #[serde(default)]
     pub query_access_path_open_p95_ms: Vec<TimingP95>,
+    #[serde(default)]
+    pub put_phase_p95_ms: Vec<TimingP95>,
+    #[serde(default)]
+    pub recent_put_phase_p95_ms: Vec<TimingP95>,
     pub query_returned_count: usize,
     pub lexical_cache_hits: usize,
     pub lexical_cache_misses: usize,
@@ -193,14 +198,17 @@ pub fn run_inprocess_scaling(
     db.apply_schema(scaling_schema())?;
 
     let mut insert_latencies = Vec::new();
+    let mut put_phase_samples = BTreeMap::<String, Vec<f64>>::new();
     let mut points = Vec::new();
     let mut next_target = 0;
     let max_records = *targets.last().expect("target");
     for index in 1..=max_records {
         let record = scaling_record(index);
-        insert_latencies.push(timed_ms(|| {
-            db.put(tracedb_query::RecordPutRequest::new(record))
-        })?);
+        let ((_, write_timing), elapsed_ms) = timed_value_ms(|| {
+            db.put_with_write_timing(tracedb_query::RecordPutRequest::new(record))
+        })?;
+        insert_latencies.push(elapsed_ms);
+        record_write_timing_samples(&write_timing, &mut put_phase_samples);
 
         while next_target < targets.len() && index == targets[next_target] {
             points.push(measure_inprocess_point(
@@ -208,6 +216,7 @@ pub fn run_inprocess_scaling(
                 &data_dir,
                 index,
                 &insert_latencies,
+                &put_phase_samples,
                 &config,
             )?);
             next_target += 1;
@@ -227,6 +236,7 @@ fn measure_inprocess_point(
     data_dir: &std::path::Path,
     records: usize,
     insert_latencies: &[f64],
+    put_phase_samples: &BTreeMap<String, Vec<f64>>,
     config: &InProcessScalingConfig,
 ) -> Result<InProcessScalingPoint, Box<dyn Error>> {
     let query = scaling_query(records);
@@ -295,6 +305,8 @@ fn measure_inprocess_point(
         query_phase_p95_ms: timing_p95_samples(&query_phase_samples),
         query_access_path_build_p95_ms: timing_p95_samples(&query_access_path_build_samples),
         query_access_path_open_p95_ms: timing_p95_samples(&query_access_path_open_samples),
+        put_phase_p95_ms: timing_p95_samples(put_phase_samples),
+        recent_put_phase_p95_ms: timing_p95_recent_samples(put_phase_samples, 64),
         query_returned_count: returned_count,
         lexical_cache_hits,
         lexical_cache_misses,
@@ -541,12 +553,59 @@ fn record_explain_timing_samples(
     }
 }
 
+fn record_write_timing_samples(timing: &WritePathTiming, samples: &mut BTreeMap<String, Vec<f64>>) {
+    for (name, value) in [
+        ("total", timing.total_ms),
+        ("lock", timing.lock_ms),
+        ("schema_lookup", timing.schema_lookup_ms),
+        ("store_clone", timing.store_clone_ms),
+        ("store_apply", timing.store_apply_ms),
+        ("feature_invalidation", timing.feature_invalidation_ms),
+        ("commit_build", timing.commit_build_ms),
+        ("wal_total", timing.wal_total_ms),
+        ("wal_lock_tail", timing.wal_lock_tail_ms),
+        ("wal_frame_build", timing.wal_frame_build_ms),
+        ("wal_write", timing.wal_write_ms),
+        ("wal_sync_data", timing.wal_sync_data_ms),
+        ("wal_tail_update", timing.wal_tail_update_ms),
+        ("store_install", timing.store_install_ms),
+        ("manifest_total", timing.manifest_total_ms),
+        ("manifest_clone", timing.manifest_clone_ms),
+        ("manifest_write_total", timing.manifest_write_total_ms),
+        ("manifest_checksum", timing.manifest_checksum_ms),
+        ("manifest_serialize", timing.manifest_serialize_ms),
+        ("manifest_write", timing.manifest_write_ms),
+        ("manifest_sync_file", timing.manifest_sync_file_ms),
+        ("manifest_rename", timing.manifest_rename_ms),
+        ("manifest_sync_dir", timing.manifest_sync_dir_ms),
+        ("cache_clear", timing.cache_clear_ms),
+    ] {
+        samples.entry(name.to_string()).or_default().push(value);
+    }
+}
+
 fn timing_p95_samples(samples: &BTreeMap<String, Vec<f64>>) -> Vec<TimingP95> {
     samples
         .iter()
         .map(|(name, values)| TimingP95 {
             name: name.clone(),
             p95_ms: round_ms(percentile(values, 95.0)),
+        })
+        .collect()
+}
+
+fn timing_p95_recent_samples(
+    samples: &BTreeMap<String, Vec<f64>>,
+    sample_count: usize,
+) -> Vec<TimingP95> {
+    samples
+        .iter()
+        .map(|(name, values)| {
+            let recent_start = values.len().saturating_sub(sample_count);
+            TimingP95 {
+                name: name.clone(),
+                p95_ms: round_ms(percentile(&values[recent_start..], 95.0)),
+            }
         })
         .collect()
 }
@@ -650,6 +709,22 @@ mod tests {
             .query_access_path_build_p95_ms
             .iter()
             .any(|timing| timing.name == "VectorPath" && timing.p95_ms >= 0.0));
+        assert!(point
+            .put_phase_p95_ms
+            .iter()
+            .any(|timing| timing.name == "store_clone" && timing.p95_ms >= 0.0));
+        assert!(point
+            .put_phase_p95_ms
+            .iter()
+            .any(|timing| timing.name == "wal_sync_data" && timing.p95_ms >= 0.0));
+        assert!(point
+            .put_phase_p95_ms
+            .iter()
+            .any(|timing| timing.name == "manifest_total" && timing.p95_ms >= 0.0));
+        assert!(point
+            .recent_put_phase_p95_ms
+            .iter()
+            .any(|timing| timing.name == "store_clone" && timing.p95_ms >= 0.0));
         assert_eq!(point.lexical_cache_hits, 0);
         assert_eq!(point.lexical_cache_misses, 0);
         assert_eq!(point.lexical_indexed_documents, 5);
