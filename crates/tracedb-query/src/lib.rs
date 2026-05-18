@@ -483,8 +483,7 @@ impl TraceDb {
             .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
             .clone();
         let epoch = self.manifest.latest_epoch.next();
-        let mut staged = self.store.clone();
-        staged.apply_replacement(&schema, &input, epoch)?;
+        let prepared = self.store.prepare_replacement(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
@@ -501,7 +500,7 @@ impl TraceDb {
             )
         };
         self.wal.append_commit(&commit)?;
-        self.store = staged;
+        self.store.install_prepared_record_write(prepared);
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
@@ -527,11 +526,9 @@ impl TraceDb {
 
         let epoch = self.manifest.latest_epoch.next();
         let store_clone_started = Instant::now();
-        let mut staged = self.store.clone();
+        let prepared = self.store.prepare_replacement(&schema, &input, epoch)?;
         let store_clone_ms = elapsed_ms(store_clone_started);
-        let store_apply_started = Instant::now();
-        staged.apply_replacement(&schema, &input, epoch)?;
-        let store_apply_ms = elapsed_ms(store_apply_started);
+        let store_apply_ms = 0.0;
         let feature_invalidation_started = Instant::now();
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
         let feature_invalidation_ms = elapsed_ms(feature_invalidation_started);
@@ -555,7 +552,7 @@ impl TraceDb {
 
         let (_lsn, wal_timing) = self.wal.append_commit_with_timing(&commit)?;
         let store_install_started = Instant::now();
-        self.store = staged;
+        self.store.install_prepared_record_write(prepared);
         let store_install_ms = elapsed_ms(store_install_started);
         let manifest_timing = self.bump_manifest_with_timing(epoch)?;
         let cache_clear_started = Instant::now();
