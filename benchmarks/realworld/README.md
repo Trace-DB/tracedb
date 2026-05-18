@@ -241,6 +241,23 @@ modal run benchmarks/realworld/modal_bench.py \
   --summary-json /tmp/tracedb-modal-summaries/modal-postgres-smoke-a.json
 ```
 
+pgvector external-control smoke on Modal:
+
+```bash
+TRACEDB_MODAL_APP_NAME=tracedb-pgvector-smoke-a \
+modal run benchmarks/realworld/modal_bench.py \
+  --run-id modal-pgvector-smoke-a \
+  --records 128 \
+  --seed 42 \
+  --target pgvector \
+  --surface sdk \
+  --scenarios search_rag_6 \
+  --allow-external-controls \
+  --require-services \
+  --pgvector-control \
+  --summary-json /tmp/tracedb-modal-summaries/modal-pgvector-smoke-a.json
+```
+
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
 `manifest.json`. The manifest records the run config, seed, Modal app name,
 resource class, redacted benchmark environment, and git commit/dirty state. Use

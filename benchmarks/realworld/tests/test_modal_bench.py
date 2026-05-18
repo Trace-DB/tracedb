@@ -124,6 +124,95 @@ class ModalBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BENCH_POSTGRES_DSN"):
             build_runner_env(config, base_env={})
 
+    def test_pgvector_external_control_requires_explicit_guardrails(self) -> None:
+        from modal_bench import (
+            ModalSmokeConfig,
+            build_runner_env,
+            build_suite_command,
+            validate_config,
+        )
+
+        with self.assertRaisesRegex(ValueError, "external controls"):
+            validate_config(ModalSmokeConfig(target="pgvector", pgvector_control=True))
+        with self.assertRaisesRegex(ValueError, "pgvector_control"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="tracedb",
+                    allow_external_controls=True,
+                    pgvector_control=True,
+                )
+            )
+
+        config = ModalSmokeConfig(
+            target="pgvector",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+            pgvector_control=True,
+        )
+
+        validate_config(config)
+        command = build_suite_command(config)
+        env = build_runner_env(config, base_env={"PATH": os.environ.get("PATH", "")})
+
+        self.assertEqual(command[command.index("--target") + 1], "pgvector")
+        self.assertIn("--require-services", command)
+        self.assertEqual(
+            env["BENCH_PGVECTOR_DSN"],
+            "postgresql://tracedb:tracedb@127.0.0.1:25433/tracedb_bench",
+        )
+        self.assertNotIn("BENCH_POSTGRES_DSN", env)
+
+    def test_pgvector_external_control_requires_dsn_when_services_are_required(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_runner_env
+
+        config = ModalSmokeConfig(
+            target="pgvector",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "BENCH_PGVECTOR_DSN"):
+            build_runner_env(config, base_env={})
+
+    def test_postgres_and_pgvector_controls_use_distinct_ports_and_dsns(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_runner_env, validate_config
+
+        config = ModalSmokeConfig(
+            target="postgres,pgvector",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+            postgres_control=True,
+            pgvector_control=True,
+            postgres_port=25_432,
+            pgvector_port=25_433,
+        )
+
+        validate_config(config)
+        env = build_runner_env(config, base_env={"PATH": os.environ.get("PATH", "")})
+
+        self.assertEqual(
+            env["BENCH_POSTGRES_DSN"],
+            "postgresql://tracedb:tracedb@127.0.0.1:25432/tracedb_bench",
+        )
+        self.assertEqual(
+            env["BENCH_PGVECTOR_DSN"],
+            "postgresql://tracedb:tracedb@127.0.0.1:25433/tracedb_bench",
+        )
+        with self.assertRaisesRegex(ValueError, "distinct ports"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="postgres,pgvector",
+                    allow_external_controls=True,
+                    postgres_control=True,
+                    pgvector_control=True,
+                    postgres_port=25_432,
+                    pgvector_port=25_432,
+                )
+            )
+
     def test_run_suite_passes_postgres_dsn_env_without_live_postgres(self) -> None:
         from modal_bench import ModalSmokeConfig, run_suite_and_bundle
 
@@ -184,6 +273,77 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
             self.assertIn("--require-services", run.call_args.args[0])
 
+    def test_run_suite_passes_pgvector_dsn_env_without_live_pgvector(self) -> None:
+        from modal_bench import ModalSmokeConfig, run_suite_and_bundle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            run_dir = reports / "modal-pgvector-smoke"
+            run_dir.mkdir(parents=True)
+            suite_json = {
+                "suite_id": "modal-pgvector-smoke",
+                "control_status": "external_control_available",
+                "summary": {"failure_count": 0},
+                "control_ledger": {
+                    "available_external_controls": [{"name": "pgvector"}],
+                    "unavailable_external_controls": [],
+                },
+                "number_to_beat": {
+                    "query_p95_ms": {"baseline": "pgvector", "value": 4.0},
+                },
+            }
+            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
+
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": "ok", "stderr": ""},
+            )()
+            config = ModalSmokeConfig(
+                run_id="modal-pgvector-smoke",
+                target="pgvector",
+                scenarios="search_rag_6",
+                reports_dir=str(reports),
+                bundle_dir=str(root / "bundles"),
+                min_free_mb=1_000,
+                allow_external_controls=True,
+                require_services=True,
+                pgvector_control=True,
+            )
+            base_env = {"PATH": os.environ.get("PATH", "")}
+            with patch.dict(os.environ, base_env, clear=True), patch(
+                "modal_bench.git_identity",
+                return_value={"commit": "test", "dirty": False, "status_short": ""},
+            ), patch("modal_bench.start_pgvector_control") as start_pgvector, patch(
+                "modal_bench.stop_postgres_control"
+            ), patch(
+                "subprocess.run", return_value=completed
+            ) as run:
+                start_pgvector.return_value = type(
+                    "PostgresControlStub",
+                    (),
+                    {
+                        "data_dir": root / "pgvector",
+                        "log_path": root / "pgvector.log",
+                        "port": 25433,
+                    },
+                )()
+                summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
+
+            self.assertEqual(summary["control_status"], "external_control_available")
+            self.assertEqual(summary["available_external_controls"], ["pgvector"])
+            self.assertEqual(
+                summary["number_to_beat"]["query_p95_ms"]["baseline"], "pgvector"
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_PGVECTOR_DSN"],
+                "postgresql://tracedb:tracedb@127.0.0.1:25433/tracedb_bench",
+            )
+            self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
+            self.assertIn("--require-services", run.call_args.args[0])
+
     def test_manifest_redacts_postgres_dsn(self) -> None:
         from modal_bench import ModalSmokeConfig, build_manifest
 
@@ -204,6 +364,27 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("BENCH_POSTGRES_DSN", manifest_text)
         self.assertNotIn("secret", manifest_text)
         self.assertEqual(manifest["runner_env"]["BENCH_POSTGRES_DSN"], "[redacted]")
+
+    def test_manifest_redacts_pgvector_dsn(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_manifest
+
+        config = ModalSmokeConfig(
+            run_id="redaction-pgvector",
+            target="pgvector",
+            allow_external_controls=True,
+            require_services=True,
+        )
+        manifest = build_manifest(
+            config,
+            ["python3", "-m", "runner", "suite"],
+            runner_env={"BENCH_PGVECTOR_DSN": "postgresql://user:secret@127.0.0.1/db"},
+        )
+
+        manifest_text = json.dumps(manifest)
+
+        self.assertIn("BENCH_PGVECTOR_DSN", manifest_text)
+        self.assertNotIn("secret", manifest_text)
+        self.assertEqual(manifest["runner_env"]["BENCH_PGVECTOR_DSN"], "[redacted]")
 
     def test_manifest_records_git_identity_for_reproducibility(self) -> None:
         from modal_bench import ModalSmokeConfig, build_manifest

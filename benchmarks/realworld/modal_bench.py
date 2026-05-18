@@ -29,6 +29,7 @@ MODAL_MIN_EPHEMERAL_DISK_MB = 524_288
 DEFAULT_MODAL_APP_NAME = "tracedb-realworld-smoke"
 MODAL_APP_NAME_ENV = "TRACEDB_MODAL_APP_NAME"
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
+PGVECTOR_DSN_ENV = "BENCH_PGVECTOR_DSN"
 EXTERNAL_CONTROL_TARGETS = {
     "postgres",
     "pgvector",
@@ -40,7 +41,7 @@ EXTERNAL_CONTROL_TARGETS = {
 }
 SENSITIVE_ENV_KEYS = {
     POSTGRES_DSN_ENV,
-    "BENCH_PGVECTOR_DSN",
+    PGVECTOR_DSN_ENV,
     "BENCH_MONGO_URI",
     "OPENROUTER_API_KEY",
 }
@@ -85,7 +86,9 @@ class ModalSmokeConfig:
     allow_provider: bool = False
     require_services: bool = False
     postgres_control: bool = False
+    pgvector_control: bool = False
     postgres_port: int = 25_432
+    pgvector_port: int = 25_433
     modal_app_name: str = DEFAULT_MODAL_APP_NAME
     source_commit: str | None = None
     source_dirty: bool | None = None
@@ -111,6 +114,16 @@ def validate_config(config: ModalSmokeConfig) -> None:
         raise ValueError("postgres_control needs allow_external_controls=True")
     if config.postgres_control and not target_needs_postgres(config):
         raise ValueError("postgres_control needs target including postgres or all")
+    if config.pgvector_control and not config.allow_external_controls:
+        raise ValueError("pgvector_control needs allow_external_controls=True")
+    if config.pgvector_control and not target_needs_pgvector(config):
+        raise ValueError("pgvector_control needs target including pgvector or all")
+    if (
+        config.postgres_control
+        and config.pgvector_control
+        and config.postgres_port == config.pgvector_port
+    ):
+        raise ValueError("postgres_control and pgvector_control need distinct ports")
     if config.min_free_mb < 1_000:
         raise ValueError("min_free_mb is too low for reproducible report artifact runs")
 
@@ -132,6 +145,11 @@ def external_targets(targets: set[str]) -> set[str]:
 def target_needs_postgres(config: ModalSmokeConfig) -> bool:
     targets = requested_targets(config.target)
     return "all" in targets or "postgres" in targets
+
+
+def target_needs_pgvector(config: ModalSmokeConfig) -> bool:
+    targets = requested_targets(config.target)
+    return "all" in targets or "pgvector" in targets
 
 
 def build_suite_command(config: ModalSmokeConfig) -> list[str]:
@@ -179,13 +197,25 @@ def build_runner_env(
     env["BENCH_DISABLE_ENV_FILE"] = "1"
     if config.postgres_control:
         env[POSTGRES_DSN_ENV] = postgres_control_dsn(config)
-    elif config.require_services and target_needs_postgres(config) and not env.get(POSTGRES_DSN_ENV):
+    elif config.require_services and target_needs_postgres(config) and not env.get(
+        POSTGRES_DSN_ENV
+    ):
         raise ValueError(f"{POSTGRES_DSN_ENV} is required for required PostgreSQL control runs")
+    if config.pgvector_control:
+        env[PGVECTOR_DSN_ENV] = pgvector_control_dsn(config)
+    elif config.require_services and target_needs_pgvector(config) and not env.get(
+        PGVECTOR_DSN_ENV
+    ):
+        raise ValueError(f"{PGVECTOR_DSN_ENV} is required for required pgvector control runs")
     return env
 
 
 def postgres_control_dsn(config: ModalSmokeConfig) -> str:
     return f"postgresql://tracedb:tracedb@127.0.0.1:{config.postgres_port}/tracedb_bench"
+
+
+def pgvector_control_dsn(config: ModalSmokeConfig) -> str:
+    return f"postgresql://tracedb:tracedb@127.0.0.1:{config.pgvector_port}/tracedb_bench"
 
 
 def redacted_env(env: Mapping[str, str]) -> dict[str, str]:
@@ -348,9 +378,12 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
     command = build_suite_command(config)
     env = build_runner_env(config)
     postgres_service: PostgresControl | None = None
+    pgvector_service: PostgresControl | None = None
     try:
         if config.postgres_control:
             postgres_service = start_postgres_control(config)
+        if config.pgvector_control:
+            pgvector_service = start_pgvector_control(config)
         completed = subprocess.run(
             command,
             cwd=lab_root,
@@ -361,6 +394,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             check=False,
         )
     finally:
+        if pgvector_service is not None:
+            stop_postgres_control(pgvector_service)
         if postgres_service is not None:
             stop_postgres_control(postgres_service)
     manifest = build_manifest(config, command, repo_root=lab_root.parent.parent, runner_env=env)
@@ -390,8 +425,24 @@ class PostgresControl:
 
 
 def start_postgres_control(config: ModalSmokeConfig) -> PostgresControl:
-    data_dir = Path("/tmp") / f"tracedb-postgres-{config.run_id}"
-    log_path = Path("/tmp") / f"tracedb-postgres-{config.run_id}.log"
+    return start_postgres_service(
+        run_id=config.run_id,
+        port=config.postgres_port,
+        service_name="postgres",
+    )
+
+
+def start_pgvector_control(config: ModalSmokeConfig) -> PostgresControl:
+    return start_postgres_service(
+        run_id=config.run_id,
+        port=config.pgvector_port,
+        service_name="pgvector",
+    )
+
+
+def start_postgres_service(*, run_id: str, port: int, service_name: str) -> PostgresControl:
+    data_dir = Path("/tmp") / f"tracedb-{service_name}-{run_id}"
+    log_path = Path("/tmp") / f"tracedb-{service_name}-{run_id}.log"
     bin_dir = postgres_bin_dir()
     initdb = bin_dir / "initdb"
     pg_ctl = bin_dir / "pg_ctl"
@@ -428,7 +479,7 @@ def start_postgres_control(config: ModalSmokeConfig) -> PostgresControl:
             "-l",
             str(log_path),
             "-o",
-            f"-h 127.0.0.1 -p {config.postgres_port}",
+            f"-h 127.0.0.1 -p {port}",
             "-w",
             "-t",
             "30",
@@ -441,7 +492,7 @@ def start_postgres_control(config: ModalSmokeConfig) -> PostgresControl:
             "-h",
             "127.0.0.1",
             "-p",
-            str(config.postgres_port),
+            str(port),
             "-U",
             "tracedb",
             "tracedb_bench",
@@ -451,7 +502,7 @@ def start_postgres_control(config: ModalSmokeConfig) -> PostgresControl:
         text=True,
         check=True,
     )
-    return PostgresControl(data_dir=data_dir, log_path=log_path, port=config.postgres_port)
+    return PostgresControl(data_dir=data_dir, log_path=log_path, port=port)
 
 
 def stop_postgres_control(service: PostgresControl) -> None:
@@ -515,7 +566,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-provider", action="store_true")
     parser.add_argument("--require-services", action="store_true")
     parser.add_argument("--postgres-control", action="store_true")
+    parser.add_argument("--pgvector-control", action="store_true")
     parser.add_argument("--postgres-port", type=int, default=25_432)
+    parser.add_argument("--pgvector-port", type=int, default=25_433)
     parser.add_argument(
         "--summary-json",
         help="Write the returned Modal benchmark summary to a clean local JSON file.",
@@ -540,7 +593,9 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         allow_provider=args.allow_provider,
         require_services=args.require_services,
         postgres_control=args.postgres_control,
+        pgvector_control=args.pgvector_control,
         postgres_port=args.postgres_port,
+        pgvector_port=args.pgvector_port,
         modal_app_name=modal_app_name(),
     )
 
@@ -602,6 +657,7 @@ if modal is not None:
 
     image = modal_image()
     postgres_image = modal_image("postgresql", "postgresql-client")
+    pgvector_image = modal_image("postgresql", "postgresql-client", "postgresql-15-pgvector")
     app = modal.App(modal_app_name())
 
     @app.function(
@@ -626,6 +682,17 @@ if modal is not None:
         config = ModalSmokeConfig(**kwargs)
         return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
 
+    @app.function(
+        image=pgvector_image,
+        cpu=ModalSmokeConfig.cpu,
+        memory=ModalSmokeConfig.memory_mb,
+        timeout=ModalSmokeConfig.timeout_seconds,
+        ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
+    )
+    def run_smoke_with_pgvector(**kwargs: Any) -> dict[str, Any]:
+        config = ModalSmokeConfig(**kwargs)
+        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
+
     @app.local_entrypoint()
     def main(
         run_id: str = "modal-smoke",
@@ -639,11 +706,18 @@ if modal is not None:
         allow_external_controls: bool = False,
         require_services: bool = False,
         postgres_control: bool = False,
+        pgvector_control: bool = False,
         allow_large: bool = False,
         allow_provider: bool = False,
         summary_json: str = "",
     ) -> None:
-        remote_function = run_smoke_with_postgres if postgres_control else run_smoke
+        remote_function = (
+            run_smoke_with_pgvector
+            if pgvector_control
+            else run_smoke_with_postgres
+            if postgres_control
+            else run_smoke
+        )
         result = remote_function.remote(
             run_id=run_id,
             records=records,
@@ -656,6 +730,7 @@ if modal is not None:
             allow_external_controls=allow_external_controls,
             require_services=require_services,
             postgres_control=postgres_control,
+            pgvector_control=pgvector_control,
             allow_large=allow_large,
             allow_provider=allow_provider,
             modal_app_name=modal_app_name(),
