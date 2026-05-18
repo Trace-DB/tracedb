@@ -18,8 +18,17 @@ sys.path.insert(0, str(LAB_ROOT))
 
 class ModalBenchTests(unittest.TestCase):
     def test_imports_without_modal_installed(self) -> None:
+        real_import = __import__
+
+        def import_without_modal(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "modal":
+                raise ImportError("modal intentionally hidden for test")
+            return real_import(name, globals, locals, fromlist, level)
+
         sys.modules.pop("modal_bench", None)
-        module = importlib.import_module("modal_bench")
+        sys.modules.pop("modal", None)
+        with patch("builtins.__import__", side_effect=import_without_modal):
+            module = importlib.import_module("modal_bench")
 
         self.assertTrue(hasattr(module, "ModalSmokeConfig"))
         self.assertIsNone(module.modal)

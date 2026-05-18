@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
 from typing import Any, Callable
 
 from .datasets import generated_dataset
@@ -275,12 +276,313 @@ def render_scaling_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def compare_inprocess_scaling_reports(
+    baseline_reports: list[dict[str, Any]],
+    candidate_reports: list[dict[str, Any]],
+    *,
+    baseline_label: str,
+    candidate_label: str,
+    min_repeats: int = 2,
+    required_write_improvement_pct: float = 25.0,
+    allowed_query_regression_pct: float = 10.0,
+    allowed_query_regression_ms: float = 5.0,
+) -> dict[str, Any]:
+    baseline_points = _collect_inprocess_points(baseline_reports)
+    candidate_points = _collect_inprocess_points(candidate_reports)
+    baseline_records = set(baseline_points)
+    candidate_records = set(candidate_points)
+    common_records = sorted(baseline_records & candidate_records)
+    missing_baseline_records = sorted(candidate_records - baseline_records)
+    missing_candidate_records = sorted(baseline_records - candidate_records)
+
+    failures = []
+    if not common_records:
+        failures.append("baseline and candidate reports have no common record targets")
+    if missing_baseline_records:
+        failures.append(f"baseline is missing record targets: {missing_baseline_records}")
+    if missing_candidate_records:
+        failures.append(f"candidate is missing record targets: {missing_candidate_records}")
+    for records in common_records:
+        baseline_repeat_count = len(baseline_points[records])
+        candidate_repeat_count = len(candidate_points[records])
+        if baseline_repeat_count < min_repeats:
+            failures.append(
+                f"{records} baseline repeats {baseline_repeat_count} below min_repeats {min_repeats}"
+            )
+        if candidate_repeat_count < min_repeats:
+            failures.append(
+                f"{records} candidate repeats {candidate_repeat_count} below min_repeats {min_repeats}"
+            )
+
+    if failures:
+        return {
+            "comparison": "tracedb-inprocess-scaling-guard",
+            "status": "invalid",
+            "baseline_label": baseline_label,
+            "candidate_label": candidate_label,
+            "baseline_reports": len(baseline_reports),
+            "candidate_reports": len(candidate_reports),
+            "min_repeats": min_repeats,
+            "required_write_improvement_pct": required_write_improvement_pct,
+            "allowed_query_regression_pct": allowed_query_regression_pct,
+            "allowed_query_regression_ms": allowed_query_regression_ms,
+            "control_status": "same_machine_parent_baseline_required",
+            "missing_baseline_records": missing_baseline_records,
+            "missing_candidate_records": missing_candidate_records,
+            "failures": failures,
+            "points": [],
+        }
+
+    points = []
+    for records in common_records:
+        baseline_insert = _median_metric(baseline_points[records], "recent_insert_p95_ms")
+        candidate_insert = _median_metric(candidate_points[records], "recent_insert_p95_ms")
+        baseline_query = _median_metric(baseline_points[records], "engine_query_p95_ms")
+        candidate_query = _median_metric(candidate_points[records], "engine_query_p95_ms")
+        baseline_checkpoint_query = _optional_median_metric(
+            baseline_points[records],
+            "checkpoint_engine_query_p95_ms",
+        )
+        candidate_checkpoint_query = _optional_median_metric(
+            candidate_points[records],
+            "checkpoint_engine_query_p95_ms",
+        )
+
+        write_improvement_pct = _improvement_pct(baseline_insert, candidate_insert)
+        hot_query_regression_ms = candidate_query - baseline_query
+        hot_query_regression_pct = _regression_pct(baseline_query, candidate_query)
+        hot_query_allowed_ms = max(
+            baseline_query * (allowed_query_regression_pct / 100.0),
+            allowed_query_regression_ms,
+        )
+        write_gate = (
+            "passed"
+            if write_improvement_pct >= required_write_improvement_pct
+            else "failed"
+        )
+        hot_query_gate = (
+            "passed"
+            if candidate_query <= baseline_query + hot_query_allowed_ms
+            else "failed"
+        )
+
+        checkpoint_query_gate = "not_applicable"
+        checkpoint_query_regression_ms = None
+        checkpoint_query_regression_pct = None
+        checkpoint_query_allowed_ms = None
+        if baseline_checkpoint_query is not None and candidate_checkpoint_query is not None:
+            checkpoint_query_regression_ms = candidate_checkpoint_query - baseline_checkpoint_query
+            checkpoint_query_regression_pct = _regression_pct(
+                baseline_checkpoint_query,
+                candidate_checkpoint_query,
+            )
+            checkpoint_query_allowed_ms = max(
+                baseline_checkpoint_query * (allowed_query_regression_pct / 100.0),
+                allowed_query_regression_ms,
+            )
+            checkpoint_query_gate = (
+                "passed"
+                if candidate_checkpoint_query
+                <= baseline_checkpoint_query + checkpoint_query_allowed_ms
+                else "failed"
+            )
+
+        point_status = (
+            "accepted"
+            if write_gate == "passed"
+            and hot_query_gate == "passed"
+            and checkpoint_query_gate != "failed"
+            else "rejected"
+        )
+        points.append(
+            {
+                "records": records,
+                "status": point_status,
+                "baseline_recent_insert_p95_ms": round(baseline_insert, 3),
+                "candidate_recent_insert_p95_ms": round(candidate_insert, 3),
+                "write_improvement_pct": round(write_improvement_pct, 3),
+                "write_gate": write_gate,
+                "baseline_hot_query_p95_ms": round(baseline_query, 3),
+                "candidate_hot_query_p95_ms": round(candidate_query, 3),
+                "hot_query_regression_ms": round(hot_query_regression_ms, 3),
+                "hot_query_regression_pct": round(hot_query_regression_pct, 3),
+                "hot_query_allowed_regression_ms": round(hot_query_allowed_ms, 3),
+                "hot_query_gate": hot_query_gate,
+                "baseline_checkpoint_query_p95_ms": _round_optional(
+                    baseline_checkpoint_query
+                ),
+                "candidate_checkpoint_query_p95_ms": _round_optional(
+                    candidate_checkpoint_query
+                ),
+                "checkpoint_query_regression_ms": _round_optional(
+                    checkpoint_query_regression_ms
+                ),
+                "checkpoint_query_regression_pct": _round_optional(
+                    checkpoint_query_regression_pct
+                ),
+                "checkpoint_query_allowed_regression_ms": _round_optional(
+                    checkpoint_query_allowed_ms
+                ),
+                "checkpoint_query_gate": checkpoint_query_gate,
+            }
+        )
+
+    status = "accepted" if all(point["status"] == "accepted" for point in points) else "rejected"
+    return {
+        "comparison": "tracedb-inprocess-scaling-guard",
+        "status": status,
+        "baseline_label": baseline_label,
+        "candidate_label": candidate_label,
+        "baseline_reports": len(baseline_reports),
+        "candidate_reports": len(candidate_reports),
+        "min_repeats": min_repeats,
+        "required_write_improvement_pct": required_write_improvement_pct,
+        "allowed_query_regression_pct": allowed_query_regression_pct,
+        "allowed_query_regression_ms": allowed_query_regression_ms,
+        "control_status": "same_machine_parent_baseline_required",
+        "missing_baseline_records": [],
+        "missing_candidate_records": [],
+        "failures": [
+            f"{point['records']}: write gate {point['write_gate']}, hot query gate {point['hot_query_gate']}, checkpoint query gate {point['checkpoint_query_gate']}"
+            for point in points
+            if point["status"] != "accepted"
+        ],
+        "points": points,
+    }
+
+
+def render_inprocess_scaling_comparison_markdown(comparison: dict[str, Any]) -> str:
+    lines = [
+        "# TraceDB In-Process Scaling Guard",
+        "",
+        f"- Status: `{comparison['status']}`",
+        f"- Baseline: `{comparison['baseline_label']}`",
+        f"- Candidate: `{comparison['candidate_label']}`",
+        f"- Baseline reports: `{comparison.get('baseline_reports', 0)}`",
+        f"- Candidate reports: `{comparison.get('candidate_reports', 0)}`",
+        f"- Minimum repeats per side/record: `{comparison.get('min_repeats', 1)}`",
+        f"- Required write improvement: `{comparison['required_write_improvement_pct']}%`",
+        f"- Allowed hot/checkpoint query regression: `max({comparison['allowed_query_regression_pct']}%, {comparison['allowed_query_regression_ms']} ms)`",
+        "",
+        "| records | status | write improvement % | write gate | hot query baseline -> candidate | hot query gate | checkpoint query baseline -> candidate | checkpoint query gate |",
+        "| ---: | --- | ---: | --- | ---: | --- | ---: | --- |",
+    ]
+    for point in comparison["points"]:
+        checkpoint_pair = "n/a"
+        if point["baseline_checkpoint_query_p95_ms"] is not None:
+            checkpoint_pair = (
+                f"{point['baseline_checkpoint_query_p95_ms']} -> "
+                f"{point['candidate_checkpoint_query_p95_ms']}"
+            )
+        lines.append(
+            "| {records} | {status} | {write_improvement_pct} | {write_gate} | {baseline_hot_query_p95_ms} -> {candidate_hot_query_p95_ms} | {hot_query_gate} | {checkpoint_pair} | {checkpoint_query_gate} |".format(
+                checkpoint_pair=checkpoint_pair,
+                **point,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Failures",
+            "",
+        ]
+    )
+    failures = comparison.get("failures", [])
+    if failures:
+        lines.extend(f"- {failure}" for failure in failures)
+    else:
+        lines.append("- None")
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            "A candidate is accepted only when recent write p95 improves enough and hot/checkpoint query p95 stay inside the read-regression guard. This is internal development evidence unless an external control is attached separately.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def run_inprocess_scaling_compare(args) -> int:
+    baseline_reports = [_read_json(Path(path)) for path in args.baseline_json]
+    candidate_reports = [_read_json(Path(path)) for path in args.candidate_json]
+    comparison = compare_inprocess_scaling_reports(
+        baseline_reports,
+        candidate_reports,
+        baseline_label=args.baseline_label,
+        candidate_label=args.candidate_label,
+        min_repeats=args.min_repeats,
+        required_write_improvement_pct=args.required_write_improvement_pct,
+        allowed_query_regression_pct=args.allowed_query_regression_pct,
+        allowed_query_regression_ms=args.allowed_query_regression_ms,
+    )
+    output_json = Path(args.output_json)
+    output_md = Path(args.output_md)
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_md.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_md.write_text(render_inprocess_scaling_comparison_markdown(comparison), encoding="utf-8")
+    print(f"wrote {output_json}")
+    print(f"wrote {output_md}")
+    return 0 if comparison["status"] == "accepted" else 1
+
+
 def directory_size(path: Path) -> int:
     total = 0
     for child in path.rglob("*"):
         if child.is_file():
             total += child.stat().st_size
     return total
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _collect_inprocess_points(reports: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
+    points: dict[int, list[dict[str, Any]]] = {}
+    for report in reports:
+        if report.get("benchmark") != "tracedb-inprocess-scaling":
+            raise ValueError("expected tracedb-inprocess-scaling report")
+        for point in report.get("points", []):
+            points.setdefault(int(point["records"]), []).append(point)
+    return points
+
+
+def _median_metric(points: list[dict[str, Any]], metric: str) -> float:
+    values = [
+        float(point[metric])
+        for point in points
+        if point.get(metric) is not None
+    ]
+    if not values:
+        raise ValueError(f"metric {metric} is missing from comparison points")
+    return float(median(values))
+
+
+def _optional_median_metric(points: list[dict[str, Any]], metric: str) -> float | None:
+    values = [
+        float(point[metric])
+        for point in points
+        if point.get(metric) is not None
+    ]
+    return float(median(values)) if values else None
+
+
+def _improvement_pct(baseline: float, candidate: float) -> float:
+    if baseline <= 0.0:
+        return 0.0
+    return ((baseline - candidate) / baseline) * 100.0
+
+
+def _regression_pct(baseline: float, candidate: float) -> float:
+    if baseline <= 0.0:
+        return 0.0
+    return ((candidate - baseline) / baseline) * 100.0
+
+
+def _round_optional(value: float | None) -> float | None:
+    return round(value, 3) if value is not None else None
 
 
 def run_subprocess(command: list[str]) -> tuple[int, str, str]:

@@ -9,7 +9,13 @@ from pathlib import Path
 LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
-from runner.scaling import TraceDbScalingRunner, parse_record_targets, render_scaling_markdown
+from runner.scaling import (
+    TraceDbScalingRunner,
+    compare_inprocess_scaling_reports,
+    parse_record_targets,
+    render_inprocess_scaling_comparison_markdown,
+    render_scaling_markdown,
+)
 
 
 def command_args(command: list[str]) -> list[str]:
@@ -137,6 +143,150 @@ class TraceDbScalingTests(unittest.TestCase):
         )
 
         self.assertIn("| 4 | 5 | 1234 | 1.2 | 1.3 | 2.4 | 3.5 | 5 |", markdown)
+
+    def test_inprocess_scaling_comparison_rejects_read_regression_despite_write_gain(self) -> None:
+        baseline = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 4096,
+                    "recent_insert_p95_ms": 40.0,
+                    "engine_query_p95_ms": 40.0,
+                    "checkpoint_engine_query_p95_ms": 30.0,
+                }
+            ],
+        }
+        candidate = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 4096,
+                    "recent_insert_p95_ms": 28.0,
+                    "engine_query_p95_ms": 50.0,
+                    "checkpoint_engine_query_p95_ms": 31.0,
+                }
+            ],
+        }
+
+        comparison = compare_inprocess_scaling_reports(
+            [baseline],
+            [candidate],
+            baseline_label="baseline-d995623",
+            candidate_label="candidate-experiment",
+            min_repeats=1,
+            required_write_improvement_pct=25.0,
+            allowed_query_regression_pct=10.0,
+            allowed_query_regression_ms=5.0,
+        )
+
+        point = comparison["points"][0]
+        self.assertEqual(comparison["status"], "rejected")
+        self.assertEqual(point["status"], "rejected")
+        self.assertEqual(point["write_gate"], "passed")
+        self.assertEqual(point["hot_query_gate"], "failed")
+        self.assertAlmostEqual(point["write_improvement_pct"], 30.0)
+        markdown = render_inprocess_scaling_comparison_markdown(comparison)
+        self.assertIn("candidate-experiment", markdown)
+        self.assertIn("hot query gate", markdown)
+
+    def test_inprocess_scaling_comparison_accepts_write_gain_with_stable_reads(self) -> None:
+        baseline = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 8192,
+                    "recent_insert_p95_ms": 40.0,
+                    "engine_query_p95_ms": 60.0,
+                    "checkpoint_engine_query_p95_ms": 55.0,
+                }
+            ],
+        }
+        candidate = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 8192,
+                    "recent_insert_p95_ms": 29.0,
+                    "engine_query_p95_ms": 64.0,
+                    "checkpoint_engine_query_p95_ms": 59.0,
+                }
+            ],
+        }
+
+        comparison = compare_inprocess_scaling_reports(
+            [baseline],
+            [candidate],
+            baseline_label="baseline",
+            candidate_label="candidate",
+            min_repeats=1,
+        )
+
+        point = comparison["points"][0]
+        self.assertEqual(comparison["status"], "accepted")
+        self.assertEqual(point["write_gate"], "passed")
+        self.assertEqual(point["hot_query_gate"], "passed")
+        self.assertEqual(point["checkpoint_query_gate"], "passed")
+
+    def test_inprocess_scaling_comparison_rejects_under_replicated_runs(self) -> None:
+        report = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 4096,
+                    "recent_insert_p95_ms": 40.0,
+                    "engine_query_p95_ms": 40.0,
+                }
+            ],
+        }
+
+        comparison = compare_inprocess_scaling_reports(
+            [report],
+            [report],
+            baseline_label="baseline",
+            candidate_label="candidate",
+            min_repeats=2,
+        )
+
+        self.assertEqual(comparison["status"], "invalid")
+        self.assertIn("min_repeats", comparison["failures"][0])
+
+    def test_inprocess_scaling_comparison_rejects_mismatched_record_targets(self) -> None:
+        baseline = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 4096,
+                    "recent_insert_p95_ms": 40.0,
+                    "engine_query_p95_ms": 40.0,
+                },
+                {
+                    "records": 8192,
+                    "recent_insert_p95_ms": 45.0,
+                    "engine_query_p95_ms": 60.0,
+                },
+            ],
+        }
+        candidate = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 8192,
+                    "recent_insert_p95_ms": 30.0,
+                    "engine_query_p95_ms": 62.0,
+                }
+            ],
+        }
+
+        comparison = compare_inprocess_scaling_reports(
+            [baseline, baseline],
+            [candidate, candidate],
+            baseline_label="baseline",
+            candidate_label="candidate",
+            min_repeats=2,
+        )
+
+        self.assertEqual(comparison["status"], "invalid")
+        self.assertEqual(comparison["missing_candidate_records"], [4096])
 
 
 if __name__ == "__main__":

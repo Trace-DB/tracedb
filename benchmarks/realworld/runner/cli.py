@@ -19,7 +19,7 @@ from .openrouter import (
     maybe_apply_openrouter_embeddings,
 )
 from .report import build_report, write_json, write_markdown
-from .scaling import run_tracedb_scaling
+from .scaling import run_inprocess_scaling_compare, run_tracedb_scaling
 from .suite import build_suite_report, selected_scenarios, write_suite_json, write_suite_markdown
 from .types import RunConfig
 
@@ -61,6 +61,21 @@ def main(argv: list[str] | None = None) -> int:
     scaling.add_argument("--output-json", default="reports/scaling/latest.json")
     scaling.add_argument("--output-md", default="reports/scaling/latest.md")
 
+    scaling_compare = subcommands.add_parser(
+        "tracedb-scaling-compare",
+        help="compare TraceDB in-process scaling reports against a parent baseline",
+    )
+    scaling_compare.add_argument("--baseline-json", nargs="+", required=True)
+    scaling_compare.add_argument("--candidate-json", nargs="+", required=True)
+    scaling_compare.add_argument("--baseline-label", default="baseline")
+    scaling_compare.add_argument("--candidate-label", default="candidate")
+    scaling_compare.add_argument("--min-repeats", type=int, default=2)
+    scaling_compare.add_argument("--required-write-improvement-pct", type=float, default=25.0)
+    scaling_compare.add_argument("--allowed-query-regression-pct", type=float, default=10.0)
+    scaling_compare.add_argument("--allowed-query-regression-ms", type=float, default=5.0)
+    scaling_compare.add_argument("--output-json", default="reports/scaling/comparison.json")
+    scaling_compare.add_argument("--output-md", default="reports/scaling/comparison.md")
+
     args = parser.parse_args(argv)
     if args.command == "run":
         return run_benchmark(args)
@@ -74,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_chat_demo(args)
     if args.command == "tracedb-scaling":
         return run_tracedb_scaling(args)
+    if args.command == "tracedb-scaling-compare":
+        return run_inprocess_scaling_compare(args)
     parser.error(f"unknown command {args.command}")
     return 2
 

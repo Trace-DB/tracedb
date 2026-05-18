@@ -139,6 +139,25 @@ Use this before changing checkpoint layout or store internals. It captures
 engine insert p95, engine open p95, engine query p95, checkpoint latency, and
 checkpointed open/query p95 without paying a new process startup per operation.
 
+Compare candidate scaling reports against same-machine parent reports before
+accepting write-path or storage-layout changes:
+
+```bash
+python3 -m runner tracedb-scaling-compare \
+  --baseline-json /tmp/baseline-r1.json /tmp/baseline-r2.json \
+  --candidate-json /tmp/candidate-r1.json /tmp/candidate-r2.json \
+  --baseline-label main-before-change \
+  --candidate-label candidate-branch \
+  --output-json /tmp/tracedb-scaling-compare/comparison.json \
+  --output-md /tmp/tracedb-scaling-compare/comparison.md
+```
+
+The default guard requires at least two reports per side/record target, matching
+record targets, a 25% recent-write p95 improvement, and no hot/checkpoint query
+p95 regression beyond `max(10%, 5ms)`. The comparison artifact is internal
+development evidence; exported benchmark claims still need an external control
+and number to beat.
+
 ## Local Compose Lab
 
 ```bash
