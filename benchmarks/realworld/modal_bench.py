@@ -37,7 +37,7 @@ PGVECTOR_VERSION = "v0.8.2"
 QDRANT_VERSION = "v1.13.4"
 QDRANT_RELEASE_URL = (
     f"https://github.com/qdrant/qdrant/releases/download/{QDRANT_VERSION}/"
-    "qdrant-x86_64-unknown-linux-gnu.tar.gz"
+    "qdrant-x86_64-unknown-linux-musl.tar.gz"
 )
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
 PGVECTOR_DSN_ENV = "BENCH_PGVECTOR_DSN"

@@ -783,6 +783,12 @@ class ModalBenchTests(unittest.TestCase):
             "tracedb_qdrant",
         )
 
+    def test_qdrant_modal_release_uses_musl_binary(self) -> None:
+        from modal_bench import QDRANT_RELEASE_URL
+
+        self.assertIn("unknown-linux-musl", QDRANT_RELEASE_URL)
+        self.assertNotIn("unknown-linux-gnu", QDRANT_RELEASE_URL)
+
     def test_cli_config_can_override_min_free_for_tiny_local_smoke(self) -> None:
         from modal_bench import _parse_args, build_suite_command
 
