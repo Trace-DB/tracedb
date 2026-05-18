@@ -193,20 +193,45 @@ class TraceDbAdapter(BenchmarkAdapter):
             admin_compact_recorder = MetricRecorder()
             admin_snapshot_recorder = MetricRecorder()
             admin_restore_recorder = MetricRecorder()
+            ingest_mode = config.tracedb_ingest_mode
 
             def timed(recorder_for_operation: MetricRecorder, operation):
                 return recorder.timed(lambda: recorder_for_operation.timed(operation))
 
-            for record in dataset.records:
-                timed(
+            if ingest_mode == "batch":
+                batch_response = timed(
                     ingest_recorder,
-                    lambda record=record: call(
-                        "record put",
+                    lambda: call(
+                        "record batch put",
                         "POST",
-                        "/v1/records/put",
-                        self._record_input(table, record),
-                    )
+                        "/v1/records/put-batch",
+                        {
+                            "records": [
+                                self._record_input(table, record)
+                                for record in dataset.records
+                            ]
+                        },
+                        timeout=admin_timeout,
+                    ),
                 )
+                if int(batch_response.get("record_count", 0)) != len(dataset.records):
+                    return [
+                        "surface unavailable: TraceDB HTTP batch write returned an unexpected record_count"
+                    ], None
+            elif ingest_mode == "per_record":
+                for record in dataset.records:
+                    timed(
+                        ingest_recorder,
+                        lambda record=record: call(
+                            "record put",
+                            "POST",
+                            "/v1/records/put",
+                            self._record_input(table, record),
+                        )
+                    )
+            else:
+                return [f"surface unavailable: unsupported TraceDB ingest mode {ingest_mode}"], None
+
             first = dataset.records[0]
             fresh_get = call(
                 "fresh get",
@@ -479,9 +504,33 @@ class TraceDbAdapter(BenchmarkAdapter):
                 dataset.queries
             )
             disk_bytes_after_workload = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
+            ingest_transaction_count = 1 if ingest_mode == "batch" else len(dataset.records)
+            ingest_transaction_total_ms = round(sum(ingest_recorder.latencies_ms), 3)
+            if ingest_mode == "per_record":
+                ingest_mode_note = (
+                    "TraceDB HTTP ingest mode: per-record durable writes; "
+                    f"transactions={ingest_transaction_count}"
+                )
+            else:
+                ingest_mode_note = (
+                    "TraceDB HTTP ingest mode: single-transaction batch put; "
+                    f"records={len(dataset.records)}"
+                )
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
+                    "ingest_transaction_count": ingest_transaction_count,
+                    "ingest_transaction_total_latency_ms": ingest_transaction_total_ms,
+                    "per_record_durable_transaction_count": len(dataset.records)
+                    if ingest_mode == "per_record"
+                    else 0,
+                    "batch_transaction_count": 1 if ingest_mode == "batch" else 0,
+                    "batch_transaction_record_count": len(dataset.records)
+                    if ingest_mode == "batch"
+                    else 0,
+                    "batch_transaction_total_latency_ms": ingest_transaction_total_ms
+                    if ingest_mode == "batch"
+                    else 0.0,
                     "query_count": len(dataset.queries),
                     "freshness_query_count": len(freshness_query_recorder.latencies_ms),
                     "admin_compact_count": len(admin_compact_recorder.latencies_ms),
@@ -507,6 +556,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             )
             notes = [
                 "TraceDB HTTP/curl records/query/delete smoke passed",
+                ingest_mode_note,
                 "TraceDB HTTP falsification checks passed: fresh-write, patch, tenant isolation, freshness modes, compact, snapshot, restore, explain, tombstone",
                 "TraceDB HTTP retrieval diagnostics: "
                 f"min_recall_at_5={metrics['min_recall_at_5']}; "

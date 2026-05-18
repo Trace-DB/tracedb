@@ -13,7 +13,8 @@ use tracedb_modules::{AccessPathDescriptor, ModuleRegistry, TraceDbModule};
 use tracedb_planner::QueryOutput;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordPutRequest, RecordScanRequest, TableSchema, TraceDb, VectorColumnSchema,
+    RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
+    VectorColumnSchema,
 };
 
 fn db() -> (TempDir, TraceDb) {
@@ -1967,6 +1968,67 @@ fn failed_put_does_not_alter_memory_wal_or_recovery() {
 }
 
 #[test]
+fn batch_put_invalid_record_does_not_alter_memory_wal_or_recovery() {
+    let (temp, mut db) = seeded_db();
+    let before_epoch = db.inspect_manifest().unwrap().latest_epoch;
+    let before_wal_entries = db.inspect_wal().unwrap().len();
+    let before = db
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("get before")
+        .expect("row before");
+
+    let err = db
+        .put_batch(RecordPutBatchRequest::new(vec![
+            record(
+                "a",
+                "tenant-a",
+                "valid replacement should not become visible",
+                [0.5, 0.5, 0.0],
+            ),
+            RecordInput {
+                table: "docs".to_string(),
+                id: "bad".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                fields: json!({
+                    "id": "bad",
+                    "tenant": "tenant-a",
+                    "body": "bad vector",
+                    "embedding": [1.0, 0.0],
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            },
+        ]))
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid vector dimensions"));
+    assert_eq!(db.inspect_wal().unwrap().len(), before_wal_entries);
+    assert_eq!(db.inspect_manifest().unwrap().latest_epoch, before_epoch);
+    assert_eq!(
+        db.get(RecordGetRequest::new("docs", "tenant-a", "a"))
+            .expect("get after")
+            .expect("row after")
+            .fields,
+        before.fields
+    );
+
+    drop(db);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(
+        recovered.inspect_manifest().unwrap().latest_epoch,
+        before_epoch
+    );
+    assert_eq!(
+        recovered
+            .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+            .expect("recovered get")
+            .expect("recovered row")
+            .fields,
+        before.fields
+    );
+}
+
+#[test]
 fn put_full_replacement_wal_recovery_and_dirty_feature_state_match() {
     let (temp, mut db) = seeded_db();
 
@@ -2032,6 +2094,80 @@ fn put_full_replacement_wal_recovery_and_dirty_feature_state_match() {
 }
 
 #[test]
+fn batch_put_writes_one_wal_commit_and_recovers_all_replacements() {
+    let (temp, mut db) = seeded_db();
+    let before_wal_entries = db.inspect_wal().unwrap().len();
+
+    let epoch = db
+        .put_batch(RecordPutBatchRequest::new(vec![
+            RecordInput {
+                table: "docs".to_string(),
+                id: "a".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                fields: json!({
+                    "id": "a",
+                    "tenant": "tenant-a",
+                    "body": "batch replacement a",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            },
+            RecordInput {
+                table: "docs".to_string(),
+                id: "b".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                fields: json!({
+                    "id": "b",
+                    "tenant": "tenant-a",
+                    "body": "batch replacement b",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            },
+        ]))
+        .expect("batch put");
+
+    assert_eq!(db.inspect_manifest().unwrap().latest_epoch, epoch);
+    let wal = db.inspect_wal().expect("wal");
+    assert_eq!(wal.len(), before_wal_entries + 1);
+    let last = &wal.last().expect("last commit").commit;
+    assert_eq!(last.epoch, epoch);
+    assert_eq!(last.replacements.len(), 2);
+    assert!(last.mutations.is_empty());
+    assert!(last.deletions.is_empty());
+    assert_eq!(last.feature_invalidations.len(), 2);
+
+    drop(db);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(recovered.inspect_manifest().unwrap().latest_epoch, epoch);
+    assert_eq!(
+        recovered
+            .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+            .expect("recovered a")
+            .expect("row a")
+            .fields["body"],
+        json!("batch replacement a")
+    );
+    assert_eq!(
+        recovered
+            .get(RecordGetRequest::new("docs", "tenant-a", "b"))
+            .expect("recovered b")
+            .expect("row b")
+            .fields["body"],
+        json!("batch replacement b")
+    );
+    assert_eq!(
+        recovered
+            .feature_state("docs", "tenant-a", "a", "embedding")
+            .expect("feature state a")
+            .status,
+        FeatureStatus::Dirty
+    );
+}
+
+#[test]
 fn stale_handle_put_reconciles_committed_wal_before_epoch_allocation() {
     let (temp, mut first) = seeded_db();
     let mut stale = TraceDb::open(temp.path()).expect("stale handle");
@@ -2080,6 +2216,51 @@ fn stale_handle_put_reconciles_committed_wal_before_epoch_allocation() {
     assert!(recovered
         .get(RecordGetRequest::new("docs", "tenant-a", "stale"))
         .expect("recovered stale")
+        .is_some());
+}
+
+#[test]
+fn stale_handle_batch_put_reconciles_committed_wal_before_epoch_allocation() {
+    let (temp, mut first) = seeded_db();
+    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
+
+    let first_epoch = first
+        .put(RecordPutRequest::new(record(
+            "fresh",
+            "tenant-a",
+            "fresh handle committed first",
+            [0.7, 0.2, 0.1],
+        )))
+        .expect("fresh put");
+    let stale_epoch = stale
+        .put_batch(RecordPutBatchRequest::new(vec![
+            record("stale-a", "tenant-a", "stale batch a", [0.4, 0.4, 0.2]),
+            record("stale-b", "tenant-a", "stale batch b", [0.3, 0.5, 0.2]),
+        ]))
+        .expect("stale batch put");
+
+    assert_eq!(
+        stale_epoch,
+        first_epoch.next(),
+        "stale batch writers must not reuse an epoch already committed by another handle"
+    );
+
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(
+        recovered.inspect_manifest().unwrap().latest_epoch,
+        stale_epoch
+    );
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "fresh"))
+        .expect("fresh get")
+        .is_some());
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "stale-a"))
+        .expect("stale a get")
+        .is_some());
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "stale-b"))
+        .expect("stale b get")
         .is_some());
 }
 

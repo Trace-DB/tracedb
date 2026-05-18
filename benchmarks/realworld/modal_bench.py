@@ -79,6 +79,7 @@ class ModalSmokeConfig:
     scenarios: str = "sdk_cli_surface"
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
+    tracedb_ingest_mode: str = "per_record"
     embedding_dimensions: str | None = None
     seed: int = 42
     reports_dir: str = DEFAULT_REPORTS_DIR
@@ -109,6 +110,8 @@ class ModalSmokeConfig:
 
 
 def validate_config(config: ModalSmokeConfig) -> None:
+    if config.tracedb_ingest_mode not in {"per_record", "batch"}:
+        raise ValueError("tracedb_ingest_mode must be per_record or batch")
     if config.records > DEFAULT_MAX_RECORDS and not config.allow_large:
         raise ValueError(
             f"records={config.records} exceeds safe default {DEFAULT_MAX_RECORDS}; set allow_large explicitly"
@@ -240,6 +243,8 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         config.openrouter_mode,
         "--openrouter-cap",
         config.openrouter_cap,
+        "--tracedb-ingest-mode",
+        config.tracedb_ingest_mode,
         "--seed",
         str(config.seed),
         "--run-id",
@@ -741,6 +746,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenarios", default="sdk_cli_surface")
     parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
     parser.add_argument("--openrouter-cap", default="moderate")
+    parser.add_argument(
+        "--tracedb-ingest-mode",
+        default="per_record",
+        choices=["per_record", "batch"],
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-free-mb", type=int, default=20_000)
     parser.add_argument("--allow-large", action="store_true")
@@ -770,6 +780,7 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         scenarios=args.scenarios,
         openrouter_mode=args.openrouter_mode,
         openrouter_cap=args.openrouter_cap,
+        tracedb_ingest_mode=args.tracedb_ingest_mode,
         seed=args.seed,
         min_free_mb=args.min_free_mb,
         allow_large=args.allow_large,
@@ -949,6 +960,7 @@ if modal is not None:
         surface: str = "sdk",
         scenarios: str = "sdk_cli_surface",
         openrouter_mode: str = "off",
+        tracedb_ingest_mode: str = "per_record",
         seed: int = 42,
         allow_external_controls: bool = False,
         require_services: bool = False,
@@ -967,6 +979,7 @@ if modal is not None:
             surface=surface,
             scenarios=scenarios,
             openrouter_mode=openrouter_mode,
+            tracedb_ingest_mode=tracedb_ingest_mode,
             seed=seed,
             allow_external_controls=allow_external_controls,
             require_services=require_services,

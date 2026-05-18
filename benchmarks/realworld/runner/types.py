@@ -78,3 +78,4 @@ class RunConfig:
     run_id: str = ""
     reports_dir: str = "reports"
     observer: Any | None = None
+    tracedb_ingest_mode: str = "per_record"

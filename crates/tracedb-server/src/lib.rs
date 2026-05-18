@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tracedb_query::{
     HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput, RecordPatchRequest,
-    RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
+    RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
 };
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -136,6 +136,12 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
                 .put(RecordPutRequest::new(input))
                 .map_err(to_io_error)?;
             ok(json!({ "epoch": epoch.get() }))
+        }
+        ("POST", "/v1/records/put-batch") => {
+            let request: RecordPutBatchRequest = serde_json::from_str(body).map_err(to_io_error)?;
+            let record_count = request.records.len();
+            let epoch = db.lock().unwrap().put_batch(request).map_err(to_io_error)?;
+            ok(json!({ "epoch": epoch.get(), "record_count": record_count }))
         }
         ("POST", "/v1/records/patch") => {
             let request: RecordPatchRequest = serde_json::from_str(body).map_err(to_io_error)?;

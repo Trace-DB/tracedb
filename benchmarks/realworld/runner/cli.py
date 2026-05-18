@@ -121,6 +121,12 @@ def add_benchmark_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--require-services", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-id", default="")
+    parser.add_argument(
+        "--tracedb-ingest-mode",
+        default="per_record",
+        choices=["per_record", "batch"],
+        help="TraceDB HTTP ingest lane: per_record keeps one durable write per record; batch uses one atomic batch transaction.",
+    )
     add_openrouter_args(parser)
 
 
@@ -185,6 +191,7 @@ def execute_benchmark(
         run_id=selected_run_id,
         reports_dir=str(reports_dir),
         observer=recorder,
+        tracedb_ingest_mode=args.tracedb_ingest_mode,
     )
     manifest = build_manifest(
         args=args,
@@ -454,6 +461,7 @@ def build_manifest(
         },
         "targets": config.target,
         "surfaces": config.surfaces,
+        "tracedb_ingest_mode": config.tracedb_ingest_mode,
         "openrouter": {
             **openrouter_config,
             "stats": openrouter_stats,

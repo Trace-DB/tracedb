@@ -74,6 +74,7 @@ class FakeQdrant:
 class FakeTraceDb:
     def __init__(self) -> None:
         self.records: dict[tuple[str, str, str], dict] = {}
+        self.batch_sizes: list[int] = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -133,6 +134,23 @@ class FakeTraceDb:
                         "deleted": False,
                     }
                     self._json(200, {"epoch": len(owner.records)})
+                    return
+                if self.path == "/v1/records/put-batch":
+                    records = payload.get("records", [])
+                    owner.batch_sizes.append(len(records))
+                    for record in records:
+                        key = (record["table"], record["tenant_id"], record["id"])
+                        owner.records[key] = {
+                            "table": record["table"],
+                            "tenant_id": record["tenant_id"],
+                            "record_id": record["id"],
+                            "fields": dict(record.get("fields", {})),
+                            "deleted": False,
+                        }
+                    self._json(
+                        200,
+                        {"epoch": len(owner.records), "record_count": len(records)},
+                    )
                     return
                 if self.path == "/v1/records/get":
                     key = (payload["table"], payload["tenant_id"], payload["id"])
@@ -469,6 +487,9 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertTrue(result["available"], result["notes"])
         self.assertEqual(result["metrics"]["ingest_count"], 16)
         self.assertEqual(result["metrics"]["ingest_transaction_count"], 1)
+        self.assertIn("ingest_transaction_total_latency_ms", result["metrics"])
+        self.assertIn("single_transaction_row_insert_latency_p95_ms", result["metrics"])
+        self.assertIn("single_transaction_commit_latency_p95_ms", result["metrics"])
         self.assertEqual(result["metrics"]["disk_bytes"], 65_536)
         self.assertIn("ingest_latency_p95_ms", result["metrics"])
         self.assertIn("ingest_commit_latency_p95_ms", result["metrics"])
@@ -646,6 +667,9 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("admin_snapshot_latency_p95_ms", result["metrics"])
         self.assertIn("admin_restore_latency_p95_ms", result["metrics"])
         self.assertEqual(result["metrics"]["freshness_query_count"], 2)
+        self.assertEqual(result["metrics"]["ingest_transaction_count"], 12)
+        self.assertEqual(result["metrics"]["per_record_durable_transaction_count"], 12)
+        self.assertEqual(result["metrics"]["batch_transaction_count"], 0)
         self.assertIn("freshness_query_latency_p95_ms", result["metrics"])
         self.assertGreaterEqual(result["metrics"]["disk_bytes"], 128)
         self.assertEqual(
@@ -655,6 +679,43 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertGreaterEqual(result["metrics"]["disk_bytes_after_workload"], 128)
         self.assertTrue(
             any("data directory bytes measured" in note for note in result["notes"]),
+            result["notes"],
+        )
+
+    def test_tracedb_http_surface_can_use_batch_ingest_mode(self) -> None:
+        fake = FakeTraceDb().start()
+        old_url = os.environ.get("TRACEDB_HTTP_URL")
+        try:
+            os.environ["TRACEDB_HTTP_URL"] = fake.base_url
+            result = TraceDbAdapter().run(
+                generated_dataset(12, 42),
+                RunConfig(
+                    profile="smoke",
+                    target=["tracedb"],
+                    surfaces=["http"],
+                    require_services=False,
+                    repo_root=".",
+                    run_id="batch-ingest",
+                    tracedb_ingest_mode="batch",
+                ),
+            )
+        finally:
+            if old_url is None:
+                os.environ.pop("TRACEDB_HTTP_URL", None)
+            else:
+                os.environ["TRACEDB_HTTP_URL"] = old_url
+            fake.stop()
+
+        self.assertTrue(result["available"], result["notes"])
+        self.assertEqual(fake.batch_sizes, [12])
+        self.assertEqual(result["metrics"]["ingest_count"], 12)
+        self.assertEqual(result["metrics"]["ingest_transaction_count"], 1)
+        self.assertEqual(result["metrics"]["per_record_durable_transaction_count"], 0)
+        self.assertEqual(result["metrics"]["batch_transaction_count"], 1)
+        self.assertEqual(result["metrics"]["batch_transaction_record_count"], 12)
+        self.assertIn("batch_transaction_total_latency_ms", result["metrics"])
+        self.assertTrue(
+            any("single-transaction batch" in note for note in result["notes"]),
             result["notes"],
         )
 

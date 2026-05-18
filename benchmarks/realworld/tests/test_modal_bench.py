@@ -60,6 +60,8 @@ class ModalBenchTests(unittest.TestCase):
                 "off",
                 "--openrouter-cap",
                 "moderate",
+                "--tracedb-ingest-mode",
+                "per_record",
                 "--seed",
                 "42",
                 "--run-id",
@@ -82,6 +84,8 @@ class ModalBenchTests(unittest.TestCase):
             validate_config(ModalSmokeConfig(gpu_requested=True))
         with self.assertRaisesRegex(ValueError, "OpenRouter"):
             validate_config(ModalSmokeConfig(openrouter_mode="required"))
+        with self.assertRaisesRegex(ValueError, "tracedb_ingest_mode"):
+            validate_config(ModalSmokeConfig(tracedb_ingest_mode="invalid"))
         with self.assertRaisesRegex(ValueError, "target=all"):
             validate_config(ModalSmokeConfig(target="all"))
         with self.assertRaisesRegex(ValueError, "external controls"):
@@ -635,15 +639,22 @@ class ModalBenchTests(unittest.TestCase):
                 "512",
                 "--seed",
                 "777",
+                "--tracedb-ingest-mode",
+                "batch",
             ]
         )
 
         self.assertEqual(config.run_id, "tiny")
         self.assertEqual(config.records, 16)
         self.assertEqual(config.min_free_mb, 512)
+        self.assertEqual(config.tracedb_ingest_mode, "batch")
         self.assertIn("--seed", build_suite_command(config))
         command = build_suite_command(config)
         self.assertEqual(command[command.index("--seed") + 1], "777")
+        self.assertEqual(
+            command[command.index("--tracedb-ingest-mode") + 1],
+            "batch",
+        )
 
     def test_run_local_writes_clean_summary_json(self) -> None:
         from modal_bench import run_local

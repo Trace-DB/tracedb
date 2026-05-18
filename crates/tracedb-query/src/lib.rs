@@ -85,6 +85,17 @@ impl RecordPutRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RecordPutBatchRequest {
+    pub records: Vec<RecordInput>,
+}
+
+impl RecordPutBatchRequest {
+    pub fn new(records: Vec<RecordInput>) -> Self {
+        Self { records }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RecordPatchRequest {
     pub table: String,
     pub tenant_id: String,
@@ -518,6 +529,56 @@ impl TraceDb {
             deletions: Vec::new(),
             feature_invalidations,
             module_events: module_events_for_schema("record.put", &schema),
+            ..CommitRecord::empty(epoch.get(), epoch).for_database(
+                self.manifest.database_id.clone(),
+                self.manifest.branch_id.clone(),
+            )
+        };
+        self.wal.append_commit(&commit)?;
+        self.store = staged;
+        self.bump_manifest(epoch)?;
+        self.clear_lexical_cache();
+        Ok(epoch)
+    }
+
+    pub fn put_batch(&mut self, request: RecordPutBatchRequest) -> Result<Epoch> {
+        let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
+        if request.records.is_empty() {
+            return Err(TraceDbError::InvalidCommand(
+                "batch put requires at least one record".to_string(),
+            ));
+        }
+
+        let epoch = self.manifest.latest_epoch.next();
+        let mut staged = self.store.clone();
+        let mut feature_invalidations = Vec::new();
+        let mut module_events = Vec::new();
+        let mut seen_module_events = BTreeSet::new();
+        for input in &request.records {
+            let schema = self
+                .manifest
+                .table(&input.table)
+                .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
+                .clone();
+            staged.apply_replacement(&schema, input, epoch)?;
+            feature_invalidations.extend(feature_invalidations_for_mutation(&schema, input));
+            for event in module_events_for_schema("record.put", &schema) {
+                if seen_module_events.insert((event.module_id.clone(), event.event.clone())) {
+                    module_events.push(event);
+                }
+            }
+        }
+
+        let commit = CommitRecord {
+            schema_epoch: self.manifest.latest_epoch,
+            policy_epoch: self.manifest.latest_epoch,
+            schema_changes: Vec::new(),
+            replacements: request.records.clone(),
+            mutations: Vec::new(),
+            deletions: Vec::new(),
+            feature_invalidations,
+            module_events,
             ..CommitRecord::empty(epoch.get(), epoch).for_database(
                 self.manifest.database_id.clone(),
                 self.manifest.branch_id.clone(),

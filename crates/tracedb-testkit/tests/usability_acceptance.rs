@@ -198,9 +198,16 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
     assert_http_contains(
         addr,
         "POST",
+        "/v1/records/put-batch",
+        r#"{"records":[{"table":"docs","id":"b","tenant_id":"tenant-a","fields":{"id":"b","tenant":"tenant-a","body":"batch http write","status":"draft","embedding":[0.0,1.0,0.0]}}]}"#,
+        "\"record_count\":1",
+    );
+    assert_http_contains(
+        addr,
+        "POST",
         "/v1/records/patch",
         r#"{"table":"docs","tenant_id":"tenant-a","id":"a","fields":{"status":"published"}}"#,
-        "\"epoch\":3",
+        "\"epoch\":4",
     );
     assert_http_contains(
         addr,
@@ -214,7 +221,7 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         "POST",
         "/v1/records/scan",
         r#"{"table":"docs","tenant_id":"tenant-a","limit":10}"#,
-        "\"returned_count\":1",
+        "\"returned_count\":2",
     );
     assert_http_contains(
         addr,

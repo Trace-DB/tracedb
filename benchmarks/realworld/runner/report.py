@@ -109,18 +109,22 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         provider_metrics_row(report),
         "",
-        "| baseline | available | role | ingest | queries | p50 ms | p95 ms | p99 ms | ingest p95 ms | query p95 ms | admin p95 ms | recall@5 | same-file recall@5 | span gaps | nDCG@5 | MRR@5 | notes |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| baseline | available | role | ingest | ingest txns | ingest txn total ms | queries | p50 ms | p95 ms | p99 ms | ingest p95 ms | query p95 ms | admin p95 ms | recall@5 | same-file recall@5 | span gaps | nDCG@5 | MRR@5 | notes |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for baseline in report["baselines"]:
         metrics = baseline["metrics"]
         notes = "; ".join(baseline["notes"]).replace("|", "\\|")
         lines.append(
-            "| {name} | {available} | {role} | {ingest} | {queries} | {p50} | {p95} | {p99} | {ingest_p95} | {query_p95} | {admin_p95} | {recall} | {same_file_recall} | {span_gaps} | {ndcg} | {mrr} | {notes} |".format(
+            "| {name} | {available} | {role} | {ingest} | {ingest_txns} | {ingest_txn_total} | {queries} | {p50} | {p95} | {p99} | {ingest_p95} | {query_p95} | {admin_p95} | {recall} | {same_file_recall} | {span_gaps} | {ndcg} | {mrr} | {notes} |".format(
                 name=baseline["name"],
                 available="yes" if baseline["available"] else "no",
                 role=baseline["role"],
                 ingest=metrics.get("ingest_count", 0),
+                ingest_txns=metrics.get("ingest_transaction_count", "n/a"),
+                ingest_txn_total=metrics.get(
+                    "ingest_transaction_total_latency_ms", "n/a"
+                ),
                 queries=metrics.get("query_count", 0),
                 p50=metrics.get("latency_p50_ms", 0.0),
                 p95=metrics.get("latency_p95_ms", 0.0),
@@ -183,6 +187,12 @@ def build_control_ledger(baselines: list[dict[str, Any]]) -> dict[str, Any]:
                 available_external,
                 "ingest_latency_p95_ms",
                 lower_is_better=True,
+            ),
+            "ingest_transaction_total_ms": _best_metric(
+                available_external,
+                "ingest_transaction_total_latency_ms",
+                lower_is_better=True,
+                require_positive=True,
             ),
             "storage_bytes": _best_metric(
                 available_external,

@@ -181,6 +181,20 @@ The runner accepts a comma-separated `--target` list such as
 `--target tracedb,pgvector,qdrant`, and TraceDB-specific API surface checks can be
 selected with `--surface sdk,cli,http,curl`.
 
+TraceDB HTTP ingest has two explicitly separate lanes:
+
+- `--tracedb-ingest-mode per_record` (default): one durable HTTP `put` and one
+  TraceDB WAL commit per record. This is the product durability lane and should
+  not be compared directly to PostgreSQL or pgvector bulk transactions.
+- `--tracedb-ingest-mode batch`: one HTTP `put-batch` request, one TraceDB epoch,
+  and one WAL commit for all records. This is the fairer transaction-shape lane
+  for pgvector/PostgreSQL controls that insert many rows before one `COMMIT`.
+
+Reports keep both concepts visible with `ingest_transaction_count`,
+`ingest_transaction_total_latency_ms`, `per_record_durable_transaction_count`,
+and `batch_transaction_*` metrics. The control ledger now includes
+`ingest_transaction_total_ms` as the batch/transaction number to beat.
+
 ## Railway-Targeted Run
 
 When local disk is constrained, deploy TraceDB to Railway and keep this Mac as
@@ -211,6 +225,25 @@ modal run benchmarks/realworld/modal_bench.py \
   --records 16 \
   --seed 42 \
   --summary-json /tmp/tracedb-modal-summaries/modal-remote-smoke-16.json
+```
+
+TraceDB actual-engine batch lane against pgvector control:
+
+```bash
+TRACEDB_MODAL_IMAGE_KIND=tracedb_pgvector \
+modal run benchmarks/realworld/modal_bench.py \
+  --run-id modal-tracedb-pgvector-batch-r1024-a \
+  --records 1024 \
+  --target tracedb,pgvector \
+  --surface http \
+  --scenarios search_rag_6 \
+  --openrouter-mode off \
+  --tracedb-ingest-mode batch \
+  --allow-external-controls \
+  --require-services \
+  --tracedb-engine-control \
+  --pgvector-control \
+  --summary-json /tmp/tracedb-modal-summaries/modal-tracedb-pgvector-batch-r1024-a.json
 ```
 
 Local dry run without Modal:

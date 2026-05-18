@@ -63,6 +63,10 @@ class PgVectorAdapter(BenchmarkAdapter):
             ingest_summary = ingest_recorder.summary()
             setup_summary = setup_recorder.summary()
             commit_summary = commit_recorder.summary()
+            ingest_transaction_total_ms = round(
+                sum(ingest_recorder.latencies_ms) + sum(commit_recorder.latencies_ms),
+                3,
+            )
             metrics = dict(query_summary)
             metrics.update(
                 {
@@ -92,6 +96,13 @@ class PgVectorAdapter(BenchmarkAdapter):
                 {
                     "ingest_count": len(dataset.records),
                     "ingest_transaction_count": 1,
+                    "ingest_transaction_total_latency_ms": ingest_transaction_total_ms,
+                    "single_transaction_row_insert_latency_p95_ms": ingest_summary[
+                        "latency_p95_ms"
+                    ],
+                    "single_transaction_commit_latency_p95_ms": commit_summary[
+                        "latency_p95_ms"
+                    ],
                     "query_count": len(dataset.queries),
                     "failure_count": 0,
                     "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,

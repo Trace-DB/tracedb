@@ -276,8 +276,8 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
         [
             "## Scenario Comparison Matrix",
             "",
-            "| scenario | baseline | available | ingest | queries | p50 ms | p95 ms | p99 ms | recall@5 | nDCG@5 | MRR@5 | failures | notes |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            "| scenario | baseline | available | ingest | ingest txns | ingest txn total ms | queries | p50 ms | p95 ms | p99 ms | recall@5 | nDCG@5 | MRR@5 | failures | notes |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
     for scenario in report["scenarios"]:
@@ -285,11 +285,15 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
             metrics = baseline["metrics"]
             notes = "; ".join(baseline["notes"]).replace("|", "\\|")
             lines.append(
-                "| {scenario} | {baseline} | {available} | {ingest} | {queries} | {p50} | {p95} | {p99} | {recall} | {ndcg} | {mrr} | {failures} | {notes} |".format(
+                "| {scenario} | {baseline} | {available} | {ingest} | {ingest_txns} | {ingest_txn_total} | {queries} | {p50} | {p95} | {p99} | {recall} | {ndcg} | {mrr} | {failures} | {notes} |".format(
                     scenario=scenario["id"],
                     baseline=baseline["name"],
                     available="yes" if baseline["available"] else "no",
                     ingest=metrics.get("ingest_count", 0),
+                    ingest_txns=metrics.get("ingest_transaction_count", "n/a"),
+                    ingest_txn_total=metrics.get(
+                        "ingest_transaction_total_latency_ms", "n/a"
+                    ),
                     queries=metrics.get("query_count", 0),
                     p50=metrics.get("latency_p50_ms", 0.0),
                     p95=metrics.get("latency_p95_ms", 0.0),

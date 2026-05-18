@@ -62,6 +62,20 @@ The aggregate suite currently runs:
 Provider-backed runs add OpenRouter embedding metadata and
 `cohere/rerank-4-fast` retrieve-then-rerank metrics.
 
+## Ingest Semantics
+
+Do not collapse all ingest numbers into one claim. TraceDB exposes two HTTP
+ingest modes:
+
+- `per_record` (default): one durable TraceDB commit per record.
+- `batch`: one `put-batch` request, one epoch, and one WAL commit for the whole
+  dataset load.
+
+PostgreSQL and pgvector controls in this suite currently use one bulk
+transaction. Treat `ingest_transaction_total_latency_ms` as the transaction-shape
+comparison and keep `ingest_latency_p95_ms` as the per-operation timing inside
+each adapter's chosen ingest mode.
+
 ## Move the Repo to the Host
 
 If the repo has a remote:
