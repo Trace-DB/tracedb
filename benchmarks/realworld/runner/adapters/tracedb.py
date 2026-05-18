@@ -306,7 +306,6 @@ class TraceDbAdapter(BenchmarkAdapter):
             records_by_id = {record.record_id: record for record in dataset.records}
             off_category_result_count = 0
             queries_with_off_category_results = 0
-            scalar_filter_applied_count = 0
             query_phase_recorders: dict[str, MetricRecorder] = {}
             query_access_path_build_recorders: dict[str, MetricRecorder] = {}
             query_access_path_open_recorders: dict[str, MetricRecorder] = {}
@@ -320,23 +319,101 @@ class TraceDbAdapter(BenchmarkAdapter):
             query_http_response_content_length_bytes: list[float] = []
             query_http_response_content_length_missing_count = 0
             query_http_response_content_length_mismatch_count = 0
-            for query in dataset.queries:
+            query_output_probe_limit = min(
+                len(dataset.queries),
+                max(0, int(self._float_env("TRACEDB_QUERY_OUTPUT_PROBE_LIMIT", 3.0))),
+            )
+            query_output_probe_count = 0
+            query_output_probe_latency_recorders: dict[str, MetricRecorder] = {}
+            query_output_probe_response_timing_recorders: dict[str, dict[str, MetricRecorder]] = {}
+            query_output_probe_server_timing_recorders: dict[str, dict[str, MetricRecorder]] = {}
+            query_output_probe_body_bytes: dict[str, list[float]] = {}
+            query_output_probe_content_length_bytes: dict[str, list[float]] = {}
+            query_output_probe_content_length_missing_counts: dict[str, int] = {}
+            query_output_probe_content_length_mismatch_counts: dict[str, int] = {}
+            query_output_probe_true_over_false_deltas: list[float] = []
+            query_output_probe_explain_endpoint_over_false_deltas: list[float] = []
+            query_output_probe_phase_timing_counts: list[float] = []
+            query_output_probe_access_path_timing_counts: list[float] = []
+            query_output_probe_planner_candidate_counts: list[float] = []
+            query_output_probe_candidates: list[dict[str, Any]] = []
+            query_output_probe_result_id_mismatch_count = 0
+            query_output_probe_explain_returned_count_mismatch_count = 0
+            query_output_probe_required_explain_field_missing_count = 0
+            query_output_probe_explain_false_explain_returned_count = 0
+
+            def query_body(
+                query, *, freshness: str = "AllowDirty", explain: bool
+            ) -> dict[str, Any]:
+                return {
+                    "table": table,
+                    "tenant_id": query.tenant_id,
+                    "scalar_eq": {"category": query.category},
+                    "text": query.text,
+                    "vector": query.vector,
+                    "top_k": query.top_k,
+                    "freshness": freshness,
+                    "explain": explain,
+                }
+
+            def record_query_output_probe_metadata(
+                shape: str,
+                response_headers: dict[str, str],
+                response_meta: dict[str, float | int],
+            ) -> None:
+                _record_server_timing_metrics(
+                    response_headers,
+                    query_output_probe_server_timing_recorders.setdefault(shape, {}),
+                )
+                _record_response_metadata_metrics(
+                    response_meta,
+                    query_output_probe_response_timing_recorders.setdefault(shape, {}),
+                    query_output_probe_body_bytes.setdefault(shape, []),
+                    query_output_probe_content_length_bytes.setdefault(shape, []),
+                )
+                query_output_probe_content_length_missing_counts[shape] = (
+                    query_output_probe_content_length_missing_counts.get(shape, 0)
+                    + int(response_meta.get("content_length_missing", 0))
+                )
+                query_output_probe_content_length_mismatch_counts[shape] = (
+                    query_output_probe_content_length_mismatch_counts.get(shape, 0)
+                    + int(response_meta.get("content_length_mismatch", 0))
+                )
+
+            def record_existing_query_output_probe(
+                shape: str,
+                elapsed_ms: float,
+                response_headers: dict[str, str],
+                response_meta: dict[str, float | int],
+            ) -> None:
+                query_output_probe_latency_recorders.setdefault(
+                    shape, MetricRecorder()
+                ).latencies_ms.append(elapsed_ms)
+                record_query_output_probe_metadata(shape, response_headers, response_meta)
+
+            def call_query_output_probe(
+                shape: str,
+                label: str,
+                path: str,
+                body: dict[str, Any],
+            ) -> tuple[dict[str, Any], float]:
+                probe_recorder = query_output_probe_latency_recorders.setdefault(
+                    shape, MetricRecorder()
+                )
+                probe_result, probe_headers, probe_meta = probe_recorder.timed(
+                    lambda: call_with_headers(label, "POST", path, body)
+                )
+                record_query_output_probe_metadata(shape, probe_headers, probe_meta)
+                return probe_result, probe_recorder.latencies_ms[-1]
+
+            for query_index, query in enumerate(dataset.queries):
                 result, response_headers, response_meta = timed(
                     query_recorder,
                     lambda query=query: call_with_headers(
                         "query allow-dirty",
                         "POST",
                         "/v1/query",
-                        {
-                            "table": table,
-                            "tenant_id": query.tenant_id,
-                            "scalar_eq": {"category": query.category},
-                            "text": query.text,
-                            "vector": query.vector,
-                            "top_k": query.top_k,
-                            "freshness": "AllowDirty",
-                            "explain": True,
-                        },
+                        query_body(query, explain=False),
                     )
                 )
                 query_client_ms = query_recorder.latencies_ms[-1]
@@ -389,25 +466,108 @@ class TraceDbAdapter(BenchmarkAdapter):
                 same_file_recalls.append(same_file_recall)
                 if same_file_recall > recall:
                     span_gap_count += 1
-                explain = result.get("explain", {})
-                missing = [
-                    key
-                    for key in [
-                        "opened_candidate_streams",
-                        "fusion_method",
-                        "freshness_mode",
-                        "scalar_filter_applied",
-                        "tenant_mask_visible_records",
-                    ]
-                    if key not in explain
+                explain_for_observer = result.get("explain")
+                if query_index < query_output_probe_limit:
+                    query_output_probe_candidates.append(
+                        {
+                            "query": query,
+                            "ids": ids,
+                            "query_client_ms": query_client_ms,
+                            "response_headers": response_headers,
+                            "response_meta": response_meta,
+                            "primary_explain": explain_for_observer,
+                        }
+                    )
+                if config.observer and isinstance(explain_for_observer, dict):
+                    config.observer.observe(
+                        "tracedb.query_explain",
+                        {
+                            "query_id": query.query_id,
+                            "freshness_mode": explain_for_observer.get("freshness_mode"),
+                            "scalar_filter_applied": explain_for_observer.get(
+                                "scalar_filter_applied"
+                            ),
+                            "scalar_filter_visible_records": explain_for_observer.get(
+                                "scalar_filter_visible_records"
+                            ),
+                            "scalar_filter_removed_records": explain_for_observer.get(
+                                "scalar_filter_removed_records"
+                            ),
+                            "opened_candidate_streams": explain_for_observer.get(
+                                "opened_candidate_streams"
+                            ),
+                            "candidate_budget": explain_for_observer.get("candidate_budget"),
+                            "expected_ids": query.expected_ids,
+                            "actual_ids": ids,
+                            "expected_category": query.category,
+                            "off_category_actual_ids": off_category_ids,
+                            "recall_at_k": round(recall, 3),
+                            "same_file_recall_at_k": round(same_file_recall, 3),
+                            "ndcg_at_k": round(ndcg, 3),
+                            "mrr_at_k": round(mrr, 3),
+                            "returned_count": explain_for_observer.get("returned_count"),
+                        },
+                    )
+
+            for candidate in query_output_probe_candidates:
+                query = candidate["query"]
+                ids = candidate["ids"]
+                query_client_ms = float(candidate["query_client_ms"])
+                record_existing_query_output_probe(
+                    "explain_false",
+                    query_client_ms,
+                    candidate["response_headers"],
+                    candidate["response_meta"],
+                )
+                if isinstance(candidate.get("primary_explain"), dict):
+                    query_output_probe_explain_false_explain_returned_count += 1
+                explain_true_result, explain_true_ms = call_query_output_probe(
+                    "explain_true",
+                    "query allow-dirty explain probe",
+                    "/v1/query",
+                    query_body(query, explain=True),
+                )
+                explain_endpoint, explain_endpoint_ms = call_query_output_probe(
+                    "explain_endpoint",
+                    "explain endpoint probe",
+                    "/v1/explain",
+                    query_body(query, explain=True),
+                )
+                query_output_probe_true_over_false_deltas.append(
+                    explain_true_ms - query_client_ms
+                )
+                query_output_probe_explain_endpoint_over_false_deltas.append(
+                    explain_endpoint_ms - query_client_ms
+                )
+                explain_true_ids = [
+                    row.get("record_id") for row in explain_true_result.get("results", [])
                 ]
-                if missing:
+                if [str(record_id) for record_id in explain_true_ids] != [
+                    str(record_id) for record_id in ids
+                ]:
+                    query_output_probe_result_id_mismatch_count += 1
+                explain = explain_true_result.get("explain", {})
+                missing = _missing_required_explain_fields(explain)
+                endpoint_missing = _missing_required_explain_fields(explain_endpoint)
+                query_output_probe_required_explain_field_missing_count += len(
+                    missing
+                ) + len(endpoint_missing)
+                if missing or endpoint_missing:
                     return [
-                        "surface unavailable: TraceDB HTTP explain missing "
-                        + ", ".join(missing)
+                        "surface unavailable: TraceDB HTTP output-shape explain missing "
+                        + ", ".join(missing + endpoint_missing)
                     ], None
-                if explain.get("scalar_filter_applied") is True:
-                    scalar_filter_applied_count += 1
+                returned_count = _float_metric(explain.get("returned_count"))
+                endpoint_returned_count = _float_metric(
+                    explain_endpoint.get("returned_count")
+                )
+                if returned_count is None or int(returned_count) != len(explain_true_ids):
+                    query_output_probe_explain_returned_count_mismatch_count += 1
+                if (
+                    endpoint_returned_count is None
+                    or int(endpoint_returned_count) != len(explain_true_ids)
+                ):
+                    query_output_probe_explain_returned_count_mismatch_count += 1
                 phase_total_ms = _explain_phase_total_ms(explain)
                 if phase_total_ms is not None:
                     query_engine_phase_total_recorder.latencies_ms.append(phase_total_ms)
@@ -417,32 +577,20 @@ class TraceDbAdapter(BenchmarkAdapter):
                     query_access_path_build_recorders,
                     query_access_path_open_recorders,
                 )
-                if config.observer:
-                    config.observer.observe(
-                        "tracedb.query_explain",
-                        {
-                            "query_id": query.query_id,
-                            "freshness_mode": explain.get("freshness_mode"),
-                            "scalar_filter_applied": explain.get("scalar_filter_applied"),
-                            "scalar_filter_visible_records": explain.get(
-                                "scalar_filter_visible_records"
-                            ),
-                            "scalar_filter_removed_records": explain.get(
-                                "scalar_filter_removed_records"
-                            ),
-                            "opened_candidate_streams": explain.get("opened_candidate_streams"),
-                            "candidate_budget": explain.get("candidate_budget"),
-                            "expected_ids": query.expected_ids,
-                            "actual_ids": ids,
-                            "expected_category": query.category,
-                            "off_category_actual_ids": off_category_ids,
-                            "recall_at_k": round(recall, 3),
-                            "same_file_recall_at_k": round(same_file_recall, 3),
-                            "ndcg_at_k": round(ndcg, 3),
-                            "mrr_at_k": round(mrr, 3),
-                            "returned_count": explain.get("returned_count"),
-                        },
+                phase_timings = explain.get("phase_timings", [])
+                if isinstance(phase_timings, list):
+                    query_output_probe_phase_timing_counts.append(float(len(phase_timings)))
+                access_path_timings = explain.get("access_path_timings", [])
+                if isinstance(access_path_timings, list):
+                    query_output_probe_access_path_timing_counts.append(
+                        float(len(access_path_timings))
                     )
+                opened_candidate_streams = explain.get("opened_candidate_streams", [])
+                if isinstance(opened_candidate_streams, list):
+                    query_output_probe_planner_candidate_counts.append(
+                        float(len(opened_candidate_streams))
+                    )
+                query_output_probe_count += 1
 
             if dataset.queries:
                 query = dataset.queries[0]
@@ -576,9 +724,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             min_ndcg = min(ndcgs) if ndcgs else 0.0
             queries_below_full_recall = sum(1 for recall in recalls if recall < 1.0)
             queries_with_zero_recall = sum(1 for recall in recalls if recall == 0.0)
-            category_filter_applied = bool(dataset.queries) and scalar_filter_applied_count == len(
-                dataset.queries
-            )
+            category_filter_applied = bool(dataset.queries) and off_category_result_count == 0
             disk_bytes_after_workload = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
             disk_bytes_after_workload_by_top_level = _directory_top_level_bytes(
                 os.environ.get("TRACEDB_HTTP_DATA_DIR")
@@ -684,6 +830,88 @@ class TraceDbAdapter(BenchmarkAdapter):
                 query_http_response_content_length_mismatch_count
             )
             metrics.update(_recorder_metric_fields("query_server", query_server_timing_recorders))
+            metrics["query_output_probe_count"] = query_output_probe_count
+            metrics["query_output_probe_result_id_mismatch_count"] = (
+                query_output_probe_result_id_mismatch_count
+            )
+            metrics["query_output_probe_explain_returned_count_mismatch_count"] = (
+                query_output_probe_explain_returned_count_mismatch_count
+            )
+            metrics["query_output_probe_required_explain_field_missing_count"] = (
+                query_output_probe_required_explain_field_missing_count
+            )
+            metrics["query_output_probe_explain_false_explain_returned_count"] = (
+                query_output_probe_explain_false_explain_returned_count
+            )
+            metrics["query_phase_probe_sample_count"] = query_output_probe_count
+            metrics["query_access_path_probe_sample_count"] = query_output_probe_count
+            for shape, probe_recorder in sorted(query_output_probe_latency_recorders.items()):
+                metrics.update(
+                    _single_recorder_metric_fields(
+                        f"query_output_probe_{shape}_query",
+                        probe_recorder,
+                    )
+                )
+                metrics.update(
+                    _response_byte_metric_fields(
+                        f"query_output_probe_{shape}_body_bytes",
+                        query_output_probe_body_bytes.get(shape, []),
+                    )
+                )
+                metrics.update(
+                    _response_byte_metric_fields(
+                        f"query_output_probe_{shape}_content_length_bytes",
+                        query_output_probe_content_length_bytes.get(shape, []),
+                    )
+                )
+                metrics.update(
+                    _recorder_metric_fields(
+                        f"query_output_probe_{shape}_response",
+                        query_output_probe_response_timing_recorders.get(shape, {}),
+                    )
+                )
+                metrics.update(
+                    _recorder_metric_fields(
+                        f"query_output_probe_{shape}_server",
+                        query_output_probe_server_timing_recorders.get(shape, {}),
+                    )
+                )
+                metrics[f"query_output_probe_{shape}_response_content_length_missing_count"] = (
+                    query_output_probe_content_length_missing_counts.get(shape, 0)
+                )
+                metrics[f"query_output_probe_{shape}_response_content_length_mismatch_count"] = (
+                    query_output_probe_content_length_mismatch_counts.get(shape, 0)
+                )
+            metrics.update(
+                _duration_distribution_metric_fields(
+                    "query_output_probe_explain_true_over_false_delta",
+                    query_output_probe_true_over_false_deltas,
+                )
+            )
+            metrics.update(
+                _duration_distribution_metric_fields(
+                    "query_output_probe_explain_endpoint_over_false_delta",
+                    query_output_probe_explain_endpoint_over_false_deltas,
+                )
+            )
+            metrics.update(
+                _numeric_distribution_metric_fields(
+                    "query_output_probe_phase_timing_count",
+                    query_output_probe_phase_timing_counts,
+                )
+            )
+            metrics.update(
+                _numeric_distribution_metric_fields(
+                    "query_output_probe_access_path_timing_count",
+                    query_output_probe_access_path_timing_counts,
+                )
+            )
+            metrics.update(
+                _numeric_distribution_metric_fields(
+                    "query_output_probe_planner_candidate_count",
+                    query_output_probe_planner_candidate_counts,
+                )
+            )
             metrics.update(
                 _recorder_metric_fields(
                     "query_access_path",
@@ -750,6 +978,14 @@ class TraceDbAdapter(BenchmarkAdapter):
                     f"body_bytes_p95={metrics.get('query_http_response_body_bytes_p95', 0)}; "
                     "content_length_mismatches="
                     f"{query_http_response_content_length_mismatch_count}"
+                )
+            if query_output_probe_count:
+                notes.append(
+                    "TraceDB HTTP output-shape attribution recorded: "
+                    f"probe_count={query_output_probe_count}; "
+                    "shapes=explain_false,explain_true,explain_endpoint; "
+                    "explain_false_returned_explain="
+                    f"{query_output_probe_explain_false_explain_returned_count}"
                 )
             if disk_bytes_after_ingest_by_top_level:
                 notes.append(
@@ -953,6 +1189,26 @@ def _response_byte_metric_fields(prefix: str, values: list[float]) -> dict[str, 
     }
 
 
+def _numeric_distribution_metric_fields(prefix: str, values: list[float]) -> dict[str, float]:
+    if not values:
+        return {}
+    return {
+        f"{prefix}_p50": round(percentile(values, 50), 3),
+        f"{prefix}_p95": round(percentile(values, 95), 3),
+        f"{prefix}_p99": round(percentile(values, 99), 3),
+    }
+
+
+def _duration_distribution_metric_fields(prefix: str, values: list[float]) -> dict[str, float]:
+    if not values:
+        return {}
+    return {
+        f"{prefix}_p50_ms": round(percentile(values, 50), 3),
+        f"{prefix}_p95_ms": round(percentile(values, 95), 3),
+        f"{prefix}_p99_ms": round(percentile(values, 99), 3),
+    }
+
+
 def _recorder_metric_fields(
     prefix: str, recorders: dict[str, MetricRecorder]
 ) -> dict[str, float | int]:
@@ -980,3 +1236,19 @@ def _float_metric(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _missing_required_explain_fields(explain: Any) -> list[str]:
+    if not isinstance(explain, dict):
+        return ["explain"]
+    return [
+        key
+        for key in [
+            "opened_candidate_streams",
+            "fusion_method",
+            "freshness_mode",
+            "scalar_filter_applied",
+            "tenant_mask_visible_records",
+        ]
+        if key not in explain
+    ]

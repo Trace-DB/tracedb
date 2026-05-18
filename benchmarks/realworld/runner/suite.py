@@ -321,20 +321,23 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
             "",
             "## TraceDB Attribution",
             "",
-            "| scenario | query p95 ms | query phases | server timings | http/client | response | access paths | storage after ingest | storage after workload |",
-            "| --- | ---: | --- | --- | --- | --- | --- | --- | --- |",
+            "| scenario | query p95 ms | query phases | server timings | http/client | response | output shape probe | access paths | storage after ingest | storage after workload |",
+            "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     if report.get("tracedb_attribution"):
         for item in report["tracedb_attribution"]:
             lines.append(
-                "| {scenario} | {query_p95} | {query_phases} | {server} | {http_client} | {response} | {access_paths} | {storage_ingest} | {storage_workload} |".format(
+                "| {scenario} | {query_p95} | {query_phases} | {server} | {http_client} | {response} | {output_shape_probe} | {access_paths} | {storage_ingest} | {storage_workload} |".format(
                     scenario=item["scenario_id"],
                     query_p95=item.get("query", {}).get("query_latency_p95_ms", "n/a"),
                     query_phases=_metric_map_summary(item.get("query_phases", {})),
                     server=_metric_map_summary(item.get("server", {})),
                     http_client=_metric_map_summary(item.get("http_client", {})),
                     response=_metric_map_summary(item.get("response", {})),
+                    output_shape_probe=_metric_map_summary(
+                        item.get("output_shape_probe", {})
+                    ),
                     access_paths=_metric_map_summary(item.get("access_paths", {})),
                     storage_ingest=_metric_map_summary(
                         item.get("storage_after_ingest", {})
@@ -345,7 +348,7 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
                 )
             )
     else:
-        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
 
     lines.extend(
         [
@@ -533,6 +536,7 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
         access_paths = _strip_metric_prefix(metrics, "query_access_path_")
         http_client = _strip_metric_prefix(metrics, "query_http_client_")
         response = _strip_metric_prefix(metrics, "query_http_response_")
+        output_shape_probe = _strip_metric_prefix(metrics, "query_output_probe_")
         server = _strip_metric_prefix(metrics, "query_server_")
         engine = _strip_metric_prefix(metrics, "query_engine_")
         storage_after_ingest = _strip_metric_prefix(metrics, "disk_bytes_after_ingest_")
@@ -543,6 +547,7 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
                 access_paths,
                 http_client,
                 response,
+                output_shape_probe,
                 server,
                 engine,
                 storage_after_ingest,
@@ -566,6 +571,7 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
                 "query_phases": query_phases,
                 "http_client": http_client,
                 "response": response,
+                "output_shape_probe": output_shape_probe,
                 "server": server,
                 "engine": engine,
                 "access_paths": access_paths,

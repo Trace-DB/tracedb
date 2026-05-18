@@ -79,6 +79,7 @@ class FakeTraceDb:
     def __init__(self) -> None:
         self.records: dict[tuple[str, str, str], dict] = {}
         self.batch_sizes: list[int] = []
+        self.query_requests: list[dict[str, object]] = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -174,59 +175,22 @@ class FakeTraceDb:
                     self._json(200, {"epoch": len(owner.records) + 1})
                     return
                 if self.path == "/v1/query":
-                    results = []
-                    for record in owner.records.values():
-                        if record["deleted"]:
-                            continue
-                        fields = record["fields"]
-                        if record["table"] != payload["table"]:
-                            continue
-                        if record["tenant_id"] != payload["tenant_id"]:
-                            continue
-                        if fields.get("category") != payload.get("scalar_eq", {}).get("category"):
-                            continue
-                        results.append({"record_id": record["record_id"]})
-                    self._json(
-                        200,
-                        {
-                            "results": results[: int(payload.get("top_k", 5))],
-                            "explain": {
-                                "opened_candidate_streams": ["LexicalPath"],
-                                "fusion_method": "fake",
-                                "freshness_mode": payload.get("freshness", "AllowDirty"),
-                                "scalar_filter_applied": True,
-                                "tenant_mask_visible_records": len(results),
-                                "scalar_filter_visible_records": len(results),
-                                "scalar_filter_removed_records": 0,
-                                "candidate_budget": payload.get("top_k", 5),
-                                "returned_count": len(results[: int(payload.get("top_k", 5))]),
-                                "phase_timings": [
-                                    {"phase": "tenant_visibility", "elapsed_ms": 1.25},
-                                    {"phase": "access_path_build", "elapsed_ms": 2.5},
-                                    {"phase": "fusion", "elapsed_ms": 0.75},
-                                    {"phase": "materialization", "elapsed_ms": 0.5},
-                                ],
-                                "access_path_timings": [
-                                    {
-                                        "access_path_id": "LexicalPath",
-                                        "build_ms": 1.5,
-                                        "open_ms": 0.25,
-                                    },
-                                    {
-                                        "access_path_id": "VectorPath",
-                                        "build_ms": 3.0,
-                                        "open_ms": 0.5,
-                                    },
-                                ],
-                            },
-                        },
-                        {
-                            "Server-Timing": (
-                                "read;dur=0.01, parse;dur=0.02, lock_wait;dur=0.03, "
-                                "engine;dur=0.04, encode;dur=0.05, prewrite_total;dur=0.15"
-                            )
-                        },
+                    owner.query_requests.append(
+                        {"path": self.path, "explain": payload.get("explain")}
                     )
+                    results = self._matching_results(payload)
+                    response = {
+                        "results": results[: int(payload.get("top_k", 5))],
+                        "explain": self._explain(payload, results),
+                    }
+                    self._json(200, response, self._server_timing_headers())
+                    return
+                if self.path == "/v1/explain":
+                    owner.query_requests.append(
+                        {"path": self.path, "explain": payload.get("explain")}
+                    )
+                    results = self._matching_results(payload)
+                    self._json(200, self._explain(payload, results), self._server_timing_headers())
                     return
                 if self.path in {"/v1/admin/compact", "/v1/admin/snapshot", "/v1/admin/restore"}:
                     self._json(200, {"ok": True})
@@ -237,6 +201,60 @@ class FakeTraceDb:
                     self._json(200, {"epoch": len(owner.records) + 2})
                     return
                 self._json(404, {"error": "not found"})
+
+            def _matching_results(self, payload: dict) -> list[dict[str, str]]:
+                results = []
+                for record in owner.records.values():
+                    if record["deleted"]:
+                        continue
+                    fields = record["fields"]
+                    if record["table"] != payload["table"]:
+                        continue
+                    if record["tenant_id"] != payload["tenant_id"]:
+                        continue
+                    if fields.get("category") != payload.get("scalar_eq", {}).get("category"):
+                        continue
+                    results.append({"record_id": record["record_id"]})
+                return results
+
+            def _explain(self, payload: dict, results: list[dict[str, str]]) -> dict:
+                return {
+                    "opened_candidate_streams": ["LexicalPath"],
+                    "fusion_method": "fake",
+                    "freshness_mode": payload.get("freshness", "AllowDirty"),
+                    "scalar_filter_applied": True,
+                    "tenant_mask_visible_records": len(results),
+                    "scalar_filter_visible_records": len(results),
+                    "scalar_filter_removed_records": 0,
+                    "candidate_budget": payload.get("top_k", 5),
+                    "returned_count": len(results[: int(payload.get("top_k", 5))]),
+                    "phase_timings": [
+                        {"phase": "tenant_visibility", "elapsed_ms": 1.25},
+                        {"phase": "access_path_build", "elapsed_ms": 2.5},
+                        {"phase": "fusion", "elapsed_ms": 0.75},
+                        {"phase": "materialization", "elapsed_ms": 0.5},
+                    ],
+                    "access_path_timings": [
+                        {
+                            "access_path_id": "LexicalPath",
+                            "build_ms": 1.5,
+                            "open_ms": 0.25,
+                        },
+                        {
+                            "access_path_id": "VectorPath",
+                            "build_ms": 3.0,
+                            "open_ms": 0.5,
+                        },
+                    ],
+                }
+
+            def _server_timing_headers(self) -> dict[str, str]:
+                return {
+                    "Server-Timing": (
+                        "read;dur=0.01, parse;dur=0.02, lock_wait;dur=0.03, "
+                        "engine;dur=0.04, encode;dur=0.05, prewrite_total;dur=0.15"
+                    )
+                }
 
         return Handler
 
@@ -781,6 +799,49 @@ class AdapterHardeningTests(unittest.TestCase):
             any("server/client query attribution" in note for note in result["notes"]),
             result["notes"],
         )
+        query_calls = [
+            request for request in fake.query_requests if request["path"] == "/v1/query"
+        ]
+        explain_endpoint_calls = [
+            request for request in fake.query_requests if request["path"] == "/v1/explain"
+        ]
+        self.assertGreaterEqual(
+            len([request for request in query_calls if request["explain"] is False]),
+            result["metrics"]["query_count"],
+        )
+        self.assertGreater(
+            len([request for request in query_calls if request["explain"] is True]),
+            0,
+        )
+        self.assertGreater(len(explain_endpoint_calls), 0)
+        self.assertEqual(result["metrics"]["query_output_probe_count"], 3)
+        self.assertEqual(
+            result["metrics"]["query_output_probe_explain_false_query_count"],
+            3,
+        )
+        self.assertEqual(
+            result["metrics"]["query_output_probe_explain_true_query_count"],
+            3,
+        )
+        self.assertEqual(
+            result["metrics"]["query_output_probe_explain_endpoint_query_count"],
+            3,
+        )
+        self.assertEqual(result["metrics"]["query_output_probe_result_id_mismatch_count"], 0)
+        self.assertEqual(
+            result["metrics"]["query_output_probe_explain_returned_count_mismatch_count"],
+            0,
+        )
+        self.assertEqual(
+            result["metrics"]["query_output_probe_required_explain_field_missing_count"],
+            0,
+        )
+        self.assertEqual(
+            result["metrics"]["query_output_probe_explain_false_explain_returned_count"],
+            3,
+        )
+        self.assertEqual(result["metrics"]["query_phase_probe_sample_count"], 3)
+        self.assertEqual(result["metrics"]["query_access_path_probe_sample_count"], 3)
 
     def test_request_json_with_response_reports_response_metadata(self) -> None:
         from runner.http import request_json_with_response
@@ -850,8 +911,39 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("query_http_response_processing_latency_p95_ms", metrics)
         self.assertIn("query_http_client_header_overhead_latency_p95_ms", metrics)
         self.assertIn("query_http_client_unattributed_overhead_latency_p95_ms", metrics)
+        self.assertGreater(metrics["query_output_probe_explain_false_body_bytes_p95"], 0)
+        self.assertGreater(metrics["query_output_probe_explain_true_body_bytes_p95"], 0)
+        self.assertGreater(metrics["query_output_probe_explain_endpoint_body_bytes_p95"], 0)
+        self.assertEqual(
+            metrics["query_output_probe_explain_false_body_bytes_p95"],
+            metrics["query_output_probe_explain_true_body_bytes_p95"],
+        )
+        self.assertEqual(
+            metrics["query_output_probe_explain_false_explain_returned_count"],
+            metrics["query_output_probe_count"],
+        )
+        self.assertIn(
+            "query_output_probe_explain_endpoint_response_processing_latency_p95_ms",
+            metrics,
+        )
+        self.assertIn(
+            "query_output_probe_explain_true_over_false_delta_p95_ms",
+            metrics,
+        )
+        self.assertEqual(
+            metrics["query_output_probe_explain_false_response_content_length_mismatch_count"],
+            0,
+        )
+        self.assertEqual(
+            metrics["query_output_probe_explain_endpoint_response_content_length_missing_count"],
+            0,
+        )
         self.assertTrue(
             any("response attribution" in note for note in result["notes"]),
+            result["notes"],
+        )
+        self.assertTrue(
+            any("output-shape attribution" in note for note in result["notes"]),
             result["notes"],
         )
 
