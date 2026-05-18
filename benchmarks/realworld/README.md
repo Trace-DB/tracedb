@@ -239,7 +239,8 @@ modal run benchmarks/realworld/modal_bench.py \
   --run-id modal-remote-smoke-16 \
   --records 16 \
   --seed 42 \
-  --summary-json /tmp/tracedb-modal-summaries/modal-remote-smoke-16.json
+  --summary-json /tmp/tracedb-modal-summaries/modal-remote-smoke-16.json \
+  --bundle-output /tmp/tracedb-modal-bundles/modal-remote-smoke-16.exported.tar.gz
 ```
 
 TraceDB actual-engine batch lane against pgvector control:
@@ -270,6 +271,7 @@ python3 benchmarks/realworld/modal_bench.py \
   --records 16 \
   --seed 42 \
   --summary-json /tmp/tracedb-modal-summaries/modal-local-smoke.json \
+  --bundle-output /tmp/tracedb-modal-bundles/modal-local-smoke.exported.tar.gz \
   --min-free-mb 1000
 ```
 
@@ -384,7 +386,8 @@ for r in a b c; do
     --tracedb-engine-control \
     --opensearch-control \
     --pgvector-control \
-    --summary-json "/tmp/tracedb-modal-summaries/modal-tracedb-controls-codesearch-<commit>-r1000-${r}.json"
+    --summary-json "/tmp/tracedb-modal-summaries/modal-tracedb-controls-codesearch-<commit>-r1000-${r}.json" \
+    --bundle-output "/tmp/tracedb-modal-bundles/modal-tracedb-controls-codesearch-<commit>-r1000-${r}.exported.tar.gz"
 done
 ```
 
@@ -396,16 +399,23 @@ intentionally debugging image selection. A valid external-qrels run must report
 `source_dirty=false`, `relevance_label_mode=external_qrels`, distinct Modal app
 names, and no unavailable controls. Treat the local `--summary-json` files as
 the durable aggregate evidence surface unless the remote Modal bundle tarballs
-are explicitly persisted. Current summaries also carry per-baseline
-`query_results` with query IDs, expected IDs, top-k actual IDs, exact recall,
-same-file recall, nDCG, and MRR for adapters that expose query result lists.
+are explicitly persisted with `--bundle-output`. Current summaries also carry
+per-baseline `query_results` with query IDs, expected IDs, top-k actual IDs,
+exact recall, same-file recall, nDCG, and MRR for adapters that expose query
+result lists.
 
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
 `manifest.json`. The manifest records the run config, seed, Modal app name,
 resource class, redacted benchmark environment, and git commit/dirty state. Use
-`--summary-json` for clean local per-run evidence instead of scraping Modal logs.
-By default this lane reports `control_status=internal_only_smoke`; it is
-development evidence, not a product benchmark claim.
+`--summary-json` for clean local per-run evidence instead of scraping Modal
+logs, and use `--bundle-output` when the full tarball must survive the remote
+Modal container. The saved summary records `exported_bundle_path` and
+`exported_bundle_sha256`; transient returned bundle bytes are stripped before
+summary JSON is written. `--bundle-output` is guarded by
+`--bundle-export-max-mb` (default `64`) because this path returns the bundle
+through the Modal function result; use a durable object store or Modal Volume
+for larger archives. By default this lane reports `control_status=internal_only_smoke`;
+it is development evidence, not a product benchmark claim.
 
 ## Reports
 

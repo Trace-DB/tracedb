@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib
 import io
 import json
@@ -836,6 +838,61 @@ class ModalBenchTests(unittest.TestCase):
         self.assertNotIn("secret-token", manifest_text)
         self.assertEqual(manifest["runner_env"]["TRACEDB_HTTP_BEARER_TOKEN"], "[redacted]")
 
+    def test_run_suite_redacts_sensitive_values_from_process_tails(self) -> None:
+        from modal_bench import ModalSmokeConfig, run_suite_and_bundle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            run_dir = reports / "redacted-process-tail"
+            run_dir.mkdir(parents=True)
+            suite_json = {
+                "suite_id": "redacted-process-tail",
+                "control_status": "external_control_available",
+                "summary": {"failure_count": 0},
+                "control_ledger": {
+                    "available_external_controls": [{"name": "PostgreSQL"}],
+                    "unavailable_external_controls": [],
+                },
+                "number_to_beat": {},
+            }
+            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
+
+            secret_dsn = "postgresql://user:secret@127.0.0.1:25432/db"
+            completed = type(
+                "Completed",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": f"connected to {secret_dsn}",
+                    "stderr": f"retrying {secret_dsn}",
+                },
+            )()
+            config = ModalSmokeConfig(
+                run_id="redacted-process-tail",
+                target="postgres",
+                scenarios="search_rag_6",
+                reports_dir=str(reports),
+                bundle_dir=str(root / "bundles"),
+                min_free_mb=1_000,
+                allow_external_controls=True,
+                require_services=True,
+            )
+            base_env = {
+                "PATH": os.environ.get("PATH", ""),
+                "BENCH_POSTGRES_DSN": secret_dsn,
+            }
+            with patch.dict(os.environ, base_env, clear=True), patch(
+                "modal_bench.git_identity",
+                return_value={"commit": "test", "dirty": False, "status_short": ""},
+            ), patch("subprocess.run", return_value=completed):
+                summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
+
+            process_text = json.dumps(summary["manifest"]["process"])
+            self.assertNotIn("secret", process_text)
+            self.assertIn("[redacted]", process_text)
+
     def test_manifest_records_git_identity_for_reproducibility(self) -> None:
         from modal_bench import ModalSmokeConfig, build_manifest
 
@@ -1033,6 +1090,125 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8")), summary)
             self.assertTrue(summary_path.read_text(encoding="utf-8").endswith("\n"))
+
+    def test_run_local_exports_local_bundle_output_and_records_checksum(self) -> None:
+        from modal_bench import run_local
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_bundle = root / "source.tar.gz"
+            bundle_bytes = b"bundle-bytes"
+            source_bundle.write_bytes(bundle_bytes)
+            summary = {
+                "run_id": "bundle-output-test",
+                "bundle_path": str(source_bundle),
+                "control_status": "external_control_available",
+            }
+            summary_path = root / "summary.json"
+            bundle_output = root / "exports" / "bundle.tar.gz"
+
+            with patch("modal_bench.run_suite_and_bundle", return_value=summary), patch(
+                "sys.stdout", new=io.StringIO()
+            ):
+                exit_code = run_local(
+                    [
+                        "--run-id",
+                        "bundle-output-test",
+                        "--summary-json",
+                        str(summary_path),
+                        "--bundle-output",
+                        str(bundle_output),
+                    ]
+                )
+
+            written_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(bundle_output.read_bytes(), bundle_bytes)
+            self.assertEqual(str(bundle_output), written_summary["exported_bundle_path"])
+            self.assertEqual(
+                hashlib.sha256(bundle_bytes).hexdigest(),
+                written_summary["exported_bundle_sha256"],
+            )
+            self.assertEqual(len(bundle_bytes), written_summary["exported_bundle_size_bytes"])
+            self.assertEqual(str(source_bundle), written_summary["exported_bundle_source_path"])
+            self.assertEqual("local_copy", written_summary["bundle_export_transport"])
+            self.assertTrue(written_summary["exported_bundle_checksum_verified"])
+
+    def test_write_bundle_output_decodes_remote_payload_without_leaking_summary_bytes(
+        self,
+    ) -> None:
+        from modal_bench import (
+            BUNDLE_BYTES_FIELD,
+            BUNDLE_SHA256_FIELD,
+            BUNDLE_SIZE_FIELD,
+            write_bundle_output,
+        )
+
+        bundle_bytes = b"remote-bundle-bytes"
+        summary = {
+            "run_id": "remote-bundle-output-test",
+            "bundle_path": "/tmp/remote-bundle.tar.gz",
+            BUNDLE_BYTES_FIELD: base64.b64encode(bundle_bytes).decode("ascii"),
+            BUNDLE_SHA256_FIELD: hashlib.sha256(bundle_bytes).hexdigest(),
+            BUNDLE_SIZE_FIELD: len(bundle_bytes),
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle_output = Path(temp_dir) / "bundle.tar.gz"
+            clean_summary = write_bundle_output(summary, str(bundle_output))
+
+            self.assertEqual(bundle_output.read_bytes(), bundle_bytes)
+            self.assertNotIn(BUNDLE_BYTES_FIELD, clean_summary)
+            self.assertNotIn(BUNDLE_BYTES_FIELD, summary)
+            self.assertEqual(str(bundle_output), clean_summary["exported_bundle_path"])
+            self.assertEqual(
+                hashlib.sha256(bundle_bytes).hexdigest(),
+                clean_summary["exported_bundle_sha256"],
+            )
+            self.assertEqual(len(bundle_bytes), clean_summary["exported_bundle_size_bytes"])
+            self.assertEqual(
+                "/tmp/remote-bundle.tar.gz",
+                clean_summary["exported_bundle_source_path"],
+            )
+            self.assertEqual("modal_return_bytes", clean_summary["bundle_export_transport"])
+            self.assertTrue(clean_summary["exported_bundle_checksum_verified"])
+
+    def test_write_bundle_output_rejects_remote_payload_without_checksum(self) -> None:
+        from modal_bench import BUNDLE_BYTES_FIELD, write_bundle_output
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                write_bundle_output(
+                    {
+                        "bundle_path": "/tmp/remote-bundle.tar.gz",
+                        BUNDLE_BYTES_FIELD: base64.b64encode(b"bundle").decode("ascii"),
+                    },
+                    str(Path(temp_dir) / "bundle.tar.gz"),
+                )
+
+    def test_write_bundle_output_rejects_remote_payload_checksum_mismatch(self) -> None:
+        from modal_bench import BUNDLE_BYTES_FIELD, BUNDLE_SHA256_FIELD, write_bundle_output
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                write_bundle_output(
+                    {
+                        "bundle_path": "/tmp/remote-bundle.tar.gz",
+                        BUNDLE_BYTES_FIELD: base64.b64encode(b"bundle").decode("ascii"),
+                        BUNDLE_SHA256_FIELD: "not-the-real-sha",
+                    },
+                    str(Path(temp_dir) / "bundle.tar.gz"),
+                )
+
+    def test_attach_bundle_bytes_rejects_oversized_bundle_payload(self) -> None:
+        from modal_bench import attach_bundle_bytes
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_bundle = Path(temp_dir) / "source.tar.gz"
+            source_bundle.write_bytes(b"x")
+
+            with self.assertRaisesRegex(ValueError, "bundle exceeds"):
+                attach_bundle_bytes({"bundle_path": str(source_bundle)}, max_mb=0)
 
     def test_bundles_report_artifacts_and_extracts_control_summary(self) -> None:
         from modal_bench import (

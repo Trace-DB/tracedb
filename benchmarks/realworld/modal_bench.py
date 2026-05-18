@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import glob
+import hashlib
 import json
 import os
 import shlex
@@ -32,6 +34,10 @@ MODAL_MIN_EPHEMERAL_DISK_MB = 524_288
 DEFAULT_MODAL_APP_NAME = "tracedb-realworld-smoke"
 MODAL_APP_NAME_ENV = "TRACEDB_MODAL_APP_NAME"
 MODAL_IMAGE_KIND_ENV = "TRACEDB_MODAL_IMAGE_KIND"
+DEFAULT_BUNDLE_EXPORT_MAX_MB = 64
+BUNDLE_BYTES_FIELD = "bundle_bytes_b64"
+BUNDLE_SHA256_FIELD = "bundle_bytes_sha256"
+BUNDLE_SIZE_FIELD = "bundle_bytes_size"
 RUST_MODAL_IMAGE = "rust:1.94-bookworm"
 PGVECTOR_VERSION = "v0.8.2"
 QDRANT_VERSION = "v1.13.4"
@@ -419,6 +425,15 @@ def redacted_env(env: Mapping[str, str]) -> dict[str, str]:
     return redacted
 
 
+def redact_sensitive_text(text: str, env: Mapping[str, str]) -> str:
+    redacted = text
+    for key in SENSITIVE_ENV_KEYS:
+        value = env.get(key)
+        if value:
+            redacted = redacted.replace(value, "[redacted]")
+    return redacted
+
+
 def git_identity(repo_root: Path) -> dict[str, Any]:
     def git_output(*args: str) -> str:
         completed = subprocess.run(
@@ -612,8 +627,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
     manifest = build_manifest(config, command, repo_root=lab_root.parent.parent, runner_env=env)
     manifest["process"] = {
         "returncode": completed.returncode,
-        "stdout_tail": completed.stdout[-4000:],
-        "stderr_tail": completed.stderr[-4000:],
+        "stdout_tail": redact_sensitive_text(completed.stdout[-4000:], env),
+        "stderr_tail": redact_sensitive_text(completed.stderr[-4000:], env),
     }
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr or completed.stdout)
@@ -1130,6 +1145,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--summary-json",
         help="Write the returned Modal benchmark summary to a clean local JSON file.",
     )
+    parser.add_argument(
+        "--bundle-output",
+        help="Write the report bundle tarball to this local path when the run completes.",
+    )
+    parser.add_argument(
+        "--bundle-export-max-mb",
+        type=int,
+        default=DEFAULT_BUNDLE_EXPORT_MAX_MB,
+        help="Maximum report bundle size to return or copy through --bundle-output.",
+    )
     return parser
 
 
@@ -1173,13 +1198,23 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
 
 def _parse_args_with_summary_output(
     argv: list[str] | None = None,
-) -> tuple[ModalSmokeConfig, str | None]:
+) -> tuple[ModalSmokeConfig, str | None, str | None, int]:
     args = _build_parser().parse_args(argv)
-    return _config_from_args(args), args.summary_json
+    return (
+        _config_from_args(args),
+        args.summary_json,
+        args.bundle_output,
+        args.bundle_export_max_mb,
+    )
 
 
 def _parse_args(argv: list[str] | None = None) -> ModalSmokeConfig:
-    config, _summary_json = _parse_args_with_summary_output(argv)
+    (
+        config,
+        _summary_json,
+        _bundle_output,
+        _bundle_export_max_mb,
+    ) = _parse_args_with_summary_output(argv)
     return config
 
 
@@ -1189,6 +1224,78 @@ def write_summary_json(summary: dict[str, Any], summary_json: str | None) -> Non
     output_path = Path(summary_json).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _ensure_bundle_export_size(size_bytes: int, max_mb: int) -> None:
+    max_bytes = max_mb * 1024 * 1024
+    if size_bytes > max_bytes:
+        raise ValueError(
+            f"bundle exceeds --bundle-export-max-mb={max_mb}: "
+            f"{size_bytes} bytes > {max_bytes} bytes"
+        )
+
+
+def attach_bundle_bytes(
+    summary: dict[str, Any],
+    *,
+    max_mb: int = DEFAULT_BUNDLE_EXPORT_MAX_MB,
+) -> dict[str, Any]:
+    bundle_path = summary.get("bundle_path")
+    if not bundle_path:
+        raise ValueError("summary does not include bundle_path")
+    data = Path(bundle_path).read_bytes()
+    _ensure_bundle_export_size(len(data), max_mb)
+    result = dict(summary)
+    result[BUNDLE_BYTES_FIELD] = base64.b64encode(data).decode("ascii")
+    result[BUNDLE_SHA256_FIELD] = hashlib.sha256(data).hexdigest()
+    result[BUNDLE_SIZE_FIELD] = len(data)
+    return result
+
+
+def write_bundle_output(
+    summary: dict[str, Any],
+    bundle_output: str | None,
+    *,
+    max_mb: int = DEFAULT_BUNDLE_EXPORT_MAX_MB,
+) -> dict[str, Any]:
+    clean_summary = dict(summary)
+    payload = clean_summary.pop(BUNDLE_BYTES_FIELD, None)
+    expected_sha256 = clean_summary.pop(BUNDLE_SHA256_FIELD, None)
+    expected_size = clean_summary.pop(BUNDLE_SIZE_FIELD, None)
+    summary.pop(BUNDLE_BYTES_FIELD, None)
+    summary.pop(BUNDLE_SHA256_FIELD, None)
+    summary.pop(BUNDLE_SIZE_FIELD, None)
+    if not bundle_output:
+        return clean_summary
+
+    output_path = Path(bundle_output).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if payload is not None:
+        if expected_sha256 is None:
+            raise ValueError("bundle payload checksum missing")
+        data = base64.b64decode(payload.encode("ascii"), validate=True)
+    else:
+        source_path_text = clean_summary.get("bundle_path")
+        if not source_path_text:
+            raise ValueError("summary does not include bundle_path")
+        data = Path(source_path_text).expanduser().read_bytes()
+
+    _ensure_bundle_export_size(len(data), max_mb)
+    if expected_size is not None and expected_size != len(data):
+        raise ValueError("bundle payload size mismatch")
+    actual_sha256 = hashlib.sha256(data).hexdigest()
+    if expected_sha256 is not None and expected_sha256 != actual_sha256:
+        raise ValueError("bundle payload checksum mismatch")
+    output_path.write_bytes(data)
+    clean_summary["exported_bundle_path"] = str(output_path)
+    clean_summary["exported_bundle_source_path"] = clean_summary.get("bundle_path")
+    clean_summary["exported_bundle_size_bytes"] = len(data)
+    clean_summary["exported_bundle_sha256"] = actual_sha256
+    clean_summary["exported_bundle_checksum_verified"] = True
+    clean_summary["bundle_export_transport"] = (
+        "modal_return_bytes" if payload is not None else "local_copy"
+    )
+    return clean_summary
 
 
 def source_git_kwargs(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
@@ -1202,8 +1309,18 @@ def source_git_kwargs(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
 
 
 def run_local(argv: list[str] | None = None) -> int:
-    config, summary_json = _parse_args_with_summary_output(argv)
+    (
+        config,
+        summary_json,
+        bundle_output,
+        bundle_export_max_mb,
+    ) = _parse_args_with_summary_output(argv)
     summary = run_suite_and_bundle(config)
+    summary = write_bundle_output(
+        summary,
+        bundle_output,
+        max_mb=bundle_export_max_mb,
+    )
     write_summary_json(summary, summary_json)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
@@ -1375,9 +1492,16 @@ if modal is not None:
         timeout=ModalSmokeConfig.timeout_seconds,
         ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
     )
-    def run_smoke_remote(**kwargs: Any) -> dict[str, Any]:
+    def run_smoke_remote(
+        export_bundle: bool = False,
+        bundle_export_max_mb: int = DEFAULT_BUNDLE_EXPORT_MAX_MB,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         config = ModalSmokeConfig(**kwargs)
-        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
+        summary = run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
+        if export_bundle:
+            return attach_bundle_bytes(summary, max_mb=bundle_export_max_mb)
+        return summary
 
     @app.local_entrypoint()
     def main(
@@ -1400,8 +1524,12 @@ if modal is not None:
         allow_large: bool = False,
         allow_provider: bool = False,
         summary_json: str = "",
+        bundle_output: str = "",
+        bundle_export_max_mb: int = DEFAULT_BUNDLE_EXPORT_MAX_MB,
     ) -> None:
         result = run_smoke_remote.remote(
+            export_bundle=bool(bundle_output),
+            bundle_export_max_mb=bundle_export_max_mb,
             run_id=run_id,
             records=records,
             dataset=dataset,
@@ -1424,6 +1552,7 @@ if modal is not None:
             modal_image_kind=selected_image_kind,
             **source_git_kwargs(),
         )
+        result = write_bundle_output(result, bundle_output, max_mb=bundle_export_max_mb)
         write_summary_json(result, summary_json)
         print(json.dumps(result, indent=2, sort_keys=True))
 else:
