@@ -127,7 +127,7 @@ struct WalTail {
 
 #[derive(Clone, Debug, PartialEq)]
 struct CommitFrame {
-    commit: CommitRecord,
+    epoch: Epoch,
     payload_checksum: u32,
     payload_bytes: u64,
     frame_bytes: u64,
@@ -143,6 +143,26 @@ struct CommitFrameBuildTiming {
     frame_assembly_ms: f64,
     payload_bytes: u64,
     frame_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct CommitRecordForFrame<'a> {
+    database_id: &'a str,
+    branch_id: &'a str,
+    transaction_id: u64,
+    epoch: Epoch,
+    parent_epoch: Epoch,
+    previous_commit_hash: u32,
+    idempotency_key: &'a Option<String>,
+    schema_epoch: Epoch,
+    policy_epoch: Epoch,
+    schema_changes: &'a [TableSchema],
+    replacements: &'a [RecordInput],
+    mutations: &'a [RecordInput],
+    deletions: &'a [RecordDeletion],
+    feature_invalidations: &'a [FeatureInvalidation],
+    module_events: &'a [ModuleCommitEvent],
+    commit_marker: &'a str,
 }
 
 impl Wal {
@@ -200,7 +220,7 @@ impl Wal {
         file.write_all(&frame.frame)?;
         file.sync_data()?;
         tail.last_lsn = Some(lsn);
-        tail.last_epoch = Some(frame.commit.epoch);
+        tail.last_epoch = Some(frame.epoch);
         tail.last_checksum = frame.payload_checksum;
         tail.file_len += frame.frame_bytes;
         Ok(lsn)
@@ -240,7 +260,7 @@ impl Wal {
         let sync_data_ms = elapsed_ms(sync_data_started);
         let tail_update_started = Instant::now();
         tail.last_lsn = Some(lsn);
-        tail.last_epoch = Some(frame.commit.epoch);
+        tail.last_epoch = Some(frame.epoch);
         tail.last_checksum = frame.payload_checksum;
         tail.file_len += frame.frame_bytes;
         let tail_update_ms = elapsed_ms(tail_update_started);
@@ -281,14 +301,13 @@ fn build_commit_frame(
     lsn: Lsn,
     previous_checksum: u32,
 ) -> Result<CommitFrame> {
-    let commit = prepare_commit_for_frame(commit, previous_checksum);
-    let payload = serialize_commit_payload(&commit, lsn)?;
+    let payload = serialize_commit_payload_for_frame(commit, previous_checksum, lsn)?;
     let payload_checksum = checksum_bytes(&payload);
     let frame = assemble_commit_frame(lsn, previous_checksum, payload_checksum, &payload);
     let payload_bytes = payload.len() as u64;
     let frame_bytes = frame.len() as u64;
     Ok(CommitFrame {
-        commit,
+        epoch: commit.epoch,
         payload_checksum,
         payload_bytes,
         frame_bytes,
@@ -303,11 +322,11 @@ fn build_commit_frame_with_timing(
 ) -> Result<(CommitFrame, CommitFrameBuildTiming)> {
     let frame_build_started = Instant::now();
     let commit_prepare_started = Instant::now();
-    let commit = prepare_commit_for_frame(commit, previous_checksum);
+    let commit_for_frame = prepare_commit_for_frame(commit, previous_checksum);
     let commit_prepare_ms = elapsed_ms(commit_prepare_started);
 
     let serialize_started = Instant::now();
-    let payload = serialize_commit_payload(&commit, lsn)?;
+    let payload = serialize_prepared_commit_payload(&commit_for_frame, lsn)?;
     let serialize_ms = elapsed_ms(serialize_started);
 
     let payload_checksum_started = Instant::now();
@@ -323,7 +342,7 @@ fn build_commit_frame_with_timing(
 
     Ok((
         CommitFrame {
-            commit,
+            epoch: commit.epoch,
             payload_checksum,
             payload_bytes,
             frame_bytes,
@@ -341,14 +360,56 @@ fn build_commit_frame_with_timing(
     ))
 }
 
-fn prepare_commit_for_frame(commit: &CommitRecord, previous_checksum: u32) -> CommitRecord {
-    let mut commit = commit.clone();
-    commit.previous_commit_hash = previous_checksum;
-    commit
+fn prepare_commit_for_frame<'a>(
+    commit: &'a CommitRecord,
+    previous_checksum: u32,
+) -> CommitRecordForFrame<'a> {
+    CommitRecordForFrame {
+        database_id: &commit.database_id,
+        branch_id: &commit.branch_id,
+        transaction_id: commit.transaction_id,
+        epoch: commit.epoch,
+        parent_epoch: commit.parent_epoch,
+        previous_commit_hash: previous_checksum,
+        idempotency_key: &commit.idempotency_key,
+        schema_epoch: commit.schema_epoch,
+        policy_epoch: commit.policy_epoch,
+        schema_changes: &commit.schema_changes,
+        replacements: &commit.replacements,
+        mutations: &commit.mutations,
+        deletions: &commit.deletions,
+        feature_invalidations: &commit.feature_invalidations,
+        module_events: &commit.module_events,
+        commit_marker: &commit.commit_marker,
+    }
 }
 
+#[cfg(test)]
 fn serialize_commit_payload(commit: &CommitRecord, lsn: Lsn) -> Result<Vec<u8>> {
     let payload = serde_json::to_vec(commit)?;
+    check_payload_len(&payload, lsn)?;
+    Ok(payload)
+}
+
+fn serialize_commit_payload_for_frame(
+    commit: &CommitRecord,
+    previous_checksum: u32,
+    lsn: Lsn,
+) -> Result<Vec<u8>> {
+    let commit = prepare_commit_for_frame(commit, previous_checksum);
+    serialize_prepared_commit_payload(&commit, lsn)
+}
+
+fn serialize_prepared_commit_payload(
+    commit: &CommitRecordForFrame<'_>,
+    lsn: Lsn,
+) -> Result<Vec<u8>> {
+    let payload = serde_json::to_vec(commit)?;
+    check_payload_len(&payload, lsn)?;
+    Ok(payload)
+}
+
+fn check_payload_len(payload: &[u8], lsn: Lsn) -> Result<()> {
     if payload.len() > MAX_PAYLOAD_LEN {
         return Err(TraceDbError::WalCorruption(format!(
             "payload length {} exceeds max {MAX_PAYLOAD_LEN} at lsn {}",
@@ -356,7 +417,7 @@ fn serialize_commit_payload(commit: &CommitRecord, lsn: Lsn) -> Result<Vec<u8>> 
             lsn.get()
         )));
     }
-    Ok(payload)
+    Ok(())
 }
 
 fn assemble_commit_frame(
@@ -586,8 +647,7 @@ mod tests {
 
         assert_eq!(untimed.frame, timed.frame);
         assert_eq!(untimed.payload_checksum, timed.payload_checksum);
-        assert_eq!(untimed.commit, timed.commit);
-        assert_eq!(timed.commit.previous_commit_hash, previous_checksum);
+        assert_eq!(untimed.epoch, timed.epoch);
         assert_eq!(timing.payload_bytes, untimed.payload_bytes);
         assert_eq!(timing.frame_bytes, untimed.frame_bytes);
     }
@@ -628,5 +688,69 @@ mod tests {
         for pair in timed_entries.windows(2) {
             assert_eq!(pair[1].commit.previous_commit_hash, pair[0].checksum);
         }
+    }
+
+    #[test]
+    fn borrowed_commit_payload_matches_cloned_commit_record_bytes() {
+        let mut fields = serde_json::Map::new();
+        fields.insert("title".to_string(), serde_json::json!("alpha"));
+        fields.insert(
+            "embedding".to_string(),
+            serde_json::json!([0.1_f32, 0.2_f32, 0.3_f32]),
+        );
+        let commit = CommitRecord {
+            database_id: "db".to_string(),
+            branch_id: "main".to_string(),
+            transaction_id: 42,
+            epoch: Epoch::new(9),
+            parent_epoch: Epoch::new(8),
+            previous_commit_hash: 0,
+            idempotency_key: Some("idem-42".to_string()),
+            schema_epoch: Epoch::new(6),
+            policy_epoch: Epoch::new(7),
+            schema_changes: vec![TableSchema {
+                name: "docs".to_string(),
+                primary_id_column: "id".to_string(),
+                tenant_id_column: "tenant_id".to_string(),
+                scalar_columns: vec!["title".to_string()],
+                text_indexed_columns: vec!["body".to_string()],
+                vector_columns: Vec::new(),
+            }],
+            replacements: vec![RecordInput {
+                table: "docs".to_string(),
+                id: "a".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                fields: fields.clone(),
+            }],
+            mutations: vec![RecordInput {
+                table: "docs".to_string(),
+                id: "b".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                fields,
+            }],
+            deletions: vec![RecordDeletion::new("docs", "tenant-a", "old", "replace")],
+            feature_invalidations: vec![FeatureInvalidation {
+                table: "docs".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                record_id: "a".to_string(),
+                feature: "embedding".to_string(),
+                status: tracedb_core::FeatureStatus::Dirty,
+            }],
+            module_events: vec![ModuleCommitEvent {
+                module_id: "text".to_string(),
+                event: "indexed".to_string(),
+            }],
+            commit_marker: "COMMITTED".to_string(),
+        };
+        let previous_checksum = 0xCAFE_BABE;
+        let lsn = Lsn::new(4);
+        let mut cloned = commit.clone();
+        cloned.previous_commit_hash = previous_checksum;
+        let cloned_payload = serialize_commit_payload(&cloned, lsn).expect("cloned payload");
+
+        let borrowed_payload = serialize_commit_payload_for_frame(&commit, previous_checksum, lsn)
+            .expect("borrowed payload");
+
+        assert_eq!(borrowed_payload, cloned_payload);
     }
 }
