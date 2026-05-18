@@ -2168,6 +2168,52 @@ fn batch_put_writes_one_wal_commit_and_recovers_all_replacements() {
 }
 
 #[test]
+fn batch_put_write_timing_reports_phase_costs_and_recovers_replacements() {
+    let (temp, mut db) = seeded_db();
+    let before_wal_entries = db.inspect_wal().unwrap().len();
+
+    let (epoch, timing) = db
+        .put_batch_with_write_timing(RecordPutBatchRequest::new(vec![
+            record(
+                "timed-a",
+                "tenant-a",
+                "timed batch replacement a",
+                [0.2, 0.5, 0.3],
+            ),
+            record(
+                "timed-b",
+                "tenant-a",
+                "timed batch replacement b",
+                [0.3, 0.4, 0.3],
+            ),
+        ]))
+        .expect("timed batch put");
+
+    assert_eq!(db.inspect_manifest().unwrap().latest_epoch, epoch);
+    assert_eq!(db.inspect_wal().unwrap().len(), before_wal_entries + 1);
+    assert!(timing.total_ms >= 0.0);
+    assert!(timing.store_clone_ms >= 0.0);
+    assert!(timing.store_apply_ms >= 0.0);
+    assert!(timing.feature_invalidation_ms >= 0.0);
+    assert!(timing.commit_build_ms >= 0.0);
+    assert!(timing.wal_total_ms >= 0.0);
+    assert!(timing.manifest_total_ms >= 0.0);
+    assert!(timing.cache_clear_ms >= 0.0);
+
+    drop(db);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(recovered.inspect_manifest().unwrap().latest_epoch, epoch);
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "timed-a"))
+        .expect("timed a get")
+        .is_some());
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "timed-b"))
+        .expect("timed b get")
+        .is_some());
+}
+
+#[test]
 fn stale_handle_put_reconciles_committed_wal_before_epoch_allocation() {
     let (temp, mut first) = seeded_db();
     let mut stale = TraceDb::open(temp.path()).expect("stale handle");

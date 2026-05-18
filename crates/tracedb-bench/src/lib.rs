@@ -7,8 +7,8 @@ use std::error::Error;
 use std::fs;
 use std::time::Instant;
 use tracedb_query::{
-    FreshnessMode, HybridQuery, RecordInput, TableSchema, TraceDb, VectorColumnSchema,
-    WritePathTiming,
+    FreshnessMode, HybridQuery, RecordInput, RecordPutBatchRequest, TableSchema, TraceDb,
+    VectorColumnSchema, WritePathTiming,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -104,10 +104,36 @@ pub struct InProcessScalingReport {
     pub points: Vec<InProcessScalingPoint>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BatchWriteAttributionConfig {
+    pub record_targets: Vec<usize>,
+    pub repetitions: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BatchWriteAttributionReport {
+    pub benchmark: String,
+    pub point_count: usize,
+    pub max_records: usize,
+    pub points: Vec<BatchWriteAttributionPoint>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TimingP95 {
     pub name: String,
     pub p95_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BatchWriteAttributionPoint {
+    pub records: usize,
+    pub repetitions: usize,
+    pub batch_write_p50_ms: f64,
+    pub batch_write_p95_ms: f64,
+    pub batch_write_p99_ms: f64,
+    pub wal_bytes_p95: u64,
+    pub data_dir_bytes_p95: u64,
+    pub batch_phase_p95_ms: Vec<TimingP95>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -227,6 +253,62 @@ pub fn run_inprocess_scaling(
         benchmark: "tracedb-inprocess-scaling".to_string(),
         point_count: points.len(),
         max_records,
+        points,
+    })
+}
+
+pub fn run_batch_write_attribution(
+    config: BatchWriteAttributionConfig,
+) -> Result<BatchWriteAttributionReport, Box<dyn Error>> {
+    if config.record_targets.is_empty() {
+        return Err("at least one record target is required".into());
+    }
+    if config.repetitions == 0 {
+        return Err("batch write attribution repetitions must be positive".into());
+    }
+    let mut targets = config.record_targets.clone();
+    targets.sort_unstable();
+    targets.dedup();
+    if targets.contains(&0) {
+        return Err("record targets must be positive".into());
+    }
+
+    let mut points = Vec::new();
+    for records in targets.iter().copied() {
+        let mut batch_latencies = Vec::new();
+        let mut wal_sizes = Vec::new();
+        let mut data_dir_sizes = Vec::new();
+        let mut phase_samples = BTreeMap::<String, Vec<f64>>::new();
+        for _ in 0..config.repetitions {
+            let temp = tempfile::tempdir()?;
+            let data_dir = temp.path().to_path_buf();
+            let mut db = TraceDb::open(&data_dir)?;
+            db.apply_schema(scaling_schema())?;
+            let inputs = (1..=records).map(scaling_record).collect::<Vec<_>>();
+            let ((_, timing), elapsed_ms) = timed_value_ms(|| {
+                db.put_batch_with_write_timing(RecordPutBatchRequest::new(inputs))
+            })?;
+            batch_latencies.push(elapsed_ms);
+            record_write_timing_samples(&timing, &mut phase_samples);
+            wal_sizes.push(wal_bytes(&data_dir));
+            data_dir_sizes.push(directory_size(&data_dir));
+        }
+        points.push(BatchWriteAttributionPoint {
+            records,
+            repetitions: config.repetitions,
+            batch_write_p50_ms: round_ms(percentile(&batch_latencies, 50.0)),
+            batch_write_p95_ms: round_ms(percentile(&batch_latencies, 95.0)),
+            batch_write_p99_ms: round_ms(percentile(&batch_latencies, 99.0)),
+            wal_bytes_p95: percentile_u64(&wal_sizes, 95.0),
+            data_dir_bytes_p95: percentile_u64(&data_dir_sizes, 95.0),
+            batch_phase_p95_ms: timing_p95_samples(&phase_samples),
+        });
+    }
+
+    Ok(BatchWriteAttributionReport {
+        benchmark: "tracedb-batch-write-attribution".to_string(),
+        point_count: points.len(),
+        max_records: *targets.last().expect("target"),
         points,
     })
 }
@@ -630,6 +712,16 @@ fn percentile(values: &[f64], p: f64) -> f64 {
     sorted[rank]
 }
 
+fn percentile_u64(values: &[u64], p: f64) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let rank = ((p / 100.0) * ((sorted.len() - 1) as f64)).round() as usize;
+    sorted[rank]
+}
+
 fn round_ms(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
 }
@@ -768,5 +860,43 @@ mod tests {
             .expect("checkpoint query phase timings")
             .iter()
             .any(|timing| timing.name == "access_path_build" && timing.p95_ms >= 0.0));
+    }
+
+    #[test]
+    fn batch_write_attribution_report_exposes_batch_phase_costs() {
+        let report = run_batch_write_attribution(BatchWriteAttributionConfig {
+            record_targets: vec![8],
+            repetitions: 2,
+        })
+        .expect("batch attribution report");
+
+        assert_eq!(report.benchmark, "tracedb-batch-write-attribution");
+        assert_eq!(report.points.len(), 1);
+        let point = &report.points[0];
+        assert_eq!(point.records, 8);
+        assert_eq!(point.repetitions, 2);
+        assert!(point.batch_write_p50_ms > 0.0);
+        assert!(point.batch_write_p95_ms >= point.batch_write_p50_ms);
+        assert!(point.batch_write_p99_ms >= point.batch_write_p95_ms);
+        assert!(point.wal_bytes_p95 > 0);
+        assert!(point.data_dir_bytes_p95 >= point.wal_bytes_p95);
+        for name in [
+            "store_clone",
+            "store_apply",
+            "feature_invalidation",
+            "commit_build",
+            "wal_total",
+            "manifest_total",
+            "store_install",
+            "cache_clear",
+        ] {
+            assert!(
+                point
+                    .batch_phase_p95_ms
+                    .iter()
+                    .any(|timing| timing.name == name && timing.p95_ms >= 0.0),
+                "missing batch phase {name}"
+            );
+        }
     }
 }

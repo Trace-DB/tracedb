@@ -591,6 +591,106 @@ impl TraceDb {
         Ok(epoch)
     }
 
+    pub fn put_batch_with_write_timing(
+        &mut self,
+        request: RecordPutBatchRequest,
+    ) -> Result<(Epoch, WritePathTiming)> {
+        let total_started = Instant::now();
+        let lock_started = Instant::now();
+        let _guard = WriteLock::acquire(&self.dir)?;
+        let lock_ms = elapsed_ms(lock_started);
+        let refresh_timing = self.refresh_from_disk_if_stale_with_timing()?;
+        if request.records.is_empty() {
+            return Err(TraceDbError::InvalidCommand(
+                "batch put requires at least one record".to_string(),
+            ));
+        }
+
+        let schema_lookup_started = Instant::now();
+        let schemas = request
+            .records
+            .iter()
+            .map(|input| {
+                self.manifest
+                    .table(&input.table)
+                    .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))
+                    .cloned()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let schema_lookup_ms = elapsed_ms(schema_lookup_started);
+
+        let epoch = self.manifest.latest_epoch.next();
+        let store_clone_started = Instant::now();
+        let mut staged = self.store.clone();
+        let store_clone_ms = elapsed_ms(store_clone_started);
+
+        let store_apply_started = Instant::now();
+        for (input, schema) in request.records.iter().zip(schemas.iter()) {
+            staged.apply_replacement(schema, input, epoch)?;
+        }
+        let store_apply_ms = elapsed_ms(store_apply_started);
+
+        let feature_invalidation_started = Instant::now();
+        let mut feature_invalidations = Vec::new();
+        for (input, schema) in request.records.iter().zip(schemas.iter()) {
+            feature_invalidations.extend(feature_invalidations_for_mutation(schema, input));
+        }
+        let feature_invalidation_ms = elapsed_ms(feature_invalidation_started);
+
+        let commit_build_started = Instant::now();
+        let mut module_events = Vec::new();
+        let mut seen_module_events = BTreeSet::new();
+        for schema in &schemas {
+            for event in module_events_for_schema("record.put", schema) {
+                if seen_module_events.insert((event.module_id.clone(), event.event.clone())) {
+                    module_events.push(event);
+                }
+            }
+        }
+        let commit = CommitRecord {
+            schema_epoch: self.manifest.latest_epoch,
+            policy_epoch: self.manifest.latest_epoch,
+            schema_changes: Vec::new(),
+            replacements: request.records.clone(),
+            mutations: Vec::new(),
+            deletions: Vec::new(),
+            feature_invalidations,
+            module_events,
+            ..CommitRecord::empty(epoch.get(), epoch).for_database(
+                self.manifest.database_id.clone(),
+                self.manifest.branch_id.clone(),
+            )
+        };
+        let commit_build_ms = elapsed_ms(commit_build_started);
+
+        let (_lsn, wal_timing) = self.wal.append_commit_with_timing(&commit)?;
+        let store_install_started = Instant::now();
+        self.store = staged;
+        let store_install_ms = elapsed_ms(store_install_started);
+        let manifest_timing = self.bump_manifest_with_timing(epoch)?;
+        let cache_clear_started = Instant::now();
+        self.clear_lexical_cache();
+        let cache_clear_ms = elapsed_ms(cache_clear_started);
+
+        Ok((
+            epoch,
+            WritePathTiming::from_parts(
+                elapsed_ms(total_started),
+                lock_ms,
+                refresh_timing,
+                schema_lookup_ms,
+                store_clone_ms,
+                store_apply_ms,
+                feature_invalidation_ms,
+                commit_build_ms,
+                wal_timing,
+                store_install_ms,
+                manifest_timing,
+                cache_clear_ms,
+            ),
+        ))
+    }
+
     pub fn put_with_write_timing(
         &mut self,
         request: RecordPutRequest,

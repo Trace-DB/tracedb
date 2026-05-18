@@ -1,8 +1,27 @@
 #![forbid(unsafe_code)]
 
-use tracedb_bench::{run_inprocess_scaling, BenchmarkTarget, InProcessScalingConfig, WorkloadKind};
+use tracedb_bench::{
+    run_batch_write_attribution, run_inprocess_scaling, BatchWriteAttributionConfig,
+    BenchmarkTarget, InProcessScalingConfig, WorkloadKind,
+};
 
 fn main() {
+    if std::env::var("TRACEDB_BENCH_MODE").as_deref() == Ok("batch-write-attribution") {
+        let report = run_batch_write_attribution(BatchWriteAttributionConfig {
+            record_targets: parse_record_targets(
+                &std::env::var("TRACEDB_BENCH_RECORD_TARGETS")
+                    .unwrap_or_else(|_| "1024,4096".to_string()),
+            ),
+            repetitions: parse_usize_env("TRACEDB_BENCH_BATCH_REPETITIONS", 3),
+        })
+        .expect("batch write attribution benchmark");
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("json report")
+        );
+        return;
+    }
+
     if std::env::var("TRACEDB_BENCH_MODE").as_deref() == Ok("inprocess-scaling") {
         let report = run_inprocess_scaling(InProcessScalingConfig {
             record_targets: parse_record_targets(

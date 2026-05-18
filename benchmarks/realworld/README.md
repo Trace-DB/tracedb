@@ -142,6 +142,21 @@ Write phase timings include lock acquisition, stale-refresh checks, WAL append,
 store clone/install, and manifest write phases so write-path changes can be
 attributed before they are promoted into optimization claims.
 
+## TraceDB Batch Write Attribution
+
+Use this lane after a batch ingest external-control run shows a write gap. It
+isolates in-process engine phases for one batch transaction, including store
+clone/apply/install, WAL, manifest, and cache-clear timing. Compare this with
+actual HTTP batch totals to estimate HTTP/server overhead before changing engine
+semantics.
+
+```bash
+TRACEDB_BENCH_MODE=batch-write-attribution \
+TRACEDB_BENCH_RECORD_TARGETS=1024,4096 \
+TRACEDB_BENCH_BATCH_REPETITIONS=3 \
+cargo run -p tracedb-bench > /tmp/tracedb-batch-write-attribution.json
+```
+
 Compare candidate scaling reports against same-machine parent reports before
 accepting write-path or storage-layout changes:
 
