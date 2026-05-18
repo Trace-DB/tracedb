@@ -322,14 +322,14 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
             "",
             "## TraceDB Attribution",
             "",
-            "| scenario | query p95 ms | query phases | server timings | http/client | response | output shape probe | access paths | storage after ingest | storage after workload |",
-            "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| scenario | query p95 ms | query phases | server timings | http/client | response | output shape probe | access paths | batch phases | batch sizes | storage after ingest | storage after workload |",
+            "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     if report.get("tracedb_attribution"):
         for item in report["tracedb_attribution"]:
             lines.append(
-                "| {scenario} | {query_p95} | {query_phases} | {server} | {http_client} | {response} | {output_shape_probe} | {access_paths} | {storage_ingest} | {storage_workload} |".format(
+                "| {scenario} | {query_p95} | {query_phases} | {server} | {http_client} | {response} | {output_shape_probe} | {access_paths} | {batch_phases} | {batch_sizes} | {storage_ingest} | {storage_workload} |".format(
                     scenario=item["scenario_id"],
                     query_p95=item.get("query", {}).get("query_latency_p95_ms", "n/a"),
                     query_phases=_metric_map_summary(item.get("query_phases", {})),
@@ -340,6 +340,8 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
                         item.get("output_shape_probe", {})
                     ),
                     access_paths=_metric_map_summary(item.get("access_paths", {})),
+                    batch_phases=_metric_map_summary(item.get("batch_phases", {})),
+                    batch_sizes=_metric_map_summary(item.get("batch_sizes", {})),
                     storage_ingest=_metric_map_summary(
                         item.get("storage_after_ingest", {})
                     ),
@@ -349,7 +351,7 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
                 )
             )
     else:
-        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
 
     lines.extend(
         [
@@ -540,6 +542,8 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
         output_shape_probe = _strip_metric_prefix(metrics, "query_output_probe_")
         server = _strip_metric_prefix(metrics, "query_server_")
         engine = _strip_metric_prefix(metrics, "query_engine_")
+        batch_phases = _strip_metric_prefix(metrics, "batch_phase_")
+        batch_sizes = _strip_metric_prefix(metrics, "batch_size_")
         storage_after_ingest = _strip_metric_prefix(metrics, "disk_bytes_after_ingest_")
         storage_after_workload = _strip_metric_prefix(metrics, "disk_bytes_after_workload_")
         if not any(
@@ -551,6 +555,8 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
                 output_shape_probe,
                 server,
                 engine,
+                batch_phases,
+                batch_sizes,
                 storage_after_ingest,
                 storage_after_workload,
             ]
@@ -576,6 +582,8 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
                 "server": server,
                 "engine": engine,
                 "access_paths": access_paths,
+                "batch_phases": batch_phases,
+                "batch_sizes": batch_sizes,
                 "storage_after_ingest": storage_after_ingest,
                 "storage_after_workload": storage_after_workload,
             }

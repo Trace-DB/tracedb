@@ -100,12 +100,17 @@ impl RecordPutRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RecordPutBatchRequest {
+    #[serde(default)]
+    pub include_write_timing: bool,
     pub records: Vec<RecordInput>,
 }
 
 impl RecordPutBatchRequest {
     pub fn new(records: Vec<RecordInput>) -> Self {
-        Self { records }
+        Self {
+            include_write_timing: false,
+            records,
+        }
     }
 }
 

@@ -142,6 +142,7 @@ class FakeTraceDb:
     def __init__(self) -> None:
         self.records: dict[tuple[str, str, str], dict] = {}
         self.batch_sizes: list[int] = []
+        self.batch_write_timing_requested: list[bool] = []
         self.query_requests: list[dict[str, object]] = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -210,6 +211,8 @@ class FakeTraceDb:
                 if self.path == "/v1/records/put-batch":
                     records = payload.get("records", [])
                     owner.batch_sizes.append(len(records))
+                    include_write_timing = bool(payload.get("include_write_timing"))
+                    owner.batch_write_timing_requested.append(include_write_timing)
                     for record in records:
                         key = (record["table"], record["tenant_id"], record["id"])
                         owner.records[key] = {
@@ -219,10 +222,20 @@ class FakeTraceDb:
                             "fields": dict(record.get("fields", {})),
                             "deleted": False,
                         }
-                    self._json(
-                        200,
-                        {"epoch": len(owner.records), "record_count": len(records)},
-                    )
+                    response = {"epoch": len(owner.records), "record_count": len(records)}
+                    if include_write_timing:
+                        response["write_timing"] = {
+                            "total_ms": 8.0,
+                            "total_without_manifest_ms": 6.5,
+                            "lock_ms": 0.25,
+                            "wal_total_ms": 3.25,
+                            "wal_payload_bytes": 4096,
+                            "wal_frame_bytes": 4160,
+                            "manifest_total_ms": 1.5,
+                            "manifest_bytes": 512,
+                            "store_apply_ms": 2.0,
+                        }
+                    self._json(200, response)
                     return
                 if self.path == "/v1/records/get":
                     key = (payload["table"], payload["tenant_id"], payload["id"])
@@ -1610,14 +1623,25 @@ class AdapterHardeningTests(unittest.TestCase):
 
         self.assertTrue(result["available"], result["notes"])
         self.assertEqual(fake.batch_sizes, [12])
+        self.assertEqual(fake.batch_write_timing_requested, [True])
         self.assertEqual(result["metrics"]["ingest_count"], 12)
         self.assertEqual(result["metrics"]["ingest_transaction_count"], 1)
         self.assertEqual(result["metrics"]["per_record_durable_transaction_count"], 0)
         self.assertEqual(result["metrics"]["batch_transaction_count"], 1)
         self.assertEqual(result["metrics"]["batch_transaction_record_count"], 12)
         self.assertIn("batch_transaction_total_latency_ms", result["metrics"])
+        self.assertEqual(result["metrics"]["batch_phase_total_latency_p95_ms"], 8.0)
+        self.assertEqual(result["metrics"]["batch_phase_wal_total_latency_p95_ms"], 3.25)
+        self.assertEqual(result["metrics"]["batch_phase_manifest_total_latency_p95_ms"], 1.5)
+        self.assertEqual(result["metrics"]["batch_size_wal_payload_bytes"], 4096)
+        self.assertEqual(result["metrics"]["batch_size_wal_frame_bytes"], 4160)
+        self.assertEqual(result["metrics"]["batch_size_manifest_bytes"], 512)
         self.assertTrue(
             any("single-transaction batch" in note for note in result["notes"]),
+            result["notes"],
+        )
+        self.assertTrue(
+            any("batch write attribution" in note for note in result["notes"]),
             result["notes"],
         )
 

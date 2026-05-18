@@ -143,8 +143,21 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
         ("POST", "/v1/records/put-batch") => {
             let request: RecordPutBatchRequest = serde_json::from_str(body).map_err(to_io_error)?;
             let record_count = request.records.len();
-            let epoch = db.lock().unwrap().put_batch(request).map_err(to_io_error)?;
-            ok(json!({ "epoch": epoch.get(), "record_count": record_count }))
+            if request.include_write_timing {
+                let (epoch, timing) = db
+                    .lock()
+                    .unwrap()
+                    .put_batch_with_write_timing(request)
+                    .map_err(to_io_error)?;
+                ok(json!({
+                    "epoch": epoch.get(),
+                    "record_count": record_count,
+                    "write_timing": timing,
+                }))
+            } else {
+                let epoch = db.lock().unwrap().put_batch(request).map_err(to_io_error)?;
+                ok(json!({ "epoch": epoch.get(), "record_count": record_count }))
+            }
         }
         ("POST", "/v1/records/patch") => {
             let request: RecordPatchRequest = serde_json::from_str(body).map_err(to_io_error)?;

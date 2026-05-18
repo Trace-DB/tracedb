@@ -217,6 +217,12 @@ class SuiteReportingTests(unittest.TestCase):
                         "query_access_path_probe_sample_count": 3,
                         "query_phase_access_path_build_latency_p95_ms": 2.25,
                         "query_access_path_lexicalpath_build_latency_p95_ms": 1.25,
+                        "batch_phase_total_latency_p95_ms": 60.0,
+                        "batch_phase_wal_total_latency_p95_ms": 26.0,
+                        "batch_phase_manifest_total_latency_p95_ms": 9.0,
+                        "batch_size_wal_payload_bytes": 315654,
+                        "batch_size_wal_frame_bytes": 315690,
+                        "batch_size_manifest_bytes": 2293,
                         "disk_bytes": 4096,
                         "disk_bytes_after_ingest_wal": 1024,
                         "disk_bytes_after_ingest_manifest_tdb": 256,
@@ -325,6 +331,10 @@ class SuiteReportingTests(unittest.TestCase):
             0,
         )
         self.assertEqual(attribution["engine"]["phase_total_latency_p95_ms"], 2.25)
+        self.assertEqual(attribution["batch_phases"]["total_latency_p95_ms"], 60.0)
+        self.assertEqual(attribution["batch_phases"]["wal_total_latency_p95_ms"], 26.0)
+        self.assertEqual(attribution["batch_sizes"]["wal_payload_bytes"], 315654)
+        self.assertEqual(attribution["batch_sizes"]["manifest_bytes"], 2293)
         self.assertEqual(attribution["storage_after_ingest"]["wal"], 1024)
         self.assertEqual(attribution["storage_after_ingest"]["manifest_tdb"], 256)
 
@@ -347,6 +357,8 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("order_valid_for_latency_comparison=1", markdown)
         self.assertIn("probe_sample_count=3", markdown)
         self.assertIn("access_path_build_latency_p95_ms", markdown)
+        self.assertIn("wal_total_latency_p95_ms=26.0", markdown)
+        self.assertIn("wal_payload_bytes=315654", markdown)
         self.assertIn("wal=1024", markdown)
 
     def test_suite_query_comparison_prefers_query_scoped_latency(self) -> None:

@@ -235,7 +235,7 @@ fn generated_smoke_benchmark_emits_json_and_markdown_for_all_baselines() {
         serde_json::from_str(&std::fs::read_to_string(&json_report).unwrap()).unwrap();
     assert_eq!(report["profile"], "smoke");
     assert_eq!(report["dataset"]["kind"], "generated");
-    assert_eq!(report["summary"]["baseline_count"], 6);
+    assert_eq!(report["summary"]["baseline_count"], 7);
     assert_eq!(report["summary"]["record_count"], 48);
 
     let baselines = report["baselines"].as_array().expect("baselines array");
@@ -246,6 +246,7 @@ fn generated_smoke_benchmark_emits_json_and_markdown_for_all_baselines() {
         "mongodb",
         "qdrant",
         "opensearch",
+        "milvus",
     ] {
         let entry = baselines
             .iter()

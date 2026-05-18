@@ -222,6 +222,8 @@ class TraceDbAdapter(BenchmarkAdapter):
             admin_compact_recorder = MetricRecorder()
             admin_snapshot_recorder = MetricRecorder()
             admin_restore_recorder = MetricRecorder()
+            batch_phase_recorders: dict[str, MetricRecorder] = {}
+            batch_size_metrics: dict[str, int] = {}
             ingest_mode = config.tracedb_ingest_mode
 
             def timed(recorder_for_operation: MetricRecorder, operation):
@@ -235,6 +237,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                         "POST",
                         "/v1/records/put-batch",
                         {
+                            "include_write_timing": True,
                             "records": [
                                 self._record_input(table, record)
                                 for record in dataset.records
@@ -247,6 +250,11 @@ class TraceDbAdapter(BenchmarkAdapter):
                     return [
                         "surface unavailable: TraceDB HTTP batch write returned an unexpected record_count"
                     ], None, []
+                _record_write_timing_metrics(
+                    batch_response.get("write_timing"),
+                    batch_phase_recorders,
+                    batch_size_metrics,
+                )
             elif ingest_mode == "per_record":
                 for record in dataset.records:
                     timed(
@@ -893,6 +901,8 @@ class TraceDbAdapter(BenchmarkAdapter):
             metrics.update(
                 _recorder_metric_fields("query_phase", query_phase_recorders)
             )
+            metrics.update(_recorder_metric_fields("batch_phase", batch_phase_recorders))
+            metrics.update(_byte_metric_fields("batch_size", batch_size_metrics))
             metrics.update(_single_recorder_metric_fields("query_http_client", query_recorder))
             metrics.update(
                 _recorder_metric_fields(
@@ -1110,6 +1120,12 @@ class TraceDbAdapter(BenchmarkAdapter):
                     f"phases={len(query_phase_recorders)}; "
                     f"access_paths={len(query_access_path_build_recorders)}"
                 )
+            if batch_phase_recorders or batch_size_metrics:
+                notes.append(
+                    "TraceDB HTTP batch write attribution recorded: "
+                    f"phases={len(batch_phase_recorders)}; "
+                    f"sizes={len(batch_size_metrics)}"
+                )
             if query_server_timing_recorders or query_http_client_overhead_recorder.latencies_ms:
                 notes.append(
                     "TraceDB HTTP server/client query attribution recorded: "
@@ -1276,6 +1292,70 @@ def _explain_phase_total_ms(explain: dict[str, Any]) -> float | None:
     return total if found else None
 
 
+def _record_write_timing_metrics(
+    timing: Any,
+    phase_recorders: dict[str, MetricRecorder],
+    size_metrics: dict[str, int],
+) -> None:
+    if not isinstance(timing, dict):
+        return
+    total_ms = _float_metric(timing.get("total_ms"))
+    manifest_total_ms = _float_metric(timing.get("manifest_total_ms"))
+    total_without_manifest_ms = _float_metric(timing.get("total_without_manifest_ms"))
+    if (
+        total_without_manifest_ms is None
+        and total_ms is not None
+        and manifest_total_ms is not None
+    ):
+        total_without_manifest_ms = max(total_ms - manifest_total_ms, 0.0)
+    phase_values = [
+        ("total", total_ms),
+        ("total_without_manifest", total_without_manifest_ms),
+        ("lock", _float_metric(timing.get("lock_ms"))),
+        ("refresh_total", _float_metric(timing.get("refresh_total_ms"))),
+        ("refresh_manifest_read", _float_metric(timing.get("refresh_manifest_read_ms"))),
+        ("refresh_wal_tail", _float_metric(timing.get("refresh_wal_tail_ms"))),
+        ("refresh_reopen", _float_metric(timing.get("refresh_reopen_ms"))),
+        ("schema_lookup", _float_metric(timing.get("schema_lookup_ms"))),
+        ("store_clone", _float_metric(timing.get("store_clone_ms"))),
+        ("store_apply", _float_metric(timing.get("store_apply_ms"))),
+        ("feature_invalidation", _float_metric(timing.get("feature_invalidation_ms"))),
+        ("commit_build", _float_metric(timing.get("commit_build_ms"))),
+        ("wal_total", _float_metric(timing.get("wal_total_ms"))),
+        ("wal_lock_tail", _float_metric(timing.get("wal_lock_tail_ms"))),
+        ("wal_frame_build", _float_metric(timing.get("wal_frame_build_ms"))),
+        ("wal_commit_prepare", _float_metric(timing.get("wal_commit_prepare_ms"))),
+        ("wal_serialize", _float_metric(timing.get("wal_serialize_ms"))),
+        ("wal_payload_checksum", _float_metric(timing.get("wal_payload_checksum_ms"))),
+        ("wal_frame_assembly", _float_metric(timing.get("wal_frame_assembly_ms"))),
+        ("wal_write", _float_metric(timing.get("wal_write_ms"))),
+        ("wal_sync_data", _float_metric(timing.get("wal_sync_data_ms"))),
+        ("wal_tail_update", _float_metric(timing.get("wal_tail_update_ms"))),
+        ("store_install", _float_metric(timing.get("store_install_ms"))),
+        ("manifest_total", manifest_total_ms),
+        ("manifest_clone", _float_metric(timing.get("manifest_clone_ms"))),
+        ("manifest_write_total", _float_metric(timing.get("manifest_write_total_ms"))),
+        ("manifest_checksum", _float_metric(timing.get("manifest_checksum_ms"))),
+        ("manifest_serialize", _float_metric(timing.get("manifest_serialize_ms"))),
+        ("manifest_write", _float_metric(timing.get("manifest_write_ms"))),
+        ("manifest_sync_file", _float_metric(timing.get("manifest_sync_file_ms"))),
+        ("manifest_rename", _float_metric(timing.get("manifest_rename_ms"))),
+        ("manifest_sync_dir", _float_metric(timing.get("manifest_sync_dir_ms"))),
+        ("cache_clear", _float_metric(timing.get("cache_clear_ms"))),
+    ]
+    for name, value in phase_values:
+        if value is not None:
+            phase_recorders.setdefault(name, MetricRecorder()).latencies_ms.append(value)
+    for source_name, metric_name in [
+        ("wal_payload_bytes", "wal_payload_bytes"),
+        ("wal_frame_bytes", "wal_frame_bytes"),
+        ("manifest_bytes", "manifest_bytes"),
+    ]:
+        value = _int_metric(timing.get(source_name))
+        if value is not None:
+            size_metrics[metric_name] = value
+
+
 def _record_server_timing_metrics(
     headers: dict[str, str],
     recorders: dict[str, MetricRecorder],
@@ -1398,6 +1478,10 @@ def _top_level_byte_metric_fields(prefix: str, values: dict[str, int]) -> dict[s
     return {f"{prefix}_{name}": bytes_value for name, bytes_value in sorted(values.items())}
 
 
+def _byte_metric_fields(prefix: str, values: dict[str, int]) -> dict[str, int]:
+    return {f"{prefix}_{name}": bytes_value for name, bytes_value in sorted(values.items())}
+
+
 def _metric_token(value: str) -> str:
     token = "".join(character.lower() if character.isalnum() else "_" for character in value)
     return "_".join(part for part in token.split("_") if part)
@@ -1408,6 +1492,15 @@ def _float_metric(value: Any) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_metric(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 

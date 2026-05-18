@@ -202,12 +202,26 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         r#"{"records":[{"table":"docs","id":"b","tenant_id":"tenant-a","fields":{"id":"b","tenant":"tenant-a","body":"batch http write","status":"draft","embedding":[0.0,1.0,0.0]}}]}"#,
         "\"record_count\":1",
     );
+    let batch_timing_response = http_response(
+        addr,
+        "POST",
+        "/v1/records/put-batch",
+        r#"{"include_write_timing":true,"records":[{"table":"docs","id":"c","tenant_id":"tenant-a","fields":{"id":"c","tenant":"tenant-a","body":"timed batch http write","status":"draft","embedding":[0.0,0.0,1.0]}}]}"#,
+    );
+    assert!(
+        batch_timing_response.contains("\"write_timing\""),
+        "batch write timing response missing write_timing: {batch_timing_response}"
+    );
+    assert!(
+        batch_timing_response.contains("\"wal_payload_bytes\""),
+        "batch write timing response missing WAL byte attribution: {batch_timing_response}"
+    );
     assert_http_contains(
         addr,
         "POST",
         "/v1/records/patch",
         r#"{"table":"docs","tenant_id":"tenant-a","id":"a","fields":{"status":"published"}}"#,
-        "\"epoch\":4",
+        "\"epoch\":5",
     );
     assert_http_contains(
         addr,
@@ -221,7 +235,7 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         "POST",
         "/v1/records/scan",
         r#"{"table":"docs","tenant_id":"tenant-a","limit":10}"#,
-        "\"returned_count\":2",
+        "\"returned_count\":3",
     );
     let query_response = http_response(
         addr,
