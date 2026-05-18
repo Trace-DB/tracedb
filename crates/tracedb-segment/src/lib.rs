@@ -136,6 +136,8 @@ impl SegmentObject {
             segment_id: self.segment_id.clone(),
             generation: self.generation,
             state: self.state.clone(),
+            table_set: self.table_set.clone(),
+            tenant_set: self.tenant_set.clone(),
         }
     }
 }
@@ -145,6 +147,8 @@ pub fn published_segment(segment_id: impl Into<String>, generation: u64) -> Segm
         segment_id: segment_id.into(),
         generation,
         state: SegmentState::Published,
+        table_set: Vec::new(),
+        tenant_set: Vec::new(),
     }
 }
 

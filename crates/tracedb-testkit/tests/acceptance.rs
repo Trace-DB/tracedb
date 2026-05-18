@@ -1568,6 +1568,11 @@ fn published_segment_object_has_format_state_and_checksum() {
     let manifest = db.inspect_manifest().unwrap();
     assert_eq!(manifest.segments[0].segment_id, "seg-1");
     assert_eq!(manifest.segments[0].state, SegmentState::Published);
+    assert_eq!(manifest.segments[0].table_set, vec!["docs"]);
+    assert_eq!(
+        manifest.segments[0].tenant_set,
+        vec!["tenant-a", "tenant-b"]
+    );
     assert!(manifest.indexes.iter().any(|index| {
         index.segment_id == "seg-1"
             && index.kind == "text"
@@ -1680,6 +1685,60 @@ fn sealed_segment_text_and_vector_search_participates_in_query() {
     assert!(result.explain.segments_scanned > 0);
     assert!(result.explain.text_candidates >= 2);
     assert!(result.explain.vector_candidates > 2);
+}
+
+#[test]
+fn query_skips_segment_files_when_manifest_table_set_cannot_match() {
+    let (temp, mut db) = seeded_db();
+    db.compact().expect("compact docs segment");
+    let manifest = db.inspect_manifest().expect("manifest");
+    assert_eq!(manifest.segments.len(), 1);
+    assert_eq!(manifest.segments[0].table_set, vec!["docs"]);
+
+    let segment_path = temp
+        .path()
+        .join("segments")
+        .join(format!("{}.tseg", manifest.segments[0].segment_id));
+    std::fs::write(&segment_path, b"not a valid segment").expect("corrupt irrelevant segment");
+
+    let mut other_schema = schema();
+    other_schema.name = "other_docs".to_string();
+    db.apply_schema(other_schema).expect("other schema");
+    db.insert(RecordInput {
+        table: "other_docs".to_string(),
+        id: "other-a".to_string(),
+        tenant_id: "tenant-a".to_string(),
+        fields: json!({
+            "id": "other-a",
+            "tenant": "tenant-a",
+            "conversation": "c1",
+            "body": "fresh unrelated table evidence",
+            "embedding": [1.0, 0.0, 0.0],
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    })
+    .expect("insert other record");
+
+    let result = db
+        .query(HybridQuery {
+            table: "other_docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text: Some("fresh unrelated evidence".to_string()),
+            vector: None,
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 5,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        })
+        .expect("query should skip irrelevant corrupt segment");
+
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].record_id, "other-a");
+    assert_eq!(result.explain.segments_scanned, 0);
 }
 
 #[test]

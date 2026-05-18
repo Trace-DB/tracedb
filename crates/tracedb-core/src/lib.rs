@@ -271,6 +271,10 @@ pub struct SegmentManifest {
     pub segment_id: String,
     pub generation: u64,
     pub state: SegmentState,
+    #[serde(default)]
+    pub table_set: Vec<String>,
+    #[serde(default)]
+    pub tenant_set: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

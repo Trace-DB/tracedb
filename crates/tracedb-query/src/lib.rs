@@ -1118,6 +1118,16 @@ impl TraceDb {
             if segment.state != tracedb_core::SegmentState::Published {
                 continue;
             }
+            if !segment.table_set.is_empty()
+                && !segment.table_set.iter().any(|entry| entry == table)
+            {
+                continue;
+            }
+            if !segment.tenant_set.is_empty()
+                && !segment.tenant_set.iter().any(|entry| entry == tenant_id)
+            {
+                continue;
+            }
             let path = self
                 .dir
                 .join("segments")
