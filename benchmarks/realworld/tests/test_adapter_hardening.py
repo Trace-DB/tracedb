@@ -510,6 +510,48 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertTrue(result["available"], result["notes"])
         self.assertEqual(fake.batch_sizes, [50, 50, 30])
 
+    def test_qdrant_reports_ingest_query_and_storage_metrics(self) -> None:
+        fake = FakeQdrant().start()
+        old_url = os.environ.get("BENCH_QDRANT_URL")
+        old_storage_dir = os.environ.get("BENCH_QDRANT_STORAGE_DIR")
+        os.environ["BENCH_QDRANT_URL"] = fake.base_url
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                storage_dir = Path(temp_dir)
+                (storage_dir / "collections").mkdir()
+                (storage_dir / "collections" / "segment.bin").write_bytes(b"x" * 1234)
+                os.environ["BENCH_QDRANT_STORAGE_DIR"] = str(storage_dir)
+
+                result = QdrantAdapter().run(
+                    generated_dataset(12, 42),
+                    RunConfig(
+                        profile="smoke",
+                        target=["qdrant"],
+                        surfaces=["sdk"],
+                        require_services=False,
+                        repo_root=".",
+                    ),
+                )
+        finally:
+            if old_url is None:
+                os.environ.pop("BENCH_QDRANT_URL", None)
+            else:
+                os.environ["BENCH_QDRANT_URL"] = old_url
+            if old_storage_dir is None:
+                os.environ.pop("BENCH_QDRANT_STORAGE_DIR", None)
+            else:
+                os.environ["BENCH_QDRANT_STORAGE_DIR"] = old_storage_dir
+            fake.stop()
+
+        metrics = result["metrics"]
+        self.assertTrue(result["available"], result["notes"])
+        self.assertIn("query_latency_p95_ms", metrics)
+        self.assertIn("ingest_latency_p95_ms", metrics)
+        self.assertGreater(metrics["ingest_transaction_total_latency_ms"], 0.0)
+        self.assertEqual(metrics["disk_bytes"], 1234)
+        self.assertEqual(metrics["disk_bytes_after_ingest"], 1234)
+        self.assertEqual(metrics["disk_bytes_after_workload"], 1234)
+
     def test_pgvector_reports_ingest_query_and_storage_metrics(self) -> None:
         fake_psycopg = FakePsycopg(storage_bytes=65_536)
         old_psycopg = sys.modules.get("psycopg")
