@@ -9,8 +9,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .base import BenchmarkAdapter, command_exists, in_memory_search_metrics
-from ..http import request_json, request_json_with_headers
-from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k, same_file_recall_at_k
+from ..http import request_json, request_json_with_response
+from ..metrics import (
+    MetricRecorder,
+    mrr_at_k,
+    ndcg_at_k,
+    percentile,
+    recall_at_k,
+    same_file_recall_at_k,
+)
 from ..types import DatasetBundle, RunConfig
 
 
@@ -170,9 +177,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             path: str,
             body: dict[str, Any] | None = None,
             timeout: float = http_timeout,
-        ) -> tuple[dict[str, Any], dict[str, str]]:
+        ) -> tuple[dict[str, Any], dict[str, str], dict[str, float | int]]:
             try:
-                return request_json_with_headers(
+                return request_json_with_response(
                     method, f"{base_url}{path}", body, timeout=timeout
                 )
             except Exception as error:
@@ -306,8 +313,15 @@ class TraceDbAdapter(BenchmarkAdapter):
             query_server_timing_recorders: dict[str, MetricRecorder] = {}
             query_engine_phase_total_recorder = MetricRecorder()
             query_http_client_overhead_recorder = MetricRecorder()
+            query_http_client_header_overhead_recorder = MetricRecorder()
+            query_http_client_unattributed_overhead_recorder = MetricRecorder()
+            query_http_response_timing_recorders: dict[str, MetricRecorder] = {}
+            query_http_response_body_bytes: list[float] = []
+            query_http_response_content_length_bytes: list[float] = []
+            query_http_response_content_length_missing_count = 0
+            query_http_response_content_length_mismatch_count = 0
             for query in dataset.queries:
-                result, response_headers = timed(
+                result, response_headers, response_meta = timed(
                     query_recorder,
                     lambda query=query: call_with_headers(
                         "query allow-dirty",
@@ -329,11 +343,32 @@ class TraceDbAdapter(BenchmarkAdapter):
                 server_timings = _record_server_timing_metrics(
                     response_headers, query_server_timing_recorders
                 )
+                _record_response_metadata_metrics(
+                    response_meta,
+                    query_http_response_timing_recorders,
+                    query_http_response_body_bytes,
+                    query_http_response_content_length_bytes,
+                )
+                query_http_response_content_length_missing_count += int(
+                    response_meta.get("content_length_missing", 0)
+                )
+                query_http_response_content_length_mismatch_count += int(
+                    response_meta.get("content_length_mismatch", 0)
+                )
                 server_prewrite_ms = server_timings.get("prewrite_total")
                 if server_prewrite_ms is not None:
-                    query_http_client_overhead_recorder.latencies_ms.append(
-                        max(query_client_ms - server_prewrite_ms, 0.0)
-                    )
+                    client_overhead_ms = max(query_client_ms - server_prewrite_ms, 0.0)
+                    query_http_client_overhead_recorder.latencies_ms.append(client_overhead_ms)
+                    header_wait_ms = _float_metric(response_meta.get("header_wait_ms"))
+                    if header_wait_ms is not None:
+                        query_http_client_header_overhead_recorder.latencies_ms.append(
+                            max(header_wait_ms - server_prewrite_ms, 0.0)
+                        )
+                    processing_ms = _float_metric(response_meta.get("processing_ms"))
+                    if processing_ms is not None:
+                        query_http_client_unattributed_overhead_recorder.latencies_ms.append(
+                            max(client_overhead_ms - processing_ms, 0.0)
+                        )
                 ids = [row.get("record_id") for row in result.get("results", [])]
                 off_category_ids = [
                     record_id
@@ -612,6 +647,42 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "query_http_client_overhead", query_http_client_overhead_recorder
                 )
             )
+            metrics.update(
+                _single_recorder_metric_fields(
+                    "query_http_client_header_overhead",
+                    query_http_client_header_overhead_recorder,
+                )
+            )
+            metrics.update(
+                _single_recorder_metric_fields(
+                    "query_http_client_unattributed_overhead",
+                    query_http_client_unattributed_overhead_recorder,
+                )
+            )
+            metrics.update(
+                _response_byte_metric_fields(
+                    "query_http_response_body_bytes",
+                    query_http_response_body_bytes,
+                )
+            )
+            metrics.update(
+                _response_byte_metric_fields(
+                    "query_http_response_content_length_bytes",
+                    query_http_response_content_length_bytes,
+                )
+            )
+            metrics.update(
+                _recorder_metric_fields(
+                    "query_http_response",
+                    query_http_response_timing_recorders,
+                )
+            )
+            metrics["query_http_response_content_length_missing_count"] = (
+                query_http_response_content_length_missing_count
+            )
+            metrics["query_http_response_content_length_mismatch_count"] = (
+                query_http_response_content_length_mismatch_count
+            )
             metrics.update(_recorder_metric_fields("query_server", query_server_timing_recorders))
             metrics.update(
                 _recorder_metric_fields(
@@ -672,6 +743,13 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "TraceDB HTTP server/client query attribution recorded: "
                     f"server_timing_fields={len(query_server_timing_recorders)}; "
                     f"client_overhead_samples={len(query_http_client_overhead_recorder.latencies_ms)}"
+                )
+            if query_http_response_body_bytes:
+                notes.append(
+                    "TraceDB HTTP response attribution recorded: "
+                    f"body_bytes_p95={metrics.get('query_http_response_body_bytes_p95', 0)}; "
+                    "content_length_mismatches="
+                    f"{query_http_response_content_length_mismatch_count}"
                 )
             if disk_bytes_after_ingest_by_top_level:
                 notes.append(
@@ -833,12 +911,46 @@ def _record_server_timing_metrics(
     return values
 
 
+def _record_response_metadata_metrics(
+    response_meta: dict[str, float | int],
+    timing_recorders: dict[str, MetricRecorder],
+    body_bytes: list[float],
+    content_length_bytes: list[float],
+) -> None:
+    body_byte_count = _float_metric(response_meta.get("body_bytes"))
+    if body_byte_count is not None:
+        body_bytes.append(body_byte_count)
+    content_length = _float_metric(response_meta.get("content_length_bytes"))
+    if content_length is not None:
+        content_length_bytes.append(content_length)
+    for source_name, metric_name in [
+        ("header_wait_ms", "header_wait"),
+        ("body_read_ms", "body_read"),
+        ("decode_ms", "decode"),
+        ("json_parse_ms", "json_parse"),
+        ("processing_ms", "processing"),
+    ]:
+        value = _float_metric(response_meta.get(source_name))
+        if value is not None:
+            timing_recorders.setdefault(metric_name, MetricRecorder()).latencies_ms.append(value)
+
+
 def _single_recorder_metric_fields(
     prefix: str, recorder: MetricRecorder
 ) -> dict[str, float | int]:
     fields: dict[str, float | int] = {f"{prefix}_count": len(recorder.latencies_ms)}
     fields.update({f"{prefix}_{key}": value for key, value in recorder.summary().items()})
     return fields
+
+
+def _response_byte_metric_fields(prefix: str, values: list[float]) -> dict[str, float | int]:
+    if not values:
+        return {}
+    return {
+        f"{prefix}_p50": round(percentile(values, 50), 3),
+        f"{prefix}_p95": round(percentile(values, 95), 3),
+        f"{prefix}_p99": round(percentile(values, 99), 3),
+    }
 
 
 def _recorder_metric_fields(

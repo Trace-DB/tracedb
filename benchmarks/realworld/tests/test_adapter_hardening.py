@@ -782,6 +782,79 @@ class AdapterHardeningTests(unittest.TestCase):
             result["notes"],
         )
 
+    def test_request_json_with_response_reports_response_metadata(self) -> None:
+        from runner.http import request_json_with_response
+
+        fake = FakeTraceDb().start()
+        try:
+            payload, headers, response_meta = request_json_with_response(
+                "GET", f"{fake.base_url}/ready"
+            )
+        finally:
+            fake.stop()
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertIn("content-length", headers)
+        self.assertEqual(
+            response_meta["content_length_bytes"],
+            int(headers["content-length"]),
+        )
+        self.assertEqual(response_meta["body_bytes"], response_meta["content_length_bytes"])
+        self.assertEqual(response_meta["content_length_missing"], 0)
+        self.assertEqual(response_meta["content_length_mismatch"], 0)
+        for key in [
+            "header_wait_ms",
+            "body_read_ms",
+            "decode_ms",
+            "json_parse_ms",
+            "processing_ms",
+        ]:
+            self.assertIn(key, response_meta)
+            self.assertGreaterEqual(response_meta[key], 0.0)
+
+    def test_tracedb_http_surface_reports_response_size_and_client_overhead_attribution(self) -> None:
+        fake = FakeTraceDb().start()
+        old_url = os.environ.get("TRACEDB_HTTP_URL")
+        try:
+            os.environ["TRACEDB_HTTP_URL"] = fake.base_url
+            result = TraceDbAdapter().run(
+                generated_dataset(12, 42),
+                RunConfig(
+                    profile="smoke",
+                    target=["tracedb"],
+                    surfaces=["http"],
+                    require_services=False,
+                    repo_root=".",
+                    run_id="response-attribution",
+                ),
+            )
+        finally:
+            if old_url is None:
+                os.environ.pop("TRACEDB_HTTP_URL", None)
+            else:
+                os.environ["TRACEDB_HTTP_URL"] = old_url
+            fake.stop()
+
+        self.assertTrue(result["available"], result["notes"])
+        metrics = result["metrics"]
+        self.assertGreater(metrics["query_http_response_body_bytes_p95"], 0)
+        self.assertEqual(
+            metrics["query_http_response_body_bytes_p95"],
+            metrics["query_http_response_content_length_bytes_p95"],
+        )
+        self.assertEqual(metrics["query_http_response_content_length_missing_count"], 0)
+        self.assertEqual(metrics["query_http_response_content_length_mismatch_count"], 0)
+        self.assertIn("query_http_response_body_read_latency_p95_ms", metrics)
+        self.assertIn("query_http_response_decode_latency_p95_ms", metrics)
+        self.assertIn("query_http_response_json_parse_latency_p95_ms", metrics)
+        self.assertIn("query_http_response_processing_latency_p95_ms", metrics)
+        self.assertIn("query_http_client_header_overhead_latency_p95_ms", metrics)
+        self.assertIn("query_http_client_unattributed_overhead_latency_p95_ms", metrics)
+        self.assertTrue(
+            any("response attribution" in note for note in result["notes"]),
+            result["notes"],
+        )
+
     def test_tracedb_http_surface_can_use_batch_ingest_mode(self) -> None:
         fake = FakeTraceDb().start()
         old_url = os.environ.get("TRACEDB_HTTP_URL")

@@ -740,6 +740,10 @@ class ModalBenchTests(unittest.TestCase):
                             "latency_p95_ms": 4.0,
                             "overhead_latency_p95_ms": 2.5,
                         },
+                        "response": {
+                            "body_bytes_p95": 2048,
+                            "processing_latency_p95_ms": 0.4,
+                        },
                         "server": {"engine_latency_p95_ms": 1.0},
                         "engine": {"phase_total_latency_p95_ms": 1.5},
                         "access_paths": {},
@@ -793,6 +797,10 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(
             summary["tracedb_attribution"][0]["http_client"]["overhead_latency_p95_ms"],
             2.5,
+        )
+        self.assertEqual(
+            summary["tracedb_attribution"][0]["response"]["body_bytes_p95"],
+            2048,
         )
 
 

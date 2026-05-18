@@ -177,9 +177,14 @@ class SuiteReportingTests(unittest.TestCase):
                         "query_latency_p95_ms": 3.5,
                         "query_http_client_latency_p95_ms": 3.5,
                         "query_http_client_overhead_latency_p95_ms": 1.0,
+                        "query_http_client_unattributed_overhead_latency_p95_ms": 0.6,
                         "query_server_engine_latency_p95_ms": 2.0,
                         "query_server_prewrite_total_latency_p95_ms": 2.5,
                         "query_engine_phase_total_latency_p95_ms": 2.25,
+                        "query_http_response_body_bytes_p95": 4096,
+                        "query_http_response_content_length_bytes_p95": 4096,
+                        "query_http_response_processing_latency_p95_ms": 0.4,
+                        "query_http_response_content_length_mismatch_count": 0,
                         "query_phase_access_path_build_latency_p95_ms": 2.25,
                         "query_access_path_lexicalpath_build_latency_p95_ms": 1.25,
                         "disk_bytes": 4096,
@@ -243,6 +248,15 @@ class SuiteReportingTests(unittest.TestCase):
         )
         self.assertEqual(attribution["http_client"]["latency_p95_ms"], 3.5)
         self.assertEqual(attribution["http_client"]["overhead_latency_p95_ms"], 1.0)
+        self.assertEqual(
+            attribution["http_client"]["unattributed_overhead_latency_p95_ms"],
+            0.6,
+        )
+        self.assertEqual(attribution["response"]["body_bytes_p95"], 4096)
+        self.assertEqual(
+            attribution["response"]["content_length_bytes_p95"],
+            4096,
+        )
         self.assertEqual(attribution["server"]["engine_latency_p95_ms"], 2.0)
         self.assertEqual(attribution["engine"]["phase_total_latency_p95_ms"], 2.25)
         self.assertEqual(attribution["storage_after_ingest"]["wal"], 1024)
@@ -256,6 +270,7 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("## TraceDB Attribution", markdown)
         self.assertIn("engine_latency_p95_ms=2.0", markdown)
         self.assertIn("overhead_latency_p95_ms=1.0", markdown)
+        self.assertIn("body_bytes_p95=4096", markdown)
         self.assertIn("access_path_build_latency_p95_ms", markdown)
         self.assertIn("wal=1024", markdown)
 
