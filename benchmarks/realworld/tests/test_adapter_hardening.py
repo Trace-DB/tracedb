@@ -14,6 +14,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from runner.adapters.mongodb import MongoAdapter
+from runner.adapters.milvus import MilvusAdapter
 from runner.adapters.qdrant import QdrantAdapter
 from runner.adapters.opensearch import OpenSearchAdapter
 from runner.adapters.pgvector import PgVectorAdapter
@@ -497,6 +498,73 @@ class FakeMongoCursor:
         return iter(self.rows)
 
 
+class FakePyMilvus:
+    def __init__(self) -> None:
+        self.client = FakeMilvusClient()
+        self.client_uris: list[str] = []
+
+    def MilvusClient(self, uri: str, **_kwargs: object) -> "FakeMilvusClient":
+        self.client_uris.append(uri)
+        return self.client
+
+
+class FakeMilvusClient:
+    def __init__(self) -> None:
+        self.collections: dict[str, list[dict[str, object]]] = {}
+        self.created: list[dict[str, object]] = []
+        self.search_filters: list[str] = []
+        self.flush_count = 0
+        self.closed = False
+
+    def create_collection(self, **kwargs: object) -> None:
+        collection = str(kwargs["collection_name"])
+        self.created.append(dict(kwargs))
+        self.collections[collection] = []
+
+    def insert(self, collection_name: str, data: list[dict[str, object]]) -> None:
+        self.collections.setdefault(collection_name, []).extend(data)
+
+    def flush(self, collection_name: str) -> None:
+        if collection_name not in self.collections:
+            raise AssertionError(f"unknown collection {collection_name!r}")
+        self.flush_count += 1
+
+    def search(
+        self,
+        *,
+        collection_name: str,
+        data: list[list[float]],
+        filter: str,
+        limit: int,
+        output_fields: list[str],
+    ) -> list[list[dict[str, object]]]:
+        self.search_filters.append(filter)
+        tenant = _filter_value(filter, "tenant_id")
+        category = _filter_value(filter, "category")
+        rows = [
+            {
+                "entity": {
+                    field: record.get(field)
+                    for field in output_fields
+                    if field in record
+                }
+            }
+            for record in self.collections.get(collection_name, [])
+            if record.get("tenant_id") == tenant and record.get("category") == category
+        ]
+        return [rows[:limit]]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _filter_value(filter_text: str, field: str) -> str:
+    prefix = f'{field} == "'
+    start = filter_text.index(prefix) + len(prefix)
+    end = filter_text.index('"', start)
+    return filter_text[start:end]
+
+
 class AdapterHardeningTests(unittest.TestCase):
     def test_external_qrels_loaders_use_current_hf_configs(self) -> None:
         class FakeDataset(list):
@@ -823,6 +891,73 @@ class AdapterHardeningTests(unittest.TestCase):
             )
         )
         self.assertEqual(fake_psycopg.connect_calls[0][1], 2)
+
+    def test_milvus_reports_ingest_query_and_storage_metrics(self) -> None:
+        fake_pymilvus = FakePyMilvus()
+        old_pymilvus = sys.modules.get("pymilvus")
+        old_uri = os.environ.get("BENCH_MILVUS_URI")
+        old_storage_dir = os.environ.get("BENCH_MILVUS_STORAGE_DIR")
+        sys.modules["pymilvus"] = fake_pymilvus
+        os.environ["BENCH_MILVUS_URI"] = "/tmp/test-milvus-lite.db"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                storage_dir = Path(temp_dir)
+                (storage_dir / "milvus_lite.db").write_bytes(b"x" * 4096)
+                os.environ["BENCH_MILVUS_STORAGE_DIR"] = str(storage_dir)
+
+                dataset = generated_dataset(16, 42)
+                result = MilvusAdapter().run(
+                    dataset,
+                    RunConfig(
+                        profile="smoke",
+                        target=["milvus"],
+                        surfaces=["sdk"],
+                        require_services=True,
+                        repo_root=".",
+                    ),
+                )
+        finally:
+            if old_pymilvus is None:
+                sys.modules.pop("pymilvus", None)
+            else:
+                sys.modules["pymilvus"] = old_pymilvus
+            if old_uri is None:
+                os.environ.pop("BENCH_MILVUS_URI", None)
+            else:
+                os.environ["BENCH_MILVUS_URI"] = old_uri
+            if old_storage_dir is None:
+                os.environ.pop("BENCH_MILVUS_STORAGE_DIR", None)
+            else:
+                os.environ["BENCH_MILVUS_STORAGE_DIR"] = old_storage_dir
+
+        self.assertTrue(result["available"], result["notes"])
+        metrics = result["metrics"]
+        self.assertEqual(metrics["ingest_count"], 16)
+        self.assertEqual(metrics["ingest_transaction_count"], 1)
+        self.assertIn("ingest_transaction_total_latency_ms", metrics)
+        self.assertIn("setup_latency_p95_ms", metrics)
+        self.assertIn("ingest_latency_p95_ms", metrics)
+        self.assertIn("query_latency_p95_ms", metrics)
+        self.assertEqual(metrics["latency_p95_ms"], metrics["query_latency_p95_ms"])
+        self.assertEqual(metrics["disk_bytes"], 4096)
+        self.assertEqual(metrics["disk_bytes_after_ingest"], 4096)
+        self.assertEqual(metrics["disk_bytes_after_workload"], 4096)
+        self.assertEqual(len(result["query_results"]), len(dataset.queries))
+        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["expected_ids"],
+            dataset.queries[0].expected_ids,
+        )
+        self.assertIn("recall_at_k", result["query_results"][0])
+        self.assertEqual(fake_pymilvus.client_uris, ["/tmp/test-milvus-lite.db"])
+        self.assertTrue(fake_pymilvus.client.closed)
+        self.assertTrue(fake_pymilvus.client.search_filters)
+        self.assertIn("tenant_id ==", fake_pymilvus.client.search_filters[0])
+        self.assertIn("category ==", fake_pymilvus.client.search_filters[0])
+        self.assertTrue(
+            any("Milvus Lite" in note for note in result["notes"]),
+            result["notes"],
+        )
 
     def test_mongodb_reports_query_results_and_storage_metrics(self) -> None:
         fake_pymongo = FakePyMongo(storage_bytes=73_728)

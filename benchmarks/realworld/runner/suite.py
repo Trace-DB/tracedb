@@ -18,6 +18,7 @@ ROLE_DESCRIPTIONS = {
     "MongoDB": "document-store baseline for nested JSON, sparse fields, and document-shaped updates",
     "Qdrant": "vector-native baseline for approximate nearest neighbor plus payload filters",
     "OpenSearch": "lexical/search baseline for BM25-style text retrieval and search ranking",
+    "Milvus": "vector-native baseline for scalar-filtered dense-vector retrieval",
 }
 
 
@@ -76,7 +77,7 @@ SCENARIOS = {
         scenario_id="search_rag_6",
         name="Side-by-side Search/RAG 6 database comparison",
         description=(
-            "Compares TraceDB, PostgreSQL, pgvector, MongoDB, Qdrant, and OpenSearch on the same "
+            "Compares TraceDB, PostgreSQL, pgvector, MongoDB, Qdrant, OpenSearch, and Milvus on the same "
             "tenant-filtered generated RAG corpus with text, vector, scalar, and nested metadata."
         ),
         hypothesis=(
@@ -88,7 +89,7 @@ SCENARIOS = {
         pass_criteria=[
             "All configured services either report metrics or clear unavailable reasons",
             "TraceDB remains available",
-            "Comparison table includes all six baselines",
+            "Comparison table includes all configured baselines",
         ],
     ),
 }

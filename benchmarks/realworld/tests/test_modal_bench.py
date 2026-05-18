@@ -388,11 +388,71 @@ class ModalBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BENCH_MONGO_URI"):
             build_runner_env(config, base_env={})
 
+    def test_milvus_external_control_requires_explicit_guardrails(self) -> None:
+        from modal_bench import (
+            ModalSmokeConfig,
+            build_runner_env,
+            build_suite_command,
+            validate_config,
+        )
+
+        with self.assertRaisesRegex(ValueError, "external controls"):
+            validate_config(ModalSmokeConfig(target="milvus", milvus_control=True))
+        with self.assertRaisesRegex(ValueError, "milvus_control"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="tracedb",
+                    allow_external_controls=True,
+                    milvus_control=True,
+                )
+            )
+
+        config = ModalSmokeConfig(
+            run_id="modal-milvus-smoke",
+            target="milvus",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+            milvus_control=True,
+        )
+
+        validate_config(config)
+        command = build_suite_command(config)
+        env = build_runner_env(config, base_env={"PATH": os.environ.get("PATH", "")})
+
+        self.assertEqual(command[command.index("--target") + 1], "milvus")
+        self.assertIn("--require-services", command)
+        self.assertEqual(
+            env["BENCH_MILVUS_URI"],
+            "/tmp/tracedb-milvus-modal-milvus-smoke/milvus_lite.db",
+        )
+        self.assertEqual(
+            env["BENCH_MILVUS_STORAGE_DIR"],
+            "/tmp/tracedb-milvus-modal-milvus-smoke",
+        )
+        self.assertNotIn("BENCH_POSTGRES_DSN", env)
+        self.assertNotIn("BENCH_PGVECTOR_DSN", env)
+        self.assertNotIn("BENCH_QDRANT_URL", env)
+        self.assertNotIn("BENCH_MONGO_URI", env)
+
+    def test_milvus_external_control_requires_uri_when_services_are_required(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_runner_env
+
+        config = ModalSmokeConfig(
+            target="milvus",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "BENCH_MILVUS_URI"):
+            build_runner_env(config, base_env={})
+
     def test_enabled_controls_use_distinct_ports_and_dsns(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env, validate_config
 
         config = ModalSmokeConfig(
-            target="tracedb,postgres,pgvector,qdrant,opensearch,mongodb",
+            target="tracedb,postgres,pgvector,qdrant,opensearch,mongodb,milvus",
             surface="http",
             scenarios="search_rag_6",
             allow_external_controls=True,
@@ -403,6 +463,7 @@ class ModalBenchTests(unittest.TestCase):
             qdrant_control=True,
             opensearch_control=True,
             mongodb_control=True,
+            milvus_control=True,
             tracedb_port=18_080,
             postgres_port=25_432,
             pgvector_port=25_433,
@@ -425,6 +486,10 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(env["BENCH_QDRANT_URL"], "http://127.0.0.1:26333")
         self.assertEqual(env["BENCH_OPENSEARCH_URL"], "http://127.0.0.1:29200")
         self.assertEqual(env["BENCH_MONGO_URI"], "mongodb://127.0.0.1:27027")
+        self.assertEqual(
+            env["BENCH_MILVUS_URI"],
+            "/tmp/tracedb-milvus-modal-smoke/milvus_lite.db",
+        )
         self.assertEqual(env["TRACEDB_HTTP_URL"], "http://127.0.0.1:18080")
         with self.assertRaisesRegex(ValueError, "distinct ports"):
             validate_config(
@@ -854,6 +919,84 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
             self.assertIn("--require-services", run.call_args.args[0])
 
+    def test_run_suite_passes_milvus_env_without_live_milvus(self) -> None:
+        from modal_bench import ModalSmokeConfig, run_suite_and_bundle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            run_dir = reports / "modal-milvus-smoke"
+            run_dir.mkdir(parents=True)
+            suite_json = {
+                "suite_id": "modal-milvus-smoke",
+                "control_status": "external_control_available",
+                "summary": {"failure_count": 0},
+                "control_ledger": {
+                    "available_external_controls": [{"name": "milvus"}],
+                    "unavailable_external_controls": [],
+                },
+                "number_to_beat": {
+                    "query_p95_ms": {"baseline": "milvus", "value": 4.0},
+                },
+            }
+            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
+
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": "ok", "stderr": ""},
+            )()
+            config = ModalSmokeConfig(
+                run_id="modal-milvus-smoke",
+                target="milvus",
+                scenarios="search_rag_6",
+                reports_dir=str(reports),
+                bundle_dir=str(root / "bundles"),
+                min_free_mb=1_000,
+                allow_external_controls=True,
+                require_services=True,
+                milvus_control=True,
+            )
+            base_env = {"PATH": os.environ.get("PATH", "")}
+            milvus_service = type(
+                "MilvusLiteControlStub",
+                (),
+                {
+                    "data_dir": root / "milvus",
+                    "uri": str(root / "milvus" / "milvus_lite.db"),
+                },
+            )()
+            with patch.dict(os.environ, base_env, clear=True), patch(
+                "modal_bench.git_identity",
+                return_value={"commit": "test", "dirty": False, "status_short": ""},
+            ), patch(
+                "modal_bench.start_milvus_control", return_value=milvus_service
+            ) as start_milvus, patch(
+                "modal_bench.stop_milvus_control"
+            ) as stop_milvus, patch(
+                "subprocess.run", return_value=completed
+            ) as run:
+                summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
+
+            start_milvus.assert_called_once()
+            stop_milvus.assert_called_once_with(milvus_service)
+            self.assertEqual(summary["control_status"], "external_control_available")
+            self.assertEqual(summary["available_external_controls"], ["milvus"])
+            self.assertEqual(
+                summary["number_to_beat"]["query_p95_ms"]["baseline"], "milvus"
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_MILVUS_URI"],
+                "/tmp/tracedb-milvus-modal-milvus-smoke/milvus_lite.db",
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_MILVUS_STORAGE_DIR"],
+                "/tmp/tracedb-milvus-modal-milvus-smoke",
+            )
+            self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
+            self.assertIn("--require-services", run.call_args.args[0])
+
     def test_run_suite_starts_tracedb_engine_control_and_passes_http_env(self) -> None:
         from modal_bench import ModalSmokeConfig, run_suite_and_bundle
 
@@ -1159,6 +1302,10 @@ class ModalBenchTests(unittest.TestCase):
             "mongodb",
         )
         self.assertEqual(
+            modal_image_kind_from_args(["modal_bench.py", "--milvus-control"]),
+            "milvus",
+        )
+        self.assertEqual(
             modal_image_kind_from_args(
                 ["modal_bench.py", "--tracedb-engine-control", "--pgvector-control"]
             ),
@@ -1184,6 +1331,12 @@ class ModalBenchTests(unittest.TestCase):
         )
         self.assertEqual(
             modal_image_kind_from_args(
+                ["modal_bench.py", "--tracedb-engine-control", "--milvus-control"]
+            ),
+            "tracedb_milvus",
+        )
+        self.assertEqual(
+            modal_image_kind_from_args(
                 [
                     "modal_bench.py",
                     "--tracedb-engine-control",
@@ -1195,7 +1348,7 @@ class ModalBenchTests(unittest.TestCase):
         )
         self.assertEqual(
             modal_image_kind_from_args(
-                ["modal_bench.py", "--pgvector-control", "--opensearch-control"]
+                ["modal_bench.py", "--pgvector-control", "--milvus-control"]
             ),
             "external_controls",
         )

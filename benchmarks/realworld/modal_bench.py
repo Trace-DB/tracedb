@@ -63,6 +63,9 @@ OPENSEARCH_URL_ENV = "BENCH_OPENSEARCH_URL"
 OPENSEARCH_STORAGE_DIR_ENV = "BENCH_OPENSEARCH_STORAGE_DIR"
 MONGO_URI_ENV = "BENCH_MONGO_URI"
 MONGO_STORAGE_DIR_ENV = "BENCH_MONGO_STORAGE_DIR"
+MILVUS_URI_ENV = "BENCH_MILVUS_URI"
+MILVUS_TOKEN_ENV = "BENCH_MILVUS_TOKEN"
+MILVUS_STORAGE_DIR_ENV = "BENCH_MILVUS_STORAGE_DIR"
 TRACEDB_HTTP_URL_ENV = "TRACEDB_HTTP_URL"
 TRACEDB_HTTP_DATA_DIR_ENV = "TRACEDB_HTTP_DATA_DIR"
 EXTERNAL_CONTROL_TARGETS = {
@@ -78,6 +81,7 @@ SENSITIVE_ENV_KEYS = {
     POSTGRES_DSN_ENV,
     PGVECTOR_DSN_ENV,
     MONGO_URI_ENV,
+    MILVUS_TOKEN_ENV,
     "OPENROUTER_API_KEY",
     "TRACEDB_HTTP_BEARER_TOKEN",
 }
@@ -128,6 +132,7 @@ class ModalSmokeConfig:
     qdrant_control: bool = False
     opensearch_control: bool = False
     mongodb_control: bool = False
+    milvus_control: bool = False
     tracedb_port: int = 18_080
     postgres_port: int = 25_432
     pgvector_port: int = 25_433
@@ -182,6 +187,10 @@ def validate_config(config: ModalSmokeConfig) -> None:
         raise ValueError("mongodb_control needs allow_external_controls=True")
     if config.mongodb_control and not target_needs_mongodb(config):
         raise ValueError("mongodb_control needs target including mongodb or all")
+    if config.milvus_control and not config.allow_external_controls:
+        raise ValueError("milvus_control needs allow_external_controls=True")
+    if config.milvus_control and not target_needs_milvus(config):
+        raise ValueError("milvus_control needs target including milvus or all")
     ports = []
     if config.tracedb_engine_control:
         ports.append(("tracedb_engine_control", config.tracedb_port))
@@ -219,6 +228,7 @@ def modal_image_kind_from_flags(
     qdrant_control: bool = False,
     opensearch_control: bool = False,
     mongodb_control: bool = False,
+    milvus_control: bool = False,
 ) -> str:
     external_count = sum(
         int(enabled)
@@ -228,6 +238,7 @@ def modal_image_kind_from_flags(
             qdrant_control,
             opensearch_control,
             mongodb_control,
+            milvus_control,
         )
     )
     if tracedb_engine_control and external_count > 1:
@@ -242,6 +253,8 @@ def modal_image_kind_from_flags(
         return "tracedb_opensearch"
     if tracedb_engine_control and mongodb_control:
         return "tracedb_mongodb"
+    if tracedb_engine_control and milvus_control:
+        return "tracedb_milvus"
     if tracedb_engine_control:
         return "tracedb"
     if pgvector_control:
@@ -252,6 +265,8 @@ def modal_image_kind_from_flags(
         return "opensearch"
     if mongodb_control:
         return "mongodb"
+    if milvus_control:
+        return "milvus"
     if postgres_control:
         return "postgres"
     return "base"
@@ -268,6 +283,7 @@ def modal_image_kind_from_args(argv: list[str]) -> str:
         qdrant_control="--qdrant-control" in argv,
         opensearch_control="--opensearch-control" in argv,
         mongodb_control="--mongodb-control" in argv,
+        milvus_control="--milvus-control" in argv,
     )
 
 
@@ -279,11 +295,13 @@ def validate_modal_image_kind(kind: str) -> str:
         "qdrant",
         "opensearch",
         "mongodb",
+        "milvus",
         "tracedb",
         "tracedb_pgvector",
         "tracedb_qdrant",
         "tracedb_opensearch",
         "tracedb_mongodb",
+        "tracedb_milvus",
         "external_controls",
         "tracedb_controls",
     }
@@ -330,6 +348,11 @@ def target_needs_opensearch(config: ModalSmokeConfig) -> bool:
 def target_needs_mongodb(config: ModalSmokeConfig) -> bool:
     targets = requested_targets(config.target)
     return "all" in targets or "mongodb" in targets
+
+
+def target_needs_milvus(config: ModalSmokeConfig) -> bool:
+    targets = requested_targets(config.target)
+    return "all" in targets or "milvus" in targets
 
 
 def surface_needs_http(config: ModalSmokeConfig) -> bool:
@@ -411,6 +434,11 @@ def build_runner_env(
         env[MONGO_STORAGE_DIR_ENV] = str(mongodb_control_data_dir(config))
     elif config.require_services and target_needs_mongodb(config) and not env.get(MONGO_URI_ENV):
         raise ValueError(f"{MONGO_URI_ENV} is required for required MongoDB control runs")
+    if config.milvus_control:
+        env[MILVUS_URI_ENV] = milvus_control_uri(config)
+        env[MILVUS_STORAGE_DIR_ENV] = str(milvus_control_data_dir(config))
+    elif config.require_services and target_needs_milvus(config) and not env.get(MILVUS_URI_ENV):
+        raise ValueError(f"{MILVUS_URI_ENV} is required for required Milvus control runs")
     if config.tracedb_engine_control:
         env[TRACEDB_HTTP_URL_ENV] = tracedb_engine_http_url(config)
         env[TRACEDB_HTTP_DATA_DIR_ENV] = str(tracedb_engine_data_dir(config))
@@ -447,6 +475,14 @@ def mongodb_control_uri(config: ModalSmokeConfig) -> str:
 
 def mongodb_control_data_dir(config: ModalSmokeConfig) -> Path:
     return Path("/tmp") / f"tracedb-mongodb-{config.run_id}"
+
+
+def milvus_control_data_dir(config: ModalSmokeConfig) -> Path:
+    return Path("/tmp") / f"tracedb-milvus-{config.run_id}"
+
+
+def milvus_control_uri(config: ModalSmokeConfig) -> str:
+    return str(milvus_control_data_dir(config) / "milvus_lite.db")
 
 
 def tracedb_engine_http_url(config: ModalSmokeConfig) -> str:
@@ -633,6 +669,7 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
     qdrant_service: QdrantControl | None = None
     opensearch_service: OpenSearchControl | None = None
     mongodb_service: MongoDbControl | None = None
+    milvus_service: MilvusLiteControl | None = None
     try:
         if config.tracedb_engine_control:
             tracedb_service = start_tracedb_engine_control(
@@ -649,6 +686,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             opensearch_service = start_opensearch_control(config)
         if config.mongodb_control:
             mongodb_service = start_mongodb_control(config)
+        if config.milvus_control:
+            milvus_service = start_milvus_control(config)
         completed = subprocess.run(
             command,
             cwd=lab_root,
@@ -659,6 +698,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             check=False,
         )
     finally:
+        if milvus_service is not None:
+            stop_milvus_control(milvus_service)
         if mongodb_service is not None:
             stop_mongodb_control(mongodb_service)
         if opensearch_service is not None:
@@ -727,6 +768,12 @@ class MongoDbControl:
     log_path: Path
     port: int
     process: subprocess.Popen[str]
+
+
+@dataclass(frozen=True)
+class MilvusLiteControl:
+    data_dir: Path
+    uri: str
 
 
 def start_tracedb_engine_control(
@@ -1139,6 +1186,18 @@ def stop_mongodb_control(service: MongoDbControl) -> None:
         service.process.wait(timeout=10)
 
 
+def start_milvus_control(config: ModalSmokeConfig) -> MilvusLiteControl:
+    data_dir = milvus_control_data_dir(config)
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True)
+    return MilvusLiteControl(data_dir=data_dir, uri=milvus_control_uri(config))
+
+
+def stop_milvus_control(_service: MilvusLiteControl) -> None:
+    return None
+
+
 def start_postgres_service(*, run_id: str, port: int, service_name: str) -> PostgresControl:
     data_dir = Path("/tmp") / f"tracedb-{service_name}-{run_id}"
     log_path = Path("/tmp") / f"tracedb-{service_name}-{run_id}.log"
@@ -1275,6 +1334,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qdrant-control", action="store_true")
     parser.add_argument("--opensearch-control", action="store_true")
     parser.add_argument("--mongodb-control", action="store_true")
+    parser.add_argument("--milvus-control", action="store_true")
     parser.add_argument("--tracedb-port", type=int, default=18_080)
     parser.add_argument("--postgres-port", type=int, default=25_432)
     parser.add_argument("--pgvector-port", type=int, default=25_433)
@@ -1321,6 +1381,7 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         qdrant_control=args.qdrant_control,
         opensearch_control=args.opensearch_control,
         mongodb_control=args.mongodb_control,
+        milvus_control=args.milvus_control,
         tracedb_port=args.tracedb_port,
         postgres_port=args.postgres_port,
         pgvector_port=args.pgvector_port,
@@ -1335,6 +1396,7 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
             qdrant_control=args.qdrant_control,
             opensearch_control=args.opensearch_control,
             mongodb_control=args.mongodb_control,
+            milvus_control=args.milvus_control,
         ),
     )
 
@@ -1613,6 +1675,12 @@ if modal is not None:
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
 
+    def milvus_control_image() -> modal.Image:
+        return modal_image()
+
+    def tracedb_milvus_control_image() -> modal.Image:
+        return tracedb_engine_image()
+
     def external_controls_image() -> modal.Image:
         return add_repo_source(
             add_mongodb_binary(
@@ -1647,6 +1715,8 @@ if modal is not None:
             return tracedb_opensearch_control_image()
         if kind == "tracedb_mongodb":
             return tracedb_mongodb_control_image()
+        if kind == "tracedb_milvus":
+            return tracedb_milvus_control_image()
         if kind == "tracedb":
             return tracedb_engine_image()
         if kind == "pgvector":
@@ -1657,6 +1727,8 @@ if modal is not None:
             return opensearch_control_image()
         if kind == "mongodb":
             return mongodb_control_image()
+        if kind == "milvus":
+            return milvus_control_image()
         if kind == "postgres":
             return modal_image("postgresql", "postgresql-client")
         return modal_image()
@@ -1702,6 +1774,7 @@ if modal is not None:
         qdrant_control: bool = False,
         opensearch_control: bool = False,
         mongodb_control: bool = False,
+        milvus_control: bool = False,
         allow_large: bool = False,
         allow_provider: bool = False,
         summary_json: str = "",
@@ -1728,6 +1801,7 @@ if modal is not None:
             qdrant_control=qdrant_control,
             opensearch_control=opensearch_control,
             mongodb_control=mongodb_control,
+            milvus_control=milvus_control,
             allow_large=allow_large,
             allow_provider=allow_provider,
             modal_app_name=modal_app_name(),

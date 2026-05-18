@@ -193,7 +193,7 @@ the Python runner also loads the mounted `.env.local` file. Secrets are never
 baked into images or committed YAML.
 
 The runner accepts a comma-separated `--target` list such as
-`--target tracedb,pgvector,qdrant`, and TraceDB-specific API surface checks can be
+`--target tracedb,pgvector,qdrant,milvus`, and TraceDB-specific API surface checks can be
 selected with `--surface sdk,cli,http,curl`.
 
 TraceDB HTTP ingest has two explicitly separate lanes:
@@ -334,6 +334,28 @@ as `mongodb_dbstats_data_size_bytes`,
 `mongodb_dbstats_storage_size_bytes`, `mongodb_dbstats_index_size_bytes`, and
 `mongodb_dbstats_total_size_bytes`. Treat `storageSize` as allocation and
 `disk_bytes` as data-dir footprint, not logical payload size.
+
+Milvus Lite external-control smoke on Modal:
+
+```bash
+TRACEDB_MODAL_APP_NAME=tracedb-milvus-smoke-a \
+modal run benchmarks/realworld/modal_bench.py \
+  --run-id modal-milvus-smoke-a \
+  --records 128 \
+  --seed 42 \
+  --target milvus \
+  --surface sdk \
+  --scenarios search_rag_6 \
+  --allow-external-controls \
+  --require-services \
+  --milvus-control \
+  --summary-json /tmp/tracedb-modal-summaries/modal-milvus-smoke-a.json
+```
+
+The first Milvus lane uses Milvus Lite through `pymilvus` and a local
+`BENCH_MILVUS_URI` file. It is an embedded vector-control smoke, not a
+standalone or distributed Milvus product benchmark. `disk_bytes` measures the
+local Lite DB file/directory, not a server-reported Milvus storage metric.
 
 TraceDB actual-engine HTTP smoke on Modal:
 
