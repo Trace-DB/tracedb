@@ -648,28 +648,39 @@ if modal is not None:
         "libssl-dev",
     )
 
-    def modal_image(*extra_packages: str) -> modal.Image:
+    def modal_base_image(*extra_packages: str) -> modal.Image:
         return (
             modal.Image.debian_slim(python_version="3.12")
             .apt_install(*BASE_APT_PACKAGES, *extra_packages)
             .pip_install_from_requirements(str(LAB_ROOT / "requirements.txt"))
-            .add_local_dir(str(REPO_ROOT), remote_path=REMOTE_REPO, ignore=MODAL_IGNORE_PATTERNS)
         )
+
+    def add_repo_source(base_image: modal.Image) -> modal.Image:
+        return base_image.add_local_dir(
+            str(REPO_ROOT),
+            remote_path=REMOTE_REPO,
+            ignore=MODAL_IGNORE_PATTERNS,
+        )
+
+    def modal_image(*extra_packages: str) -> modal.Image:
+        return add_repo_source(modal_base_image(*extra_packages))
 
     image = modal_image()
     postgres_image = modal_image("postgresql", "postgresql-client")
-    pgvector_image = modal_image(
-        "git",
-        "postgresql",
-        "postgresql-client",
-        "postgresql-server-dev-all",
-    ).run_commands(
-        "cd /tmp && "
-        f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
-        "cd pgvector && "
-        "make && "
-        "make install && "
-        "rm -rf /tmp/pgvector"
+    pgvector_image = add_repo_source(
+        modal_base_image(
+            "git",
+            "postgresql",
+            "postgresql-client",
+            "postgresql-server-dev-all",
+        ).run_commands(
+            "cd /tmp && "
+            f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
+            "cd pgvector && "
+            "make && "
+            "make install && "
+            "rm -rf /tmp/pgvector"
+        )
     )
     app = modal.App(modal_app_name())
 
