@@ -234,6 +234,7 @@ TRACEDB_MODAL_IMAGE_KIND=tracedb_pgvector \
 modal run benchmarks/realworld/modal_bench.py \
   --run-id modal-tracedb-pgvector-batch-r1024-a \
   --records 1024 \
+  --allow-large \
   --target tracedb,pgvector \
   --surface http \
   --scenarios search_rag_6 \
@@ -317,32 +318,36 @@ pgvector comparisons should use this flag together with `--pgvector-control`;
 otherwise TraceDB results remain development evidence rather than an exported
 product benchmark claim.
 
-Replicated TraceDB actual-engine plus pgvector control run:
+Replicated TraceDB actual-engine batch plus pgvector control run:
 
 ```bash
-TRACEDB_MODAL_APP_NAME=tracedb-engine-pgvector-1024-a \
+TRACEDB_MODAL_APP_NAME=tracedb-batch-pgvector-1024-a \
 TRACEDB_MODAL_IMAGE_KIND=tracedb_pgvector \
 modal run benchmarks/realworld/modal_bench.py \
-  --run-id modal-tracedb-pgvector-http-<commit>-r1024-a \
+  --run-id modal-tracedb-pgvector-batch-<commit>-r1024-a \
   --records 1024 \
   --allow-large \
   --seed 42 \
   --target tracedb,pgvector \
   --surface http \
   --scenarios search_rag_6 \
+  --tracedb-ingest-mode batch \
   --allow-external-controls \
   --require-services \
   --tracedb-engine-control \
   --pgvector-control \
-  --summary-json /tmp/tracedb-modal-summaries/modal-tracedb-pgvector-http-<commit>-r1024-a.json
+  --summary-json /tmp/tracedb-modal-summaries/modal-tracedb-pgvector-batch-<commit>-r1024-a.json
 ```
 
 Use separate `TRACEDB_MODAL_APP_NAME` values and repeat suffixes for variance
 runs. Treat `query_latency_*`, `ingest_latency_*`, `disk_bytes`,
 `disk_bytes_after_workload`, `freshness_query_*`, and admin split metrics as
 separate KPI surfaces. pgvector ingest is per-row insert inside one bulk
-transaction; TraceDB ingest is per-record durable HTTP write unless a later
-batch/transaction lane is explicitly used.
+transaction; TraceDB per-record durable HTTP write remains the default pressure
+lane, while `--tracedb-ingest-mode batch` measures one TraceDB batch
+transaction. Use TraceDB `batch_transaction_total_latency_ms` against pgvector
+`ingest_transaction_total_latency_ms` for the fair transaction-total ingest
+comparison.
 
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
 `manifest.json`. The manifest records the run config, seed, Modal app name,
