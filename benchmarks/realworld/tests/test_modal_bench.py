@@ -331,11 +331,68 @@ class ModalBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BENCH_OPENSEARCH_URL"):
             build_runner_env(config, base_env={})
 
+    def test_mongodb_external_control_requires_explicit_guardrails(self) -> None:
+        from modal_bench import (
+            ModalSmokeConfig,
+            build_runner_env,
+            build_suite_command,
+            validate_config,
+        )
+
+        with self.assertRaisesRegex(ValueError, "external controls"):
+            validate_config(ModalSmokeConfig(target="mongodb", mongodb_control=True))
+        with self.assertRaisesRegex(ValueError, "mongodb_control"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="tracedb",
+                    allow_external_controls=True,
+                    mongodb_control=True,
+                )
+            )
+
+        config = ModalSmokeConfig(
+            run_id="modal-mongodb-smoke",
+            target="mongodb",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+            mongodb_control=True,
+            mongodb_port=27_027,
+        )
+
+        validate_config(config)
+        command = build_suite_command(config)
+        env = build_runner_env(config, base_env={"PATH": os.environ.get("PATH", "")})
+
+        self.assertEqual(command[command.index("--target") + 1], "mongodb")
+        self.assertIn("--require-services", command)
+        self.assertEqual(env["BENCH_MONGO_URI"], "mongodb://127.0.0.1:27027")
+        self.assertEqual(
+            env["BENCH_MONGO_STORAGE_DIR"],
+            "/tmp/tracedb-mongodb-modal-mongodb-smoke",
+        )
+        self.assertNotIn("BENCH_POSTGRES_DSN", env)
+        self.assertNotIn("BENCH_PGVECTOR_DSN", env)
+        self.assertNotIn("BENCH_QDRANT_URL", env)
+
+    def test_mongodb_external_control_requires_uri_when_services_are_required(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_runner_env
+
+        config = ModalSmokeConfig(
+            target="mongodb",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "BENCH_MONGO_URI"):
+            build_runner_env(config, base_env={})
+
     def test_enabled_controls_use_distinct_ports_and_dsns(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env, validate_config
 
         config = ModalSmokeConfig(
-            target="tracedb,postgres,pgvector,qdrant,opensearch",
+            target="tracedb,postgres,pgvector,qdrant,opensearch,mongodb",
             surface="http",
             scenarios="search_rag_6",
             allow_external_controls=True,
@@ -345,11 +402,13 @@ class ModalBenchTests(unittest.TestCase):
             pgvector_control=True,
             qdrant_control=True,
             opensearch_control=True,
+            mongodb_control=True,
             tracedb_port=18_080,
             postgres_port=25_432,
             pgvector_port=25_433,
             qdrant_port=26_333,
             opensearch_port=29_200,
+            mongodb_port=27_027,
         )
 
         validate_config(config)
@@ -365,6 +424,7 @@ class ModalBenchTests(unittest.TestCase):
         )
         self.assertEqual(env["BENCH_QDRANT_URL"], "http://127.0.0.1:26333")
         self.assertEqual(env["BENCH_OPENSEARCH_URL"], "http://127.0.0.1:29200")
+        self.assertEqual(env["BENCH_MONGO_URI"], "mongodb://127.0.0.1:27027")
         self.assertEqual(env["TRACEDB_HTTP_URL"], "http://127.0.0.1:18080")
         with self.assertRaisesRegex(ValueError, "distinct ports"):
             validate_config(
@@ -409,6 +469,17 @@ class ModalBenchTests(unittest.TestCase):
                     opensearch_control=True,
                     qdrant_port=28_998,
                     opensearch_port=28_999,
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "distinct ports"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="qdrant,mongodb",
+                    allow_external_controls=True,
+                    qdrant_control=True,
+                    mongodb_control=True,
+                    qdrant_port=27_026,
+                    mongodb_port=27_027,
                 )
             )
 
@@ -703,6 +774,86 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
             self.assertIn("--require-services", run.call_args.args[0])
 
+    def test_run_suite_passes_mongodb_env_without_live_mongodb(self) -> None:
+        from modal_bench import ModalSmokeConfig, run_suite_and_bundle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            run_dir = reports / "modal-mongodb-smoke"
+            run_dir.mkdir(parents=True)
+            suite_json = {
+                "suite_id": "modal-mongodb-smoke",
+                "control_status": "external_control_available",
+                "summary": {"failure_count": 0},
+                "control_ledger": {
+                    "available_external_controls": [{"name": "mongodb"}],
+                    "unavailable_external_controls": [],
+                },
+                "number_to_beat": {
+                    "query_p95_ms": {"baseline": "mongodb", "value": 4.0},
+                },
+            }
+            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
+
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": "ok", "stderr": ""},
+            )()
+            config = ModalSmokeConfig(
+                run_id="modal-mongodb-smoke",
+                target="mongodb",
+                scenarios="search_rag_6",
+                reports_dir=str(reports),
+                bundle_dir=str(root / "bundles"),
+                min_free_mb=1_000,
+                allow_external_controls=True,
+                require_services=True,
+                mongodb_control=True,
+            )
+            base_env = {"PATH": os.environ.get("PATH", "")}
+            mongodb_service = type(
+                "MongoDbControlStub",
+                (),
+                {
+                    "data_dir": root / "mongodb",
+                    "log_path": root / "mongodb.log",
+                    "port": 27027,
+                    "process": None,
+                },
+            )()
+            with patch.dict(os.environ, base_env, clear=True), patch(
+                "modal_bench.git_identity",
+                return_value={"commit": "test", "dirty": False, "status_short": ""},
+            ), patch(
+                "modal_bench.start_mongodb_control", return_value=mongodb_service
+            ) as start_mongodb, patch(
+                "modal_bench.stop_mongodb_control"
+            ) as stop_mongodb, patch(
+                "subprocess.run", return_value=completed
+            ) as run:
+                summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
+
+            start_mongodb.assert_called_once()
+            stop_mongodb.assert_called_once_with(mongodb_service)
+            self.assertEqual(summary["control_status"], "external_control_available")
+            self.assertEqual(summary["available_external_controls"], ["mongodb"])
+            self.assertEqual(
+                summary["number_to_beat"]["query_p95_ms"]["baseline"], "mongodb"
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_MONGO_URI"],
+                "mongodb://127.0.0.1:27027",
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_MONGO_STORAGE_DIR"],
+                "/tmp/tracedb-mongodb-modal-mongodb-smoke",
+            )
+            self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
+            self.assertIn("--require-services", run.call_args.args[0])
+
     def test_run_suite_starts_tracedb_engine_control_and_passes_http_env(self) -> None:
         from modal_bench import ModalSmokeConfig, run_suite_and_bundle
 
@@ -817,6 +968,27 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("BENCH_PGVECTOR_DSN", manifest_text)
         self.assertNotIn("secret", manifest_text)
         self.assertEqual(manifest["runner_env"]["BENCH_PGVECTOR_DSN"], "[redacted]")
+
+    def test_manifest_redacts_mongodb_uri(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_manifest
+
+        config = ModalSmokeConfig(
+            run_id="redaction-mongodb",
+            target="mongodb",
+            allow_external_controls=True,
+            require_services=True,
+        )
+        manifest = build_manifest(
+            config,
+            ["python3", "-m", "runner", "suite"],
+            runner_env={"BENCH_MONGO_URI": "mongodb://user:secret@127.0.0.1/db"},
+        )
+
+        manifest_text = json.dumps(manifest)
+
+        self.assertIn("BENCH_MONGO_URI", manifest_text)
+        self.assertNotIn("secret", manifest_text)
+        self.assertEqual(manifest["runner_env"]["BENCH_MONGO_URI"], "[redacted]")
 
     def test_manifest_records_tracedb_http_engine_env_without_secrets(self) -> None:
         from modal_bench import ModalSmokeConfig, build_manifest
@@ -983,6 +1155,10 @@ class ModalBenchTests(unittest.TestCase):
             "opensearch",
         )
         self.assertEqual(
+            modal_image_kind_from_args(["modal_bench.py", "--mongodb-control"]),
+            "mongodb",
+        )
+        self.assertEqual(
             modal_image_kind_from_args(
                 ["modal_bench.py", "--tracedb-engine-control", "--pgvector-control"]
             ),
@@ -999,6 +1175,12 @@ class ModalBenchTests(unittest.TestCase):
                 ["modal_bench.py", "--tracedb-engine-control", "--opensearch-control"]
             ),
             "tracedb_opensearch",
+        )
+        self.assertEqual(
+            modal_image_kind_from_args(
+                ["modal_bench.py", "--tracedb-engine-control", "--mongodb-control"]
+            ),
+            "tracedb_mongodb",
         )
         self.assertEqual(
             modal_image_kind_from_args(
@@ -1029,6 +1211,14 @@ class ModalBenchTests(unittest.TestCase):
 
         self.assertIn("artifacts.opensearch.org", OPENSEARCH_RELEASE_URL)
         self.assertIn("linux-x64.tar.gz", OPENSEARCH_RELEASE_URL)
+
+    def test_mongodb_modal_release_uses_debian12_tarball(self) -> None:
+        from modal_bench import MONGODB_RELEASE_URL, MONGODB_VERSION
+
+        self.assertEqual(MONGODB_VERSION, "8.0.23")
+        self.assertIn("fastdl.mongodb.org/linux", MONGODB_RELEASE_URL)
+        self.assertIn("debian12", MONGODB_RELEASE_URL)
+        self.assertTrue(MONGODB_RELEASE_URL.endswith(".tgz"))
 
     def test_cli_config_can_override_min_free_for_tiny_local_smoke(self) -> None:
         from modal_bench import _parse_args, build_suite_command

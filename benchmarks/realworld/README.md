@@ -309,6 +309,23 @@ modal run benchmarks/realworld/modal_bench.py \
   --summary-json /tmp/tracedb-modal-summaries/modal-pgvector-smoke-a.json
 ```
 
+MongoDB external-control smoke on Modal:
+
+```bash
+TRACEDB_MODAL_APP_NAME=tracedb-mongodb-smoke-a \
+modal run benchmarks/realworld/modal_bench.py \
+  --run-id modal-mongodb-smoke-a \
+  --records 128 \
+  --seed 42 \
+  --target mongodb \
+  --surface sdk \
+  --scenarios search_rag_6 \
+  --allow-external-controls \
+  --require-services \
+  --mongodb-control \
+  --summary-json /tmp/tracedb-modal-summaries/modal-mongodb-smoke-a.json
+```
+
 TraceDB actual-engine HTTP smoke on Modal:
 
 ```bash

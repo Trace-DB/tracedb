@@ -13,6 +13,7 @@ from pathlib import Path
 LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
+from runner.adapters.mongodb import MongoAdapter
 from runner.adapters.qdrant import QdrantAdapter
 from runner.adapters.opensearch import OpenSearchAdapter
 from runner.adapters.pgvector import PgVectorAdapter
@@ -399,6 +400,85 @@ class FakePsycopgCursor:
         return self.last_rows[0] if self.last_rows else None
 
 
+class FakePyMongo:
+    def __init__(self, storage_bytes: int = 73_728) -> None:
+        self.client = FakeMongoClient(storage_bytes)
+        self.connect_calls: list[tuple[str, int]] = []
+
+    def MongoClient(self, uri: str, serverSelectionTimeoutMS: int):
+        self.connect_calls.append((uri, serverSelectionTimeoutMS))
+        return self.client
+
+
+class FakeMongoClient:
+    def __init__(self, storage_bytes: int) -> None:
+        self.admin = FakeMongoAdmin()
+        self.tracedb_bench = FakeMongoDatabase(storage_bytes)
+
+
+class FakeMongoAdmin:
+    def command(self, command: str) -> dict[str, object]:
+        if command != "ping":
+            raise AssertionError(f"unexpected admin command {command!r}")
+        return {"ok": 1}
+
+
+class FakeMongoDatabase:
+    def __init__(self, storage_bytes: int) -> None:
+        self.storage_bytes = storage_bytes
+        self.records = FakeMongoCollection()
+
+    def command(self, command: str) -> dict[str, object]:
+        if command != "dbStats":
+            raise AssertionError(f"unexpected database command {command!r}")
+        return {"storageSize": self.storage_bytes}
+
+
+class FakeMongoCollection:
+    def __init__(self) -> None:
+        self.documents: list[dict[str, object]] = []
+        self.indexes: list[list[tuple[str, int]]] = []
+
+    def delete_many(self, _filter: dict[str, object]) -> None:
+        self.documents.clear()
+
+    def insert_many(self, documents: list[dict[str, object]]) -> None:
+        self.documents.extend(documents)
+
+    def create_index(self, keys: list[tuple[str, int]]) -> None:
+        self.indexes.append(keys)
+
+    def find(self, filter_doc: dict[str, object], _projection: dict[str, int]) -> "FakeMongoCursor":
+        matches = []
+        for document in self.documents:
+            metadata = document.get("metadata", {})
+            nested = metadata.get("nested", {}) if isinstance(metadata, dict) else {}
+            if document.get("tenant_id") != filter_doc.get("tenant_id"):
+                continue
+            if document.get("category") != filter_doc.get("category"):
+                continue
+            if "priority" not in nested:
+                continue
+            matches.append(document)
+        return FakeMongoCursor(matches)
+
+
+class FakeMongoCursor:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+
+    def sort(self, _sort_spec: list[tuple[str, int]]) -> "FakeMongoCursor":
+        self.rows.sort(key=lambda row: (-float(row.get("rating", 0.0)), str(row.get("id", ""))))
+        return self
+
+    def limit(self, limit: int) -> "FakeMongoCursor":
+        self.rows = self.rows[:limit]
+        return self
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
 class AdapterHardeningTests(unittest.TestCase):
     def test_external_qrels_loaders_use_current_hf_configs(self) -> None:
         class FakeDataset(list):
@@ -725,6 +805,57 @@ class AdapterHardeningTests(unittest.TestCase):
             )
         )
         self.assertEqual(fake_psycopg.connect_calls[0][1], 2)
+
+    def test_mongodb_reports_query_results_and_storage_metrics(self) -> None:
+        fake_pymongo = FakePyMongo(storage_bytes=73_728)
+        old_pymongo = sys.modules.get("pymongo")
+        old_uri = os.environ.get("BENCH_MONGO_URI")
+        sys.modules["pymongo"] = fake_pymongo
+        os.environ["BENCH_MONGO_URI"] = "mongodb://bench:bench@127.0.0.1:27027/bench"
+        try:
+            dataset = generated_dataset(16, 42)
+            result = MongoAdapter().run(
+                dataset,
+                RunConfig(
+                    profile="smoke",
+                    target=["mongodb"],
+                    surfaces=["sdk"],
+                    require_services=True,
+                    repo_root=".",
+                ),
+            )
+        finally:
+            if old_pymongo is None:
+                sys.modules.pop("pymongo", None)
+            else:
+                sys.modules["pymongo"] = old_pymongo
+            if old_uri is None:
+                os.environ.pop("BENCH_MONGO_URI", None)
+            else:
+                os.environ["BENCH_MONGO_URI"] = old_uri
+
+        self.assertTrue(result["available"], result["notes"])
+        metrics = result["metrics"]
+        self.assertEqual(metrics["ingest_count"], 16)
+        self.assertIn("setup_latency_p95_ms", metrics)
+        self.assertIn("ingest_latency_p95_ms", metrics)
+        self.assertIn("query_latency_p95_ms", metrics)
+        self.assertEqual(metrics["latency_p95_ms"], metrics["query_latency_p95_ms"])
+        self.assertEqual(metrics["disk_bytes"], 73_728)
+        self.assertEqual(metrics["disk_bytes_after_ingest"], 73_728)
+        self.assertEqual(metrics["disk_bytes_after_workload"], 73_728)
+        self.assertEqual(len(result["query_results"]), len(dataset.queries))
+        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["expected_ids"],
+            dataset.queries[0].expected_ids,
+        )
+        self.assertIn("recall_at_k", result["query_results"][0])
+        self.assertEqual(fake_pymongo.connect_calls[0][1], 2000)
+        self.assertTrue(
+            any("dbStats" in note for note in result["notes"]),
+            result["notes"],
+        )
 
     def test_request_json_sends_optional_bearer_token(self) -> None:
         seen_headers: list[str] = []

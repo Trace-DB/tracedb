@@ -50,12 +50,19 @@ OPENSEARCH_RELEASE_URL = (
     "https://artifacts.opensearch.org/releases/bundle/opensearch/"
     f"{OPENSEARCH_VERSION}/opensearch-{OPENSEARCH_VERSION}-linux-x64.tar.gz"
 )
+MONGODB_VERSION = "8.0.23"
+MONGODB_RELEASE_URL = (
+    "https://fastdl.mongodb.org/linux/"
+    f"mongodb-linux-x86_64-debian12-{MONGODB_VERSION}.tgz"
+)
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
 PGVECTOR_DSN_ENV = "BENCH_PGVECTOR_DSN"
 QDRANT_URL_ENV = "BENCH_QDRANT_URL"
 QDRANT_STORAGE_DIR_ENV = "BENCH_QDRANT_STORAGE_DIR"
 OPENSEARCH_URL_ENV = "BENCH_OPENSEARCH_URL"
 OPENSEARCH_STORAGE_DIR_ENV = "BENCH_OPENSEARCH_STORAGE_DIR"
+MONGO_URI_ENV = "BENCH_MONGO_URI"
+MONGO_STORAGE_DIR_ENV = "BENCH_MONGO_STORAGE_DIR"
 TRACEDB_HTTP_URL_ENV = "TRACEDB_HTTP_URL"
 TRACEDB_HTTP_DATA_DIR_ENV = "TRACEDB_HTTP_DATA_DIR"
 EXTERNAL_CONTROL_TARGETS = {
@@ -70,7 +77,7 @@ EXTERNAL_CONTROL_TARGETS = {
 SENSITIVE_ENV_KEYS = {
     POSTGRES_DSN_ENV,
     PGVECTOR_DSN_ENV,
-    "BENCH_MONGO_URI",
+    MONGO_URI_ENV,
     "OPENROUTER_API_KEY",
     "TRACEDB_HTTP_BEARER_TOKEN",
 }
@@ -120,11 +127,13 @@ class ModalSmokeConfig:
     pgvector_control: bool = False
     qdrant_control: bool = False
     opensearch_control: bool = False
+    mongodb_control: bool = False
     tracedb_port: int = 18_080
     postgres_port: int = 25_432
     pgvector_port: int = 25_433
     qdrant_port: int = 26_333
     opensearch_port: int = 29_200
+    mongodb_port: int = 27_027
     modal_app_name: str = DEFAULT_MODAL_APP_NAME
     modal_image_kind: str = "base"
     source_commit: str | None = None
@@ -169,6 +178,10 @@ def validate_config(config: ModalSmokeConfig) -> None:
         raise ValueError("opensearch_control needs allow_external_controls=True")
     if config.opensearch_control and not target_needs_opensearch(config):
         raise ValueError("opensearch_control needs target including opensearch or all")
+    if config.mongodb_control and not config.allow_external_controls:
+        raise ValueError("mongodb_control needs allow_external_controls=True")
+    if config.mongodb_control and not target_needs_mongodb(config):
+        raise ValueError("mongodb_control needs target including mongodb or all")
     ports = []
     if config.tracedb_engine_control:
         ports.append(("tracedb_engine_control", config.tracedb_port))
@@ -182,6 +195,8 @@ def validate_config(config: ModalSmokeConfig) -> None:
     if config.opensearch_control:
         ports.append(("opensearch_control", config.opensearch_port))
         ports.append(("opensearch_transport_control", config.opensearch_port + 100))
+    if config.mongodb_control:
+        ports.append(("mongodb_control", config.mongodb_port))
     seen_ports: dict[int, str] = {}
     for name, port in ports:
         previous = seen_ports.get(port)
@@ -203,6 +218,7 @@ def modal_image_kind_from_flags(
     postgres_control: bool,
     qdrant_control: bool = False,
     opensearch_control: bool = False,
+    mongodb_control: bool = False,
 ) -> str:
     external_count = sum(
         int(enabled)
@@ -211,6 +227,7 @@ def modal_image_kind_from_flags(
             pgvector_control,
             qdrant_control,
             opensearch_control,
+            mongodb_control,
         )
     )
     if tracedb_engine_control and external_count > 1:
@@ -223,6 +240,8 @@ def modal_image_kind_from_flags(
         return "tracedb_qdrant"
     if tracedb_engine_control and opensearch_control:
         return "tracedb_opensearch"
+    if tracedb_engine_control and mongodb_control:
+        return "tracedb_mongodb"
     if tracedb_engine_control:
         return "tracedb"
     if pgvector_control:
@@ -231,6 +250,8 @@ def modal_image_kind_from_flags(
         return "qdrant"
     if opensearch_control:
         return "opensearch"
+    if mongodb_control:
+        return "mongodb"
     if postgres_control:
         return "postgres"
     return "base"
@@ -246,6 +267,7 @@ def modal_image_kind_from_args(argv: list[str]) -> str:
         postgres_control="--postgres-control" in argv,
         qdrant_control="--qdrant-control" in argv,
         opensearch_control="--opensearch-control" in argv,
+        mongodb_control="--mongodb-control" in argv,
     )
 
 
@@ -256,10 +278,12 @@ def validate_modal_image_kind(kind: str) -> str:
         "pgvector",
         "qdrant",
         "opensearch",
+        "mongodb",
         "tracedb",
         "tracedb_pgvector",
         "tracedb_qdrant",
         "tracedb_opensearch",
+        "tracedb_mongodb",
         "external_controls",
         "tracedb_controls",
     }
@@ -301,6 +325,11 @@ def target_needs_qdrant(config: ModalSmokeConfig) -> bool:
 def target_needs_opensearch(config: ModalSmokeConfig) -> bool:
     targets = requested_targets(config.target)
     return "all" in targets or "opensearch" in targets
+
+
+def target_needs_mongodb(config: ModalSmokeConfig) -> bool:
+    targets = requested_targets(config.target)
+    return "all" in targets or "mongodb" in targets
 
 
 def surface_needs_http(config: ModalSmokeConfig) -> bool:
@@ -377,6 +406,11 @@ def build_runner_env(
         OPENSEARCH_URL_ENV
     ):
         raise ValueError(f"{OPENSEARCH_URL_ENV} is required for required OpenSearch control runs")
+    if config.mongodb_control:
+        env[MONGO_URI_ENV] = mongodb_control_uri(config)
+        env[MONGO_STORAGE_DIR_ENV] = str(mongodb_control_data_dir(config))
+    elif config.require_services and target_needs_mongodb(config) and not env.get(MONGO_URI_ENV):
+        raise ValueError(f"{MONGO_URI_ENV} is required for required MongoDB control runs")
     if config.tracedb_engine_control:
         env[TRACEDB_HTTP_URL_ENV] = tracedb_engine_http_url(config)
         env[TRACEDB_HTTP_DATA_DIR_ENV] = str(tracedb_engine_data_dir(config))
@@ -405,6 +439,14 @@ def opensearch_control_url(config: ModalSmokeConfig) -> str:
 
 def opensearch_control_data_dir(config: ModalSmokeConfig) -> Path:
     return Path("/tmp") / f"tracedb-opensearch-{config.run_id}"
+
+
+def mongodb_control_uri(config: ModalSmokeConfig) -> str:
+    return f"mongodb://127.0.0.1:{config.mongodb_port}"
+
+
+def mongodb_control_data_dir(config: ModalSmokeConfig) -> Path:
+    return Path("/tmp") / f"tracedb-mongodb-{config.run_id}"
 
 
 def tracedb_engine_http_url(config: ModalSmokeConfig) -> str:
@@ -590,6 +632,7 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
     pgvector_service: PostgresControl | None = None
     qdrant_service: QdrantControl | None = None
     opensearch_service: OpenSearchControl | None = None
+    mongodb_service: MongoDbControl | None = None
     try:
         if config.tracedb_engine_control:
             tracedb_service = start_tracedb_engine_control(
@@ -604,6 +647,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             qdrant_service = start_qdrant_control(config)
         if config.opensearch_control:
             opensearch_service = start_opensearch_control(config)
+        if config.mongodb_control:
+            mongodb_service = start_mongodb_control(config)
         completed = subprocess.run(
             command,
             cwd=lab_root,
@@ -614,6 +659,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             check=False,
         )
     finally:
+        if mongodb_service is not None:
+            stop_mongodb_control(mongodb_service)
         if opensearch_service is not None:
             stop_opensearch_control(opensearch_service)
         if qdrant_service is not None:
@@ -668,6 +715,14 @@ class QdrantControl:
 
 @dataclass(frozen=True)
 class OpenSearchControl:
+    data_dir: Path
+    log_path: Path
+    port: int
+    process: subprocess.Popen[str]
+
+
+@dataclass(frozen=True)
+class MongoDbControl:
     data_dir: Path
     log_path: Path
     port: int
@@ -780,6 +835,26 @@ def wait_for_opensearch_ready(base_url: str, *, timeout_seconds: float = 60.0) -
             last_error = error
         time.sleep(0.25)
     raise TimeoutError(f"{base_url} did not respond before timeout: {last_error}")
+
+
+def wait_for_mongodb_ready(uri: str, *, timeout_seconds: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        client = None
+        try:
+            import pymongo
+
+            client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=1000)
+            client.admin.command("ping")
+            return
+        except Exception as error:  # pragma: no cover - exercised in Modal.
+            last_error = error
+        finally:
+            if client is not None:
+                client.close()
+        time.sleep(0.1)
+    raise TimeoutError(f"{uri} did not respond before timeout: {last_error}")
 
 
 def tail_file(path: Path, *, limit: int = 2000) -> str:
@@ -919,6 +994,45 @@ def start_opensearch_control(config: ModalSmokeConfig) -> OpenSearchControl:
     return service
 
 
+def start_mongodb_control(config: ModalSmokeConfig) -> MongoDbControl:
+    data_dir = mongodb_control_data_dir(config)
+    log_path = Path("/tmp") / f"tracedb-mongodb-{config.run_id}.log"
+    binary = mongodb_binary()
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True)
+    with log_path.open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(
+            [
+                str(binary),
+                "--dbpath",
+                str(data_dir),
+                "--bind_ip",
+                "127.0.0.1",
+                "--port",
+                str(config.mongodb_port),
+                "--nounixsocket",
+                "--quiet",
+            ],
+            cwd=Path("/tmp"),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    service = MongoDbControl(
+        data_dir=data_dir,
+        log_path=log_path,
+        port=config.mongodb_port,
+        process=process,
+    )
+    try:
+        wait_for_mongodb_ready(mongodb_control_uri(config))
+    except Exception:
+        stop_mongodb_control(service)
+        raise RuntimeError(f"MongoDB control failed to become ready; log tail: {tail_file(log_path)}")
+    return service
+
+
 def opensearch_install_dir() -> Path:
     override = os.environ.get("OPENSEARCH_HOME")
     if override:
@@ -991,6 +1105,30 @@ def stop_qdrant_control(service: QdrantControl) -> None:
 
 
 def stop_opensearch_control(service: OpenSearchControl) -> None:
+    if service.process.poll() is not None:
+        return
+    service.process.terminate()
+    try:
+        service.process.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        service.process.kill()
+        service.process.wait(timeout=10)
+
+
+def mongodb_binary() -> Path:
+    override = os.environ.get("MONGOD_BIN")
+    if override:
+        return Path(override)
+    binary = shutil.which("mongod")
+    if binary is not None:
+        return Path(binary)
+    for candidate in (Path("/usr/local/bin/mongod"), Path("/usr/bin/mongod")):
+        if candidate.exists():
+            return candidate
+    raise RuntimeError("mongod binary not found; install MongoDB in the Modal image")
+
+
+def stop_mongodb_control(service: MongoDbControl) -> None:
     if service.process.poll() is not None:
         return
     service.process.terminate()
@@ -1136,11 +1274,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pgvector-control", action="store_true")
     parser.add_argument("--qdrant-control", action="store_true")
     parser.add_argument("--opensearch-control", action="store_true")
+    parser.add_argument("--mongodb-control", action="store_true")
     parser.add_argument("--tracedb-port", type=int, default=18_080)
     parser.add_argument("--postgres-port", type=int, default=25_432)
     parser.add_argument("--pgvector-port", type=int, default=25_433)
     parser.add_argument("--qdrant-port", type=int, default=26_333)
     parser.add_argument("--opensearch-port", type=int, default=29_200)
+    parser.add_argument("--mongodb-port", type=int, default=27_027)
     parser.add_argument(
         "--summary-json",
         help="Write the returned Modal benchmark summary to a clean local JSON file.",
@@ -1180,11 +1320,13 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         pgvector_control=args.pgvector_control,
         qdrant_control=args.qdrant_control,
         opensearch_control=args.opensearch_control,
+        mongodb_control=args.mongodb_control,
         tracedb_port=args.tracedb_port,
         postgres_port=args.postgres_port,
         pgvector_port=args.pgvector_port,
         qdrant_port=args.qdrant_port,
         opensearch_port=args.opensearch_port,
+        mongodb_port=args.mongodb_port,
         modal_app_name=modal_app_name(),
         modal_image_kind=modal_image_kind_from_flags(
             tracedb_engine_control=args.tracedb_engine_control,
@@ -1192,6 +1334,7 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
             postgres_control=args.postgres_control,
             qdrant_control=args.qdrant_control,
             opensearch_control=args.opensearch_control,
+            mongodb_control=args.mongodb_control,
         ),
     )
 
@@ -1421,6 +1564,25 @@ if modal is not None:
             "rm -f /tmp/opensearch.tar.gz"
         )
 
+    def add_mongodb_binary(base_image: modal.Image) -> modal.Image:
+        return base_image.apt_install(
+            "libcurl4",
+            "libgssapi-krb5-2",
+            "libldap-common",
+            "libwrap0",
+            "libsasl2-2",
+            "libsasl2-modules",
+            "libsasl2-modules-gssapi-mit",
+            "openssl",
+            "liblzma5",
+        ).run_commands(
+            f"curl --fail --show-error --location {MONGODB_RELEASE_URL} -o /tmp/mongodb.tar.gz && "
+            "tar -xzf /tmp/mongodb.tar.gz -C /tmp && "
+            "cp /tmp/mongodb-linux-*/bin/mongod /usr/local/bin/mongod && "
+            "chmod +x /usr/local/bin/mongod && "
+            "rm -rf /tmp/mongodb.tar.gz /tmp/mongodb-linux-*"
+        )
+
     def qdrant_control_image() -> modal.Image:
         return add_repo_source(add_qdrant_binary(modal_base_image()))
 
@@ -1441,17 +1603,31 @@ if modal is not None:
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
 
+    def mongodb_control_image() -> modal.Image:
+        return add_repo_source(add_mongodb_binary(modal_base_image()))
+
+    def tracedb_mongodb_control_image() -> modal.Image:
+        return add_repo_source_for_build(
+            add_mongodb_binary(rust_modal_base_image())
+        ).run_commands(
+            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
+        )
+
     def external_controls_image() -> modal.Image:
         return add_repo_source(
-            add_opensearch_binary(
-                add_qdrant_binary(pgvector_package_image(modal_base_image()))
+            add_mongodb_binary(
+                add_opensearch_binary(
+                    add_qdrant_binary(pgvector_package_image(modal_base_image()))
+                )
             )
         )
 
     def tracedb_controls_image() -> modal.Image:
         return add_repo_source_for_build(
-            add_opensearch_binary(
-                add_qdrant_binary(pgvector_package_image(rust_modal_base_image()))
+            add_mongodb_binary(
+                add_opensearch_binary(
+                    add_qdrant_binary(pgvector_package_image(rust_modal_base_image()))
+                )
             )
         ).run_commands(
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
@@ -1469,6 +1645,8 @@ if modal is not None:
             return tracedb_qdrant_control_image()
         if kind == "tracedb_opensearch":
             return tracedb_opensearch_control_image()
+        if kind == "tracedb_mongodb":
+            return tracedb_mongodb_control_image()
         if kind == "tracedb":
             return tracedb_engine_image()
         if kind == "pgvector":
@@ -1477,6 +1655,8 @@ if modal is not None:
             return qdrant_control_image()
         if kind == "opensearch":
             return opensearch_control_image()
+        if kind == "mongodb":
+            return mongodb_control_image()
         if kind == "postgres":
             return modal_image("postgresql", "postgresql-client")
         return modal_image()
@@ -1521,6 +1701,7 @@ if modal is not None:
         pgvector_control: bool = False,
         qdrant_control: bool = False,
         opensearch_control: bool = False,
+        mongodb_control: bool = False,
         allow_large: bool = False,
         allow_provider: bool = False,
         summary_json: str = "",
@@ -1546,6 +1727,7 @@ if modal is not None:
             pgvector_control=pgvector_control,
             qdrant_control=qdrant_control,
             opensearch_control=opensearch_control,
+            mongodb_control=mongodb_control,
             allow_large=allow_large,
             allow_provider=allow_provider,
             modal_app_name=modal_app_name(),
