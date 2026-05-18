@@ -314,6 +314,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             query_http_client_overhead_recorder = MetricRecorder()
             query_http_client_header_overhead_recorder = MetricRecorder()
             query_http_client_unattributed_overhead_recorder = MetricRecorder()
+            query_http_client_phase_recorders: dict[str, MetricRecorder] = {}
             query_http_response_timing_recorders: dict[str, MetricRecorder] = {}
             query_http_response_body_bytes: list[float] = []
             query_http_response_content_length_bytes: list[float] = []
@@ -325,6 +326,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             )
             query_output_probe_count = 0
             query_output_probe_latency_recorders: dict[str, MetricRecorder] = {}
+            query_output_probe_http_client_phase_recorders: dict[
+                str, dict[str, MetricRecorder]
+            ] = {}
             query_output_probe_response_timing_recorders: dict[str, dict[str, MetricRecorder]] = {}
             query_output_probe_server_timing_recorders: dict[str, dict[str, MetricRecorder]] = {}
             query_output_probe_body_bytes: dict[str, list[float]] = {}
@@ -421,6 +425,10 @@ class TraceDbAdapter(BenchmarkAdapter):
                     query_output_probe_body_bytes.setdefault(shape, []),
                     query_output_probe_content_length_bytes.setdefault(shape, []),
                 )
+                _record_http_client_phase_metrics(
+                    response_meta,
+                    query_output_probe_http_client_phase_recorders.setdefault(shape, {}),
+                )
                 query_output_probe_content_length_missing_counts[shape] = (
                     query_output_probe_content_length_missing_counts.get(shape, 0)
                     + int(response_meta.get("content_length_missing", 0))
@@ -471,6 +479,10 @@ class TraceDbAdapter(BenchmarkAdapter):
                     query_http_response_timing_recorders,
                     query_http_response_body_bytes,
                     query_http_response_content_length_bytes,
+                )
+                _record_http_client_phase_metrics(
+                    response_meta,
+                    query_http_client_phase_recorders,
                 )
                 query_http_response_content_length_missing_count += int(
                     response_meta.get("content_length_missing", 0)
@@ -873,6 +885,12 @@ class TraceDbAdapter(BenchmarkAdapter):
             )
             metrics.update(_single_recorder_metric_fields("query_http_client", query_recorder))
             metrics.update(
+                _recorder_metric_fields(
+                    "query_http_client",
+                    query_http_client_phase_recorders,
+                )
+            )
+            metrics.update(
                 _single_recorder_metric_fields(
                     "query_engine_phase_total", query_engine_phase_total_recorder
                 )
@@ -972,6 +990,12 @@ class TraceDbAdapter(BenchmarkAdapter):
                     _response_byte_metric_fields(
                         f"query_output_probe_{shape}_content_length_bytes",
                         query_output_probe_content_length_bytes.get(shape, []),
+                    )
+                )
+                metrics.update(
+                    _recorder_metric_fields(
+                        f"query_output_probe_{shape}_http_client",
+                        query_output_probe_http_client_phase_recorders.get(shape, {}),
                     )
                 )
                 metrics.update(
@@ -1288,7 +1312,27 @@ def _record_response_metadata_metrics(
     ]:
         value = _float_metric(response_meta.get(source_name))
         if value is not None:
-            timing_recorders.setdefault(metric_name, MetricRecorder()).latencies_ms.append(value)
+            timing_recorders.setdefault(metric_name, MetricRecorder()).latencies_ms.append(
+                value
+            )
+
+
+def _record_http_client_phase_metrics(
+    response_meta: dict[str, float | int],
+    timing_recorders: dict[str, MetricRecorder],
+) -> None:
+    for source_name, metric_name in [
+        ("socket_connect_ms", "socket_connect"),
+        ("request_header_write_ms", "request_header_write"),
+        ("request_body_write_ms", "request_body_write"),
+        ("request_write_ms", "request_write"),
+        ("response_header_wait_ms", "response_header_wait"),
+    ]:
+        value = _float_metric(response_meta.get(source_name))
+        if value is not None:
+            timing_recorders.setdefault(metric_name, MetricRecorder()).latencies_ms.append(
+                value
+            )
 
 
 def _single_recorder_metric_fields(

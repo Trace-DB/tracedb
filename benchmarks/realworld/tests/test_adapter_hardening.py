@@ -911,6 +911,11 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(response_meta["content_length_mismatch"], 0)
         for key in [
             "header_wait_ms",
+            "socket_connect_ms",
+            "request_header_write_ms",
+            "request_body_write_ms",
+            "request_write_ms",
+            "response_header_wait_ms",
             "body_read_ms",
             "decode_ms",
             "json_parse_ms",
@@ -918,6 +923,10 @@ class AdapterHardeningTests(unittest.TestCase):
         ]:
             self.assertIn(key, response_meta)
             self.assertGreaterEqual(response_meta[key], 0.0)
+        self.assertGreaterEqual(
+            response_meta["header_wait_ms"],
+            response_meta["response_header_wait_ms"],
+        )
 
     def test_tracedb_http_surface_reports_response_size_and_client_overhead_attribution(self) -> None:
         fake = FakeTraceDb().start()
@@ -955,6 +964,11 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("query_http_response_decode_latency_p95_ms", metrics)
         self.assertIn("query_http_response_json_parse_latency_p95_ms", metrics)
         self.assertIn("query_http_response_processing_latency_p95_ms", metrics)
+        self.assertIn("query_http_client_socket_connect_latency_p95_ms", metrics)
+        self.assertIn("query_http_client_request_header_write_latency_p95_ms", metrics)
+        self.assertIn("query_http_client_request_body_write_latency_p95_ms", metrics)
+        self.assertIn("query_http_client_request_write_latency_p95_ms", metrics)
+        self.assertIn("query_http_client_response_header_wait_latency_p95_ms", metrics)
         self.assertIn("query_http_client_header_overhead_latency_p95_ms", metrics)
         self.assertIn("query_http_client_unattributed_overhead_latency_p95_ms", metrics)
         self.assertGreater(metrics["query_output_probe_explain_false_body_bytes_p95"], 0)
@@ -970,6 +984,14 @@ class AdapterHardeningTests(unittest.TestCase):
         )
         self.assertIn(
             "query_output_probe_explain_endpoint_response_processing_latency_p95_ms",
+            metrics,
+        )
+        self.assertIn(
+            "query_output_probe_explain_false_http_client_request_write_latency_p95_ms",
+            metrics,
+        )
+        self.assertIn(
+            "query_output_probe_explain_endpoint_http_client_response_header_wait_latency_p95_ms",
             metrics,
         )
         self.assertIn(

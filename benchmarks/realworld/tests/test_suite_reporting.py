@@ -176,6 +176,11 @@ class SuiteReportingTests(unittest.TestCase):
                         "latency_p95_ms": 7.0,
                         "query_latency_p95_ms": 3.5,
                         "query_http_client_latency_p95_ms": 3.5,
+                        "query_http_client_socket_connect_latency_p95_ms": 0.2,
+                        "query_http_client_request_header_write_latency_p95_ms": 0.1,
+                        "query_http_client_request_body_write_latency_p95_ms": 0.05,
+                        "query_http_client_request_write_latency_p95_ms": 0.15,
+                        "query_http_client_response_header_wait_latency_p95_ms": 2.0,
                         "query_http_client_overhead_latency_p95_ms": 1.0,
                         "query_http_client_unattributed_overhead_latency_p95_ms": 0.6,
                         "query_server_engine_latency_p95_ms": 2.0,
@@ -279,6 +284,18 @@ class SuiteReportingTests(unittest.TestCase):
             attribution["http_client"]["unattributed_overhead_latency_p95_ms"],
             0.6,
         )
+        self.assertEqual(
+            attribution["http_client"]["socket_connect_latency_p95_ms"],
+            0.2,
+        )
+        self.assertEqual(
+            attribution["http_client"]["request_write_latency_p95_ms"],
+            0.15,
+        )
+        self.assertEqual(
+            attribution["http_client"]["response_header_wait_latency_p95_ms"],
+            2.0,
+        )
         self.assertEqual(attribution["response"]["body_bytes_p95"], 4096)
         self.assertEqual(
             attribution["response"]["content_length_bytes_p95"],
@@ -321,6 +338,9 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("engine_core_latency_p95_ms=1.1", markdown)
         self.assertIn("overhead_latency_p95_ms=1.0", markdown)
         self.assertIn("body_bytes_p95=4096", markdown)
+        self.assertIn("socket_connect_latency_p95_ms=0.2", markdown)
+        self.assertIn("request_write_latency_p95_ms=0.15", markdown)
+        self.assertIn("response_header_wait_latency_p95_ms=2.0", markdown)
         self.assertIn("output shape probe", markdown)
         self.assertIn("explain_false_body_bytes_p95=1024", markdown)
         self.assertIn("explain_false_explain_returned_count=0", markdown)
