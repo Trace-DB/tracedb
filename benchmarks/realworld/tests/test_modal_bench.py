@@ -583,6 +583,29 @@ class ModalBenchTests(unittest.TestCase):
             "tracedb-postgres-b",
         )
 
+    def test_modal_image_kind_selects_only_requested_control_lane(self) -> None:
+        from modal_bench import modal_image_kind_from_args
+
+        self.assertEqual(modal_image_kind_from_args(["modal_bench.py"]), "base")
+        self.assertEqual(
+            modal_image_kind_from_args(["modal_bench.py", "--postgres-control"]),
+            "postgres",
+        )
+        self.assertEqual(
+            modal_image_kind_from_args(["modal_bench.py", "--pgvector-control"]),
+            "pgvector",
+        )
+        self.assertEqual(
+            modal_image_kind_from_args(["modal_bench.py", "--tracedb-engine-control"]),
+            "tracedb",
+        )
+        self.assertEqual(
+            modal_image_kind_from_args(
+                ["modal_bench.py", "--tracedb-engine-control", "--pgvector-control"]
+            ),
+            "tracedb_pgvector",
+        )
+
     def test_cli_config_can_override_min_free_for_tiny_local_smoke(self) -> None:
         from modal_bench import _parse_args, build_suite_command
 

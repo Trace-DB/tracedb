@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import time
 import urllib.request
@@ -30,6 +31,8 @@ DEFAULT_MAX_RECORDS = 1000
 MODAL_MIN_EPHEMERAL_DISK_MB = 524_288
 DEFAULT_MODAL_APP_NAME = "tracedb-realworld-smoke"
 MODAL_APP_NAME_ENV = "TRACEDB_MODAL_APP_NAME"
+MODAL_IMAGE_KIND_ENV = "TRACEDB_MODAL_IMAGE_KIND"
+RUST_MODAL_IMAGE = "rust:1.94-bookworm"
 PGVECTOR_VERSION = "v0.8.2"
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
 PGVECTOR_DSN_ENV = "BENCH_PGVECTOR_DSN"
@@ -98,6 +101,7 @@ class ModalSmokeConfig:
     postgres_port: int = 25_432
     pgvector_port: int = 25_433
     modal_app_name: str = DEFAULT_MODAL_APP_NAME
+    modal_image_kind: str = "base"
     source_commit: str | None = None
     source_dirty: bool | None = None
     source_status_short: str | None = None
@@ -142,6 +146,41 @@ def validate_config(config: ModalSmokeConfig) -> None:
 
 def modal_app_name() -> str:
     return os.environ.get(MODAL_APP_NAME_ENV, DEFAULT_MODAL_APP_NAME)
+
+
+def modal_image_kind_from_flags(
+    *,
+    tracedb_engine_control: bool,
+    pgvector_control: bool,
+    postgres_control: bool,
+) -> str:
+    if tracedb_engine_control and pgvector_control:
+        return "tracedb_pgvector"
+    if tracedb_engine_control:
+        return "tracedb"
+    if pgvector_control:
+        return "pgvector"
+    if postgres_control:
+        return "postgres"
+    return "base"
+
+
+def modal_image_kind_from_args(argv: list[str]) -> str:
+    env_kind = os.environ.get(MODAL_IMAGE_KIND_ENV)
+    if env_kind:
+        return validate_modal_image_kind(env_kind)
+    return modal_image_kind_from_flags(
+        tracedb_engine_control="--tracedb-engine-control" in argv,
+        pgvector_control="--pgvector-control" in argv,
+        postgres_control="--postgres-control" in argv,
+    )
+
+
+def validate_modal_image_kind(kind: str) -> str:
+    valid = {"base", "postgres", "pgvector", "tracedb", "tracedb_pgvector"}
+    if kind not in valid:
+        raise ValueError(f"{MODAL_IMAGE_KIND_ENV} must be one of {', '.join(sorted(valid))}")
+    return kind
 
 
 def requested_targets(target: str) -> set[str]:
@@ -737,6 +776,11 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         postgres_port=args.postgres_port,
         pgvector_port=args.pgvector_port,
         modal_app_name=modal_app_name(),
+        modal_image_kind=modal_image_kind_from_flags(
+            tracedb_engine_control=args.tracedb_engine_control,
+            pgvector_control=args.pgvector_control,
+            postgres_control=args.postgres_control,
+        ),
     )
 
 
@@ -794,6 +838,13 @@ if modal is not None:
             .pip_install_from_requirements(str(LAB_ROOT / "requirements.txt"))
         )
 
+    def rust_modal_base_image(*extra_packages: str) -> modal.Image:
+        return (
+            modal.Image.from_registry(RUST_MODAL_IMAGE, add_python="3.12")
+            .apt_install(*BASE_APT_PACKAGES, *extra_packages)
+            .pip_install_from_requirements(str(LAB_ROOT / "requirements.txt"))
+        )
+
     def add_repo_source(base_image: modal.Image) -> modal.Image:
         return base_image.add_local_dir(
             str(REPO_ROOT),
@@ -814,47 +865,61 @@ if modal is not None:
 
     def tracedb_engine_image(*extra_packages: str) -> modal.Image:
         return add_repo_source_for_build(
-            modal_base_image("cargo", "postgresql", "postgresql-client", *extra_packages)
+            rust_modal_base_image(*extra_packages)
         ).run_commands(
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
 
-    image = modal_image()
-    postgres_image = modal_image("postgresql", "postgresql-client")
-    pgvector_image = add_repo_source(
-        modal_base_image(
-            "git",
-            "postgresql",
-            "postgresql-client",
-            "postgresql-server-dev-all",
-        ).run_commands(
-            "cd /tmp && "
-            f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
-            "cd pgvector && "
-            "make && "
-            "make install && "
-            "rm -rf /tmp/pgvector"
+    def pgvector_control_image() -> modal.Image:
+        return add_repo_source(
+            modal_base_image(
+                "git",
+                "postgresql",
+                "postgresql-client",
+                "postgresql-server-dev-all",
+            ).run_commands(
+                "cd /tmp && "
+                f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
+                "cd pgvector && "
+                "make && "
+                "make install && "
+                "rm -rf /tmp/pgvector"
+            )
         )
-    )
-    tracedb_image = tracedb_engine_image()
-    tracedb_pgvector_image = add_repo_source_for_build(
-        modal_base_image(
-            "cargo",
-            "git",
-            "postgresql",
-            "postgresql-client",
-            "postgresql-server-dev-all",
+
+    def tracedb_pgvector_control_image() -> modal.Image:
+        return add_repo_source_for_build(
+            rust_modal_base_image(
+                "git",
+                "postgresql",
+                "postgresql-client",
+                "postgresql-server-dev-all",
+            ).run_commands(
+                "cd /tmp && "
+                f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
+                "cd pgvector && "
+                "make && "
+                "make install && "
+                "rm -rf /tmp/pgvector"
+            )
         ).run_commands(
-            "cd /tmp && "
-            f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
-            "cd pgvector && "
-            "make && "
-            "make install && "
-            "rm -rf /tmp/pgvector"
+            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
-    ).run_commands(
-        f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
-    )
+
+    def selected_modal_image(kind: str) -> modal.Image:
+        kind = validate_modal_image_kind(kind)
+        if kind == "tracedb_pgvector":
+            return tracedb_pgvector_control_image()
+        if kind == "tracedb":
+            return tracedb_engine_image()
+        if kind == "pgvector":
+            return pgvector_control_image()
+        if kind == "postgres":
+            return modal_image("postgresql", "postgresql-client")
+        return modal_image()
+
+    selected_image_kind = modal_image_kind_from_args(sys.argv)
+    image = selected_modal_image(selected_image_kind)
     app = modal.App(modal_app_name())
 
     @app.function(
@@ -864,51 +929,7 @@ if modal is not None:
         timeout=ModalSmokeConfig.timeout_seconds,
         ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
     )
-    def run_smoke(**kwargs: Any) -> dict[str, Any]:
-        config = ModalSmokeConfig(**kwargs)
-        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
-
-    @app.function(
-        image=postgres_image,
-        cpu=ModalSmokeConfig.cpu,
-        memory=ModalSmokeConfig.memory_mb,
-        timeout=ModalSmokeConfig.timeout_seconds,
-        ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
-    )
-    def run_smoke_with_postgres(**kwargs: Any) -> dict[str, Any]:
-        config = ModalSmokeConfig(**kwargs)
-        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
-
-    @app.function(
-        image=pgvector_image,
-        cpu=ModalSmokeConfig.cpu,
-        memory=ModalSmokeConfig.memory_mb,
-        timeout=ModalSmokeConfig.timeout_seconds,
-        ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
-    )
-    def run_smoke_with_pgvector(**kwargs: Any) -> dict[str, Any]:
-        config = ModalSmokeConfig(**kwargs)
-        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
-
-    @app.function(
-        image=tracedb_image,
-        cpu=ModalSmokeConfig.cpu,
-        memory=ModalSmokeConfig.memory_mb,
-        timeout=ModalSmokeConfig.timeout_seconds,
-        ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
-    )
-    def run_smoke_with_tracedb_engine(**kwargs: Any) -> dict[str, Any]:
-        config = ModalSmokeConfig(**kwargs)
-        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
-
-    @app.function(
-        image=tracedb_pgvector_image,
-        cpu=ModalSmokeConfig.cpu,
-        memory=ModalSmokeConfig.memory_mb,
-        timeout=ModalSmokeConfig.timeout_seconds,
-        ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
-    )
-    def run_smoke_with_tracedb_engine_and_pgvector(**kwargs: Any) -> dict[str, Any]:
+    def run_smoke_remote(**kwargs: Any) -> dict[str, Any]:
         config = ModalSmokeConfig(**kwargs)
         return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
 
@@ -931,19 +952,7 @@ if modal is not None:
         allow_provider: bool = False,
         summary_json: str = "",
     ) -> None:
-        remote_function = (
-            run_smoke_with_tracedb_engine_and_pgvector
-            if tracedb_engine_control and pgvector_control
-            else run_smoke_with_tracedb_engine
-            if tracedb_engine_control
-            else
-            run_smoke_with_pgvector
-            if pgvector_control
-            else run_smoke_with_postgres
-            if postgres_control
-            else run_smoke
-        )
-        result = remote_function.remote(
+        result = run_smoke_remote.remote(
             run_id=run_id,
             records=records,
             dataset=dataset,
@@ -960,6 +969,7 @@ if modal is not None:
             allow_large=allow_large,
             allow_provider=allow_provider,
             modal_app_name=modal_app_name(),
+            modal_image_kind=selected_image_kind,
             **source_git_kwargs(),
         )
         write_summary_json(result, summary_json)

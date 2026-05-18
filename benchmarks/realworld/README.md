@@ -277,9 +277,12 @@ Use `--tracedb-engine-control` when TraceDB needs to be measured through the
 real server process instead of SDK request-builder smoke. The Modal image builds
 the release `tracedb-server` binary, starts it on loopback, sets
 `TRACEDB_HTTP_URL`, and records `TRACEDB_HTTP_DATA_DIR` so HTTP runs can report
-actual data-directory bytes. Side-by-side pgvector comparisons should use this
-flag together with `--pgvector-control`; otherwise TraceDB results remain
-development evidence rather than an exported product benchmark claim.
+actual data-directory bytes. The Modal wrapper selects one image family per run
+from the requested flags, so a TraceDB-only smoke does not build pgvector and a
+side-by-side run can still use a combined TraceDB+pgvector image. Side-by-side
+pgvector comparisons should use this flag together with `--pgvector-control`;
+otherwise TraceDB results remain development evidence rather than an exported
+product benchmark claim.
 
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
 `manifest.json`. The manifest records the run config, seed, Modal app name,
