@@ -23,6 +23,10 @@ pub struct WalAppendTiming {
     pub total_ms: f64,
     pub lock_tail_ms: f64,
     pub frame_build_ms: f64,
+    pub commit_prepare_ms: f64,
+    pub serialize_ms: f64,
+    pub payload_checksum_ms: f64,
+    pub frame_assembly_ms: f64,
     pub payload_bytes: u64,
     pub frame_bytes: u64,
     pub write_ms: f64,
@@ -227,9 +231,13 @@ impl Wal {
         let lock_tail_ms = elapsed_ms(lock_tail_started);
 
         let frame_build_started = Instant::now();
+        let commit_prepare_started = Instant::now();
         let mut commit = commit.clone();
         commit.previous_commit_hash = prev_checksum;
+        let commit_prepare_ms = elapsed_ms(commit_prepare_started);
+        let serialize_started = Instant::now();
         let payload = serde_json::to_vec(&commit)?;
+        let serialize_ms = elapsed_ms(serialize_started);
         if payload.len() > MAX_PAYLOAD_LEN {
             return Err(TraceDbError::WalCorruption(format!(
                 "payload length {} exceeds max {MAX_PAYLOAD_LEN} at lsn {}",
@@ -237,8 +245,11 @@ impl Wal {
                 lsn.get()
             )));
         }
+        let payload_checksum_started = Instant::now();
         let payload_checksum = checksum_bytes(&payload);
+        let payload_checksum_ms = elapsed_ms(payload_checksum_started);
 
+        let frame_assembly_started = Instant::now();
         let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
         frame.extend_from_slice(&WAL_MAGIC.to_le_bytes());
         frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
@@ -251,6 +262,7 @@ impl Wal {
         frame.extend_from_slice(&COMMIT_FOOTER.to_le_bytes());
         let payload_bytes = payload.len() as u64;
         let frame_bytes = frame.len() as u64;
+        let frame_assembly_ms = elapsed_ms(frame_assembly_started);
         let frame_build_ms = elapsed_ms(frame_build_started);
 
         let write_started = Instant::now();
@@ -272,6 +284,10 @@ impl Wal {
                 total_ms: elapsed_ms(total_started),
                 lock_tail_ms,
                 frame_build_ms,
+                commit_prepare_ms,
+                serialize_ms,
+                payload_checksum_ms,
+                frame_assembly_ms,
                 payload_bytes,
                 frame_bytes,
                 write_ms,

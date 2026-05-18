@@ -2197,6 +2197,12 @@ fn batch_put_write_timing_reports_phase_costs_and_recovers_replacements() {
     assert!(timing.feature_invalidation_ms >= 0.0);
     assert!(timing.commit_build_ms >= 0.0);
     assert!(timing.wal_total_ms >= 0.0);
+    assert!(timing.wal_commit_prepare_ms >= 0.0);
+    assert!(timing.wal_serialize_ms >= 0.0);
+    assert!(timing.wal_payload_checksum_ms >= 0.0);
+    assert!(timing.wal_frame_assembly_ms >= 0.0);
+    assert!(timing.wal_payload_bytes > 0);
+    assert!(timing.wal_frame_bytes >= timing.wal_payload_bytes);
     assert!(timing.manifest_total_ms >= 0.0);
     assert!(timing.cache_clear_ms >= 0.0);
 

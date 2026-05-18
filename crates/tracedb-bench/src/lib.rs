@@ -667,6 +667,10 @@ fn record_write_timing_samples(timing: &WritePathTiming, samples: &mut BTreeMap<
         ("wal_total", timing.wal_total_ms),
         ("wal_lock_tail", timing.wal_lock_tail_ms),
         ("wal_frame_build", timing.wal_frame_build_ms),
+        ("wal_commit_prepare", timing.wal_commit_prepare_ms),
+        ("wal_serialize", timing.wal_serialize_ms),
+        ("wal_payload_checksum", timing.wal_payload_checksum_ms),
+        ("wal_frame_assembly", timing.wal_frame_assembly_ms),
         ("wal_write", timing.wal_write_ms),
         ("wal_sync_data", timing.wal_sync_data_ms),
         ("wal_tail_update", timing.wal_tail_update_ms),
@@ -919,6 +923,10 @@ mod tests {
             "manifest_total",
             "store_install",
             "cache_clear",
+            "wal_commit_prepare",
+            "wal_serialize",
+            "wal_payload_checksum",
+            "wal_frame_assembly",
         ] {
             assert!(
                 point
