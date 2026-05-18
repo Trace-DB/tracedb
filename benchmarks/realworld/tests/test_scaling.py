@@ -198,6 +198,11 @@ class TraceDbScalingTests(unittest.TestCase):
                     "recent_insert_p95_ms": 40.0,
                     "engine_query_p95_ms": 60.0,
                     "checkpoint_engine_query_p95_ms": 55.0,
+                    "recent_put_phase_p95_ms": [
+                        {"name": "manifest_total", "p95_ms": 12.0},
+                        {"name": "wal_total", "p95_ms": 8.0},
+                        {"name": "total_without_manifest", "p95_ms": 28.0},
+                    ],
                 }
             ],
         }
@@ -226,6 +231,42 @@ class TraceDbScalingTests(unittest.TestCase):
         self.assertEqual(point["write_gate"], "passed")
         self.assertEqual(point["hot_query_gate"], "passed")
         self.assertEqual(point["checkpoint_query_gate"], "passed")
+        self.assertEqual(point["baseline_manifest_total_p95_ms"], 12.0)
+        self.assertEqual(point["baseline_wal_total_p95_ms"], 8.0)
+        self.assertEqual(point["baseline_manifest_headroom_pct"], 30.0)
+        self.assertEqual(point["baseline_wal_manifest_headroom_pct"], 50.0)
+        self.assertEqual(point["candidate_required_write_p95_ms"], 30.0)
+        self.assertEqual(point["baseline_manifest_deferral_estimated_p95_ms"], 28.0)
+        self.assertTrue(point["manifest_deferral_could_clear_write_gate"])
+        markdown = render_inprocess_scaling_comparison_markdown(comparison)
+        self.assertIn("Phase Headroom", markdown)
+        self.assertIn("phase p95 values are sizing evidence", markdown)
+
+    def test_inprocess_scaling_comparison_allows_missing_phase_headroom(self) -> None:
+        report = {
+            "benchmark": "tracedb-inprocess-scaling",
+            "points": [
+                {
+                    "records": 4096,
+                    "recent_insert_p95_ms": 40.0,
+                    "engine_query_p95_ms": 40.0,
+                }
+            ],
+        }
+
+        comparison = compare_inprocess_scaling_reports(
+            [report],
+            [report],
+            baseline_label="baseline",
+            candidate_label="candidate",
+            min_repeats=1,
+        )
+
+        point = comparison["points"][0]
+        self.assertEqual(comparison["status"], "rejected")
+        self.assertIsNone(point["baseline_manifest_headroom_pct"])
+        self.assertIsNone(point["manifest_deferral_could_clear_write_gate"])
+        self.assertIn("phase timings unavailable", point["phase_headroom_warning"])
 
     def test_inprocess_scaling_comparison_rejects_under_replicated_runs(self) -> None:
         report = {

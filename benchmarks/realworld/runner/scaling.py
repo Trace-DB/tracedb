@@ -347,6 +347,43 @@ def compare_inprocess_scaling_reports(
             candidate_points[records],
             "checkpoint_engine_query_p95_ms",
         )
+        baseline_manifest_total = _optional_recent_phase_median(
+            baseline_points[records],
+            "manifest_total",
+        )
+        baseline_wal_total = _optional_recent_phase_median(
+            baseline_points[records],
+            "wal_total",
+        )
+        baseline_total_without_manifest = _optional_recent_phase_median(
+            baseline_points[records],
+            "total_without_manifest",
+        )
+        candidate_required_write_p95 = baseline_insert * (
+            1.0 - required_write_improvement_pct / 100.0
+        )
+        baseline_manifest_headroom_pct = None
+        baseline_wal_manifest_headroom_pct = None
+        manifest_deferral_estimated_p95 = None
+        manifest_deferral_could_clear_write_gate = None
+        phase_headroom_warning = "phase timings unavailable; headroom not computed"
+        if baseline_manifest_total is not None:
+            baseline_manifest_headroom_pct = (baseline_manifest_total / baseline_insert) * 100.0
+            manifest_deferral_estimated_p95 = (
+                baseline_total_without_manifest
+                if baseline_total_without_manifest is not None
+                else max(0.0, baseline_insert - baseline_manifest_total)
+            )
+            manifest_deferral_could_clear_write_gate = (
+                manifest_deferral_estimated_p95 <= candidate_required_write_p95
+            )
+            phase_headroom_warning = (
+                "phase p95 values are sizing evidence only; confirm with a runtime benchmark"
+            )
+        if baseline_manifest_total is not None and baseline_wal_total is not None:
+            baseline_wal_manifest_headroom_pct = (
+                (baseline_manifest_total + baseline_wal_total) / baseline_insert
+            ) * 100.0
 
         write_improvement_pct = _improvement_pct(baseline_insert, candidate_insert)
         hot_query_regression_ms = candidate_query - baseline_query
@@ -424,6 +461,22 @@ def compare_inprocess_scaling_reports(
                     checkpoint_query_allowed_ms
                 ),
                 "checkpoint_query_gate": checkpoint_query_gate,
+                "baseline_manifest_total_p95_ms": _round_optional(baseline_manifest_total),
+                "baseline_wal_total_p95_ms": _round_optional(baseline_wal_total),
+                "baseline_manifest_headroom_pct": _round_optional(
+                    baseline_manifest_headroom_pct
+                ),
+                "baseline_wal_manifest_headroom_pct": _round_optional(
+                    baseline_wal_manifest_headroom_pct
+                ),
+                "candidate_required_write_p95_ms": round(candidate_required_write_p95, 3),
+                "baseline_manifest_deferral_estimated_p95_ms": _round_optional(
+                    manifest_deferral_estimated_p95
+                ),
+                "manifest_deferral_could_clear_write_gate": (
+                    manifest_deferral_could_clear_write_gate
+                ),
+                "phase_headroom_warning": phase_headroom_warning,
             }
         )
 
@@ -478,6 +531,30 @@ def render_inprocess_scaling_comparison_markdown(comparison: dict[str, Any]) -> 
             "| {records} | {status} | {write_improvement_pct} | {write_gate} | {baseline_hot_query_p95_ms} -> {candidate_hot_query_p95_ms} | {hot_query_gate} | {checkpoint_pair} | {checkpoint_query_gate} |".format(
                 checkpoint_pair=checkpoint_pair,
                 **point,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Phase Headroom",
+            "",
+            "The phase p95 values are sizing evidence only; runtime changes still need their own benchmark run.",
+            "",
+            "| records | manifest p95 | manifest headroom % | required write p95 | estimated p95 without manifest | clears write gate? |",
+            "| ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for point in comparison["points"]:
+        lines.append(
+            "| {records} | {manifest} | {headroom} | {required} | {estimated} | {clears} |".format(
+                records=point["records"],
+                manifest=_format_optional(point.get("baseline_manifest_total_p95_ms")),
+                headroom=_format_optional(point.get("baseline_manifest_headroom_pct")),
+                required=_format_optional(point.get("candidate_required_write_p95_ms")),
+                estimated=_format_optional(
+                    point.get("baseline_manifest_deferral_estimated_p95_ms")
+                ),
+                clears=point.get("manifest_deferral_could_clear_write_gate"),
             )
         )
     lines.extend(
@@ -569,6 +646,15 @@ def _optional_median_metric(points: list[dict[str, Any]], metric: str) -> float 
     return float(median(values)) if values else None
 
 
+def _optional_recent_phase_median(points: list[dict[str, Any]], name: str) -> float | None:
+    values = []
+    for point in points:
+        for timing in point.get("recent_put_phase_p95_ms", []):
+            if timing.get("name") == name and timing.get("p95_ms") is not None:
+                values.append(float(timing["p95_ms"]))
+    return float(median(values)) if values else None
+
+
 def _improvement_pct(baseline: float, candidate: float) -> float:
     if baseline <= 0.0:
         return 0.0
@@ -583,6 +669,10 @@ def _regression_pct(baseline: float, candidate: float) -> float:
 
 def _round_optional(value: float | None) -> float | None:
     return round(value, 3) if value is not None else None
+
+
+def _format_optional(value: Any) -> str:
+    return "n/a" if value is None else str(value)
 
 
 def run_subprocess(command: list[str]) -> tuple[int, str, str]:

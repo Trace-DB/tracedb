@@ -158,6 +158,11 @@ p95 regression beyond `max(10%, 5ms)`. The comparison artifact is internal
 development evidence; exported benchmark claims still need an external control
 and number to beat.
 
+Comparison reports also include a Phase Headroom section when recent write phase
+timings are present. That section estimates whether removing manifest write cost
+could clear the write gate, but it is sizing evidence only; any runtime change
+still needs a fresh candidate benchmark and recovery tests.
+
 ## Local Compose Lab
 
 ```bash

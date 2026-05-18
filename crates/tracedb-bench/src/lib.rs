@@ -554,8 +554,10 @@ fn record_explain_timing_samples(
 }
 
 fn record_write_timing_samples(timing: &WritePathTiming, samples: &mut BTreeMap<String, Vec<f64>>) {
+    let total_without_manifest = (timing.total_ms - timing.manifest_total_ms).max(0.0);
     for (name, value) in [
         ("total", timing.total_ms),
+        ("total_without_manifest", total_without_manifest),
         ("lock", timing.lock_ms),
         ("schema_lookup", timing.schema_lookup_ms),
         ("store_clone", timing.store_clone_ms),
@@ -725,6 +727,22 @@ mod tests {
             .recent_put_phase_p95_ms
             .iter()
             .any(|timing| timing.name == "store_clone" && timing.p95_ms >= 0.0));
+        let recent_total = point
+            .recent_put_phase_p95_ms
+            .iter()
+            .find(|timing| timing.name == "total")
+            .expect("recent total write p95")
+            .p95_ms;
+        let recent_without_manifest = point
+            .recent_put_phase_p95_ms
+            .iter()
+            .find(|timing| timing.name == "total_without_manifest")
+            .expect("recent total_without_manifest write p95")
+            .p95_ms;
+        assert!(
+            recent_without_manifest <= recent_total,
+            "manifest deferral headroom estimate should not exceed total write latency"
+        );
         assert_eq!(point.lexical_cache_hits, 0);
         assert_eq!(point.lexical_cache_misses, 0);
         assert_eq!(point.lexical_indexed_documents, 5);
