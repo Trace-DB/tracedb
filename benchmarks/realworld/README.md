@@ -326,6 +326,15 @@ modal run benchmarks/realworld/modal_bench.py \
   --summary-json /tmp/tracedb-modal-summaries/modal-mongodb-smoke-a.json
 ```
 
+MongoDB reports both footprint and dbStats storage surfaces. `disk_bytes`,
+`disk_bytes_after_ingest`, and `disk_bytes_after_workload` keep the existing
+data-dir footprint behavior when `BENCH_MONGO_STORAGE_DIR` is available, with a
+fallback to dbStats `storageSize`/`dataSize`. The raw dbStats fields are exported
+as `mongodb_dbstats_data_size_bytes`,
+`mongodb_dbstats_storage_size_bytes`, `mongodb_dbstats_index_size_bytes`, and
+`mongodb_dbstats_total_size_bytes`. Treat `storageSize` as allocation and
+`disk_bytes` as data-dir footprint, not logical payload size.
+
 TraceDB actual-engine HTTP smoke on Modal:
 
 ```bash

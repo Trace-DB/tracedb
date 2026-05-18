@@ -401,8 +401,13 @@ class FakePsycopgCursor:
 
 
 class FakePyMongo:
-    def __init__(self, storage_bytes: int = 73_728) -> None:
-        self.client = FakeMongoClient(storage_bytes)
+    def __init__(
+        self,
+        storage_bytes: int = 73_728,
+        data_size_bytes: int = 12_288,
+        index_size_bytes: int = 4_096,
+    ) -> None:
+        self.client = FakeMongoClient(storage_bytes, data_size_bytes, index_size_bytes)
         self.connect_calls: list[tuple[str, int]] = []
 
     def MongoClient(self, uri: str, serverSelectionTimeoutMS: int):
@@ -411,9 +416,13 @@ class FakePyMongo:
 
 
 class FakeMongoClient:
-    def __init__(self, storage_bytes: int) -> None:
+    def __init__(
+        self, storage_bytes: int, data_size_bytes: int, index_size_bytes: int
+    ) -> None:
         self.admin = FakeMongoAdmin()
-        self.tracedb_bench = FakeMongoDatabase(storage_bytes)
+        self.tracedb_bench = FakeMongoDatabase(
+            storage_bytes, data_size_bytes, index_size_bytes
+        )
 
 
 class FakeMongoAdmin:
@@ -424,14 +433,23 @@ class FakeMongoAdmin:
 
 
 class FakeMongoDatabase:
-    def __init__(self, storage_bytes: int) -> None:
+    def __init__(
+        self, storage_bytes: int, data_size_bytes: int, index_size_bytes: int
+    ) -> None:
         self.storage_bytes = storage_bytes
+        self.data_size_bytes = data_size_bytes
+        self.index_size_bytes = index_size_bytes
         self.records = FakeMongoCollection()
 
     def command(self, command: str) -> dict[str, object]:
         if command != "dbStats":
             raise AssertionError(f"unexpected database command {command!r}")
-        return {"storageSize": self.storage_bytes}
+        return {
+            "dataSize": self.data_size_bytes,
+            "storageSize": self.storage_bytes,
+            "indexSize": self.index_size_bytes,
+            "totalSize": self.storage_bytes + self.index_size_bytes,
+        }
 
 
 class FakeMongoCollection:
@@ -844,6 +862,23 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["disk_bytes"], 73_728)
         self.assertEqual(metrics["disk_bytes_after_ingest"], 73_728)
         self.assertEqual(metrics["disk_bytes_after_workload"], 73_728)
+        self.assertEqual(metrics["mongodb_dbstats_data_size_bytes"], 12_288)
+        self.assertEqual(metrics["mongodb_dbstats_data_size_bytes_after_ingest"], 12_288)
+        self.assertEqual(metrics["mongodb_dbstats_data_size_bytes_after_workload"], 12_288)
+        self.assertEqual(metrics["mongodb_dbstats_storage_size_bytes"], 73_728)
+        self.assertEqual(
+            metrics["mongodb_dbstats_storage_size_bytes_after_ingest"], 73_728
+        )
+        self.assertEqual(
+            metrics["mongodb_dbstats_storage_size_bytes_after_workload"], 73_728
+        )
+        self.assertEqual(metrics["mongodb_dbstats_index_size_bytes"], 4_096)
+        self.assertEqual(metrics["mongodb_dbstats_index_size_bytes_after_ingest"], 4_096)
+        self.assertEqual(metrics["mongodb_dbstats_index_size_bytes_after_workload"], 4_096)
+        self.assertEqual(metrics["mongodb_dbstats_total_size_bytes"], 77_824)
+        self.assertEqual(metrics["mongodb_dbstats_total_size_bytes_after_ingest"], 77_824)
+        self.assertEqual(metrics["mongodb_dbstats_total_size_bytes_after_workload"], 77_824)
+        self.assertEqual(metrics["mongodb_data_dir_bytes"], 0)
         self.assertEqual(len(result["query_results"]), len(dataset.queries))
         self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
         self.assertEqual(
@@ -856,6 +891,59 @@ class AdapterHardeningTests(unittest.TestCase):
             any("dbStats" in note for note in result["notes"]),
             result["notes"],
         )
+
+    def test_mongodb_keeps_dbstats_storage_when_data_dir_bytes_are_available(self) -> None:
+        fake_pymongo = FakePyMongo(
+            storage_bytes=73_728,
+            data_size_bytes=12_288,
+            index_size_bytes=4_096,
+        )
+        old_pymongo = sys.modules.get("pymongo")
+        old_uri = os.environ.get("BENCH_MONGO_URI")
+        old_storage_dir = os.environ.get("BENCH_MONGO_STORAGE_DIR")
+        sys.modules["pymongo"] = fake_pymongo
+        os.environ["BENCH_MONGO_URI"] = "mongodb://bench:bench@127.0.0.1:27027/bench"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                storage_dir = Path(temp_dir)
+                (storage_dir / "wiredtiger.wt").write_bytes(b"x" * 64)
+                (storage_dir / "journal").mkdir()
+                (storage_dir / "journal" / "j._0").write_bytes(b"y" * 32)
+                os.environ["BENCH_MONGO_STORAGE_DIR"] = str(storage_dir)
+                result = MongoAdapter().run(
+                    generated_dataset(8, 42),
+                    RunConfig(
+                        profile="smoke",
+                        target=["mongodb"],
+                        surfaces=["sdk"],
+                        require_services=True,
+                        repo_root=".",
+                    ),
+                )
+        finally:
+            if old_pymongo is None:
+                sys.modules.pop("pymongo", None)
+            else:
+                sys.modules["pymongo"] = old_pymongo
+            if old_uri is None:
+                os.environ.pop("BENCH_MONGO_URI", None)
+            else:
+                os.environ["BENCH_MONGO_URI"] = old_uri
+            if old_storage_dir is None:
+                os.environ.pop("BENCH_MONGO_STORAGE_DIR", None)
+            else:
+                os.environ["BENCH_MONGO_STORAGE_DIR"] = old_storage_dir
+
+        metrics = result["metrics"]
+        self.assertEqual(metrics["disk_bytes"], 96)
+        self.assertEqual(metrics["disk_bytes_after_ingest"], 96)
+        self.assertEqual(metrics["mongodb_data_dir_bytes"], 96)
+        self.assertEqual(metrics["mongodb_data_dir_bytes_after_ingest"], 96)
+        self.assertEqual(metrics["mongodb_data_dir_bytes_after_workload"], 96)
+        self.assertEqual(metrics["mongodb_dbstats_data_size_bytes"], 12_288)
+        self.assertEqual(metrics["mongodb_dbstats_storage_size_bytes"], 73_728)
+        self.assertEqual(metrics["mongodb_dbstats_index_size_bytes"], 4_096)
+        self.assertEqual(metrics["mongodb_dbstats_total_size_bytes"], 77_824)
 
     def test_request_json_sends_optional_bearer_token(self) -> None:
         seen_headers: list[str] = []
@@ -1565,6 +1653,10 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(report["number_to_beat"]["query_p95_ms"]["value"], 5.0)
         self.assertEqual(report["number_to_beat"]["query_p95_ms"]["baseline"], "PostgreSQL")
         self.assertEqual(report["number_to_beat"]["recall_at_5"]["value"], 0.5)
+        self.assertEqual(report["number_to_beat"]["storage_bytes"]["value"], 1024.0)
+        self.assertEqual(
+            report["number_to_beat"]["storage_bytes"]["source_metric"], "disk_bytes"
+        )
         self.assertEqual(report["control_ledger"]["unavailable_external_controls"][0]["name"], "Qdrant")
 
     def test_report_number_to_beat_prefers_query_scoped_latency(self) -> None:

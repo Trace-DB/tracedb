@@ -32,7 +32,7 @@ class MongoAdapter(BenchmarkAdapter):
                 ingest_recorder.timed(
                     lambda: collection.insert_many([record.to_json() for record in dataset.records])
                 )
-            disk_bytes_after_ingest = _storage_bytes(database)
+            storage_after_ingest = _storage_snapshot(database)
             recalls = []
             ndcgs = []
             mrrs = []
@@ -57,7 +57,7 @@ class MongoAdapter(BenchmarkAdapter):
                 recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
                 ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
                 mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
-            disk_bytes_after_workload = _storage_bytes(database)
+            storage_after_workload = _storage_snapshot(database)
             query_summary = query_recorder.summary()
             ingest_summary = ingest_recorder.summary()
             setup_summary = setup_recorder.summary()
@@ -77,9 +77,52 @@ class MongoAdapter(BenchmarkAdapter):
                     "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
-                    "disk_bytes": disk_bytes_after_ingest,
-                    "disk_bytes_after_ingest": disk_bytes_after_ingest,
-                    "disk_bytes_after_workload": disk_bytes_after_workload,
+                    "disk_bytes": storage_after_ingest["disk_bytes"],
+                    "disk_bytes_after_ingest": storage_after_ingest["disk_bytes"],
+                    "disk_bytes_after_workload": storage_after_workload["disk_bytes"],
+                    "mongodb_data_dir_bytes": storage_after_ingest["data_dir_bytes"],
+                    "mongodb_data_dir_bytes_after_ingest": storage_after_ingest[
+                        "data_dir_bytes"
+                    ],
+                    "mongodb_data_dir_bytes_after_workload": storage_after_workload[
+                        "data_dir_bytes"
+                    ],
+                    "mongodb_dbstats_data_size_bytes": storage_after_ingest[
+                        "dbstats_data_size_bytes"
+                    ],
+                    "mongodb_dbstats_data_size_bytes_after_ingest": storage_after_ingest[
+                        "dbstats_data_size_bytes"
+                    ],
+                    "mongodb_dbstats_data_size_bytes_after_workload": storage_after_workload[
+                        "dbstats_data_size_bytes"
+                    ],
+                    "mongodb_dbstats_storage_size_bytes": storage_after_ingest[
+                        "dbstats_storage_size_bytes"
+                    ],
+                    "mongodb_dbstats_storage_size_bytes_after_ingest": storage_after_ingest[
+                        "dbstats_storage_size_bytes"
+                    ],
+                    "mongodb_dbstats_storage_size_bytes_after_workload": storage_after_workload[
+                        "dbstats_storage_size_bytes"
+                    ],
+                    "mongodb_dbstats_index_size_bytes": storage_after_ingest[
+                        "dbstats_index_size_bytes"
+                    ],
+                    "mongodb_dbstats_index_size_bytes_after_ingest": storage_after_ingest[
+                        "dbstats_index_size_bytes"
+                    ],
+                    "mongodb_dbstats_index_size_bytes_after_workload": storage_after_workload[
+                        "dbstats_index_size_bytes"
+                    ],
+                    "mongodb_dbstats_total_size_bytes": storage_after_ingest[
+                        "dbstats_total_size_bytes"
+                    ],
+                    "mongodb_dbstats_total_size_bytes_after_ingest": storage_after_ingest[
+                        "dbstats_total_size_bytes"
+                    ],
+                    "mongodb_dbstats_total_size_bytes_after_workload": storage_after_workload[
+                        "dbstats_total_size_bytes"
+                    ],
                 }
             )
             return self.ok_result(
@@ -87,7 +130,8 @@ class MongoAdapter(BenchmarkAdapter):
                 metrics,
                 [
                     "real MongoDB nested sparse document workload executed through pymongo",
-                    "MongoDB storage bytes measured with dbStats, falling back to BENCH_MONGO_STORAGE_DIR when available",
+                    "MongoDB disk_bytes measures BENCH_MONGO_STORAGE_DIR when available and falls back to dbStats storageSize/dataSize",
+                    "MongoDB dbStats data/storage/index/total size metrics are reported separately from data-dir footprint",
                 ],
                 query_results=query_results,
             )
@@ -107,15 +151,42 @@ def _setup_collection(collection: Any) -> None:
     collection.create_index([("tenant_id", 1), ("category", 1)])
 
 
-def _storage_bytes(database: Any) -> int:
-    db_stats_bytes = 0
+def _storage_snapshot(database: Any) -> dict[str, int]:
+    stats: dict[str, Any] = {}
+    dbstats_data_size_bytes = 0
+    dbstats_storage_size_bytes = 0
+    dbstats_index_size_bytes = 0
+    dbstats_total_size_bytes = 0
     try:
         stats = database.command("dbStats")
-        db_stats_bytes = int(stats.get("storageSize") or stats.get("dataSize") or 0)
     except Exception:
         pass
-    directory_bytes = _directory_bytes(os.environ.get("BENCH_MONGO_STORAGE_DIR"))
-    return directory_bytes or db_stats_bytes
+    if stats:
+        dbstats_data_size_bytes = _int_stat(stats, "dataSize")
+        dbstats_storage_size_bytes = _int_stat(stats, "storageSize")
+        dbstats_index_size_bytes = _int_stat(stats, "indexSize")
+        dbstats_total_size_bytes = _int_stat(stats, "totalSize")
+        if dbstats_total_size_bytes == 0 and (
+            dbstats_storage_size_bytes or dbstats_index_size_bytes
+        ):
+            dbstats_total_size_bytes = dbstats_storage_size_bytes + dbstats_index_size_bytes
+    data_dir_bytes = _directory_bytes(os.environ.get("BENCH_MONGO_STORAGE_DIR"))
+    disk_bytes = data_dir_bytes or dbstats_storage_size_bytes or dbstats_data_size_bytes
+    return {
+        "disk_bytes": disk_bytes,
+        "data_dir_bytes": data_dir_bytes,
+        "dbstats_data_size_bytes": dbstats_data_size_bytes,
+        "dbstats_storage_size_bytes": dbstats_storage_size_bytes,
+        "dbstats_index_size_bytes": dbstats_index_size_bytes,
+        "dbstats_total_size_bytes": dbstats_total_size_bytes,
+    }
+
+
+def _int_stat(stats: dict[str, Any], key: str) -> int:
+    try:
+        return int(stats.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _directory_bytes(path_text: str | None) -> int:
