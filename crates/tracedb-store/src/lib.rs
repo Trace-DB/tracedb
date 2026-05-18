@@ -30,29 +30,19 @@ pub struct StoredRecord {
 
 #[derive(Clone, Debug, Default)]
 pub struct RecordStore {
-    partitions: BTreeMap<String, BTreeMap<String, Vec<StoredRecord>>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PreparedRecordWrite {
-    partition_key: String,
-    records: BTreeMap<String, Vec<StoredRecord>>,
-    record: StoredRecord,
+    versions: BTreeMap<String, Vec<StoredRecord>>,
 }
 
 impl RecordStore {
     pub fn from_checkpoint_records(records: Vec<StoredRecord>) -> Result<Self> {
         let mut store = Self::default();
         for record in records {
-            let partition_key =
-                record_key_prefix(&record.header.table_id, &record.header.tenant_id);
-            store
-                .partitions
-                .entry(partition_key)
-                .or_default()
-                .entry(record.header.record_id.clone())
-                .or_default()
-                .push(record);
+            let key = record_key(
+                &record.header.table_id,
+                &record.header.tenant_id,
+                &record.header.record_id,
+            );
+            store.versions.entry(key).or_default().push(record);
         }
         Ok(store)
     }
@@ -109,18 +99,16 @@ impl RecordStore {
 
     pub fn checkpoint_records(&self, epoch: Epoch) -> Vec<StoredRecord> {
         let mut records = Vec::new();
-        for partition in self.partitions.values() {
-            for versions in partition.values() {
-                if let Some(record) = versions.iter().rev().find(|record| {
-                    record.header.begin_epoch <= epoch
-                        && record
-                            .header
-                            .end_epoch
-                            .map(|end| end > epoch)
-                            .unwrap_or(true)
-                }) {
-                    records.push(record.clone());
-                }
+        for versions in self.versions.values() {
+            if let Some(record) = versions.iter().rev().find(|record| {
+                record.header.begin_epoch <= epoch
+                    && record
+                        .header
+                        .end_epoch
+                        .map(|end| end > epoch)
+                        .unwrap_or(true)
+            }) {
+                records.push(record.clone());
             }
         }
         records
@@ -132,48 +120,54 @@ impl RecordStore {
         input: &RecordInput,
         epoch: Epoch,
     ) -> Result<StoredRecord> {
-        let tenant_id = validate_record_input_for_write(schema, input)?;
-        let partition_key = record_key_prefix(&input.table, &tenant_id);
-        let versions = self
-            .partitions
-            .entry(partition_key)
-            .or_default()
-            .entry(input.id.clone())
-            .or_default();
-        apply_replacement_to_versions(schema, input, epoch, tenant_id, versions)
-    }
+        validate_record_identity(schema, input, None)?;
+        validate_vector_dimensions(schema, input)?;
+        let tenant_id = if input.tenant_id.is_empty() {
+            return Err(TraceDbError::InvalidRecord(
+                "tenant id cannot be empty".to_string(),
+            ));
+        } else {
+            input.tenant_id.clone()
+        };
+        let key = record_key(&input.table, &tenant_id, &input.id);
+        let versions = self.versions.entry(key).or_default();
 
-    pub fn prepare_replacement(
-        &self,
-        schema: &TableSchema,
-        input: &RecordInput,
-        epoch: Epoch,
-    ) -> Result<PreparedRecordWrite> {
-        let tenant_id = validate_record_input_for_write(schema, input)?;
-        let partition_key = record_key_prefix(&input.table, &tenant_id);
-        let mut records = self
-            .partitions
-            .get(&partition_key)
-            .cloned()
-            .unwrap_or_default();
-        let record = apply_replacement_to_versions(
-            schema,
-            input,
-            epoch,
-            tenant_id,
-            records.entry(input.id.clone()).or_default(),
-        )?;
-        Ok(PreparedRecordWrite {
-            partition_key,
-            records,
-            record,
-        })
-    }
+        if let Some(current) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none())
+        {
+            current.header.end_epoch = Some(epoch);
+        }
 
-    pub fn install_prepared_record_write(&mut self, prepared: PreparedRecordWrite) -> StoredRecord {
-        self.partitions
-            .insert(prepared.partition_key, prepared.records);
-        prepared.record
+        let mut fields = input.fields.clone();
+        fields.insert(
+            schema.primary_id_column.clone(),
+            Value::String(input.id.clone()),
+        );
+        fields.insert(
+            schema.tenant_id_column.clone(),
+            Value::String(tenant_id.clone()),
+        );
+        validate_record_identity(schema, input, Some(&fields))?;
+
+        let features = build_features(schema, input, &fields, None, epoch);
+        let record = StoredRecord {
+            header: RecordHeader {
+                record_id: input.id.clone(),
+                table_id: input.table.clone(),
+                tenant_id,
+                schema_version: 1,
+                begin_epoch: epoch,
+                end_epoch: None,
+                version_id: VersionId::new(epoch.get()),
+                tombstone: None,
+            },
+            fields,
+            features,
+        };
+        versions.push(record.clone());
+        Ok(record)
     }
 
     pub fn apply_mutation(
@@ -191,13 +185,8 @@ impl RecordStore {
         } else {
             mutation.tenant_id.clone()
         };
-        let partition_key = record_key_prefix(&mutation.table, &tenant_id);
-        let versions = self
-            .partitions
-            .entry(partition_key)
-            .or_default()
-            .entry(mutation.id.clone())
-            .or_default();
+        let key = record_key(&mutation.table, &tenant_id, &mutation.id);
+        let versions = self.versions.entry(key).or_default();
         let previous = versions
             .iter()
             .rev()
@@ -260,12 +249,8 @@ impl RecordStore {
         epoch: Epoch,
     ) -> Result<StoredRecord> {
         validate_deletion_identity(schema, deletion)?;
-        let partition_key = record_key_prefix(&deletion.table, &deletion.tenant_id);
-        let Some(versions) = self
-            .partitions
-            .get_mut(&partition_key)
-            .and_then(|records| records.get_mut(&deletion.id))
-        else {
+        let key = record_key(&deletion.table, &deletion.tenant_id, &deletion.id);
+        let Some(versions) = self.versions.get_mut(&key) else {
             return Err(TraceDbError::NotFound(format!(
                 "{}:{}:{}",
                 deletion.table, deletion.tenant_id, deletion.id
@@ -320,9 +305,8 @@ impl RecordStore {
         record_id: &str,
         epoch: Epoch,
     ) -> Option<StoredRecord> {
-        self.partitions
-            .get(&record_key_prefix(table, tenant_id))
-            .and_then(|records| records.get(record_id))
+        self.versions
+            .get(&record_key(table, tenant_id, record_id))
             .and_then(|versions| visible_record_at(versions, epoch))
     }
 
@@ -345,32 +329,27 @@ impl RecordStore {
         tenant_id: &str,
         epoch: Epoch,
     ) -> Vec<StoredRecord> {
-        self.partitions
-            .get(&record_key_prefix(table, tenant_id))
-            .map(|records| {
-                records
-                    .values()
-                    .filter_map(|versions| visible_record_at(versions, epoch))
-                    .collect()
-            })
-            .unwrap_or_default()
+        let prefix = record_key_prefix(table, tenant_id);
+        self.versions
+            .range(prefix.clone()..)
+            .take_while(|(key, _)| key.starts_with(&prefix))
+            .filter_map(|(_, versions)| visible_record_at(versions, epoch))
+            .collect()
     }
 
     pub fn snapshot(&self, epoch: Epoch) -> ReadSnapshot {
         let mut records = Vec::new();
-        for partition in self.partitions.values() {
-            for versions in partition.values() {
-                if let Some(record) = versions.iter().rev().find(|record| {
-                    record.header.begin_epoch <= epoch
-                        && record
-                            .header
-                            .end_epoch
-                            .map(|end| end > epoch)
-                            .unwrap_or(true)
-                        && record.header.tombstone.is_none()
-                }) {
-                    records.push(record.clone());
-                }
+        for versions in self.versions.values() {
+            if let Some(record) = versions.iter().rev().find(|record| {
+                record.header.begin_epoch <= epoch
+                    && record
+                        .header
+                        .end_epoch
+                        .map(|end| end > epoch)
+                        .unwrap_or(true)
+                    && record.header.tombstone.is_none()
+            }) {
+                records.push(record.clone());
             }
         }
         ReadSnapshot { epoch, records }
@@ -381,12 +360,12 @@ impl RecordStore {
         invalidation: &FeatureInvalidation,
         epoch: Epoch,
     ) -> Result<DerivedFeatureState> {
-        let partition_key = record_key_prefix(&invalidation.table, &invalidation.tenant_id);
-        let Some(versions) = self
-            .partitions
-            .get_mut(&partition_key)
-            .and_then(|records| records.get_mut(&invalidation.record_id))
-        else {
+        let key = record_key(
+            &invalidation.table,
+            &invalidation.tenant_id,
+            &invalidation.record_id,
+        );
+        let Some(versions) = self.versions.get_mut(&key) else {
             return Err(TraceDbError::NotFound(format!(
                 "{}:{}:{}",
                 invalidation.table, invalidation.tenant_id, invalidation.record_id
@@ -469,17 +448,15 @@ impl RecordStore {
 
     fn active_feature_tenants(&self, invalidation: &FeatureInvalidation) -> Vec<String> {
         let mut tenants = Vec::new();
-        for partition in self.partitions.values() {
-            if let Some(versions) = partition.get(&invalidation.record_id) {
-                if let Some(record) = versions.iter().rev().find(|record| {
-                    record.header.table_id == invalidation.table
-                        && record.header.record_id == invalidation.record_id
-                        && record.header.end_epoch.is_none()
-                        && record.header.tombstone.is_none()
-                }) {
-                    if record.features.contains_key(&invalidation.feature) {
-                        tenants.push(record.header.tenant_id.clone());
-                    }
+        for versions in self.versions.values() {
+            if let Some(record) = versions.iter().rev().find(|record| {
+                record.header.table_id == invalidation.table
+                    && record.header.record_id == invalidation.record_id
+                    && record.header.end_epoch.is_none()
+                    && record.header.tombstone.is_none()
+            }) {
+                if record.features.contains_key(&invalidation.feature) {
+                    tenants.push(record.header.tenant_id.clone());
                 }
             }
         }
@@ -494,27 +471,24 @@ impl RecordStore {
         feature: &str,
         epoch: Epoch,
     ) -> Option<DerivedFeatureState> {
-        self.partitions
-            .get(&record_key_prefix(table, tenant_id))
-            .and_then(|records| records.get(record_id))
-            .and_then(|versions| {
-                versions
-                    .iter()
-                    .rev()
-                    .find(|record| {
-                        record.header.table_id == table
-                            && record.header.tenant_id == tenant_id
-                            && record.header.record_id == record_id
-                            && record.header.tombstone.is_none()
-                            && record.header.begin_epoch <= epoch
-                            && record
-                                .header
-                                .end_epoch
-                                .map(|end| end > epoch)
-                                .unwrap_or(true)
-                    })
-                    .and_then(|record| record.features.get(feature).cloned())
-            })
+        self.versions.values().find_map(|versions| {
+            versions
+                .iter()
+                .rev()
+                .find(|record| {
+                    record.header.table_id == table
+                        && record.header.tenant_id == tenant_id
+                        && record.header.record_id == record_id
+                        && record.header.tombstone.is_none()
+                        && record.header.begin_epoch <= epoch
+                        && record
+                            .header
+                            .end_epoch
+                            .map(|end| end > epoch)
+                            .unwrap_or(true)
+                })
+                .and_then(|record| record.features.get(feature).cloned())
+        })
     }
 
     pub fn is_tombstoned_at(
@@ -524,9 +498,8 @@ impl RecordStore {
         record_id: &str,
         epoch: Epoch,
     ) -> bool {
-        self.partitions
-            .get(&record_key_prefix(table, tenant_id))
-            .and_then(|records| records.get(record_id))
+        self.versions
+            .get(&record_key(table, tenant_id, record_id))
             .and_then(|versions| {
                 versions.iter().rev().find(|record| {
                     record.header.begin_epoch <= epoch
@@ -658,62 +631,6 @@ fn build_features(
     features
 }
 
-fn apply_replacement_to_versions(
-    schema: &TableSchema,
-    input: &RecordInput,
-    epoch: Epoch,
-    tenant_id: String,
-    versions: &mut Vec<StoredRecord>,
-) -> Result<StoredRecord> {
-    if let Some(current) = versions
-        .iter_mut()
-        .rev()
-        .find(|record| record.header.end_epoch.is_none())
-    {
-        current.header.end_epoch = Some(epoch);
-    }
-
-    let mut fields = input.fields.clone();
-    fields.insert(
-        schema.primary_id_column.clone(),
-        Value::String(input.id.clone()),
-    );
-    fields.insert(
-        schema.tenant_id_column.clone(),
-        Value::String(tenant_id.clone()),
-    );
-    validate_record_identity(schema, input, Some(&fields))?;
-
-    let features = build_features(schema, input, &fields, None, epoch);
-    let record = StoredRecord {
-        header: RecordHeader {
-            record_id: input.id.clone(),
-            table_id: input.table.clone(),
-            tenant_id,
-            schema_version: 1,
-            begin_epoch: epoch,
-            end_epoch: None,
-            version_id: VersionId::new(epoch.get()),
-            tombstone: None,
-        },
-        fields,
-        features,
-    };
-    versions.push(record.clone());
-    Ok(record)
-}
-
-fn validate_record_input_for_write(schema: &TableSchema, input: &RecordInput) -> Result<String> {
-    validate_record_identity(schema, input, None)?;
-    validate_vector_dimensions(schema, input)?;
-    if input.tenant_id.is_empty() {
-        return Err(TraceDbError::InvalidRecord(
-            "tenant id cannot be empty".to_string(),
-        ));
-    }
-    Ok(input.tenant_id.clone())
-}
-
 fn validate_vector_dimensions(schema: &TableSchema, mutation: &RecordInput) -> Result<()> {
     for vector in &schema.vector_columns {
         if let Some(value) = mutation.fields.get(&vector.name) {
@@ -787,6 +704,10 @@ fn validate_deletion_identity(schema: &TableSchema, deletion: &RecordDeletion) -
     Ok(())
 }
 
+fn record_key(table: &str, tenant: &str, id: &str) -> String {
+    format!("{}{id}", record_key_prefix(table, tenant))
+}
+
 fn record_key_prefix(table: &str, tenant: &str) -> String {
     format!("{table}\u{0}{tenant}\u{0}")
 }
@@ -829,14 +750,6 @@ mod tests {
         }
     }
 
-    fn record_with_body(id: &str, tenant: &str, body: &str) -> RecordInput {
-        let mut input = record(id, tenant);
-        input
-            .fields
-            .insert("body".to_string(), Value::String(body.to_string()));
-        input
-    }
-
     #[test]
     fn visible_records_at_uses_table_tenant_partition_prefix() {
         let schema = schema();
@@ -869,123 +782,5 @@ mod tests {
         let tenant_b = store.visible_records_at("docs", "tenant-b", Epoch::new(3));
         assert_eq!(tenant_b.len(), 1);
         assert_eq!(tenant_b[0].header.record_id, "b");
-    }
-
-    #[test]
-    fn prepared_replacement_does_not_mutate_until_install() {
-        let schema = schema();
-        let mut store = RecordStore::default();
-        store
-            .apply_mutation(
-                &schema,
-                &record_with_body("a", "tenant-a", "original"),
-                Epoch::new(1),
-            )
-            .expect("insert");
-
-        let prepared = store
-            .prepare_replacement(
-                &schema,
-                &record_with_body("a", "tenant-a", "replacement"),
-                Epoch::new(2),
-            )
-            .expect("prepare");
-
-        let still_original = store
-            .get_record("docs", "tenant-a", "a", Epoch::new(2))
-            .expect("live record before install");
-        assert_eq!(
-            still_original.fields.get("body").and_then(Value::as_str),
-            Some("original")
-        );
-
-        store.install_prepared_record_write(prepared);
-        let historical = store
-            .get_record("docs", "tenant-a", "a", Epoch::new(1))
-            .expect("historical record");
-        assert_eq!(
-            historical.fields.get("body").and_then(Value::as_str),
-            Some("original")
-        );
-        let current = store
-            .get_record("docs", "tenant-a", "a", Epoch::new(2))
-            .expect("current record");
-        assert_eq!(
-            current.fields.get("body").and_then(Value::as_str),
-            Some("replacement")
-        );
-    }
-
-    #[test]
-    fn failed_prepared_replacement_leaves_live_store_unchanged() {
-        let schema = schema();
-        let mut store = RecordStore::default();
-        store
-            .apply_mutation(
-                &schema,
-                &record_with_body("a", "tenant-a", "original"),
-                Epoch::new(1),
-            )
-            .expect("insert");
-        let mut invalid = record_with_body("a", "tenant-a", "invalid");
-        invalid
-            .fields
-            .insert("embedding".to_string(), json!([0.1, 0.2, 0.3]));
-
-        assert!(store
-            .prepare_replacement(&schema, &invalid, Epoch::new(2))
-            .is_err());
-
-        let current = store
-            .get_record("docs", "tenant-a", "a", Epoch::new(2))
-            .expect("current record");
-        assert_eq!(
-            current.fields.get("body").and_then(Value::as_str),
-            Some("original")
-        );
-    }
-
-    #[test]
-    fn prepared_replacement_scopes_install_to_target_record_chain() {
-        let schema = schema();
-        let mut store = RecordStore::default();
-        store
-            .apply_mutation(
-                &schema,
-                &record_with_body("a", "tenant-a", "tenant a original"),
-                Epoch::new(1),
-            )
-            .expect("insert tenant a");
-        store
-            .apply_mutation(
-                &schema,
-                &record_with_body("a", "tenant-b", "tenant b original"),
-                Epoch::new(2),
-            )
-            .expect("insert tenant b");
-
-        let prepared = store
-            .prepare_replacement(
-                &schema,
-                &record_with_body("a", "tenant-a", "tenant a replacement"),
-                Epoch::new(3),
-            )
-            .expect("prepare tenant a replacement");
-        store.install_prepared_record_write(prepared);
-
-        let tenant_a = store
-            .get_record("docs", "tenant-a", "a", Epoch::new(3))
-            .expect("tenant a");
-        let tenant_b = store
-            .get_record("docs", "tenant-b", "a", Epoch::new(3))
-            .expect("tenant b");
-        assert_eq!(
-            tenant_a.fields.get("body").and_then(Value::as_str),
-            Some("tenant a replacement")
-        );
-        assert_eq!(
-            tenant_b.fields.get("body").and_then(Value::as_str),
-            Some("tenant b original")
-        );
     }
 }
