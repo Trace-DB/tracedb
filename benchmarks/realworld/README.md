@@ -364,6 +364,40 @@ transaction. Use TraceDB `batch_transaction_total_latency_ms` against pgvector
 `ingest_transaction_total_latency_ms` for the fair transaction-total ingest
 comparison.
 
+Replicated CodeSearchNet actual-engine triple-control run:
+
+```bash
+for r in a b c; do
+  TRACEDB_MODAL_APP_NAME="tracedb-controls-codesearch-<commit>-r1000-${r}" \
+  modal run benchmarks/realworld/modal_bench.py \
+    --run-id "modal-tracedb-controls-codesearch-<commit>-r1000-${r}" \
+    --dataset codesearchnet_codeaware \
+    --records 1000 \
+    --seed 42 \
+    --target tracedb,opensearch,pgvector \
+    --surface http \
+    --scenarios search_rag_6 \
+    --openrouter-mode off \
+    --tracedb-ingest-mode batch \
+    --allow-external-controls \
+    --require-services \
+    --tracedb-engine-control \
+    --opensearch-control \
+    --pgvector-control \
+    --summary-json "/tmp/tracedb-modal-summaries/modal-tracedb-controls-codesearch-<commit>-r1000-${r}.json"
+done
+```
+
+This command relies on automatic image-family selection. With TraceDB plus more
+than one external control, the wrapper should select `modal_image_kind =
+tracedb_controls`; do not override `TRACEDB_MODAL_IMAGE_KIND` unless you are
+intentionally debugging image selection. A valid external-qrels run must report
+`control_status=external_control_available`, `failure_count=0`,
+`source_dirty=false`, `relevance_label_mode=external_qrels`, distinct Modal app
+names, and no unavailable controls. Treat the local `--summary-json` files as
+the durable evidence surface unless the remote Modal bundle tarballs are
+explicitly persisted.
+
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
 `manifest.json`. The manifest records the run config, seed, Modal app name,
 resource class, redacted benchmark environment, and git commit/dirty state. Use
