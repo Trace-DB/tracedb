@@ -414,6 +414,26 @@ transaction. Use TraceDB `batch_transaction_total_latency_ms` against pgvector
 `ingest_transaction_total_latency_ms` for the fair transaction-total ingest
 comparison.
 
+Current closeout checkpoint:
+
+- `88c9223 bench: split store apply write timing` adds store-apply subphase
+  attribution for `validate_identity`, `validate_vector`, `key`, `fields`,
+  `finalize_identity`, `features`, and `install`.
+- Three clean 1024-record Modal TraceDB+pgvector repeats with
+  `TRACEDB_MODAL_IMAGE_KIND=tracedb_pgvector`, `--surface http`,
+  `--tracedb-ingest-mode batch`, `--tracedb-engine-control`, and
+  `--pgvector-control` preserved source_dirty=false, verified exported bundles,
+  and `control_status=external_control_available`.
+- The checkpoint is development evidence, not a performance win: pgvector
+  remained faster on median query p95 (`1.348 ms` vs TraceDB `2.355 ms`),
+  faster on transaction ingest (`184.992 ms` vs TraceDB `216.380 ms`), and
+  smaller on storage (`335872 B` vs TraceDB after-ingest `495401 B`).
+  Generated-label quality tied at `0.233 / 0.375 / 1.000`.
+- TraceDB median Modal store_apply was `138.739 ms`, mostly features
+  `47.314 ms`, install `46.981 ms`, fields `26.969 ms`, and key `16.284 ms`.
+  Future optimization work should isolate those families with same-machine
+  parent/branch controls before another Modal claim.
+
 Replicated CodeSearchNet actual-engine triple-control run:
 
 ```bash

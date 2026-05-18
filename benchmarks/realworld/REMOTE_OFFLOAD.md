@@ -39,7 +39,8 @@ Each run should answer a specific question:
   document-shaped, tenant-filtered, and API-surface workloads.
 - Controlled variable: one dataset digest, one seed, one record count, one model
   configuration.
-- Baselines: TraceDB, PostgreSQL, PostgreSQL+pgvector, MongoDB, Qdrant, OpenSearch.
+- Baselines: TraceDB, PostgreSQL, PostgreSQL+pgvector, MongoDB, Qdrant,
+  OpenSearch, and Milvus Lite where the Modal/image family supports it.
 - Raw evidence: `manifest.json`, `observations.jsonl`, `summary.json`, `report.md`,
   and `failures.md`.
 - Interpretation: the suite-level `suite.md` explains scenarios, database roles,
@@ -57,7 +58,8 @@ The aggregate suite currently runs:
   patch visibility, tenant isolation, strict/lazy/allow-dirty freshness requests,
   explain fields, compaction, snapshot, restore, and tombstone hiding.
 - `search_rag_6`: side-by-side database comparison across TraceDB, PostgreSQL,
-  pgvector, MongoDB, Qdrant, and OpenSearch on the same tenant-filtered RAG corpus.
+  pgvector, MongoDB, Qdrant, OpenSearch, and Milvus Lite-capable lanes on the
+  same tenant-filtered RAG corpus.
 
 Provider-backed runs add OpenRouter embedding metadata and
 `cohere/rerank-4-fast` retrieve-then-rerank metrics.
@@ -75,6 +77,14 @@ PostgreSQL and pgvector controls in this suite currently use one bulk
 transaction. Treat `ingest_transaction_total_latency_ms` as the transaction-shape
 comparison and keep `ingest_latency_p95_ms` as the per-operation timing inside
 each adapter's chosen ingest mode.
+
+Current closeout checkpoint: `88c9223` has three clean 1024-record Modal
+TraceDB+pgvector batch repeats with source_dirty=false, verified exported
+bundles, and `control_status=external_control_available`. The checkpoint is
+semi-working development evidence, not a product win: pgvector still beats
+TraceDB on median query p95, transaction ingest, and storage while generated
+quality ties. The next write-path target is store_apply features/install/fields
+and key construction, not WAL or manifest.
 
 ## Move the Repo to the Host
 
