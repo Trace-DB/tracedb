@@ -138,6 +138,9 @@ cargo run -p tracedb-bench > /tmp/tracedb-inprocess-scaling.json
 Use this before changing checkpoint layout or store internals. It captures
 engine insert p95, engine open p95, engine query p95, checkpoint latency, and
 checkpointed open/query p95 without paying a new process startup per operation.
+Write phase timings include lock acquisition, stale-refresh checks, WAL append,
+store clone/install, and manifest write phases so write-path changes can be
+attributed before they are promoted into optimization claims.
 
 Compare candidate scaling reports against same-machine parent reports before
 accepting write-path or storage-layout changes:

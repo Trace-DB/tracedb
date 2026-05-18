@@ -212,6 +212,11 @@ pub struct RecordScanOutput {
 pub struct WritePathTiming {
     pub total_ms: f64,
     pub lock_ms: f64,
+    pub refresh_total_ms: f64,
+    pub refresh_manifest_read_ms: f64,
+    pub refresh_wal_tail_ms: f64,
+    pub refresh_reopen_ms: f64,
+    pub refresh_performed: bool,
     pub schema_lookup_ms: f64,
     pub store_clone_ms: f64,
     pub store_apply_ms: f64,
@@ -305,11 +310,21 @@ struct ManifestBumpTiming {
     write: ManifestWriteTiming,
 }
 
+#[derive(Clone, Debug, Default)]
+struct RefreshTiming {
+    total_ms: f64,
+    manifest_read_ms: f64,
+    wal_tail_ms: f64,
+    reopen_ms: f64,
+    performed: bool,
+}
+
 impl WritePathTiming {
     #[allow(clippy::too_many_arguments)]
     fn from_parts(
         total_ms: f64,
         lock_ms: f64,
+        refresh: RefreshTiming,
         schema_lookup_ms: f64,
         store_clone_ms: f64,
         store_apply_ms: f64,
@@ -323,6 +338,11 @@ impl WritePathTiming {
         Self {
             total_ms,
             lock_ms,
+            refresh_total_ms: refresh.total_ms,
+            refresh_manifest_read_ms: refresh.manifest_read_ms,
+            refresh_wal_tail_ms: refresh.wal_tail_ms,
+            refresh_reopen_ms: refresh.reopen_ms,
+            refresh_performed: refresh.performed,
             schema_lookup_ms,
             store_clone_ms,
             store_apply_ms,
@@ -517,8 +537,8 @@ impl TraceDb {
         let total_started = Instant::now();
         let lock_started = Instant::now();
         let _guard = WriteLock::acquire(&self.dir)?;
-        self.refresh_from_disk_if_stale()?;
         let lock_ms = elapsed_ms(lock_started);
+        let refresh_timing = self.refresh_from_disk_if_stale_with_timing()?;
 
         let input = request.record;
         let schema_lookup_started = Instant::now();
@@ -571,6 +591,7 @@ impl TraceDb {
             WritePathTiming::from_parts(
                 elapsed_ms(total_started),
                 lock_ms,
+                refresh_timing,
                 schema_lookup_ms,
                 store_clone_ms,
                 store_apply_ms,
@@ -1229,8 +1250,17 @@ impl TraceDb {
     }
 
     fn refresh_from_disk_if_stale(&mut self) -> Result<()> {
+        self.refresh_from_disk_if_stale_with_timing().map(|_| ())
+    }
+
+    fn refresh_from_disk_if_stale_with_timing(&mut self) -> Result<RefreshTiming> {
+        let total_started = Instant::now();
+        let manifest_read_started = Instant::now();
         let durable_manifest = read_manifest(self.dir.join("manifest.tdb"))?;
+        let manifest_read_ms = elapsed_ms(manifest_read_started);
+        let wal_tail_started = Instant::now();
         let wal_last_epoch = self.wal.last_commit_epoch()?;
+        let wal_tail_ms = elapsed_ms(wal_tail_started);
         let wal_is_newer = wal_last_epoch
             .map(|last_epoch| last_epoch > self.manifest.latest_epoch)
             .unwrap_or(false);
@@ -1238,9 +1268,16 @@ impl TraceDb {
             || durable_manifest.checkpoint_epoch > self.manifest.checkpoint_epoch
             || durable_manifest.manifest_generation > self.manifest.manifest_generation;
         if !wal_is_newer && !manifest_is_newer {
-            return Ok(());
+            return Ok(RefreshTiming {
+                total_ms: elapsed_ms(total_started),
+                manifest_read_ms,
+                wal_tail_ms,
+                reopen_ms: 0.0,
+                performed: false,
+            });
         }
 
+        let reopen_started = Instant::now();
         let TraceDb {
             manifest,
             store,
@@ -1253,7 +1290,13 @@ impl TraceDb {
         self.wal = wal;
         self.last_recovery_torn_tail = last_recovery_torn_tail;
         self.clear_lexical_cache();
-        Ok(())
+        Ok(RefreshTiming {
+            total_ms: elapsed_ms(total_started),
+            manifest_read_ms,
+            wal_tail_ms,
+            reopen_ms: elapsed_ms(reopen_started),
+            performed: true,
+        })
     }
 
     fn validate_schema_compatible(&self, schema: &TableSchema) -> Result<()> {

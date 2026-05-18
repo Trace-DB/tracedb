@@ -559,6 +559,14 @@ fn record_write_timing_samples(timing: &WritePathTiming, samples: &mut BTreeMap<
         ("total", timing.total_ms),
         ("total_without_manifest", total_without_manifest),
         ("lock", timing.lock_ms),
+        ("refresh_total", timing.refresh_total_ms),
+        ("refresh_manifest_read", timing.refresh_manifest_read_ms),
+        ("refresh_wal_tail", timing.refresh_wal_tail_ms),
+        ("refresh_reopen", timing.refresh_reopen_ms),
+        (
+            "refresh_performed",
+            if timing.refresh_performed { 1.0 } else { 0.0 },
+        ),
         ("schema_lookup", timing.schema_lookup_ms),
         ("store_clone", timing.store_clone_ms),
         ("store_apply", timing.store_apply_ms),
@@ -723,6 +731,10 @@ mod tests {
             .put_phase_p95_ms
             .iter()
             .any(|timing| timing.name == "manifest_total" && timing.p95_ms >= 0.0));
+        assert!(point
+            .put_phase_p95_ms
+            .iter()
+            .any(|timing| timing.name == "refresh_total" && timing.p95_ms >= 0.0));
         assert!(point
             .recent_put_phase_p95_ms
             .iter()
