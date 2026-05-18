@@ -9,3 +9,6 @@ crc32fast.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracedb-core = { path = "../tracedb-core" }
+
+[dev-dependencies]
+tempfile.workspace = true

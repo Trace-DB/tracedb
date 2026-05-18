@@ -125,6 +125,26 @@ struct WalTail {
     file_len: u64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct CommitFrame {
+    commit: CommitRecord,
+    payload_checksum: u32,
+    payload_bytes: u64,
+    frame_bytes: u64,
+    frame: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct CommitFrameBuildTiming {
+    frame_build_ms: f64,
+    commit_prepare_ms: f64,
+    serialize_ms: f64,
+    payload_checksum_ms: f64,
+    frame_assembly_ms: f64,
+    payload_bytes: u64,
+    frame_bytes: u64,
+}
+
 impl Wal {
     pub fn open(db_dir: impl AsRef<Path>) -> Result<Self> {
         let wal_dir = db_dir.as_ref().join("wal");
@@ -174,36 +194,15 @@ impl Wal {
             .map(|last_lsn| last_lsn.next())
             .unwrap_or_else(|| Lsn::new(1));
         let prev_checksum = tail.last_checksum;
-        let mut commit = commit.clone();
-        commit.previous_commit_hash = prev_checksum;
-        let payload = serde_json::to_vec(&commit)?;
-        if payload.len() > MAX_PAYLOAD_LEN {
-            return Err(TraceDbError::WalCorruption(format!(
-                "payload length {} exceeds max {MAX_PAYLOAD_LEN} at lsn {}",
-                payload.len(),
-                lsn.get()
-            )));
-        }
-        let payload_checksum = checksum_bytes(&payload);
-
-        let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
-        frame.extend_from_slice(&WAL_MAGIC.to_le_bytes());
-        frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
-        frame.extend_from_slice(&lsn.get().to_le_bytes());
-        frame.extend_from_slice(&prev_checksum.to_le_bytes());
-        frame.extend_from_slice(&1u32.to_le_bytes());
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(&payload_checksum.to_le_bytes());
-        frame.extend_from_slice(&payload);
-        frame.extend_from_slice(&COMMIT_FOOTER.to_le_bytes());
+        let frame = build_commit_frame(commit, lsn, prev_checksum)?;
 
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
-        file.write_all(&frame)?;
+        file.write_all(&frame.frame)?;
         file.sync_data()?;
         tail.last_lsn = Some(lsn);
-        tail.last_epoch = Some(commit.epoch);
-        tail.last_checksum = payload_checksum;
-        tail.file_len += frame.len() as u64;
+        tail.last_epoch = Some(frame.commit.epoch);
+        tail.last_checksum = frame.payload_checksum;
+        tail.file_len += frame.frame_bytes;
         Ok(lsn)
     }
 
@@ -230,66 +229,33 @@ impl Wal {
         let prev_checksum = tail.last_checksum;
         let lock_tail_ms = elapsed_ms(lock_tail_started);
 
-        let frame_build_started = Instant::now();
-        let commit_prepare_started = Instant::now();
-        let mut commit = commit.clone();
-        commit.previous_commit_hash = prev_checksum;
-        let commit_prepare_ms = elapsed_ms(commit_prepare_started);
-        let serialize_started = Instant::now();
-        let payload = serde_json::to_vec(&commit)?;
-        let serialize_ms = elapsed_ms(serialize_started);
-        if payload.len() > MAX_PAYLOAD_LEN {
-            return Err(TraceDbError::WalCorruption(format!(
-                "payload length {} exceeds max {MAX_PAYLOAD_LEN} at lsn {}",
-                payload.len(),
-                lsn.get()
-            )));
-        }
-        let payload_checksum_started = Instant::now();
-        let payload_checksum = checksum_bytes(&payload);
-        let payload_checksum_ms = elapsed_ms(payload_checksum_started);
-
-        let frame_assembly_started = Instant::now();
-        let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
-        frame.extend_from_slice(&WAL_MAGIC.to_le_bytes());
-        frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
-        frame.extend_from_slice(&lsn.get().to_le_bytes());
-        frame.extend_from_slice(&prev_checksum.to_le_bytes());
-        frame.extend_from_slice(&1u32.to_le_bytes());
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(&payload_checksum.to_le_bytes());
-        frame.extend_from_slice(&payload);
-        frame.extend_from_slice(&COMMIT_FOOTER.to_le_bytes());
-        let payload_bytes = payload.len() as u64;
-        let frame_bytes = frame.len() as u64;
-        let frame_assembly_ms = elapsed_ms(frame_assembly_started);
-        let frame_build_ms = elapsed_ms(frame_build_started);
+        let (frame, frame_timing) = build_commit_frame_with_timing(commit, lsn, prev_checksum)?;
 
         let write_started = Instant::now();
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
-        file.write_all(&frame)?;
+        file.write_all(&frame.frame)?;
         let write_ms = elapsed_ms(write_started);
         let sync_data_started = Instant::now();
         file.sync_data()?;
         let sync_data_ms = elapsed_ms(sync_data_started);
         let tail_update_started = Instant::now();
         tail.last_lsn = Some(lsn);
-        tail.last_epoch = Some(commit.epoch);
-        tail.last_checksum = payload_checksum;
-        tail.file_len += frame.len() as u64;
+        tail.last_epoch = Some(frame.commit.epoch);
+        tail.last_checksum = frame.payload_checksum;
+        tail.file_len += frame.frame_bytes;
         let tail_update_ms = elapsed_ms(tail_update_started);
         Ok((
             lsn,
             WalAppendTiming {
                 total_ms: elapsed_ms(total_started),
                 lock_tail_ms,
-                frame_build_ms,
-                commit_prepare_ms,
-                serialize_ms,
-                payload_checksum_ms,
-                frame_assembly_ms,
-                payload_bytes,
-                frame_bytes,
+                frame_build_ms: frame_timing.frame_build_ms,
+                commit_prepare_ms: frame_timing.commit_prepare_ms,
+                serialize_ms: frame_timing.serialize_ms,
+                payload_checksum_ms: frame_timing.payload_checksum_ms,
+                frame_assembly_ms: frame_timing.frame_assembly_ms,
+                payload_bytes: frame_timing.payload_bytes,
+                frame_bytes: frame_timing.frame_bytes,
                 write_ms,
                 sync_data_ms,
                 tail_update_ms,
@@ -308,6 +274,108 @@ impl Wal {
 
 fn elapsed_ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
+}
+
+fn build_commit_frame(
+    commit: &CommitRecord,
+    lsn: Lsn,
+    previous_checksum: u32,
+) -> Result<CommitFrame> {
+    let commit = prepare_commit_for_frame(commit, previous_checksum);
+    let payload = serialize_commit_payload(&commit, lsn)?;
+    let payload_checksum = checksum_bytes(&payload);
+    let frame = assemble_commit_frame(lsn, previous_checksum, payload_checksum, &payload);
+    let payload_bytes = payload.len() as u64;
+    let frame_bytes = frame.len() as u64;
+    Ok(CommitFrame {
+        commit,
+        payload_checksum,
+        payload_bytes,
+        frame_bytes,
+        frame,
+    })
+}
+
+fn build_commit_frame_with_timing(
+    commit: &CommitRecord,
+    lsn: Lsn,
+    previous_checksum: u32,
+) -> Result<(CommitFrame, CommitFrameBuildTiming)> {
+    let frame_build_started = Instant::now();
+    let commit_prepare_started = Instant::now();
+    let commit = prepare_commit_for_frame(commit, previous_checksum);
+    let commit_prepare_ms = elapsed_ms(commit_prepare_started);
+
+    let serialize_started = Instant::now();
+    let payload = serialize_commit_payload(&commit, lsn)?;
+    let serialize_ms = elapsed_ms(serialize_started);
+
+    let payload_checksum_started = Instant::now();
+    let payload_checksum = checksum_bytes(&payload);
+    let payload_checksum_ms = elapsed_ms(payload_checksum_started);
+
+    let frame_assembly_started = Instant::now();
+    let frame = assemble_commit_frame(lsn, previous_checksum, payload_checksum, &payload);
+    let payload_bytes = payload.len() as u64;
+    let frame_bytes = frame.len() as u64;
+    let frame_assembly_ms = elapsed_ms(frame_assembly_started);
+    let frame_build_ms = elapsed_ms(frame_build_started);
+
+    Ok((
+        CommitFrame {
+            commit,
+            payload_checksum,
+            payload_bytes,
+            frame_bytes,
+            frame,
+        },
+        CommitFrameBuildTiming {
+            frame_build_ms,
+            commit_prepare_ms,
+            serialize_ms,
+            payload_checksum_ms,
+            frame_assembly_ms,
+            payload_bytes,
+            frame_bytes,
+        },
+    ))
+}
+
+fn prepare_commit_for_frame(commit: &CommitRecord, previous_checksum: u32) -> CommitRecord {
+    let mut commit = commit.clone();
+    commit.previous_commit_hash = previous_checksum;
+    commit
+}
+
+fn serialize_commit_payload(commit: &CommitRecord, lsn: Lsn) -> Result<Vec<u8>> {
+    let payload = serde_json::to_vec(commit)?;
+    if payload.len() > MAX_PAYLOAD_LEN {
+        return Err(TraceDbError::WalCorruption(format!(
+            "payload length {} exceeds max {MAX_PAYLOAD_LEN} at lsn {}",
+            payload.len(),
+            lsn.get()
+        )));
+    }
+    Ok(payload)
+}
+
+fn assemble_commit_frame(
+    lsn: Lsn,
+    previous_checksum: u32,
+    payload_checksum: u32,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
+    frame.extend_from_slice(&WAL_MAGIC.to_le_bytes());
+    frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
+    frame.extend_from_slice(&lsn.get().to_le_bytes());
+    frame.extend_from_slice(&previous_checksum.to_le_bytes());
+    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&payload_checksum.to_le_bytes());
+    frame.extend_from_slice(payload);
+    frame.extend_from_slice(&COMMIT_FOOTER.to_le_bytes());
+    frame
 }
 
 fn tail_from_scan(path: &Path, scan: &WalScan) -> Result<WalTail> {
@@ -500,4 +568,65 @@ fn read_some(file: &mut File, buf: &mut [u8]) -> Result<usize> {
         total += read;
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timed_and_untimed_frame_builders_produce_identical_frame_bytes() {
+        let commit = CommitRecord::empty(7, Epoch::new(3)).for_database("db", "main");
+        let lsn = Lsn::new(11);
+        let previous_checksum = 0x1234_5678;
+
+        let untimed = build_commit_frame(&commit, lsn, previous_checksum).expect("untimed frame");
+        let (timed, timing) =
+            build_commit_frame_with_timing(&commit, lsn, previous_checksum).expect("timed frame");
+
+        assert_eq!(untimed.frame, timed.frame);
+        assert_eq!(untimed.payload_checksum, timed.payload_checksum);
+        assert_eq!(untimed.commit, timed.commit);
+        assert_eq!(timed.commit.previous_commit_hash, previous_checksum);
+        assert_eq!(timing.payload_bytes, untimed.payload_bytes);
+        assert_eq!(timing.frame_bytes, untimed.frame_bytes);
+    }
+
+    #[test]
+    fn timed_and_untimed_append_paths_write_identical_wal_bytes() {
+        let untimed_dir = tempfile::tempdir().expect("untimed tempdir");
+        let timed_dir = tempfile::tempdir().expect("timed tempdir");
+        let untimed = Wal::open(untimed_dir.path()).expect("untimed wal");
+        let timed = Wal::open(timed_dir.path()).expect("timed wal");
+        let commits = [
+            CommitRecord::empty(1, Epoch::new(1)).for_database("db", "main"),
+            CommitRecord::empty(2, Epoch::new(2)).for_database("db", "main"),
+            CommitRecord::empty(3, Epoch::new(3)).for_database("db", "main"),
+        ];
+
+        let mut prior_len = 0u64;
+        for commit in &commits {
+            let untimed_lsn = untimed.append_commit(commit).expect("untimed append");
+            let (timed_lsn, timing) = timed
+                .append_commit_with_timing(commit)
+                .expect("timed append");
+            assert_eq!(untimed_lsn, timed_lsn);
+            let current_len = std::fs::metadata(timed.path())
+                .expect("timed metadata")
+                .len();
+            assert_eq!(timing.frame_bytes, current_len - prior_len);
+            prior_len = current_len;
+        }
+
+        let untimed_bytes = std::fs::read(untimed.path()).expect("untimed bytes");
+        let timed_bytes = std::fs::read(timed.path()).expect("timed bytes");
+        assert_eq!(untimed_bytes, timed_bytes);
+
+        let untimed_entries = untimed.scan().expect("untimed scan");
+        let timed_entries = timed.scan().expect("timed scan");
+        assert_eq!(untimed_entries, timed_entries);
+        for pair in timed_entries.windows(2) {
+            assert_eq!(pair[1].commit.previous_commit_hash, pair[0].checksum);
+        }
+    }
 }
