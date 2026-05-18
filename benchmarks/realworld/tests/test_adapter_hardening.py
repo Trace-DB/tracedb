@@ -17,6 +17,7 @@ from runner.adapters.qdrant import QdrantAdapter
 from runner.adapters.pgvector import PgVectorAdapter
 from runner.adapters.tracedb import TraceDbAdapter
 from runner.datasets import generated_dataset, load_dataset
+from runner.experiment import ExperimentRecorder
 from runner.http import request_json
 from runner.metrics import recall_at_k, same_file_recall_at_k
 from runner.report import build_report, write_markdown
@@ -179,10 +180,9 @@ class FakeTraceDb:
                         {"path": self.path, "explain": payload.get("explain")}
                     )
                     results = self._matching_results(payload)
-                    response = {
-                        "results": results[: int(payload.get("top_k", 5))],
-                        "explain": self._explain(payload, results),
-                    }
+                    response = {"results": results[: int(payload.get("top_k", 5))]}
+                    if payload.get("explain") is True:
+                        response["explain"] = self._explain(payload, results)
                     self._json(200, response, self._server_timing_headers())
                     return
                 if self.path == "/v1/explain":
@@ -838,7 +838,7 @@ class AdapterHardeningTests(unittest.TestCase):
         )
         self.assertEqual(
             result["metrics"]["query_output_probe_explain_false_explain_returned_count"],
-            3,
+            0,
         )
         self.assertEqual(result["metrics"]["query_phase_probe_sample_count"], 3)
         self.assertEqual(result["metrics"]["query_access_path_probe_sample_count"], 3)
@@ -914,13 +914,13 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertGreater(metrics["query_output_probe_explain_false_body_bytes_p95"], 0)
         self.assertGreater(metrics["query_output_probe_explain_true_body_bytes_p95"], 0)
         self.assertGreater(metrics["query_output_probe_explain_endpoint_body_bytes_p95"], 0)
-        self.assertEqual(
+        self.assertLess(
             metrics["query_output_probe_explain_false_body_bytes_p95"],
             metrics["query_output_probe_explain_true_body_bytes_p95"],
         )
         self.assertEqual(
             metrics["query_output_probe_explain_false_explain_returned_count"],
-            metrics["query_output_probe_count"],
+            0,
         )
         self.assertIn(
             "query_output_probe_explain_endpoint_response_processing_latency_p95_ms",
@@ -940,6 +940,53 @@ class AdapterHardeningTests(unittest.TestCase):
         )
         self.assertTrue(
             any("response attribution" in note for note in result["notes"]),
+            result["notes"],
+        )
+
+    def test_tracedb_http_surface_keeps_query_explain_observations_with_lean_query(self) -> None:
+        fake = FakeTraceDb().start()
+        old_url = os.environ.get("TRACEDB_HTTP_URL")
+        try:
+            os.environ["TRACEDB_HTTP_URL"] = fake.base_url
+            with tempfile.TemporaryDirectory() as temp_dir:
+                recorder = ExperimentRecorder("lean-observer", Path(temp_dir))
+                result = TraceDbAdapter().run(
+                    generated_dataset(16, 42),
+                    RunConfig(
+                        profile="smoke",
+                        target=["tracedb"],
+                        surfaces=["http"],
+                        require_services=False,
+                        repo_root=".",
+                        run_id="lean-observer",
+                        observer=recorder,
+                    ),
+                )
+                observations = (
+                    recorder.observations_path.read_text(encoding="utf-8")
+                    if recorder.observations_path.exists()
+                    else ""
+                )
+        finally:
+            if old_url is None:
+                os.environ.pop("TRACEDB_HTTP_URL", None)
+            else:
+                os.environ["TRACEDB_HTTP_URL"] = old_url
+            fake.stop()
+
+        self.assertTrue(result["available"], result["notes"])
+        self.assertIn('"event_type": "tracedb.query_explain"', observations)
+        self.assertIn('"explain_source": "observer_explain_endpoint"', observations)
+        self.assertEqual(
+            result["metrics"]["query_observer_explain_count"],
+            result["metrics"]["query_count"],
+        )
+        self.assertEqual(
+            result["metrics"]["query_output_probe_explain_false_explain_returned_count"],
+            0,
+        )
+        self.assertTrue(
+            any("observer explain attribution" in note for note in result["notes"]),
             result["notes"],
         )
         self.assertTrue(

@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
@@ -265,6 +265,115 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
 }
 
 #[test]
+fn http_query_explain_false_is_lean_while_explain_surfaces_remain_full() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/schema/apply",
+        &serde_json::to_string(&schema()).unwrap(),
+        "\"epoch\":1",
+    );
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/records/put",
+        &serde_json::to_string(&record(
+            "a",
+            "tenant-a",
+            "rust database kernel",
+            "published",
+            [1.0, 0.0, 0.0],
+        ))
+        .unwrap(),
+        "\"epoch\":2",
+    );
+
+    let lean_query = http_response(
+        addr,
+        "POST",
+        "/v1/query",
+        r#"{"table":"docs","tenant_id":"tenant-a","text":"rust","vector":[1.0,0.0,0.0],"top_k":5,"freshness":"AllowDirty","explain":false}"#,
+    );
+    assert!(
+        lean_query.starts_with("HTTP/1.1 200 OK"),
+        "unexpected lean query response: {lean_query}"
+    );
+    assert!(
+        lean_query.contains("\"results\""),
+        "lean query should still return result rows: {lean_query}"
+    );
+    assert!(
+        !lean_query.contains("\"explain\""),
+        "explain=false query should not serialize explain payload: {lean_query}"
+    );
+    let lean_json = http_json_body(&lean_query);
+    assert!(lean_json.get("results").is_some(), "lean body: {lean_json}");
+    assert!(lean_json.get("explain").is_none(), "lean body: {lean_json}");
+
+    let explain_query = http_response(
+        addr,
+        "POST",
+        "/v1/query",
+        r#"{"table":"docs","tenant_id":"tenant-a","text":"rust","vector":[1.0,0.0,0.0],"top_k":5,"freshness":"AllowDirty","explain":true}"#,
+    );
+    assert!(
+        explain_query.starts_with("HTTP/1.1 200 OK"),
+        "unexpected explain query response: {explain_query}"
+    );
+    assert!(
+        explain_query.contains("\"explain\""),
+        "explain=true query should keep explain payload: {explain_query}"
+    );
+    let explain_query_json = http_json_body(&explain_query);
+    assert!(
+        explain_query_json.get("results").is_some(),
+        "explain query body: {explain_query_json}"
+    );
+    assert!(
+        explain_query_json.get("explain").is_some(),
+        "explain query body: {explain_query_json}"
+    );
+
+    let explain_endpoint = http_response(
+        addr,
+        "POST",
+        "/v1/explain",
+        r#"{"table":"docs","tenant_id":"tenant-a","text":"rust","vector":[1.0,0.0,0.0],"top_k":5,"freshness":"AllowDirty","explain":false}"#,
+    );
+    assert!(
+        explain_endpoint.starts_with("HTTP/1.1 200 OK"),
+        "unexpected explain endpoint response: {explain_endpoint}"
+    );
+    assert!(
+        explain_endpoint.contains("\"returned_count\""),
+        "explain endpoint should return explain fields: {explain_endpoint}"
+    );
+    assert!(
+        !explain_endpoint.contains("\"results\""),
+        "explain endpoint should not return query rows: {explain_endpoint}"
+    );
+    let explain_endpoint_json = http_json_body(&explain_endpoint);
+    assert!(
+        explain_endpoint_json.get("returned_count").is_some(),
+        "explain endpoint body: {explain_endpoint_json}"
+    );
+    assert!(
+        explain_endpoint_json.get("results").is_none(),
+        "explain endpoint body: {explain_endpoint_json}"
+    );
+}
+
+#[test]
 fn http_server_rejects_oversized_content_length_before_body_read() {
     let temp = tempfile::tempdir().expect("tempdir");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -393,4 +502,12 @@ fn http_response(addr: std::net::SocketAddr, method: &str, path: &str, body: &st
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+fn http_json_body(response: &str) -> Value {
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .expect("http response body");
+    serde_json::from_str(body).expect("json response body")
 }

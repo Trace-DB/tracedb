@@ -169,6 +169,7 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
         ("POST", "/v1/query") => {
             let parse_start = Instant::now();
             let query: HybridQuery = serde_json::from_str(body).map_err(to_io_error)?;
+            let include_explain = query.explain;
             let parse_ms = elapsed_ms(parse_start);
             let lock_start = Instant::now();
             let guard = db.lock().unwrap();
@@ -178,7 +179,11 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
             let engine_ms = elapsed_ms(engine_start);
             drop(guard);
             let encode_start = Instant::now();
-            let value = serde_json::to_value(output).map_err(to_io_error)?;
+            let value = if include_explain {
+                serde_json::to_value(output).map_err(to_io_error)?
+            } else {
+                json!({ "results": output.results })
+            };
             let value_encode_ms = elapsed_ms(encode_start);
             ok_timed(
                 value,

@@ -114,6 +114,21 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
         tracedb["metrics"]["queries_with_off_category_results_count"],
         0
     );
+    assert_eq!(
+        tracedb["metrics"]["query_output_probe_explain_false_explain_returned_count"],
+        0
+    );
+    assert!(
+        tracedb["metrics"]["query_output_probe_explain_false_body_bytes_p95"]
+            .as_f64()
+            .unwrap_or_default()
+            < tracedb["metrics"]["query_output_probe_explain_true_body_bytes_p95"]
+                .as_f64()
+                .unwrap_or_default(),
+        "explain=false body should be leaner than explain=true: {} vs {}",
+        tracedb["metrics"]["query_output_probe_explain_false_body_bytes_p95"],
+        tracedb["metrics"]["query_output_probe_explain_true_body_bytes_p95"]
+    );
     assert!(
         tracedb["metrics"]["recall_at_5"]
             .as_f64()

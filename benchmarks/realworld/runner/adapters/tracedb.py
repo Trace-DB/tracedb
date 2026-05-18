@@ -337,6 +337,8 @@ class TraceDbAdapter(BenchmarkAdapter):
             query_output_probe_access_path_timing_counts: list[float] = []
             query_output_probe_planner_candidate_counts: list[float] = []
             query_output_probe_candidates: list[dict[str, Any]] = []
+            query_explain_observer_candidates: list[dict[str, Any]] = []
+            query_explain_observer_count = 0
             query_output_probe_result_id_mismatch_count = 0
             query_output_probe_explain_returned_count_mismatch_count = 0
             query_output_probe_required_explain_field_missing_count = 0
@@ -355,6 +357,49 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "freshness": freshness,
                     "explain": explain,
                 }
+
+            def observe_query_explain(
+                query,
+                *,
+                ids: list[Any],
+                recall: float,
+                same_file_recall: float,
+                ndcg: float,
+                mrr: float,
+                off_category_ids: list[Any],
+                explain: dict[str, Any],
+                explain_source: str,
+            ) -> None:
+                if not config.observer:
+                    return
+                config.observer.observe(
+                    "tracedb.query_explain",
+                    {
+                        "query_id": query.query_id,
+                        "explain_source": explain_source,
+                        "freshness_mode": explain.get("freshness_mode"),
+                        "scalar_filter_applied": explain.get("scalar_filter_applied"),
+                        "scalar_filter_visible_records": explain.get(
+                            "scalar_filter_visible_records"
+                        ),
+                        "scalar_filter_removed_records": explain.get(
+                            "scalar_filter_removed_records"
+                        ),
+                        "opened_candidate_streams": explain.get(
+                            "opened_candidate_streams"
+                        ),
+                        "candidate_budget": explain.get("candidate_budget"),
+                        "expected_ids": query.expected_ids,
+                        "actual_ids": ids,
+                        "expected_category": query.category,
+                        "off_category_actual_ids": off_category_ids,
+                        "recall_at_k": round(recall, 3),
+                        "same_file_recall_at_k": round(same_file_recall, 3),
+                        "ndcg_at_k": round(ndcg, 3),
+                        "mrr_at_k": round(mrr, 3),
+                        "returned_count": explain.get("returned_count"),
+                    },
+                )
 
             def record_query_output_probe_metadata(
                 shape: str,
@@ -479,34 +524,28 @@ class TraceDbAdapter(BenchmarkAdapter):
                         }
                     )
                 if config.observer and isinstance(explain_for_observer, dict):
-                    config.observer.observe(
-                        "tracedb.query_explain",
+                    observe_query_explain(
+                        query,
+                        ids=ids,
+                        recall=recall,
+                        same_file_recall=same_file_recall,
+                        ndcg=ndcg,
+                        mrr=mrr,
+                        off_category_ids=off_category_ids,
+                        explain=explain_for_observer,
+                        explain_source="primary_query",
+                    )
+                elif config.observer:
+                    query_explain_observer_candidates.append(
                         {
-                            "query_id": query.query_id,
-                            "freshness_mode": explain_for_observer.get("freshness_mode"),
-                            "scalar_filter_applied": explain_for_observer.get(
-                                "scalar_filter_applied"
-                            ),
-                            "scalar_filter_visible_records": explain_for_observer.get(
-                                "scalar_filter_visible_records"
-                            ),
-                            "scalar_filter_removed_records": explain_for_observer.get(
-                                "scalar_filter_removed_records"
-                            ),
-                            "opened_candidate_streams": explain_for_observer.get(
-                                "opened_candidate_streams"
-                            ),
-                            "candidate_budget": explain_for_observer.get("candidate_budget"),
-                            "expected_ids": query.expected_ids,
-                            "actual_ids": ids,
-                            "expected_category": query.category,
-                            "off_category_actual_ids": off_category_ids,
-                            "recall_at_k": round(recall, 3),
-                            "same_file_recall_at_k": round(same_file_recall, 3),
-                            "ndcg_at_k": round(ndcg, 3),
-                            "mrr_at_k": round(mrr, 3),
-                            "returned_count": explain_for_observer.get("returned_count"),
-                        },
+                            "query": query,
+                            "ids": ids,
+                            "recall": recall,
+                            "same_file_recall": same_file_recall,
+                            "ndcg": ndcg,
+                            "mrr": mrr,
+                            "off_category_ids": off_category_ids,
+                        }
                     )
 
             for candidate in query_output_probe_candidates:
@@ -591,6 +630,28 @@ class TraceDbAdapter(BenchmarkAdapter):
                         float(len(opened_candidate_streams))
                     )
                 query_output_probe_count += 1
+
+            for candidate in query_explain_observer_candidates:
+                query = candidate["query"]
+                observer_explain = call(
+                    "observer explain",
+                    "POST",
+                    "/v1/explain",
+                    query_body(query, explain=True),
+                )
+                if isinstance(observer_explain, dict):
+                    query_explain_observer_count += 1
+                    observe_query_explain(
+                        query,
+                        ids=candidate["ids"],
+                        recall=float(candidate["recall"]),
+                        same_file_recall=float(candidate["same_file_recall"]),
+                        ndcg=float(candidate["ndcg"]),
+                        mrr=float(candidate["mrr"]),
+                        off_category_ids=candidate["off_category_ids"],
+                        explain=observer_explain,
+                        explain_source="observer_explain_endpoint",
+                    )
 
             if dataset.queries:
                 query = dataset.queries[0]
@@ -843,6 +904,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             metrics["query_output_probe_explain_false_explain_returned_count"] = (
                 query_output_probe_explain_false_explain_returned_count
             )
+            metrics["query_observer_explain_count"] = query_explain_observer_count
             metrics["query_phase_probe_sample_count"] = query_output_probe_count
             metrics["query_access_path_probe_sample_count"] = query_output_probe_count
             for shape, probe_recorder in sorted(query_output_probe_latency_recorders.items()):
@@ -986,6 +1048,13 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "shapes=explain_false,explain_true,explain_endpoint; "
                     "explain_false_returned_explain="
                     f"{query_output_probe_explain_false_explain_returned_count}"
+                )
+            if query_explain_observer_count:
+                notes.append(
+                    "TraceDB HTTP observer explain attribution recorded after measured "
+                    "lean query loop: "
+                    f"observer_explain_queries={query_explain_observer_count}; "
+                    "primary_query_explain=false"
                 )
             if disk_bytes_after_ingest_by_top_level:
                 notes.append(

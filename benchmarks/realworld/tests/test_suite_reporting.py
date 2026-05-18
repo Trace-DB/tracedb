@@ -194,7 +194,7 @@ class SuiteReportingTests(unittest.TestCase):
                         "query_output_probe_explain_endpoint_body_bytes_p95": 2048,
                         "query_output_probe_explain_true_over_false_delta_p95_ms": 0.5,
                         "query_output_probe_result_id_mismatch_count": 0,
-                        "query_output_probe_explain_false_explain_returned_count": 3,
+                        "query_output_probe_explain_false_explain_returned_count": 0,
                         "query_phase_probe_sample_count": 3,
                         "query_access_path_probe_sample_count": 3,
                         "query_phase_access_path_build_latency_p95_ms": 2.25,
@@ -282,7 +282,7 @@ class SuiteReportingTests(unittest.TestCase):
         )
         self.assertEqual(
             attribution["output_shape_probe"]["explain_false_explain_returned_count"],
-            3,
+            0,
         )
         self.assertEqual(attribution["server"]["engine_latency_p95_ms"], 2.0)
         self.assertEqual(attribution["engine"]["phase_total_latency_p95_ms"], 2.25)
@@ -300,7 +300,7 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("body_bytes_p95=4096", markdown)
         self.assertIn("output shape probe", markdown)
         self.assertIn("explain_false_body_bytes_p95=1024", markdown)
-        self.assertIn("explain_false_explain_returned_count=3", markdown)
+        self.assertIn("explain_false_explain_returned_count=0", markdown)
         self.assertIn("probe_sample_count=3", markdown)
         self.assertIn("access_path_build_latency_p95_ms", markdown)
         self.assertIn("wal=1024", markdown)
