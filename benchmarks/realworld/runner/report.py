@@ -8,6 +8,14 @@ from typing import Any
 from .types import DatasetBundle, RunConfig
 
 
+def query_latency_metric(metrics: dict[str, Any], percentile: int) -> tuple[Any | None, str]:
+    return _preferred_metric(
+        metrics,
+        f"query_latency_p{percentile}_ms",
+        f"latency_p{percentile}_ms",
+    )
+
+
 def build_report(
     dataset: DatasetBundle,
     config: RunConfig,
@@ -126,9 +134,9 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
                     "ingest_transaction_total_latency_ms", "n/a"
                 ),
                 queries=metrics.get("query_count", 0),
-                p50=metrics.get("latency_p50_ms", 0.0),
-                p95=metrics.get("latency_p95_ms", 0.0),
-                p99=metrics.get("latency_p99_ms", 0.0),
+                p50=_display_query_latency(metrics, 50),
+                p95=_display_query_latency(metrics, 95),
+                p99=_display_query_latency(metrics, 99),
                 ingest_p95=metrics.get("ingest_latency_p95_ms", "n/a"),
                 query_p95=metrics.get("query_latency_p95_ms", "n/a"),
                 admin_p95=metrics.get("admin_latency_p95_ms", "n/a"),
@@ -173,7 +181,7 @@ def build_control_ledger(baselines: list[dict[str, Any]]) -> dict[str, Any]:
         "number_to_beat": {
             "query_p95_ms": _best_metric(
                 available_external,
-                "latency_p95_ms",
+                ("query_latency_p95_ms", "latency_p95_ms"),
                 lower_is_better=True,
                 require_queries=True,
             ),
@@ -219,7 +227,7 @@ def _control_entry(baseline: dict[str, Any]) -> dict[str, Any]:
 
 def _best_metric(
     baselines: list[dict[str, Any]],
-    metric: str,
+    metric: str | tuple[str, ...],
     *,
     lower_is_better: bool,
     require_queries: bool = False,
@@ -230,7 +238,7 @@ def _best_metric(
         metrics = baseline.get("metrics", {})
         if require_queries and int(metrics.get("query_count", 0)) <= 0:
             continue
-        value = metrics.get(metric)
+        value, source_metric = _preferred_metric(metrics, *_metric_names(metric))
         if value is None:
             continue
         numeric = float(value)
@@ -242,19 +250,36 @@ def _best_metric(
                 baseline.get("name", "unknown"),
                 baseline.get("scenario_id"),
                 baseline.get("artifact_dir"),
+                source_metric,
             )
         )
     if not candidates:
-        return {"baseline": None, "value": None, "source_metric": metric}
-    value, name, scenario_id, artifact_dir = (min if lower_is_better else max)(
+        return {"baseline": None, "value": None, "source_metric": _metric_names(metric)[0]}
+    value, name, scenario_id, artifact_dir, source_metric = (min if lower_is_better else max)(
         candidates, key=lambda item: item[0]
     )
-    result = {"baseline": name, "value": value, "source_metric": metric}
+    result = {"baseline": name, "value": value, "source_metric": source_metric}
     if scenario_id is not None:
         result["scenario_id"] = scenario_id
     if artifact_dir is not None:
         result["artifact_dir"] = artifact_dir
     return result
+
+
+def _metric_names(metric: str | tuple[str, ...]) -> tuple[str, ...]:
+    return metric if isinstance(metric, tuple) else (metric,)
+
+
+def _preferred_metric(metrics: dict[str, Any], *names: str) -> tuple[Any | None, str]:
+    for name in names:
+        if name in metrics:
+            return metrics[name], name
+    return None, names[0]
+
+
+def _display_query_latency(metrics: dict[str, Any], percentile: int) -> Any:
+    value, _source = query_latency_metric(metrics, percentile)
+    return value if value is not None else 0.0
 
 
 def _control_status_sentence(report: dict[str, Any]) -> str:

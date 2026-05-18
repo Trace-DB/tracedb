@@ -1061,6 +1061,55 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(report["number_to_beat"]["recall_at_5"]["value"], 0.5)
         self.assertEqual(report["control_ledger"]["unavailable_external_controls"][0]["name"], "Qdrant")
 
+    def test_report_number_to_beat_prefers_query_scoped_latency(self) -> None:
+        dataset = generated_dataset(24, 42)
+        config = RunConfig(
+            profile="smoke",
+            target=["all"],
+            surfaces=["http"],
+            require_services=False,
+            repo_root=".",
+        )
+        report = build_report(
+            dataset,
+            config,
+            [
+                {
+                    "name": "TraceDB",
+                    "available": True,
+                    "role": "target under test",
+                    "metrics": {
+                        "ingest_count": 24,
+                        "query_count": 4,
+                        "latency_p95_ms": 125.0,
+                        "query_latency_p95_ms": 3.5,
+                        "recall_at_5": 0.75,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+                {
+                    "name": "PostgreSQL",
+                    "available": True,
+                    "role": "relational control",
+                    "metrics": {
+                        "ingest_count": 24,
+                        "query_count": 4,
+                        "latency_p95_ms": 80.0,
+                        "query_latency_p95_ms": 4.25,
+                        "recall_at_5": 0.5,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+            ],
+        )
+
+        query_number = report["number_to_beat"]["query_p95_ms"]
+        self.assertEqual(query_number["baseline"], "PostgreSQL")
+        self.assertEqual(query_number["source_metric"], "query_latency_p95_ms")
+        self.assertEqual(query_number["value"], 4.25)
+
     def test_generated_hybrid_dataset_uses_retrieval_quality_labels(self) -> None:
         smoke = load_dataset("generated", 256, 42)
         hybrid = load_dataset("generated_hybrid", 256, 42)

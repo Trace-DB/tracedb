@@ -274,6 +274,79 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("access_path_build_latency_p95_ms", markdown)
         self.assertIn("wal=1024", markdown)
 
+    def test_suite_query_comparison_prefers_query_scoped_latency(self) -> None:
+        child_report = {
+            "summary": {
+                "failure_count": 0,
+                "control_status": "external_control_available",
+            },
+            "dataset": {"kind": "generated", "source": "test"},
+            "surfaces": ["http"],
+            "openrouter": {},
+            "baselines": [
+                {
+                    "name": "TraceDB",
+                    "available": True,
+                    "role": "target under test",
+                    "metrics": {
+                        "ingest_count": 1024,
+                        "query_count": 6,
+                        "latency_p95_ms": 189.272,
+                        "query_latency_p50_ms": 2.4,
+                        "query_latency_p95_ms": 3.967,
+                        "query_latency_p99_ms": 4.1,
+                        "recall_at_5": 0.233,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+                {
+                    "name": "pgvector",
+                    "available": True,
+                    "role": "external vector control",
+                    "metrics": {
+                        "ingest_count": 1024,
+                        "query_count": 6,
+                        "latency_p95_ms": 90.0,
+                        "query_latency_p50_ms": 0.5,
+                        "query_latency_p95_ms": 1.18,
+                        "query_latency_p99_ms": 1.3,
+                        "recall_at_5": 0.233,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+            ],
+        }
+
+        suite = build_suite_report(
+            suite_id="suite-query-latency",
+            profile="smoke",
+            dataset="generated",
+            records=1024,
+            reports=[
+                {
+                    "spec": SCENARIOS["search_rag_6"],
+                    "report": child_report,
+                    "artifact_dir": "/tmp/search_rag_6",
+                }
+            ],
+        )
+
+        query_number = suite["number_to_beat"]["query_p95_ms"]
+        self.assertEqual(query_number["baseline"], "pgvector")
+        self.assertEqual(query_number["source_metric"], "query_latency_p95_ms")
+        self.assertEqual(query_number["value"], 1.18)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "suite.md"
+            write_suite_markdown(suite, path)
+            markdown = path.read_text()
+
+        self.assertIn("Fastest p95 latency: pgvector (1.180 ms p95)", markdown)
+        self.assertIn("TraceDB result: available with 1024 ingested records, 6 queries, p95 3.967 ms", markdown)
+        self.assertIn("| search_rag_6 | TraceDB | yes | 1024 | n/a | n/a | 6 | 2.4 | 3.967 | 4.1 |", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

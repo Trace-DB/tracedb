@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .report import build_control_ledger, is_tracedb_baseline
+from .report import build_control_ledger, is_tracedb_baseline, query_latency_metric
 
 
 ROLE_DESCRIPTIONS = {
@@ -305,9 +305,9 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
                         "ingest_transaction_total_latency_ms", "n/a"
                     ),
                     queries=metrics.get("query_count", 0),
-                    p50=metrics.get("latency_p50_ms", 0.0),
-                    p95=metrics.get("latency_p95_ms", 0.0),
-                    p99=metrics.get("latency_p99_ms", 0.0),
+                    p50=_display_query_latency(metrics, 50),
+                    p95=_display_query_latency(metrics, 95),
+                    p99=_display_query_latency(metrics, 99),
                     recall=metrics.get("recall_at_5", 0.0),
                     ndcg=metrics.get("ndcg_at_5", 0.0),
                     mrr=metrics.get("mrr_at_5", 0.0),
@@ -434,7 +434,10 @@ def _best_latency(scenario: dict[str, Any]) -> str:
         metrics = baseline.get("metrics", {})
         if int(metrics.get("query_count", 0)) <= 0:
             continue
-        candidates.append((float(metrics.get("latency_p95_ms", 0.0)), baseline.get("name", "unknown")))
+        latency, _source = query_latency_metric(metrics, 95)
+        if latency is None:
+            continue
+        candidates.append((float(latency), baseline.get("name", "unknown")))
     if not candidates:
         return "not measured"
     latency, name = min(candidates)
@@ -467,9 +470,10 @@ def _tracedb_result(scenario: dict[str, Any]) -> str:
     if not tracedb.get("available"):
         return f"unavailable - {notes}"
     metrics = tracedb.get("metrics", {})
+    query_p95, _source = query_latency_metric(metrics, 95)
     return (
         f"available with {metrics.get('ingest_count', 0)} ingested records, "
-        f"{metrics.get('query_count', 0)} queries, p95 {float(metrics.get('latency_p95_ms', 0.0)):.3f} ms, "
+        f"{metrics.get('query_count', 0)} queries, p95 {float(query_p95 or 0.0):.3f} ms, "
         f"recall@5 {float(metrics.get('recall_at_5', 0.0)):.4f}, "
         f"{metrics.get('failure_count', 0)} failures. Notes: {notes}"
     )
@@ -584,3 +588,8 @@ def _metric_map_summary(values: dict[str, Any]) -> str:
     if not values:
         return "n/a"
     return ", ".join(f"{key}={value}" for key, value in sorted(values.items())).replace("|", "\\|")
+
+
+def _display_query_latency(metrics: dict[str, Any], percentile: int) -> Any:
+    value, _source = query_latency_metric(metrics, percentile)
+    return value if value is not None else 0.0
