@@ -894,6 +894,7 @@ impl TraceDb {
     }
 
     pub fn query(&self, query: HybridQuery) -> Result<QueryOutput> {
+        let include_explain = query.explain;
         let schema = self
             .manifest
             .table(&query.table)
@@ -929,6 +930,7 @@ impl TraceDb {
         let visible = filter_records_by_scalar_eq(visible, &query.scalar_eq);
         let sealed_records = filter_segment_records_by_scalar_eq(sealed_records, &query.scalar_eq);
         let scalar_filter_ms = elapsed_ms(scalar_filter_started);
+        let candidate_budget = query.top_k.saturating_mul(4).max(query.top_k).max(1);
         let mut explain = ExplainOutput {
             read_epoch: self.manifest.latest_epoch,
             schema_epoch: self.manifest.latest_epoch,
@@ -939,56 +941,58 @@ impl TraceDb {
             scalar_filter_visible_records: visible.len(),
             scalar_filter_removed_records: tenant_mask_visible_records
                 .saturating_sub(visible.len()),
-            candidate_budget: query.top_k.saturating_mul(4).max(query.top_k).max(1),
+            candidate_budget,
             hot_overlay_searched: true,
             segments_scanned: sealed_records.len(),
             freshness_mode: query.freshness.as_str().to_string(),
             fusion_method: "RRF".to_string(),
             ..ExplainOutput::default()
         };
-        explain.phase_timings.push(query_phase_timing(
-            "tenant_visibility",
-            tenant_visibility_ms,
-        ));
-        explain
-            .phase_timings
-            .push(query_phase_timing("scalar_filter", scalar_filter_ms));
-        let mut trace_query = TraceQuery::hybrid(
-            &query.table,
-            &query.tenant_id,
-            query.text.as_deref(),
-            query.vector.as_ref().map(Vec::len),
-            query.top_k,
-        );
-        trace_query.scalar_eq = query.scalar_eq.clone();
-        if let Some(seed) = &query.graph_seed {
-            trace_query.graph_seeds.push(seed.clone());
-        }
-        trace_query.temporal_as_of = query.temporal_as_of;
-        let physical_plan = plan_trace_query(&trace_query, visible.len());
-        explain.selected_strategy = Some(format!("{:?}", physical_plan.strategy));
-        explain.skipped_access_paths = physical_plan
-            .skipped_paths
-            .iter()
-            .map(|path| format!("{}: {}", path.access_path_id, path.reason))
-            .collect();
-        explain.exact_fallback_triggered = physical_plan.exact_fallback;
-        explain.early_stop_reason =
-            Some("all opened streams exhausted under fixed budget".to_string());
-        explain.module_versions = self
-            .registered_module_catalog()
-            .into_iter()
-            .map(|module| format!("{}@{}", module.module_id, module.version))
-            .collect();
+        if include_explain {
+            explain.phase_timings.push(query_phase_timing(
+                "tenant_visibility",
+                tenant_visibility_ms,
+            ));
+            explain
+                .phase_timings
+                .push(query_phase_timing("scalar_filter", scalar_filter_ms));
+            let mut trace_query = TraceQuery::hybrid(
+                &query.table,
+                &query.tenant_id,
+                query.text.as_deref(),
+                query.vector.as_ref().map(Vec::len),
+                query.top_k,
+            );
+            trace_query.scalar_eq = query.scalar_eq.clone();
+            if let Some(seed) = &query.graph_seed {
+                trace_query.graph_seeds.push(seed.clone());
+            }
+            trace_query.temporal_as_of = query.temporal_as_of;
+            let physical_plan = plan_trace_query(&trace_query, visible.len());
+            explain.selected_strategy = Some(format!("{:?}", physical_plan.strategy));
+            explain.skipped_access_paths = physical_plan
+                .skipped_paths
+                .iter()
+                .map(|path| format!("{}: {}", path.access_path_id, path.reason))
+                .collect();
+            explain.exact_fallback_triggered = physical_plan.exact_fallback;
+            explain.early_stop_reason =
+                Some("all opened streams exhausted under fixed budget".to_string());
+            explain.module_versions = self
+                .registered_module_catalog()
+                .into_iter()
+                .map(|module| format!("{}@{}", module.module_id, module.version))
+                .collect();
 
-        for record in &visible {
-            for vector in &schema.vector_columns {
-                match record.features.get(&vector.name).map(|state| &state.status) {
-                    Some(FeatureStatus::Dirty) => explain.dirty_feature_count += 1,
-                    Some(FeatureStatus::Pending) => explain.pending_feature_count += 1,
-                    Some(FeatureStatus::Failed) => explain.failed_feature_count += 1,
-                    Some(FeatureStatus::Missing) | None => explain.missing_feature_count += 1,
-                    _ => {}
+            for record in &visible {
+                for vector in &schema.vector_columns {
+                    match record.features.get(&vector.name).map(|state| &state.status) {
+                        Some(FeatureStatus::Dirty) => explain.dirty_feature_count += 1,
+                        Some(FeatureStatus::Pending) => explain.pending_feature_count += 1,
+                        Some(FeatureStatus::Failed) => explain.failed_feature_count += 1,
+                        Some(FeatureStatus::Missing) | None => explain.missing_feature_count += 1,
+                        _ => {}
+                    }
                 }
             }
         }
@@ -1016,8 +1020,7 @@ impl TraceDb {
                 graph_seed: query.graph_seed.clone(),
                 temporal_as_of: query.temporal_as_of,
                 freshness: &query.freshness,
-                fallback_candidate_limit: query_has_evidence(&query)
-                    .then_some(explain.candidate_budget),
+                fallback_candidate_limit: query_has_evidence(&query).then_some(candidate_budget),
             },
         );
         let access_path_build_ms = elapsed_ms(access_path_build_started);
@@ -1032,7 +1035,7 @@ impl TraceDb {
                 query_fragment.clone(),
                 &visibility,
                 CandidateBudget {
-                    max_candidates: explain.candidate_budget,
+                    max_candidates: candidate_budget,
                 },
             );
             if let Some(timing) = access_path_timings.get_mut(index) {
@@ -1040,39 +1043,49 @@ impl TraceDb {
             }
             let source = descriptor.access_path_id.as_str();
             if source == "LexicalPath" {
-                explain.text_candidates = batch.candidates.len();
-                explain.opened_candidate_streams.push("text".to_string());
+                if include_explain {
+                    explain.text_candidates = batch.candidates.len();
+                    explain.opened_candidate_streams.push("text".to_string());
+                }
                 streams.push(ranked_stream_from_candidates("text", &batch.candidates));
             } else if source == "VectorPath" {
-                explain.vector_candidates = batch.candidates.len();
-                explain.opened_candidate_streams.push("vector".to_string());
+                if include_explain {
+                    explain.vector_candidates = batch.candidates.len();
+                    explain.opened_candidate_streams.push("vector".to_string());
+                }
                 streams.push(ranked_stream_from_candidates("vector", &batch.candidates));
             } else {
-                explain
-                    .opened_candidate_streams
-                    .push(candidate_stream_name(source).to_string());
+                if include_explain {
+                    explain
+                        .opened_candidate_streams
+                        .push(candidate_stream_name(source).to_string());
+                }
                 streams.push(ranked_stream_from_candidates(
                     candidate_stream_name(source),
                     &batch.candidates,
                 ));
             }
-            planner_candidates.extend(batch.candidates);
-            explain.access_paths.push(access_path.explain());
+            if include_explain {
+                planner_candidates.extend(batch.candidates);
+                explain.access_paths.push(access_path.explain());
+            }
         }
         let access_path_open_ms = elapsed_ms(access_path_open_started);
-        explain.phase_timings.push(query_phase_timing(
-            "access_path_build",
-            access_path_build_ms,
-        ));
-        explain
-            .phase_timings
-            .push(query_phase_timing("access_path_open", access_path_open_ms));
-        explain.access_path_timings = access_path_timings;
-        explain.lexical_cache_hits = access_paths.lexical_cache_hits;
-        explain.lexical_cache_misses = access_paths.lexical_cache_misses;
-        explain.lexical_indexed_documents = access_paths.lexical_indexed_documents;
-        explain.lexical_scored_documents = access_paths.lexical_scored_documents;
-        explain.planner_candidates = planner_candidates;
+        if include_explain {
+            explain.phase_timings.push(query_phase_timing(
+                "access_path_build",
+                access_path_build_ms,
+            ));
+            explain
+                .phase_timings
+                .push(query_phase_timing("access_path_open", access_path_open_ms));
+            explain.access_path_timings = access_path_timings;
+            explain.lexical_cache_hits = access_paths.lexical_cache_hits;
+            explain.lexical_cache_misses = access_paths.lexical_cache_misses;
+            explain.lexical_indexed_documents = access_paths.lexical_indexed_documents;
+            explain.lexical_scored_documents = access_paths.lexical_scored_documents;
+            explain.planner_candidates = planner_candidates;
+        }
 
         let fusion_started = Instant::now();
         let mut fused = fuse_query_streams(&streams);
@@ -1081,10 +1094,12 @@ impl TraceDb {
         } else if query.vector.is_some() {
             fused.sort_by(vector_first_order);
         }
-        explain.deduped_candidate_count = fused.len();
-        explain
-            .phase_timings
-            .push(query_phase_timing("fusion", elapsed_ms(fusion_started)));
+        if include_explain {
+            explain.deduped_candidate_count = fused.len();
+            explain
+                .phase_timings
+                .push(query_phase_timing("fusion", elapsed_ms(fusion_started)));
+        }
         let materialization_started = Instant::now();
         let sealed_visible_records = sealed_records
             .iter()
@@ -1138,10 +1153,12 @@ impl TraceDb {
         explain.final_visibility_guard_count = checked;
         explain.final_visibility_guard_removed = removed;
         explain.returned_count = materialized.len();
-        explain.phase_timings.push(query_phase_timing(
-            "materialization",
-            elapsed_ms(materialization_started),
-        ));
+        if include_explain {
+            explain.phase_timings.push(query_phase_timing(
+                "materialization",
+                elapsed_ms(materialization_started),
+            ));
+        }
         Ok(QueryOutput {
             results: materialized,
             explain,

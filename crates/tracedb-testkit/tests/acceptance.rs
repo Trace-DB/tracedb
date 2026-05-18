@@ -796,6 +796,24 @@ fn hybrid_query_explain_reports_phase_and_access_path_timings() {
 }
 
 #[test]
+fn query_explain_false_skips_heavy_diagnostics_without_changing_results() {
+    let (_temp, db) = seeded_db();
+    let verbose = db.query(query()).expect("verbose query");
+    let mut lean_query = query();
+    lean_query.explain = false;
+
+    let lean = db.query(lean_query).expect("lean query");
+
+    assert_eq!(lean.results, verbose.results);
+    assert!(lean.explain.opened_candidate_streams.is_empty());
+    assert!(lean.explain.access_paths.is_empty());
+    assert!(lean.explain.planner_candidates.is_empty());
+    assert!(lean.explain.module_versions.is_empty());
+    assert!(lean.explain.phase_timings.is_empty());
+    assert!(lean.explain.access_path_timings.is_empty());
+}
+
+#[test]
 fn text_candidate_stream_explain() {
     let (_temp, db) = seeded_db();
     let result = db.query(query()).expect("query");
