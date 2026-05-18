@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 use tracedb_core::{
     source_hash, value_as_f32_vec, DerivedFeatureState, Epoch, FeatureInvalidation, FeatureStatus,
     RecordDeletion, RecordInput, Result, TableSchema, TraceDbError, VersionId,
@@ -26,6 +27,17 @@ pub struct StoredRecord {
     pub header: RecordHeader,
     pub fields: Map<String, Value>,
     pub features: BTreeMap<String, DerivedFeatureState>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReplacementApplyTiming {
+    pub validate_identity_ms: f64,
+    pub validate_vector_ms: f64,
+    pub key_ms: f64,
+    pub fields_ms: f64,
+    pub finalize_identity_ms: f64,
+    pub features_ms: f64,
+    pub install_ms: f64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -135,6 +147,19 @@ impl RecordStore {
         let (key, record) = build_replacement_record(schema, input, epoch)?;
         self.install_replacement(key, record, epoch);
         Ok(())
+    }
+
+    pub fn apply_replacement_without_return_with_timing(
+        &mut self,
+        schema: &TableSchema,
+        input: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<ReplacementApplyTiming> {
+        let (key, record, mut timing) = build_replacement_record_with_timing(schema, input, epoch)?;
+        let install_started = Instant::now();
+        self.install_replacement(key, record, epoch);
+        timing.install_ms = elapsed_ms(install_started);
+        Ok(timing)
     }
 
     fn install_replacement(&mut self, key: String, record: StoredRecord, epoch: Epoch) {
@@ -554,48 +579,127 @@ fn visible_record_at(versions: &[StoredRecord], epoch: Epoch) -> Option<StoredRe
         .cloned()
 }
 
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
+
+fn measure_result<T>(slot: Option<&mut f64>, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    if let Some(slot) = slot {
+        let started = Instant::now();
+        let value = operation()?;
+        *slot = elapsed_ms(started);
+        Ok(value)
+    } else {
+        operation()
+    }
+}
+
+fn measure_value<T>(slot: Option<&mut f64>, operation: impl FnOnce() -> T) -> T {
+    if let Some(slot) = slot {
+        let started = Instant::now();
+        let value = operation();
+        *slot = elapsed_ms(started);
+        value
+    } else {
+        operation()
+    }
+}
+
 fn build_replacement_record(
     schema: &TableSchema,
     input: &RecordInput,
     epoch: Epoch,
 ) -> Result<(String, StoredRecord)> {
-    validate_record_identity(schema, input, None)?;
-    validate_vector_dimensions(schema, input)?;
-    let tenant_id = if input.tenant_id.is_empty() {
-        return Err(TraceDbError::InvalidRecord(
-            "tenant id cannot be empty".to_string(),
-        ));
-    } else {
-        input.tenant_id.clone()
-    };
-    let key = record_key(&input.table, &tenant_id, &input.id);
+    build_replacement_record_core(schema, input, epoch, None)
+}
 
-    let mut fields = input.fields.clone();
-    fields.insert(
-        schema.primary_id_column.clone(),
-        Value::String(input.id.clone()),
-    );
-    fields.insert(
-        schema.tenant_id_column.clone(),
-        Value::String(tenant_id.clone()),
-    );
-    validate_record_identity(schema, input, Some(&fields))?;
+fn build_replacement_record_with_timing(
+    schema: &TableSchema,
+    input: &RecordInput,
+    epoch: Epoch,
+) -> Result<(String, StoredRecord, ReplacementApplyTiming)> {
+    let mut timing = ReplacementApplyTiming::default();
+    let (key, record) = build_replacement_record_core(schema, input, epoch, Some(&mut timing))?;
+    Ok((key, record, timing))
+}
 
-    let features = build_features(schema, input, &fields, None, epoch);
-    let record = StoredRecord {
-        header: RecordHeader {
-            record_id: input.id.clone(),
-            table_id: input.table.clone(),
-            tenant_id,
-            schema_version: 1,
-            begin_epoch: epoch,
-            end_epoch: None,
-            version_id: VersionId::new(epoch.get()),
-            tombstone: None,
+fn build_replacement_record_core(
+    schema: &TableSchema,
+    input: &RecordInput,
+    epoch: Epoch,
+    mut timing: Option<&mut ReplacementApplyTiming>,
+) -> Result<(String, StoredRecord)> {
+    measure_result(
+        timing
+            .as_mut()
+            .map(|timing| &mut (**timing).validate_identity_ms),
+        || validate_record_identity(schema, input, None),
+    )?;
+
+    measure_result(
+        timing
+            .as_mut()
+            .map(|timing| &mut (**timing).validate_vector_ms),
+        || validate_vector_dimensions(schema, input),
+    )?;
+
+    let (tenant_id, key) =
+        measure_result(timing.as_mut().map(|timing| &mut (**timing).key_ms), || {
+            let tenant_id = if input.tenant_id.is_empty() {
+                return Err(TraceDbError::InvalidRecord(
+                    "tenant id cannot be empty".to_string(),
+                ));
+            } else {
+                input.tenant_id.clone()
+            };
+            let key = record_key(&input.table, &tenant_id, &input.id);
+            Ok((tenant_id, key))
+        })?;
+
+    let fields = measure_value(
+        timing.as_mut().map(|timing| &mut (**timing).fields_ms),
+        || {
+            let mut fields = input.fields.clone();
+            fields.insert(
+                schema.primary_id_column.clone(),
+                Value::String(input.id.clone()),
+            );
+            fields.insert(
+                schema.tenant_id_column.clone(),
+                Value::String(tenant_id.clone()),
+            );
+            fields
         },
-        fields,
-        features,
-    };
+    );
+
+    measure_result(
+        timing
+            .as_mut()
+            .map(|timing| &mut (**timing).finalize_identity_ms),
+        || validate_record_identity(schema, input, Some(&fields)),
+    )?;
+
+    let record = measure_value(
+        timing.as_mut().map(|timing| &mut (**timing).features_ms),
+        || {
+            let features = build_features(schema, input, &fields, None, epoch);
+            StoredRecord {
+                header: RecordHeader {
+                    record_id: input.id.clone(),
+                    table_id: input.table.clone(),
+                    tenant_id,
+                    schema_version: 1,
+                    begin_epoch: epoch,
+                    end_epoch: None,
+                    version_id: VersionId::new(epoch.get()),
+                    tombstone: None,
+                },
+                fields,
+                features,
+            }
+        },
+    );
+
     Ok((key, record))
 }
 
@@ -846,6 +950,53 @@ mod tests {
         assert_eq!(
             new_epoch[0].fields.get("body"),
             Some(&Value::String("tenant-a replacement".to_string()))
+        );
+    }
+
+    #[test]
+    fn timed_and_untimed_replacement_paths_remain_equivalent() {
+        let schema = schema();
+        let mut untimed = RecordStore::default();
+        let mut timed = RecordStore::default();
+        let original = record("a", "tenant-a");
+        untimed
+            .apply_replacement(&schema, &original, Epoch::new(1))
+            .expect("untimed insert original");
+        timed
+            .apply_replacement(&schema, &original, Epoch::new(1))
+            .expect("timed insert original");
+
+        let mut replacement = record("a", "tenant-a");
+        replacement.fields.insert(
+            "body".to_string(),
+            Value::String("tenant-a timed equivalent replacement".to_string()),
+        );
+        untimed
+            .apply_replacement_without_return(&schema, &replacement, Epoch::new(2))
+            .expect("untimed replacement");
+        let timing = timed
+            .apply_replacement_without_return_with_timing(&schema, &replacement, Epoch::new(2))
+            .expect("timed replacement");
+
+        let subphase_ms = timing.validate_identity_ms
+            + timing.validate_vector_ms
+            + timing.key_ms
+            + timing.fields_ms
+            + timing.finalize_identity_ms
+            + timing.features_ms
+            + timing.install_ms;
+        assert!(subphase_ms > 0.0);
+        assert_eq!(
+            untimed.visible_records_at("docs", "tenant-a", Epoch::new(1)),
+            timed.visible_records_at("docs", "tenant-a", Epoch::new(1))
+        );
+        assert_eq!(
+            untimed.visible_records_at("docs", "tenant-a", Epoch::new(2)),
+            timed.visible_records_at("docs", "tenant-a", Epoch::new(2))
+        );
+        assert_eq!(
+            untimed.checkpoint_records(Epoch::new(2)),
+            timed.checkpoint_records(Epoch::new(2))
         );
     }
 }

@@ -216,6 +216,20 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         batch_timing_response.contains("\"wal_payload_bytes\""),
         "batch write timing response missing WAL byte attribution: {batch_timing_response}"
     );
+    for field in [
+        "store_apply_validate_identity_ms",
+        "store_apply_validate_vector_ms",
+        "store_apply_key_ms",
+        "store_apply_fields_ms",
+        "store_apply_finalize_identity_ms",
+        "store_apply_features_ms",
+        "store_apply_install_ms",
+    ] {
+        assert!(
+            batch_timing_response.contains(&format!("\"{field}\"")),
+            "batch write timing response missing store-apply attribution field {field}: {batch_timing_response}"
+        );
+    }
     assert_http_contains(
         addr,
         "POST",

@@ -220,6 +220,13 @@ class SuiteReportingTests(unittest.TestCase):
                         "batch_phase_total_latency_p95_ms": 60.0,
                         "batch_phase_wal_total_latency_p95_ms": 26.0,
                         "batch_phase_manifest_total_latency_p95_ms": 9.0,
+                        "batch_phase_store_apply_validate_identity_latency_p95_ms": 2.0,
+                        "batch_phase_store_apply_validate_vector_latency_p95_ms": 3.0,
+                        "batch_phase_store_apply_key_latency_p95_ms": 1.5,
+                        "batch_phase_store_apply_fields_latency_p95_ms": 2.5,
+                        "batch_phase_store_apply_finalize_identity_latency_p95_ms": 1.25,
+                        "batch_phase_store_apply_features_latency_p95_ms": 4.0,
+                        "batch_phase_store_apply_install_latency_p95_ms": 1.0,
                         "batch_size_wal_payload_bytes": 315654,
                         "batch_size_wal_frame_bytes": 315690,
                         "batch_size_manifest_bytes": 2293,
@@ -333,6 +340,19 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(attribution["engine"]["phase_total_latency_p95_ms"], 2.25)
         self.assertEqual(attribution["batch_phases"]["total_latency_p95_ms"], 60.0)
         self.assertEqual(attribution["batch_phases"]["wal_total_latency_p95_ms"], 26.0)
+        for name, value in {
+            "store_apply_validate_identity": 2.0,
+            "store_apply_validate_vector": 3.0,
+            "store_apply_key": 1.5,
+            "store_apply_fields": 2.5,
+            "store_apply_finalize_identity": 1.25,
+            "store_apply_features": 4.0,
+            "store_apply_install": 1.0,
+        }.items():
+            self.assertEqual(
+                attribution["batch_phases"][f"{name}_latency_p95_ms"],
+                value,
+            )
         self.assertEqual(attribution["batch_sizes"]["wal_payload_bytes"], 315654)
         self.assertEqual(attribution["batch_sizes"]["manifest_bytes"], 2293)
         self.assertEqual(attribution["storage_after_ingest"]["wal"], 1024)

@@ -234,6 +234,13 @@ class FakeTraceDb:
                             "manifest_total_ms": 1.5,
                             "manifest_bytes": 512,
                             "store_apply_ms": 2.0,
+                            "store_apply_validate_identity_ms": 0.2,
+                            "store_apply_validate_vector_ms": 0.3,
+                            "store_apply_key_ms": 0.4,
+                            "store_apply_fields_ms": 0.5,
+                            "store_apply_finalize_identity_ms": 0.6,
+                            "store_apply_features_ms": 0.7,
+                            "store_apply_install_ms": 0.8,
                         }
                     self._json(200, response)
                     return
@@ -1633,6 +1640,19 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["batch_phase_total_latency_p95_ms"], 8.0)
         self.assertEqual(result["metrics"]["batch_phase_wal_total_latency_p95_ms"], 3.25)
         self.assertEqual(result["metrics"]["batch_phase_manifest_total_latency_p95_ms"], 1.5)
+        for name, value in {
+            "store_apply_validate_identity": 0.2,
+            "store_apply_validate_vector": 0.3,
+            "store_apply_key": 0.4,
+            "store_apply_fields": 0.5,
+            "store_apply_finalize_identity": 0.6,
+            "store_apply_features": 0.7,
+            "store_apply_install": 0.8,
+        }.items():
+            self.assertEqual(
+                result["metrics"][f"batch_phase_{name}_latency_p95_ms"],
+                value,
+            )
         self.assertEqual(result["metrics"]["batch_size_wal_payload_bytes"], 4096)
         self.assertEqual(result["metrics"]["batch_size_wal_frame_bytes"], 4160)
         self.assertEqual(result["metrics"]["batch_size_manifest_bytes"], 512)

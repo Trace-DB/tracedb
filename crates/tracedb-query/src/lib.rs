@@ -24,7 +24,7 @@ use tracedb_planner::{
     QueryPhaseTiming, QueryRow, ScoreComponents, Stats, TraceQuery, WorkBudget,
 };
 use tracedb_segment::SegmentRecord;
-use tracedb_store::{ReadSnapshot, RecordStore, StoredRecord};
+use tracedb_store::{ReadSnapshot, RecordStore, ReplacementApplyTiming, StoredRecord};
 
 const CHECKPOINT_MAGIC_V2: &[u8; 8] = b"TDBCHK01";
 const CHECKPOINT_MAGIC_V3: &[u8; 8] = b"TDBCHK02";
@@ -250,6 +250,20 @@ pub struct WritePathTiming {
     pub schema_lookup_ms: f64,
     pub store_clone_ms: f64,
     pub store_apply_ms: f64,
+    #[serde(default)]
+    pub store_apply_validate_identity_ms: f64,
+    #[serde(default)]
+    pub store_apply_validate_vector_ms: f64,
+    #[serde(default)]
+    pub store_apply_key_ms: f64,
+    #[serde(default)]
+    pub store_apply_fields_ms: f64,
+    #[serde(default)]
+    pub store_apply_finalize_identity_ms: f64,
+    #[serde(default)]
+    pub store_apply_features_ms: f64,
+    #[serde(default)]
+    pub store_apply_install_ms: f64,
     pub feature_invalidation_ms: f64,
     pub commit_build_ms: f64,
     pub wal_total_ms: f64,
@@ -366,6 +380,7 @@ impl WritePathTiming {
         schema_lookup_ms: f64,
         store_clone_ms: f64,
         store_apply_ms: f64,
+        store_apply_timing: ReplacementApplyTiming,
         feature_invalidation_ms: f64,
         commit_build_ms: f64,
         wal: WalAppendTiming,
@@ -384,6 +399,13 @@ impl WritePathTiming {
             schema_lookup_ms,
             store_clone_ms,
             store_apply_ms,
+            store_apply_validate_identity_ms: store_apply_timing.validate_identity_ms,
+            store_apply_validate_vector_ms: store_apply_timing.validate_vector_ms,
+            store_apply_key_ms: store_apply_timing.key_ms,
+            store_apply_fields_ms: store_apply_timing.fields_ms,
+            store_apply_finalize_identity_ms: store_apply_timing.finalize_identity_ms,
+            store_apply_features_ms: store_apply_timing.features_ms,
+            store_apply_install_ms: store_apply_timing.install_ms,
             feature_invalidation_ms,
             commit_build_ms,
             wal_total_ms: wal.total_ms,
@@ -658,9 +680,18 @@ impl TraceDb {
         let mut staged = self.store.clone();
         let store_clone_ms = elapsed_ms(store_clone_started);
 
+        let mut store_apply_timing = ReplacementApplyTiming::default();
         let store_apply_started = Instant::now();
         for (input, schema) in request.records.iter().zip(schemas.iter()) {
-            staged.apply_replacement_without_return(schema, input, epoch)?;
+            let timing =
+                staged.apply_replacement_without_return_with_timing(schema, input, epoch)?;
+            store_apply_timing.validate_identity_ms += timing.validate_identity_ms;
+            store_apply_timing.validate_vector_ms += timing.validate_vector_ms;
+            store_apply_timing.key_ms += timing.key_ms;
+            store_apply_timing.fields_ms += timing.fields_ms;
+            store_apply_timing.finalize_identity_ms += timing.finalize_identity_ms;
+            store_apply_timing.features_ms += timing.features_ms;
+            store_apply_timing.install_ms += timing.install_ms;
         }
         let store_apply_ms = elapsed_ms(store_apply_started);
 
@@ -715,6 +746,7 @@ impl TraceDb {
                 schema_lookup_ms,
                 store_clone_ms,
                 store_apply_ms,
+                store_apply_timing,
                 feature_invalidation_ms,
                 commit_build_ms,
                 wal_timing,
@@ -749,7 +781,8 @@ impl TraceDb {
         let mut staged = self.store.clone();
         let store_clone_ms = elapsed_ms(store_clone_started);
         let store_apply_started = Instant::now();
-        staged.apply_replacement_without_return(&schema, &input, epoch)?;
+        let store_apply_timing =
+            staged.apply_replacement_without_return_with_timing(&schema, &input, epoch)?;
         let store_apply_ms = elapsed_ms(store_apply_started);
         let feature_invalidation_started = Instant::now();
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
@@ -790,6 +823,7 @@ impl TraceDb {
                 schema_lookup_ms,
                 store_clone_ms,
                 store_apply_ms,
+                store_apply_timing,
                 feature_invalidation_ms,
                 commit_build_ms,
                 wal_timing,

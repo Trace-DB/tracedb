@@ -2212,6 +2212,26 @@ fn batch_put_write_timing_reports_phase_costs_and_recovers_replacements() {
     assert!(timing.total_ms >= 0.0);
     assert!(timing.store_clone_ms >= 0.0);
     assert!(timing.store_apply_ms >= 0.0);
+    assert!(timing.store_apply_validate_identity_ms >= 0.0);
+    assert!(timing.store_apply_validate_vector_ms >= 0.0);
+    assert!(timing.store_apply_key_ms >= 0.0);
+    assert!(timing.store_apply_fields_ms >= 0.0);
+    assert!(timing.store_apply_finalize_identity_ms >= 0.0);
+    assert!(timing.store_apply_features_ms >= 0.0);
+    assert!(timing.store_apply_install_ms >= 0.0);
+    let store_apply_subphase_ms = timing.store_apply_validate_identity_ms
+        + timing.store_apply_validate_vector_ms
+        + timing.store_apply_key_ms
+        + timing.store_apply_fields_ms
+        + timing.store_apply_finalize_identity_ms
+        + timing.store_apply_features_ms
+        + timing.store_apply_install_ms;
+    assert!(store_apply_subphase_ms > 0.0);
+    assert!(
+        store_apply_subphase_ms <= timing.store_apply_ms + 1.0,
+        "store apply subphases ({store_apply_subphase_ms}) should stay within measured store_apply_ms ({}) plus timer overhead tolerance",
+        timing.store_apply_ms
+    );
     assert!(timing.feature_invalidation_ms >= 0.0);
     assert!(timing.commit_build_ms >= 0.0);
     assert!(timing.wal_total_ms >= 0.0);

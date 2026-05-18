@@ -1319,6 +1319,22 @@ def _record_write_timing_metrics(
         ("schema_lookup", _float_metric(timing.get("schema_lookup_ms"))),
         ("store_clone", _float_metric(timing.get("store_clone_ms"))),
         ("store_apply", _float_metric(timing.get("store_apply_ms"))),
+        (
+            "store_apply_validate_identity",
+            _float_metric(timing.get("store_apply_validate_identity_ms")),
+        ),
+        (
+            "store_apply_validate_vector",
+            _float_metric(timing.get("store_apply_validate_vector_ms")),
+        ),
+        ("store_apply_key", _float_metric(timing.get("store_apply_key_ms"))),
+        ("store_apply_fields", _float_metric(timing.get("store_apply_fields_ms"))),
+        (
+            "store_apply_finalize_identity",
+            _float_metric(timing.get("store_apply_finalize_identity_ms")),
+        ),
+        ("store_apply_features", _float_metric(timing.get("store_apply_features_ms"))),
+        ("store_apply_install", _float_metric(timing.get("store_apply_install_ms"))),
         ("feature_invalidation", _float_metric(timing.get("feature_invalidation_ms"))),
         ("commit_build", _float_metric(timing.get("commit_build_ms"))),
         ("wal_total", _float_metric(timing.get("wal_total_ms"))),
