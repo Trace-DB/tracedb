@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .base import BenchmarkAdapter
+from .base import BenchmarkAdapter, query_result_record
 from ..http import request_json
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
@@ -61,6 +61,7 @@ class OpenSearchAdapter(BenchmarkAdapter):
             recalls = []
             ndcgs = []
             mrrs = []
+            query_results = []
             for query in dataset.queries:
                 result = recorder.timed(
                     lambda query=query: request_json(
@@ -84,6 +85,7 @@ class OpenSearchAdapter(BenchmarkAdapter):
                     hit.get("_source", {}).get("record_id")
                     for hit in result.get("hits", {}).get("hits", [])
                 ]
+                query_results.append(query_result_record(query, ids))
                 recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
                 ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
                 mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
@@ -106,6 +108,7 @@ class OpenSearchAdapter(BenchmarkAdapter):
                 dataset,
                 metrics,
                 ["real OpenSearch BM25 tenant-filtered workload executed through REST API"],
+                query_results=query_results,
             )
         except Exception as error:
             if config.require_services:

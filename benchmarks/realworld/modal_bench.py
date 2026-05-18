@@ -558,6 +558,7 @@ def extract_scenario_metrics(suite: dict[str, Any]) -> tuple[dict[str, Any], dic
                 "available": baseline.get("available", False),
                 "metrics": baseline.get("metrics", {}),
                 "notes": baseline.get("notes", []),
+                "query_results": baseline.get("query_results", []),
             }
     return baselines, datasets
 

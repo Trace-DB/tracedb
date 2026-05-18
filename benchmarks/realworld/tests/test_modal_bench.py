@@ -1060,6 +1060,14 @@ class ModalBenchTests(unittest.TestCase):
                                 "name": "tracedb",
                                 "available": True,
                                 "metrics": {"latency_p95_ms": 4.0, "query_count": 6},
+                                "query_results": [
+                                    {
+                                        "query_id": "qrel-1",
+                                        "expected_ids": ["doc-expected"],
+                                        "actual_ids": ["doc-actual"],
+                                        "recall_at_k": 0.0,
+                                    }
+                                ],
                                 "notes": ["TraceDB ran"],
                             },
                             {
@@ -1135,6 +1143,18 @@ class ModalBenchTests(unittest.TestCase):
                 "latency_p95_ms"
             ],
             4.0,
+        )
+        self.assertEqual(
+            summary["scenario_baselines"]["search_rag_6"]["tracedb"]["query_results"][0][
+                "query_id"
+            ],
+            "qrel-1",
+        )
+        self.assertEqual(
+            summary["scenario_baselines"]["search_rag_6"]["tracedb"]["query_results"][0][
+                "actual_ids"
+            ],
+            ["doc-actual"],
         )
         self.assertEqual(summary["scenario_datasets"]["search_rag_6"]["digest"], "digest-123")
         self.assertEqual(

@@ -5,8 +5,14 @@ import shutil
 from typing import Any
 
 from ..mathutil import cosine, text_score
-from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
-from ..types import BenchRecord, DatasetBundle, RunConfig
+from ..metrics import (
+    MetricRecorder,
+    mrr_at_k,
+    ndcg_at_k,
+    recall_at_k,
+    same_file_recall_at_k,
+)
+from ..types import BenchQuery, BenchRecord, DatasetBundle, RunConfig
 
 
 class BenchmarkAdapter:
@@ -43,8 +49,9 @@ class BenchmarkAdapter:
         metrics: dict[str, Any],
         notes: list[str],
         available: bool = True,
+        query_results: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        return {
+        result = {
             "name": self.name,
             "role": self.role,
             "available": available,
@@ -52,6 +59,9 @@ class BenchmarkAdapter:
             "metrics": metrics,
             "notes": notes,
         }
+        if query_results is not None:
+            result["query_results"] = query_results
+        return result
 
 
 def ranked_ids(
@@ -92,11 +102,41 @@ def oracle_rank(record: BenchRecord) -> int | None:
     return None
 
 
+def query_result_record(query: BenchQuery, actual_ids: list[Any]) -> dict[str, Any]:
+    ids = [str(record_id) for record_id in actual_ids[: query.top_k] if record_id is not None]
+    recall = recall_at_k(query.expected_ids, ids, query.top_k)
+    same_file_recall = same_file_recall_at_k(query.expected_ids, ids, query.top_k)
+    ndcg = ndcg_at_k(query.expected_ids, ids, query.top_k)
+    mrr = mrr_at_k(query.expected_ids, ids, query.top_k)
+    return {
+        "query_id": query.query_id,
+        "tenant_id": query.tenant_id,
+        "category": query.category,
+        "top_k": query.top_k,
+        "expected_ids": query.expected_ids,
+        "actual_ids": ids,
+        "recall_at_k": round(recall, 3),
+        "same_file_recall_at_k": round(same_file_recall, 3),
+        "ndcg_at_k": round(ndcg, 3),
+        "mrr_at_k": round(mrr, 3),
+        "exact_hit": recall > 0.0,
+        "same_file_hit": same_file_recall > 0.0,
+    }
+
+
 def in_memory_search_metrics(dataset: DatasetBundle) -> dict[str, Any]:
+    metrics, _query_results = in_memory_search_result(dataset)
+    return metrics
+
+
+def in_memory_search_result(
+    dataset: DatasetBundle,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     recorder = MetricRecorder()
     recalls = []
     ndcgs = []
     mrrs = []
+    query_results = []
     for query in dataset.queries:
         ids = recorder.timed(
             lambda query=query: ranked_ids(
@@ -107,6 +147,7 @@ def in_memory_search_metrics(dataset: DatasetBundle) -> dict[str, Any]:
                 query.category,
             )
         )
+        query_results.append(query_result_record(query, ids))
         recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
         ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
         mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
@@ -122,7 +163,7 @@ def in_memory_search_metrics(dataset: DatasetBundle) -> dict[str, Any]:
             "disk_bytes": 0,
         }
     )
-    return summary
+    return summary, query_results
 
 
 def optional_import(module_name: str):

@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .base import BenchmarkAdapter, command_exists, in_memory_search_metrics
+from .base import (
+    BenchmarkAdapter,
+    command_exists,
+    in_memory_search_result,
+    query_result_record,
+)
 from ..http import request_json, request_json_with_response
 from ..metrics import (
     MetricRecorder,
@@ -26,7 +31,7 @@ class TraceDbAdapter(BenchmarkAdapter):
     role = "transactional hybrid database"
 
     def run(self, dataset: DatasetBundle, config: RunConfig) -> dict[str, Any]:
-        metrics = in_memory_search_metrics(dataset)
+        metrics, query_results = in_memory_search_result(dataset)
         notes = [
             "semantic workload executed against TraceDB-compatible generated corpus",
             f"surfaces requested: {', '.join(config.surfaces)}",
@@ -37,12 +42,15 @@ class TraceDbAdapter(BenchmarkAdapter):
             notes.extend(cli_notes)
             metrics.update(cli_metrics)
         if "http" in config.surfaces or "curl" in config.surfaces:
-            http_notes, http_metrics = self._http_surface_run(dataset, config)
+            http_notes, http_metrics, http_query_results = self._http_surface_run(
+                dataset, config
+            )
             notes.extend(http_notes)
             if http_metrics is not None:
                 metrics = http_metrics
+                query_results = http_query_results
         metrics["failure_count"] = sum(1 for note in notes if note.startswith("surface unavailable"))
-        return self.ok_result(dataset, metrics, notes)
+        return self.ok_result(dataset, metrics, notes, query_results=query_results)
 
     def _sdk_surface_notes(self, dataset: DatasetBundle, _config: RunConfig) -> list[str]:
         if not dataset.records:
@@ -144,12 +152,12 @@ class TraceDbAdapter(BenchmarkAdapter):
 
     def _http_surface_run(
         self, dataset: DatasetBundle, config: RunConfig
-    ) -> tuple[list[str], dict[str, Any] | None]:
+    ) -> tuple[list[str], dict[str, Any] | None, list[dict[str, Any]]]:
         url = os.environ.get("TRACEDB_HTTP_URL")
         if not url:
-            return ["surface unavailable: TRACEDB_HTTP_URL not set for HTTP/curl smoke"], None
+            return ["surface unavailable: TRACEDB_HTTP_URL not set for HTTP/curl smoke"], None, []
         if not dataset.records:
-            return ["surface unavailable: TraceDB HTTP smoke had no records"], None
+            return ["surface unavailable: TraceDB HTTP smoke had no records"], None, []
         base_url = url.rstrip("/")
         run_token = self._path_token(config.run_id or "adhoc")
         table = f"bench_records_{run_token}_{os.getpid()}_{len(dataset.records)}"
@@ -188,7 +196,7 @@ class TraceDbAdapter(BenchmarkAdapter):
         try:
             call("ready", "GET", "/ready", timeout=http_timeout)
         except Exception as error:
-            return [f"surface unavailable: TraceDB HTTP ready failed: {error}"], None
+            return [f"surface unavailable: TraceDB HTTP ready failed: {error}"], None, []
 
         try:
             schema = {
@@ -238,7 +246,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 if int(batch_response.get("record_count", 0)) != len(dataset.records):
                     return [
                         "surface unavailable: TraceDB HTTP batch write returned an unexpected record_count"
-                    ], None
+                    ], None, []
             elif ingest_mode == "per_record":
                 for record in dataset.records:
                     timed(
@@ -251,7 +259,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                         )
                     )
             else:
-                return [f"surface unavailable: unsupported TraceDB ingest mode {ingest_mode}"], None
+                return [f"surface unavailable: unsupported TraceDB ingest mode {ingest_mode}"], None, []
 
             first = dataset.records[0]
             fresh_get = call(
@@ -261,7 +269,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 {"table": table, "tenant_id": first.tenant_id, "id": first.record_id},
             )
             if fresh_get.get("record") is None:
-                return ["surface unavailable: TraceDB HTTP fresh write was not visible"], None
+                return ["surface unavailable: TraceDB HTTP fresh write was not visible"], None, []
             disk_bytes_after_ingest = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
             disk_bytes_after_ingest_by_top_level = _directory_top_level_bytes(
                 os.environ.get("TRACEDB_HTTP_DATA_DIR")
@@ -273,7 +281,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 {"table": table, "tenant_id": "tenant-not-owned", "id": first.record_id},
             )
             if isolated_get.get("record") is not None:
-                return ["surface unavailable: TraceDB HTTP tenant isolation failed"], None
+                return ["surface unavailable: TraceDB HTTP tenant isolation failed"], None, []
             call(
                 "record patch",
                 "POST",
@@ -297,11 +305,12 @@ class TraceDbAdapter(BenchmarkAdapter):
                 .get("status")
                 != "benchmark_patched"
             ):
-                return ["surface unavailable: TraceDB HTTP patch was not visible"], None
+                return ["surface unavailable: TraceDB HTTP patch was not visible"], None, []
             recalls = []
             ndcgs = []
             mrrs = []
             same_file_recalls = []
+            query_results = []
             span_gap_count = 0
             records_by_id = {record.record_id: record for record in dataset.records}
             off_category_result_count = 0
@@ -518,6 +527,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 ndcg = ndcg_at_k(query.expected_ids, ids, query.top_k)
                 mrr = mrr_at_k(query.expected_ids, ids, query.top_k)
                 same_file_recall = same_file_recall_at_k(query.expected_ids, ids, query.top_k)
+                query_results.append(query_result_record(query, ids))
                 recalls.append(recall)
                 ndcgs.append(ndcg)
                 mrrs.append(mrr)
@@ -604,7 +614,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 ):
                     return [
                         "surface unavailable: TraceDB HTTP output-shape probe rotation failed"
-                    ], None
+                    ], None, []
                 query_output_probe_true_over_false_deltas.append(
                     explain_true_ms - explain_false_ms
                 )
@@ -635,7 +645,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                     return [
                         "surface unavailable: TraceDB HTTP output-shape explain missing "
                         + ", ".join(missing + endpoint_missing)
-                    ], None
+                    ], None, []
                 returned_count = _float_metric(explain.get("returned_count"))
                 endpoint_returned_count = _float_metric(
                     explain_endpoint.get("returned_count")
@@ -803,7 +813,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 },
             )
             if get_deleted.get("record") is not None:
-                return ["surface unavailable: TraceDB HTTP tombstone remained visible"], None
+                return ["surface unavailable: TraceDB HTTP tombstone remained visible"], None, []
 
             metrics = recorder.summary()
             for prefix, operation_summary in [
@@ -1141,9 +1151,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                         )
                     )
                 )
-            return notes, metrics
+            return notes, metrics, query_results
         except Exception as error:
-            return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None
+            return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None, []
 
     def _record_input(self, table: str, record: Any) -> dict[str, Any]:
         return {

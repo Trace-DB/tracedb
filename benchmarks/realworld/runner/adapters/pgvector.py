@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .base import BenchmarkAdapter, optional_import
+from .base import BenchmarkAdapter, optional_import, query_result_record
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
 
@@ -37,6 +37,7 @@ class PgVectorAdapter(BenchmarkAdapter):
                     recalls = []
                     ndcgs = []
                     mrrs = []
+                    query_results = []
                     for query in dataset.queries:
                         rows = query_recorder.timed(
                             lambda query=query: cur.execute(
@@ -56,6 +57,7 @@ class PgVectorAdapter(BenchmarkAdapter):
                             ).fetchall()
                         )
                         ids = [row[0] for row in rows]
+                        query_results.append(query_result_record(query, ids))
                         recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
                         ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
                         mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
@@ -119,6 +121,7 @@ class PgVectorAdapter(BenchmarkAdapter):
                     "pgvector ingest latency is per-row insert inside one bulk transaction; commit latency is reported separately",
                     "pgvector storage bytes measured with pg_total_relation_size after load and index creation",
                 ],
+                query_results=query_results,
             )
         except Exception as error:
             if config.require_services:

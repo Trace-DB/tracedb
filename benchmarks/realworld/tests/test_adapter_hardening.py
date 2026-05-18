@@ -624,8 +624,9 @@ class AdapterHardeningTests(unittest.TestCase):
                 (storage_dir / "nodes" / "0" / "segment.bin").write_bytes(b"x" * 2048)
                 os.environ["BENCH_OPENSEARCH_STORAGE_DIR"] = str(storage_dir)
 
+                dataset = generated_dataset(12, 42)
                 result = OpenSearchAdapter().run(
-                    generated_dataset(12, 42),
+                    dataset,
                     RunConfig(
                         profile="smoke",
                         target=["opensearch"],
@@ -651,6 +652,14 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["disk_bytes"], 2048)
         self.assertEqual(metrics["disk_bytes_after_ingest"], 2048)
         self.assertEqual(metrics["disk_bytes_after_workload"], 2048)
+        self.assertEqual(len(result["query_results"]), len(dataset.queries))
+        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["expected_ids"],
+            dataset.queries[0].expected_ids,
+        )
+        self.assertEqual(len(result["query_results"][0]["actual_ids"]), dataset.queries[0].top_k)
+        self.assertIn("recall_at_k", result["query_results"][0])
 
     def test_pgvector_reports_ingest_query_and_storage_metrics(self) -> None:
         fake_psycopg = FakePsycopg(storage_bytes=65_536)
@@ -659,8 +668,9 @@ class AdapterHardeningTests(unittest.TestCase):
         sys.modules["psycopg"] = fake_psycopg
         os.environ["BENCH_PGVECTOR_DSN"] = "postgresql://bench:bench@127.0.0.1:25433/bench"
         try:
+            dataset = generated_dataset(16, 42)
             result = PgVectorAdapter().run(
-                generated_dataset(16, 42),
+                dataset,
                 RunConfig(
                     profile="smoke",
                     target=["pgvector"],
@@ -691,6 +701,18 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("setup_latency_p95_ms", result["metrics"])
         self.assertIn("query_latency_p95_ms", result["metrics"])
         self.assertEqual(result["metrics"]["latency_p95_ms"], result["metrics"]["query_latency_p95_ms"])
+        self.assertEqual(len(result["query_results"]), len(dataset.queries))
+        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["expected_ids"],
+            dataset.queries[0].expected_ids,
+        )
+        self.assertGreater(len(result["query_results"][0]["actual_ids"]), 0)
+        self.assertLessEqual(
+            len(result["query_results"][0]["actual_ids"]),
+            dataset.queries[0].top_k,
+        )
+        self.assertIn("mrr_at_k", result["query_results"][0])
         self.assertEqual(fake_psycopg.connection.commit_count, 1)
         self.assertTrue(
             any("bulk transaction" in note for note in result["notes"]),
@@ -1160,8 +1182,9 @@ class AdapterHardeningTests(unittest.TestCase):
             os.environ["TRACEDB_HTTP_URL"] = fake.base_url
             with tempfile.TemporaryDirectory() as temp_dir:
                 recorder = ExperimentRecorder("lean-observer", Path(temp_dir))
+                dataset = generated_dataset(16, 42)
                 result = TraceDbAdapter().run(
-                    generated_dataset(16, 42),
+                    dataset,
                     RunConfig(
                         profile="smoke",
                         target=["tracedb"],
@@ -1185,6 +1208,9 @@ class AdapterHardeningTests(unittest.TestCase):
             fake.stop()
 
         self.assertTrue(result["available"], result["notes"])
+        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertIn("actual_ids", result["query_results"][0])
+        self.assertIn("same_file_recall_at_k", result["query_results"][0])
         self.assertIn('"event_type": "tracedb.query_explain"', observations)
         self.assertIn('"explain_source": "observer_explain_endpoint"', observations)
         self.assertEqual(

@@ -395,8 +395,10 @@ intentionally debugging image selection. A valid external-qrels run must report
 `control_status=external_control_available`, `failure_count=0`,
 `source_dirty=false`, `relevance_label_mode=external_qrels`, distinct Modal app
 names, and no unavailable controls. Treat the local `--summary-json` files as
-the durable evidence surface unless the remote Modal bundle tarballs are
-explicitly persisted.
+the durable aggregate evidence surface unless the remote Modal bundle tarballs
+are explicitly persisted. Current summaries also carry per-baseline
+`query_results` with query IDs, expected IDs, top-k actual IDs, exact recall,
+same-file recall, nDCG, and MRR for adapters that expose query result lists.
 
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
 `manifest.json`. The manifest records the run config, seed, Modal app name,
