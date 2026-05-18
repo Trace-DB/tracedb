@@ -28,6 +28,7 @@ DEFAULT_MAX_RECORDS = 1000
 MODAL_MIN_EPHEMERAL_DISK_MB = 524_288
 DEFAULT_MODAL_APP_NAME = "tracedb-realworld-smoke"
 MODAL_APP_NAME_ENV = "TRACEDB_MODAL_APP_NAME"
+PGVECTOR_VERSION = "v0.8.2"
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
 PGVECTOR_DSN_ENV = "BENCH_PGVECTOR_DSN"
 EXTERNAL_CONTROL_TARGETS = {
@@ -657,7 +658,19 @@ if modal is not None:
 
     image = modal_image()
     postgres_image = modal_image("postgresql", "postgresql-client")
-    pgvector_image = modal_image("postgresql", "postgresql-client", "postgresql-15-pgvector")
+    pgvector_image = modal_image(
+        "git",
+        "postgresql",
+        "postgresql-client",
+        "postgresql-server-dev-all",
+    ).run_commands(
+        "cd /tmp && "
+        f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
+        "cd pgvector && "
+        "make && "
+        "make install && "
+        "rm -rf /tmp/pgvector"
+    )
     app = modal.App(modal_app_name())
 
     @app.function(
