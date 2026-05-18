@@ -252,7 +252,10 @@ class FakeTraceDb:
                 return {
                     "Server-Timing": (
                         "read;dur=0.01, parse;dur=0.02, lock_wait;dur=0.03, "
-                        "engine;dur=0.04, encode;dur=0.05, prewrite_total;dur=0.15"
+                        "engine;dur=0.04, engine_core;dur=0.08, "
+                        "explain_build;dur=0.09, materialize;dur=0.10, "
+                        "response_shape;dur=0.11, body_encode;dur=0.12, "
+                        "encode;dur=0.23, prewrite_total;dur=0.35"
                     )
                 }
 
@@ -777,7 +780,26 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["query_access_path_lexicalpath_build_latency_p95_ms"], 1.5)
         self.assertEqual(metrics["query_access_path_vectorpath_open_latency_p95_ms"], 0.5)
         self.assertEqual(metrics["query_server_engine_latency_p95_ms"], 0.04)
-        self.assertEqual(metrics["query_server_prewrite_total_latency_p95_ms"], 0.15)
+        self.assertEqual(metrics["query_server_engine_core_latency_p95_ms"], 0.08)
+        self.assertEqual(metrics["query_server_explain_build_latency_p95_ms"], 0.09)
+        self.assertEqual(metrics["query_server_materialize_latency_p95_ms"], 0.1)
+        self.assertEqual(metrics["query_server_response_shape_latency_p95_ms"], 0.11)
+        self.assertEqual(metrics["query_server_body_encode_latency_p95_ms"], 0.12)
+        self.assertEqual(metrics["query_server_prewrite_total_latency_p95_ms"], 0.35)
+        self.assertEqual(
+            metrics["query_output_probe_order_mode"],
+            "fixed_explain_false_then_explain_true_then_explain_endpoint",
+        )
+        self.assertEqual(metrics["query_output_probe_shape_count"], 3)
+        self.assertEqual(
+            metrics["query_output_probe_replication_count"],
+            metrics["query_output_probe_count"],
+        )
+        self.assertEqual(metrics["query_output_probe_randomized_order"], 0)
+        self.assertEqual(
+            metrics["query_output_probe_order_valid_for_latency_comparison"],
+            0,
+        )
         self.assertEqual(metrics["query_engine_phase_total_latency_p95_ms"], 5.0)
         self.assertEqual(
             metrics["query_http_client_latency_p95_ms"],

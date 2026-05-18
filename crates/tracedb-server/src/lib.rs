@@ -175,25 +175,30 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
             let guard = db.lock().unwrap();
             let lock_wait_ms = elapsed_ms(lock_start);
             let engine_start = Instant::now();
-            let output = guard.query(query).map_err(to_io_error)?;
+            let timed_output = guard.query_with_timing(query).map_err(to_io_error)?;
             let engine_ms = elapsed_ms(engine_start);
+            let query_timing = timed_output.timing;
             drop(guard);
-            let encode_start = Instant::now();
+            let output = timed_output.output;
+            let response_shape_start = Instant::now();
             let value = if include_explain {
                 serde_json::to_value(output).map_err(to_io_error)?
             } else {
                 json!({ "results": output.results })
             };
-            let value_encode_ms = elapsed_ms(encode_start);
+            let response_shape_ms = elapsed_ms(response_shape_start);
             ok_timed(
                 value,
                 request_start,
-                value_encode_ms,
+                response_shape_ms,
                 &[
                     ("read", read_ms),
                     ("parse", parse_ms),
                     ("lock_wait", lock_wait_ms),
                     ("engine", engine_ms),
+                    ("engine_core", query_timing.engine_core_ms),
+                    ("explain_build", query_timing.explain_build_ms),
+                    ("materialize", query_timing.materialize_ms),
                 ],
             )
         }
@@ -206,21 +211,25 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
             let guard = db.lock().unwrap();
             let lock_wait_ms = elapsed_ms(lock_start);
             let engine_start = Instant::now();
-            let output = guard.query(query).map_err(to_io_error)?;
+            let timed_output = guard.query_with_timing(query).map_err(to_io_error)?;
             let engine_ms = elapsed_ms(engine_start);
+            let query_timing = timed_output.timing;
             drop(guard);
-            let encode_start = Instant::now();
-            let value = serde_json::to_value(output.explain).map_err(to_io_error)?;
-            let value_encode_ms = elapsed_ms(encode_start);
+            let response_shape_start = Instant::now();
+            let value = serde_json::to_value(timed_output.output.explain).map_err(to_io_error)?;
+            let response_shape_ms = elapsed_ms(response_shape_start);
             ok_timed(
                 value,
                 request_start,
-                value_encode_ms,
+                response_shape_ms,
                 &[
                     ("read", read_ms),
                     ("parse", parse_ms),
                     ("lock_wait", lock_wait_ms),
                     ("engine", engine_ms),
+                    ("engine_core", query_timing.engine_core_ms),
+                    ("explain_build", query_timing.explain_build_ms),
+                    ("materialize", query_timing.materialize_ms),
                 ],
             )
         }
@@ -387,14 +396,17 @@ fn ok(value: Value) -> String {
 fn ok_timed(
     value: Value,
     request_start: Instant,
-    prior_encode_ms: f64,
+    response_shape_ms: f64,
     timings: &[(&str, f64)],
 ) -> String {
     let encode_start = Instant::now();
     let body = value.to_string();
-    let encode_ms = prior_encode_ms + elapsed_ms(encode_start);
+    let body_encode_ms = elapsed_ms(encode_start);
+    let encode_ms = response_shape_ms + body_encode_ms;
     let prewrite_total_ms = elapsed_ms(request_start);
     let mut all_timings = timings.to_vec();
+    all_timings.push(("response_shape", response_shape_ms));
+    all_timings.push(("body_encode", body_encode_ms));
     all_timings.push(("encode", encode_ms));
     all_timings.push(("prewrite_total", prewrite_total_ms));
     ok_body_with_headers(

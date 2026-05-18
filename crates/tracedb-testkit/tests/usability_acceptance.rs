@@ -239,6 +239,11 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         "parse;dur=",
         "lock_wait;dur=",
         "engine;dur=",
+        "engine_core;dur=",
+        "explain_build;dur=",
+        "materialize;dur=",
+        "response_shape;dur=",
+        "body_encode;dur=",
         "encode;dur=",
         "prewrite_total;dur=",
     ] {

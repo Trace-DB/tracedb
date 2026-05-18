@@ -892,6 +892,13 @@ class TraceDbAdapter(BenchmarkAdapter):
             )
             metrics.update(_recorder_metric_fields("query_server", query_server_timing_recorders))
             metrics["query_output_probe_count"] = query_output_probe_count
+            metrics["query_output_probe_order_mode"] = (
+                "fixed_explain_false_then_explain_true_then_explain_endpoint"
+            )
+            metrics["query_output_probe_shape_count"] = 3 if query_output_probe_count else 0
+            metrics["query_output_probe_replication_count"] = query_output_probe_count
+            metrics["query_output_probe_randomized_order"] = 0
+            metrics["query_output_probe_order_valid_for_latency_comparison"] = 0
             metrics["query_output_probe_result_id_mismatch_count"] = (
                 query_output_probe_result_id_mismatch_count
             )
@@ -1046,6 +1053,8 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "TraceDB HTTP output-shape attribution recorded: "
                     f"probe_count={query_output_probe_count}; "
                     "shapes=explain_false,explain_true,explain_endpoint; "
+                    "order=fixed_explain_false_then_explain_true_then_explain_endpoint; "
+                    "latency_comparison=order_biased; "
                     "explain_false_returned_explain="
                     f"{query_output_probe_explain_false_explain_returned_count}"
                 )

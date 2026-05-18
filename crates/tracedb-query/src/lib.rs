@@ -73,6 +73,20 @@ pub struct HybridQuery {
     pub explain: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueryExecutionTiming {
+    pub total_ms: f64,
+    pub engine_core_ms: f64,
+    pub explain_build_ms: f64,
+    pub materialize_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimedQueryOutput {
+    pub output: QueryOutput,
+    pub timing: QueryExecutionTiming,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RecordPutRequest {
     pub record: RecordInput,
@@ -894,6 +908,12 @@ impl TraceDb {
     }
 
     pub fn query(&self, query: HybridQuery) -> Result<QueryOutput> {
+        Ok(self.query_with_timing(query)?.output)
+    }
+
+    pub fn query_with_timing(&self, query: HybridQuery) -> Result<TimedQueryOutput> {
+        let total_started = Instant::now();
+        let mut timing = QueryExecutionTiming::default();
         let include_explain = query.explain;
         let schema = self
             .manifest
@@ -902,17 +922,22 @@ impl TraceDb {
         validate_vector_query_dimensions(schema, query.vector.as_deref())?;
         validate_scalar_eq_predicates(schema, &query.scalar_eq)?;
         if query.top_k == 0 {
-            return Ok(QueryOutput {
-                results: Vec::new(),
-                explain: ExplainOutput {
-                    read_epoch: self.manifest.latest_epoch,
-                    schema_epoch: self.manifest.latest_epoch,
-                    policy_epoch: self.manifest.latest_epoch,
-                    scalar_filter_applied: !query.scalar_eq.is_empty(),
-                    scalar_filter_predicates: scalar_filter_predicates(&query.scalar_eq),
-                    freshness_mode: query.freshness.as_str().to_string(),
-                    fusion_method: "RRF".to_string(),
-                    ..ExplainOutput::default()
+            timing.total_ms = elapsed_ms(total_started);
+            timing.engine_core_ms = timing.total_ms;
+            return Ok(TimedQueryOutput {
+                timing,
+                output: QueryOutput {
+                    results: Vec::new(),
+                    explain: ExplainOutput {
+                        read_epoch: self.manifest.latest_epoch,
+                        schema_epoch: self.manifest.latest_epoch,
+                        policy_epoch: self.manifest.latest_epoch,
+                        scalar_filter_applied: !query.scalar_eq.is_empty(),
+                        scalar_filter_predicates: scalar_filter_predicates(&query.scalar_eq),
+                        freshness_mode: query.freshness.as_str().to_string(),
+                        fusion_method: "RRF".to_string(),
+                        ..ExplainOutput::default()
+                    },
                 },
             });
         }
@@ -949,6 +974,7 @@ impl TraceDb {
             ..ExplainOutput::default()
         };
         if include_explain {
+            let explain_build_started = Instant::now();
             explain.phase_timings.push(query_phase_timing(
                 "tenant_visibility",
                 tenant_visibility_ms,
@@ -995,6 +1021,7 @@ impl TraceDb {
                     }
                 }
             }
+            timing.explain_build_ms += elapsed_ms(explain_build_started);
         }
 
         let query_fragment = QueryFragment {
@@ -1044,21 +1071,27 @@ impl TraceDb {
             let source = descriptor.access_path_id.as_str();
             if source == "LexicalPath" {
                 if include_explain {
+                    let explain_build_started = Instant::now();
                     explain.text_candidates = batch.candidates.len();
                     explain.opened_candidate_streams.push("text".to_string());
+                    timing.explain_build_ms += elapsed_ms(explain_build_started);
                 }
                 streams.push(ranked_stream_from_candidates("text", &batch.candidates));
             } else if source == "VectorPath" {
                 if include_explain {
+                    let explain_build_started = Instant::now();
                     explain.vector_candidates = batch.candidates.len();
                     explain.opened_candidate_streams.push("vector".to_string());
+                    timing.explain_build_ms += elapsed_ms(explain_build_started);
                 }
                 streams.push(ranked_stream_from_candidates("vector", &batch.candidates));
             } else {
                 if include_explain {
+                    let explain_build_started = Instant::now();
                     explain
                         .opened_candidate_streams
                         .push(candidate_stream_name(source).to_string());
+                    timing.explain_build_ms += elapsed_ms(explain_build_started);
                 }
                 streams.push(ranked_stream_from_candidates(
                     candidate_stream_name(source),
@@ -1066,12 +1099,15 @@ impl TraceDb {
                 ));
             }
             if include_explain {
+                let explain_build_started = Instant::now();
                 planner_candidates.extend(batch.candidates);
                 explain.access_paths.push(access_path.explain());
+                timing.explain_build_ms += elapsed_ms(explain_build_started);
             }
         }
         let access_path_open_ms = elapsed_ms(access_path_open_started);
         if include_explain {
+            let explain_build_started = Instant::now();
             explain.phase_timings.push(query_phase_timing(
                 "access_path_build",
                 access_path_build_ms,
@@ -1085,6 +1121,7 @@ impl TraceDb {
             explain.lexical_indexed_documents = access_paths.lexical_indexed_documents;
             explain.lexical_scored_documents = access_paths.lexical_scored_documents;
             explain.planner_candidates = planner_candidates;
+            timing.explain_build_ms += elapsed_ms(explain_build_started);
         }
 
         let fusion_started = Instant::now();
@@ -1095,10 +1132,12 @@ impl TraceDb {
             fused.sort_by(vector_first_order);
         }
         if include_explain {
+            let explain_build_started = Instant::now();
             explain.deduped_candidate_count = fused.len();
             explain
                 .phase_timings
                 .push(query_phase_timing("fusion", elapsed_ms(fusion_started)));
+            timing.explain_build_ms += elapsed_ms(explain_build_started);
         }
         let materialization_started = Instant::now();
         let sealed_visible_records = sealed_records
@@ -1148,20 +1187,29 @@ impl TraceDb {
                 materialized.push(query_row_from_segment(record, &candidate));
             }
         }
+        let materialize_ms = elapsed_ms(materialization_started);
+        timing.materialize_ms = materialize_ms;
 
         explain.materialized_count = materialized.len();
         explain.final_visibility_guard_count = checked;
         explain.final_visibility_guard_removed = removed;
         explain.returned_count = materialized.len();
         if include_explain {
-            explain.phase_timings.push(query_phase_timing(
-                "materialization",
-                elapsed_ms(materialization_started),
-            ));
+            let explain_build_started = Instant::now();
+            explain
+                .phase_timings
+                .push(query_phase_timing("materialization", materialize_ms));
+            timing.explain_build_ms += elapsed_ms(explain_build_started);
         }
-        Ok(QueryOutput {
-            results: materialized,
-            explain,
+        timing.total_ms = elapsed_ms(total_started);
+        timing.engine_core_ms =
+            (timing.total_ms - timing.explain_build_ms - timing.materialize_ms).max(0.0);
+        Ok(TimedQueryOutput {
+            timing,
+            output: QueryOutput {
+                results: materialized,
+                explain,
+            },
         })
     }
 

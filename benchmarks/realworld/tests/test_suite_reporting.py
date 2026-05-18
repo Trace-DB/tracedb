@@ -179,6 +179,11 @@ class SuiteReportingTests(unittest.TestCase):
                         "query_http_client_overhead_latency_p95_ms": 1.0,
                         "query_http_client_unattributed_overhead_latency_p95_ms": 0.6,
                         "query_server_engine_latency_p95_ms": 2.0,
+                        "query_server_engine_core_latency_p95_ms": 1.1,
+                        "query_server_explain_build_latency_p95_ms": 0.2,
+                        "query_server_materialize_latency_p95_ms": 0.3,
+                        "query_server_response_shape_latency_p95_ms": 0.4,
+                        "query_server_body_encode_latency_p95_ms": 0.1,
                         "query_server_prewrite_total_latency_p95_ms": 2.5,
                         "query_engine_phase_total_latency_p95_ms": 2.25,
                         "query_http_response_body_bytes_p95": 4096,
@@ -195,6 +200,13 @@ class SuiteReportingTests(unittest.TestCase):
                         "query_output_probe_explain_true_over_false_delta_p95_ms": 0.5,
                         "query_output_probe_result_id_mismatch_count": 0,
                         "query_output_probe_explain_false_explain_returned_count": 0,
+                        "query_output_probe_order_mode": (
+                            "fixed_explain_false_then_explain_true_then_explain_endpoint"
+                        ),
+                        "query_output_probe_shape_count": 3,
+                        "query_output_probe_replication_count": 3,
+                        "query_output_probe_randomized_order": 0,
+                        "query_output_probe_order_valid_for_latency_comparison": 0,
                         "query_phase_probe_sample_count": 3,
                         "query_access_path_probe_sample_count": 3,
                         "query_phase_access_path_build_latency_p95_ms": 2.25,
@@ -285,6 +297,11 @@ class SuiteReportingTests(unittest.TestCase):
             0,
         )
         self.assertEqual(attribution["server"]["engine_latency_p95_ms"], 2.0)
+        self.assertEqual(attribution["server"]["engine_core_latency_p95_ms"], 1.1)
+        self.assertEqual(
+            attribution["output_shape_probe"]["order_valid_for_latency_comparison"],
+            0,
+        )
         self.assertEqual(attribution["engine"]["phase_total_latency_p95_ms"], 2.25)
         self.assertEqual(attribution["storage_after_ingest"]["wal"], 1024)
         self.assertEqual(attribution["storage_after_ingest"]["manifest_tdb"], 256)
@@ -296,6 +313,7 @@ class SuiteReportingTests(unittest.TestCase):
 
         self.assertIn("## TraceDB Attribution", markdown)
         self.assertIn("engine_latency_p95_ms=2.0", markdown)
+        self.assertIn("engine_core_latency_p95_ms=1.1", markdown)
         self.assertIn("overhead_latency_p95_ms=1.0", markdown)
         self.assertIn("body_bytes_p95=4096", markdown)
         self.assertIn("output shape probe", markdown)
