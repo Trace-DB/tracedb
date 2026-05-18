@@ -943,6 +943,23 @@ class ModalBenchTests(unittest.TestCase):
             ),
             "tracedb_opensearch",
         )
+        self.assertEqual(
+            modal_image_kind_from_args(
+                [
+                    "modal_bench.py",
+                    "--tracedb-engine-control",
+                    "--pgvector-control",
+                    "--opensearch-control",
+                ]
+            ),
+            "tracedb_controls",
+        )
+        self.assertEqual(
+            modal_image_kind_from_args(
+                ["modal_bench.py", "--pgvector-control", "--opensearch-control"]
+            ),
+            "external_controls",
+        )
 
     def test_qdrant_modal_release_uses_musl_binary(self) -> None:
         from modal_bench import QDRANT_RELEASE_URL

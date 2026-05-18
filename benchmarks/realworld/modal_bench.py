@@ -198,6 +198,19 @@ def modal_image_kind_from_flags(
     qdrant_control: bool = False,
     opensearch_control: bool = False,
 ) -> str:
+    external_count = sum(
+        int(enabled)
+        for enabled in (
+            postgres_control,
+            pgvector_control,
+            qdrant_control,
+            opensearch_control,
+        )
+    )
+    if tracedb_engine_control and external_count > 1:
+        return "tracedb_controls"
+    if not tracedb_engine_control and external_count > 1:
+        return "external_controls"
     if tracedb_engine_control and pgvector_control:
         return "tracedb_pgvector"
     if tracedb_engine_control and qdrant_control:
@@ -241,6 +254,8 @@ def validate_modal_image_kind(kind: str) -> str:
         "tracedb_pgvector",
         "tracedb_qdrant",
         "tracedb_opensearch",
+        "external_controls",
+        "tracedb_controls",
     }
     if kind not in valid:
         raise ValueError(f"{MODAL_IMAGE_KIND_ENV} must be one of {', '.join(sorted(valid))}")
@@ -1241,38 +1256,32 @@ if modal is not None:
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
 
-    def pgvector_control_image() -> modal.Image:
-        return add_repo_source(
-            modal_base_image(
+    def add_pgvector_extension(base_image: modal.Image) -> modal.Image:
+        return base_image.run_commands(
+            "cd /tmp && "
+            f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
+            "cd pgvector && "
+            "make && "
+            "make install && "
+            "rm -rf /tmp/pgvector"
+        )
+
+    def pgvector_package_image(base_image: modal.Image) -> modal.Image:
+        return add_pgvector_extension(
+            base_image.apt_install(
                 "git",
                 "postgresql",
                 "postgresql-client",
                 "postgresql-server-dev-all",
-            ).run_commands(
-                "cd /tmp && "
-                f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
-                "cd pgvector && "
-                "make && "
-                "make install && "
-                "rm -rf /tmp/pgvector"
             )
         )
 
+    def pgvector_control_image() -> modal.Image:
+        return add_repo_source(pgvector_package_image(modal_base_image()))
+
     def tracedb_pgvector_control_image() -> modal.Image:
         return add_repo_source_for_build(
-            rust_modal_base_image(
-                "git",
-                "postgresql",
-                "postgresql-client",
-                "postgresql-server-dev-all",
-            ).run_commands(
-                "cd /tmp && "
-                f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
-                "cd pgvector && "
-                "make && "
-                "make install && "
-                "rm -rf /tmp/pgvector"
-            )
+            pgvector_package_image(rust_modal_base_image())
         ).run_commands(
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
@@ -1314,8 +1323,28 @@ if modal is not None:
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
 
+    def external_controls_image() -> modal.Image:
+        return add_repo_source(
+            add_opensearch_binary(
+                add_qdrant_binary(pgvector_package_image(modal_base_image()))
+            )
+        )
+
+    def tracedb_controls_image() -> modal.Image:
+        return add_repo_source_for_build(
+            add_opensearch_binary(
+                add_qdrant_binary(pgvector_package_image(rust_modal_base_image()))
+            )
+        ).run_commands(
+            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
+        )
+
     def selected_modal_image(kind: str) -> modal.Image:
         kind = validate_modal_image_kind(kind)
+        if kind == "tracedb_controls":
+            return tracedb_controls_image()
+        if kind == "external_controls":
+            return external_controls_image()
         if kind == "tracedb_pgvector":
             return tracedb_pgvector_control_image()
         if kind == "tracedb_qdrant":
