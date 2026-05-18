@@ -2032,6 +2032,164 @@ fn put_full_replacement_wal_recovery_and_dirty_feature_state_match() {
 }
 
 #[test]
+fn stale_handle_put_reconciles_committed_wal_before_epoch_allocation() {
+    let (temp, mut first) = seeded_db();
+    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
+
+    let first_epoch = first
+        .put(RecordPutRequest::new(record(
+            "fresh",
+            "tenant-a",
+            "fresh handle committed first",
+            [0.7, 0.2, 0.1],
+        )))
+        .expect("fresh handle put");
+    let stale_epoch = stale
+        .put(RecordPutRequest::new(record(
+            "stale",
+            "tenant-a",
+            "stale handle committed second",
+            [0.6, 0.3, 0.1],
+        )))
+        .expect("stale handle put");
+
+    assert_eq!(
+        stale_epoch,
+        first_epoch.next(),
+        "stale writers must not reuse an epoch already committed by another handle"
+    );
+    assert!(
+        stale
+            .get(RecordGetRequest::new("docs", "tenant-a", "fresh"))
+            .expect("stale get fresh")
+            .is_some(),
+        "stale writer should refresh its hot store before installing its own write"
+    );
+
+    drop(first);
+    drop(stale);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(
+        recovered.inspect_manifest().unwrap().latest_epoch,
+        stale_epoch
+    );
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "fresh"))
+        .expect("recovered fresh")
+        .is_some());
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "stale"))
+        .expect("recovered stale")
+        .is_some());
+}
+
+#[test]
+fn stale_handle_insert_reconciles_committed_wal_before_epoch_allocation() {
+    let (temp, mut first) = seeded_db();
+    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
+
+    let first_epoch = first
+        .insert(record(
+            "fresh-insert",
+            "tenant-a",
+            "fresh insert committed first",
+            [0.7, 0.2, 0.1],
+        ))
+        .expect("fresh insert");
+    let stale_epoch = stale
+        .insert(record(
+            "stale-insert",
+            "tenant-a",
+            "stale insert committed second",
+            [0.6, 0.3, 0.1],
+        ))
+        .expect("stale insert");
+
+    assert_eq!(stale_epoch, first_epoch.next());
+    assert!(stale
+        .get(RecordGetRequest::new("docs", "tenant-a", "fresh-insert"))
+        .expect("stale get fresh insert")
+        .is_some());
+
+    drop(first);
+    drop(stale);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "fresh-insert"))
+        .expect("recovered fresh insert")
+        .is_some());
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "stale-insert"))
+        .expect("recovered stale insert")
+        .is_some());
+}
+
+#[test]
+fn stale_handle_delete_reconciles_committed_wal_before_staging() {
+    let (temp, mut first) = seeded_db();
+    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
+
+    let first_epoch = first
+        .insert(record(
+            "fresh-delete",
+            "tenant-a",
+            "fresh delete target",
+            [0.7, 0.2, 0.1],
+        ))
+        .expect("fresh insert");
+    let stale_epoch = stale
+        .delete(RecordDeleteRequest::new("docs", "tenant-a", "fresh-delete"))
+        .expect("stale delete");
+
+    assert_eq!(stale_epoch, first_epoch.next());
+    assert!(stale
+        .get(RecordGetRequest::new("docs", "tenant-a", "fresh-delete"))
+        .expect("stale get deleted")
+        .is_none());
+
+    drop(first);
+    drop(stale);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "fresh-delete"))
+        .expect("recovered deleted")
+        .is_none());
+}
+
+#[test]
+fn stale_handle_record_write_preserves_published_segment_manifest() {
+    let (temp, mut first) = seeded_db();
+    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
+    first
+        .publish_segment("seg-before-stale-write")
+        .expect("publish segment");
+    assert_eq!(first.inspect_manifest().unwrap().segments.len(), 1);
+
+    stale
+        .put(RecordPutRequest::new(record(
+            "after-segment",
+            "tenant-a",
+            "record after segment publish",
+            [0.6, 0.3, 0.1],
+        )))
+        .expect("stale put after segment publish");
+
+    assert_eq!(
+        stale.inspect_manifest().unwrap().segments.len(),
+        1,
+        "stale record write must preserve durable segment metadata"
+    );
+    drop(first);
+    drop(stale);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(recovered.inspect_manifest().unwrap().segments.len(), 1);
+    assert!(recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "after-segment"))
+        .expect("recovered after segment")
+        .is_some());
+}
+
+#[test]
 fn incompatible_vector_dimension_schema_change_is_rejected_after_committed_rows() {
     let (temp, mut db) = seeded_db();
     let before_epoch = db.inspect_manifest().unwrap().latest_epoch;

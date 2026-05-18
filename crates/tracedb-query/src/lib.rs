@@ -422,6 +422,7 @@ impl TraceDb {
 
     pub fn apply_schema(&mut self, schema: TableSchema) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
         schema.validate()?;
         self.validate_schema_compatible(&schema)?;
         let epoch = self.manifest.latest_epoch.next();
@@ -446,6 +447,7 @@ impl TraceDb {
 
     pub fn insert(&mut self, input: RecordInput) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
         let schema = self
             .manifest
             .table(&input.table)
@@ -476,6 +478,7 @@ impl TraceDb {
 
     pub fn put(&mut self, request: RecordPutRequest) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
         let input = request.record;
         let schema = self
             .manifest
@@ -514,6 +517,7 @@ impl TraceDb {
         let total_started = Instant::now();
         let lock_started = Instant::now();
         let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
         let lock_ms = elapsed_ms(lock_started);
 
         let input = request.record;
@@ -586,6 +590,7 @@ impl TraceDb {
 
     pub fn patch(&mut self, request: RecordPatchRequest) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
         let input = request.into_record_input();
         let schema = self
             .manifest
@@ -619,6 +624,7 @@ impl TraceDb {
 
     pub fn delete(&mut self, request: RecordDeleteRequest) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
         let deletion = request.into_deletion();
         let schema = self
             .manifest
@@ -978,6 +984,7 @@ impl TraceDb {
         }
 
         let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
         let schema = self
             .manifest
             .table(table)
@@ -1219,6 +1226,34 @@ impl TraceDb {
             clone_ms,
             write,
         })
+    }
+
+    fn refresh_from_disk_if_stale(&mut self) -> Result<()> {
+        let durable_manifest = read_manifest(self.dir.join("manifest.tdb"))?;
+        let wal_last_epoch = self.wal.last_commit_epoch()?;
+        let wal_is_newer = wal_last_epoch
+            .map(|last_epoch| last_epoch > self.manifest.latest_epoch)
+            .unwrap_or(false);
+        let manifest_is_newer = durable_manifest.latest_epoch > self.manifest.latest_epoch
+            || durable_manifest.checkpoint_epoch > self.manifest.checkpoint_epoch
+            || durable_manifest.manifest_generation > self.manifest.manifest_generation;
+        if !wal_is_newer && !manifest_is_newer {
+            return Ok(());
+        }
+
+        let TraceDb {
+            manifest,
+            store,
+            wal,
+            last_recovery_torn_tail,
+            ..
+        } = TraceDb::open(&self.dir)?;
+        self.manifest = manifest;
+        self.store = store;
+        self.wal = wal;
+        self.last_recovery_torn_tail = last_recovery_torn_tail;
+        self.clear_lexical_cache();
+        Ok(())
     }
 
     fn validate_schema_compatible(&self, schema: &TableSchema) -> Result<()> {

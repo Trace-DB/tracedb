@@ -114,6 +114,7 @@ pub struct Wal {
 #[derive(Clone, Debug, Default)]
 struct WalTail {
     last_lsn: Option<Lsn>,
+    last_epoch: Option<Epoch>,
     last_checksum: u32,
     file_len: u64,
 }
@@ -136,6 +137,19 @@ impl Wal {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn last_commit_epoch(&self) -> Result<Option<Epoch>> {
+        let mut tail = self
+            .tail
+            .lock()
+            .map_err(|_| TraceDbError::WalCorruption("wal tail cache lock poisoned".to_string()))?;
+        let file_len = fs::metadata(&self.path)?.len();
+        if file_len != tail.file_len {
+            let scan = scan_file(&self.path)?;
+            *tail = tail_from_scan(&self.path, &scan)?;
+        }
+        Ok(tail.last_epoch)
     }
 
     pub fn append_commit(&self, commit: &CommitRecord) -> Result<Lsn> {
@@ -181,6 +195,7 @@ impl Wal {
         file.write_all(&frame)?;
         file.sync_data()?;
         tail.last_lsn = Some(lsn);
+        tail.last_epoch = Some(commit.epoch);
         tail.last_checksum = payload_checksum;
         tail.file_len += frame.len() as u64;
         Ok(lsn)
@@ -243,6 +258,7 @@ impl Wal {
         let sync_data_ms = elapsed_ms(sync_data_started);
         let tail_update_started = Instant::now();
         tail.last_lsn = Some(lsn);
+        tail.last_epoch = Some(commit.epoch);
         tail.last_checksum = payload_checksum;
         tail.file_len += frame.len() as u64;
         let tail_update_ms = elapsed_ms(tail_update_started);
@@ -276,6 +292,7 @@ fn tail_from_scan(path: &Path, scan: &WalScan) -> Result<WalTail> {
     let last = scan.entries.last();
     Ok(WalTail {
         last_lsn: last.map(|entry| entry.lsn),
+        last_epoch: last.map(|entry| entry.commit.epoch),
         last_checksum: last.map(|entry| entry.checksum).unwrap_or_default(),
         file_len: fs::metadata(path)?.len(),
     })
