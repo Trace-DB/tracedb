@@ -125,6 +125,12 @@ pub struct TimingP95 {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SizeP95 {
+    pub name: String,
+    pub p95_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BatchWriteAttributionPoint {
     pub records: usize,
     pub repetitions: usize,
@@ -134,6 +140,7 @@ pub struct BatchWriteAttributionPoint {
     pub wal_bytes_p95: u64,
     pub data_dir_bytes_p95: u64,
     pub batch_phase_p95_ms: Vec<TimingP95>,
+    pub batch_size_p95: Vec<SizeP95>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -279,6 +286,7 @@ pub fn run_batch_write_attribution(
         let mut wal_sizes = Vec::new();
         let mut data_dir_sizes = Vec::new();
         let mut phase_samples = BTreeMap::<String, Vec<f64>>::new();
+        let mut size_samples = BTreeMap::<String, Vec<u64>>::new();
         for _ in 0..config.repetitions {
             let temp = tempfile::tempdir()?;
             let data_dir = temp.path().to_path_buf();
@@ -290,6 +298,7 @@ pub fn run_batch_write_attribution(
             })?;
             batch_latencies.push(elapsed_ms);
             record_write_timing_samples(&timing, &mut phase_samples);
+            record_write_size_samples(&timing, &mut size_samples);
             wal_sizes.push(wal_bytes(&data_dir));
             data_dir_sizes.push(directory_size(&data_dir));
         }
@@ -302,6 +311,7 @@ pub fn run_batch_write_attribution(
             wal_bytes_p95: percentile_u64(&wal_sizes, 95.0),
             data_dir_bytes_p95: percentile_u64(&data_dir_sizes, 95.0),
             batch_phase_p95_ms: timing_p95_samples(&phase_samples),
+            batch_size_p95: size_p95_samples(&size_samples),
         });
     }
 
@@ -676,12 +686,32 @@ fn record_write_timing_samples(timing: &WritePathTiming, samples: &mut BTreeMap<
     }
 }
 
+fn record_write_size_samples(timing: &WritePathTiming, samples: &mut BTreeMap<String, Vec<u64>>) {
+    for (name, value) in [
+        ("wal_payload", timing.wal_payload_bytes),
+        ("wal_frame", timing.wal_frame_bytes),
+        ("manifest", timing.manifest_bytes),
+    ] {
+        samples.entry(name.to_string()).or_default().push(value);
+    }
+}
+
 fn timing_p95_samples(samples: &BTreeMap<String, Vec<f64>>) -> Vec<TimingP95> {
     samples
         .iter()
         .map(|(name, values)| TimingP95 {
             name: name.clone(),
             p95_ms: round_ms(percentile(values, 95.0)),
+        })
+        .collect()
+}
+
+fn size_p95_samples(samples: &BTreeMap<String, Vec<u64>>) -> Vec<SizeP95> {
+    samples
+        .iter()
+        .map(|(name, values)| SizeP95 {
+            name: name.clone(),
+            p95_bytes: percentile_u64(values, 95.0),
         })
         .collect()
 }
@@ -898,5 +928,18 @@ mod tests {
                 "missing batch phase {name}"
             );
         }
+        for name in ["wal_payload", "wal_frame", "manifest"] {
+            assert!(
+                point
+                    .batch_size_p95
+                    .iter()
+                    .any(|size| size.name == name && size.p95_bytes > 0),
+                "missing batch size {name}"
+            );
+        }
+        assert!(!point
+            .batch_phase_p95_ms
+            .iter()
+            .any(|timing| timing.name.ends_with("_bytes")));
     }
 }

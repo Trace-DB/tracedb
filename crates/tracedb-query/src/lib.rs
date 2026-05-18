@@ -236,6 +236,8 @@ pub struct WritePathTiming {
     pub wal_total_ms: f64,
     pub wal_lock_tail_ms: f64,
     pub wal_frame_build_ms: f64,
+    pub wal_payload_bytes: u64,
+    pub wal_frame_bytes: u64,
     pub wal_write_ms: f64,
     pub wal_sync_data_ms: f64,
     pub wal_tail_update_ms: f64,
@@ -243,6 +245,7 @@ pub struct WritePathTiming {
     pub manifest_total_ms: f64,
     pub manifest_clone_ms: f64,
     pub manifest_write_total_ms: f64,
+    pub manifest_bytes: u64,
     pub manifest_checksum_ms: f64,
     pub manifest_serialize_ms: f64,
     pub manifest_write_ms: f64,
@@ -306,6 +309,7 @@ struct CheckpointPayload {
 #[derive(Clone, Debug, Default)]
 struct ManifestWriteTiming {
     total_ms: f64,
+    bytes: u64,
     checksum_ms: f64,
     serialize_ms: f64,
     write_ms: f64,
@@ -362,6 +366,8 @@ impl WritePathTiming {
             wal_total_ms: wal.total_ms,
             wal_lock_tail_ms: wal.lock_tail_ms,
             wal_frame_build_ms: wal.frame_build_ms,
+            wal_payload_bytes: wal.payload_bytes,
+            wal_frame_bytes: wal.frame_bytes,
             wal_write_ms: wal.write_ms,
             wal_sync_data_ms: wal.sync_data_ms,
             wal_tail_update_ms: wal.tail_update_ms,
@@ -369,6 +375,7 @@ impl WritePathTiming {
             manifest_total_ms: manifest.total_ms,
             manifest_clone_ms: manifest.clone_ms,
             manifest_write_total_ms: manifest.write.total_ms,
+            manifest_bytes: manifest.write.bytes,
             manifest_checksum_ms: manifest.write.checksum_ms,
             manifest_serialize_ms: manifest.write.serialize_ms,
             manifest_write_ms: manifest.write.write_ms,
@@ -2689,6 +2696,7 @@ fn write_manifest_with_timing(
     let checksum_ms = elapsed_ms(checksum_started);
     let serialize_started = Instant::now();
     let body = serde_json::to_vec_pretty(manifest)?;
+    let bytes = body.len() as u64;
     let serialize_ms = elapsed_ms(serialize_started);
     let path = path.as_ref();
     let tmp_path = path.with_extension("tdb.tmp");
@@ -2710,6 +2718,7 @@ fn write_manifest_with_timing(
     let sync_dir_ms = elapsed_ms(sync_dir_started);
     Ok(ManifestWriteTiming {
         total_ms: elapsed_ms(total_started),
+        bytes,
         checksum_ms,
         serialize_ms,
         write_ms,

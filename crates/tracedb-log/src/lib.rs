@@ -23,6 +23,8 @@ pub struct WalAppendTiming {
     pub total_ms: f64,
     pub lock_tail_ms: f64,
     pub frame_build_ms: f64,
+    pub payload_bytes: u64,
+    pub frame_bytes: u64,
     pub write_ms: f64,
     pub sync_data_ms: f64,
     pub tail_update_ms: f64,
@@ -247,6 +249,8 @@ impl Wal {
         frame.extend_from_slice(&payload_checksum.to_le_bytes());
         frame.extend_from_slice(&payload);
         frame.extend_from_slice(&COMMIT_FOOTER.to_le_bytes());
+        let payload_bytes = payload.len() as u64;
+        let frame_bytes = frame.len() as u64;
         let frame_build_ms = elapsed_ms(frame_build_started);
 
         let write_started = Instant::now();
@@ -268,6 +272,8 @@ impl Wal {
                 total_ms: elapsed_ms(total_started),
                 lock_tail_ms,
                 frame_build_ms,
+                payload_bytes,
+                frame_bytes,
                 write_ms,
                 sync_data_ms,
                 tail_update_ms,
