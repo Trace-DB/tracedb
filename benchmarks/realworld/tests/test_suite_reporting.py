@@ -156,6 +156,97 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("no product-language conclusion is valid", markdown)
         self.assertIn("`search_rag_6` / `PostgreSQL`: service not configured", markdown)
 
+    def test_suite_report_preserves_tracedb_query_storage_attribution(self) -> None:
+        child_report = {
+            "summary": {
+                "failure_count": 0,
+                "control_status": "external_control_available",
+            },
+            "dataset": {"kind": "generated", "source": "test"},
+            "surfaces": ["http"],
+            "openrouter": {},
+            "baselines": [
+                {
+                    "name": "TraceDB",
+                    "available": True,
+                    "role": "target under test",
+                    "metrics": {
+                        "ingest_count": 128,
+                        "query_count": 4,
+                        "latency_p95_ms": 7.0,
+                        "query_latency_p95_ms": 3.5,
+                        "query_phase_access_path_build_latency_p95_ms": 2.25,
+                        "query_access_path_lexicalpath_build_latency_p95_ms": 1.25,
+                        "disk_bytes": 4096,
+                        "disk_bytes_after_ingest_wal": 1024,
+                        "disk_bytes_after_ingest_manifest_tdb": 256,
+                        "disk_bytes_after_ingest_segments": 2048,
+                        "recall_at_5": 1.0,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+                {
+                    "name": "pgvector",
+                    "available": True,
+                    "role": "external vector control",
+                    "metrics": {
+                        "ingest_count": 128,
+                        "query_count": 4,
+                        "latency_p95_ms": 2.0,
+                        "ingest_latency_p95_ms": 1.0,
+                        "ingest_transaction_total_latency_ms": 80.0,
+                        "disk_bytes": 2048,
+                        "recall_at_5": 1.0,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                },
+            ],
+        }
+
+        suite = build_suite_report(
+            suite_id="suite-attribution",
+            profile="smoke",
+            dataset="generated",
+            records=128,
+            reports=[
+                {
+                    "spec": SCENARIOS["search_rag_6"],
+                    "report": child_report,
+                    "artifact_dir": "/tmp/search_rag_6",
+                }
+            ],
+        )
+
+        query_number = suite["number_to_beat"]["query_p95_ms"]
+        self.assertEqual(query_number["baseline"], "pgvector")
+        self.assertEqual(query_number["source_metric"], "latency_p95_ms")
+        self.assertEqual(query_number["scenario_id"], "search_rag_6")
+
+        attribution = suite["tracedb_attribution"][0]
+        self.assertEqual(attribution["scenario_id"], "search_rag_6")
+        self.assertEqual(attribution["query"]["query_latency_p95_ms"], 3.5)
+        self.assertEqual(
+            attribution["query_phases"]["access_path_build_latency_p95_ms"],
+            2.25,
+        )
+        self.assertEqual(
+            attribution["access_paths"]["lexicalpath_build_latency_p95_ms"],
+            1.25,
+        )
+        self.assertEqual(attribution["storage_after_ingest"]["wal"], 1024)
+        self.assertEqual(attribution["storage_after_ingest"]["manifest_tdb"], 256)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "suite.md"
+            write_suite_markdown(suite, path)
+            markdown = path.read_text()
+
+        self.assertIn("## TraceDB Attribution", markdown)
+        self.assertIn("access_path_build_latency_p95_ms", markdown)
+        self.assertIn("wal=1024", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

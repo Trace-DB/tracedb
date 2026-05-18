@@ -428,6 +428,7 @@ def extract_control_summary(bundle_path: Path, run_id: str) -> dict[str, Any]:
             for control in ledger.get("unavailable_external_controls", [])
         ],
         "number_to_beat": suite.get("number_to_beat", {}),
+        "tracedb_attribution": suite.get("tracedb_attribution", []),
         "scenario_baselines": scenario_baselines,
         "scenario_datasets": scenario_datasets,
         "suite_json": suite_member,

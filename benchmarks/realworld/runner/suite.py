@@ -120,7 +120,14 @@ def build_suite_report(
     for item in reports:
         spec: ScenarioSpec = item["spec"]
         report = item["report"]
-        all_baselines.extend(report["baselines"])
+        artifact_dir = item["artifact_dir"]
+        all_baselines.extend(
+            _baselines_with_context(
+                report["baselines"],
+                scenario_id=spec.scenario_id,
+                artifact_dir=artifact_dir,
+            )
+        )
         scenarios.append(
             {
                 "id": spec.scenario_id,
@@ -128,7 +135,7 @@ def build_suite_report(
                 "description": spec.description,
                 "hypothesis": spec.hypothesis,
                 "pass_criteria": spec.pass_criteria,
-                "artifact_dir": item["artifact_dir"],
+                "artifact_dir": artifact_dir,
                 "summary": report["summary"],
                 "dataset": report["dataset"],
                 "surfaces": report["surfaces"],
@@ -141,6 +148,7 @@ def build_suite_report(
             }
         )
     control_ledger = build_control_ledger(all_baselines)
+    tracedb_attribution = _tracedb_attribution(scenarios)
     return {
         "suite_id": suite_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -155,8 +163,10 @@ def build_suite_report(
         "control_status": control_ledger["control_status"],
         "control_ledger": control_ledger,
         "number_to_beat": control_ledger["number_to_beat"],
+        "tracedb_attribution": tracedb_attribution,
         "summary": {
             "scenario_count": len(scenarios),
+            "tracedb_attribution_count": len(tracedb_attribution),
             "baseline_observations": sum(len(scenario["baselines"]) for scenario in scenarios),
             "available_observations": sum(
                 1
@@ -309,6 +319,34 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
     lines.extend(
         [
             "",
+            "## TraceDB Attribution",
+            "",
+            "| scenario | query p95 ms | query phases | access paths | storage after ingest | storage after workload |",
+            "| --- | ---: | --- | --- | --- | --- |",
+        ]
+    )
+    if report.get("tracedb_attribution"):
+        for item in report["tracedb_attribution"]:
+            lines.append(
+                "| {scenario} | {query_p95} | {query_phases} | {access_paths} | {storage_ingest} | {storage_workload} |".format(
+                    scenario=item["scenario_id"],
+                    query_p95=item.get("query", {}).get("query_latency_p95_ms", "n/a"),
+                    query_phases=_metric_map_summary(item.get("query_phases", {})),
+                    access_paths=_metric_map_summary(item.get("access_paths", {})),
+                    storage_ingest=_metric_map_summary(
+                        item.get("storage_after_ingest", {})
+                    ),
+                    storage_workload=_metric_map_summary(
+                        item.get("storage_after_workload", {})
+                    ),
+                )
+            )
+    else:
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a |")
+
+    lines.extend(
+        [
+            "",
             "## Provider and Rerank Evidence",
             "",
             "| scenario | embedding model | used dims | native dims | requested dims | requests | embedding calls | rerank model | rerank calls | cache hits | cache misses | search units | rerank recall@5 | rerank nDCG@5 | rerank MRR@5 |",
@@ -456,3 +494,72 @@ def _number_to_beat_rows(number_to_beat: dict[str, Any]) -> list[str]:
         value = entry.get("value") if isinstance(entry, dict) else None
         rows.append(f"| {metric} | {baseline or 'n/a'} | {value if value is not None else 'n/a'} |")
     return rows
+
+
+def _baselines_with_context(
+    baselines: list[dict[str, Any]], *, scenario_id: str, artifact_dir: str
+) -> list[dict[str, Any]]:
+    contextual = []
+    for baseline in baselines:
+        copy = dict(baseline)
+        copy["scenario_id"] = scenario_id
+        copy["artifact_dir"] = artifact_dir
+        contextual.append(copy)
+    return contextual
+
+
+def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    attribution = []
+    for scenario in scenarios:
+        tracedb = next(
+            (
+                baseline
+                for baseline in scenario.get("baselines", [])
+                if is_tracedb_baseline(baseline) and baseline.get("available")
+            ),
+            None,
+        )
+        if tracedb is None:
+            continue
+        metrics = tracedb.get("metrics", {})
+        query_phases = _strip_metric_prefix(metrics, "query_phase_")
+        access_paths = _strip_metric_prefix(metrics, "query_access_path_")
+        storage_after_ingest = _strip_metric_prefix(metrics, "disk_bytes_after_ingest_")
+        storage_after_workload = _strip_metric_prefix(metrics, "disk_bytes_after_workload_")
+        if not any([query_phases, access_paths, storage_after_ingest, storage_after_workload]):
+            continue
+        attribution.append(
+            {
+                "scenario_id": scenario["id"],
+                "artifact_dir": scenario["artifact_dir"],
+                "query": {
+                    key: metrics[key]
+                    for key in [
+                        "latency_p95_ms",
+                        "query_latency_p50_ms",
+                        "query_latency_p95_ms",
+                        "query_latency_p99_ms",
+                    ]
+                    if key in metrics
+                },
+                "query_phases": query_phases,
+                "access_paths": access_paths,
+                "storage_after_ingest": storage_after_ingest,
+                "storage_after_workload": storage_after_workload,
+            }
+        )
+    return attribution
+
+
+def _strip_metric_prefix(metrics: dict[str, Any], prefix: str) -> dict[str, Any]:
+    return {
+        key[len(prefix) :]: value
+        for key, value in sorted(metrics.items())
+        if key.startswith(prefix) and key != prefix.rstrip("_")
+    }
+
+
+def _metric_map_summary(values: dict[str, Any]) -> str:
+    if not values:
+        return "n/a"
+    return ", ".join(f"{key}={value}" for key, value in sorted(values.items())).replace("|", "\\|")

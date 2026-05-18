@@ -192,6 +192,24 @@ class FakeTraceDb:
                                 "scalar_filter_removed_records": 0,
                                 "candidate_budget": payload.get("top_k", 5),
                                 "returned_count": len(results[: int(payload.get("top_k", 5))]),
+                                "phase_timings": [
+                                    {"phase": "tenant_visibility", "elapsed_ms": 1.25},
+                                    {"phase": "access_path_build", "elapsed_ms": 2.5},
+                                    {"phase": "fusion", "elapsed_ms": 0.75},
+                                    {"phase": "materialization", "elapsed_ms": 0.5},
+                                ],
+                                "access_path_timings": [
+                                    {
+                                        "access_path_id": "LexicalPath",
+                                        "build_ms": 1.5,
+                                        "open_ms": 0.25,
+                                    },
+                                    {
+                                        "access_path_id": "VectorPath",
+                                        "build_ms": 3.0,
+                                        "open_ms": 0.5,
+                                    },
+                                ],
                             },
                         },
                     )
@@ -679,6 +697,62 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertGreaterEqual(result["metrics"]["disk_bytes_after_workload"], 128)
         self.assertTrue(
             any("data directory bytes measured" in note for note in result["notes"]),
+            result["notes"],
+        )
+
+    def test_tracedb_http_surface_reports_query_phase_and_storage_attribution(self) -> None:
+        fake = FakeTraceDb().start()
+        old_url = os.environ.get("TRACEDB_HTTP_URL")
+        old_data_dir = os.environ.get("TRACEDB_HTTP_DATA_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as data_dir:
+                root = Path(data_dir)
+                (root / "manifest.tdb").write_bytes(b"m" * 32)
+                (root / "wal").mkdir()
+                (root / "wal" / "000001.twal").write_bytes(b"w" * 128)
+                (root / "segments").mkdir()
+                (root / "segments" / "000001.tseg").write_bytes(b"s" * 256)
+                os.environ["TRACEDB_HTTP_URL"] = fake.base_url
+                os.environ["TRACEDB_HTTP_DATA_DIR"] = data_dir
+                result = TraceDbAdapter().run(
+                    generated_dataset(12, 42),
+                    RunConfig(
+                        profile="smoke",
+                        target=["tracedb"],
+                        surfaces=["http"],
+                        require_services=False,
+                        repo_root=".",
+                        run_id="phase-storage",
+                    ),
+                )
+        finally:
+            if old_url is None:
+                os.environ.pop("TRACEDB_HTTP_URL", None)
+            else:
+                os.environ["TRACEDB_HTTP_URL"] = old_url
+            if old_data_dir is None:
+                os.environ.pop("TRACEDB_HTTP_DATA_DIR", None)
+            else:
+                os.environ["TRACEDB_HTTP_DATA_DIR"] = old_data_dir
+            fake.stop()
+
+        self.assertTrue(result["available"], result["notes"])
+        metrics = result["metrics"]
+        self.assertEqual(metrics["query_phase_tenant_visibility_latency_p95_ms"], 1.25)
+        self.assertEqual(metrics["query_phase_access_path_build_latency_p95_ms"], 2.5)
+        self.assertEqual(metrics["query_phase_fusion_latency_p95_ms"], 0.75)
+        self.assertEqual(metrics["query_phase_materialization_latency_p95_ms"], 0.5)
+        self.assertEqual(metrics["query_access_path_lexicalpath_build_latency_p95_ms"], 1.5)
+        self.assertEqual(metrics["query_access_path_vectorpath_open_latency_p95_ms"], 0.5)
+        self.assertEqual(metrics["disk_bytes_after_ingest_manifest_tdb"], 32)
+        self.assertEqual(metrics["disk_bytes_after_ingest_wal"], 128)
+        self.assertEqual(metrics["disk_bytes_after_ingest_segments"], 256)
+        self.assertTrue(
+            any("query phase attribution" in note for note in result["notes"]),
+            result["notes"],
+        )
+        self.assertTrue(
+            any("storage attribution" in note for note in result["notes"]),
             result["notes"],
         )
 

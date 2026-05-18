@@ -731,6 +731,16 @@ class ModalBenchTests(unittest.TestCase):
                 "number_to_beat": {
                     "query_p95_ms": {"baseline": None, "value": None},
                 },
+                "tracedb_attribution": [
+                    {
+                        "scenario_id": "search_rag_6",
+                        "query": {"query_latency_p95_ms": 4.0},
+                        "query_phases": {"access_path_build_latency_p95_ms": 1.5},
+                        "access_paths": {},
+                        "storage_after_ingest": {"wal": 512},
+                        "storage_after_workload": {"wal": 1024},
+                    }
+                ],
             }
             (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
@@ -770,6 +780,10 @@ class ModalBenchTests(unittest.TestCase):
             4.0,
         )
         self.assertEqual(summary["scenario_datasets"]["search_rag_6"]["digest"], "digest-123")
+        self.assertEqual(
+            summary["tracedb_attribution"][0]["query"]["query_latency_p95_ms"],
+            4.0,
+        )
 
 
 if __name__ == "__main__":

@@ -242,6 +242,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             if fresh_get.get("record") is None:
                 return ["surface unavailable: TraceDB HTTP fresh write was not visible"], None
             disk_bytes_after_ingest = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
+            disk_bytes_after_ingest_by_top_level = _directory_top_level_bytes(
+                os.environ.get("TRACEDB_HTTP_DATA_DIR")
+            )
             isolated_get = call(
                 "tenant isolation get",
                 "POST",
@@ -283,6 +286,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             off_category_result_count = 0
             queries_with_off_category_results = 0
             scalar_filter_applied_count = 0
+            query_phase_recorders: dict[str, MetricRecorder] = {}
+            query_access_path_build_recorders: dict[str, MetricRecorder] = {}
+            query_access_path_open_recorders: dict[str, MetricRecorder] = {}
             for query in dataset.queries:
                 result = timed(
                     query_recorder,
@@ -341,6 +347,12 @@ class TraceDbAdapter(BenchmarkAdapter):
                     ], None
                 if explain.get("scalar_filter_applied") is True:
                     scalar_filter_applied_count += 1
+                _record_explain_timing_metrics(
+                    explain,
+                    query_phase_recorders,
+                    query_access_path_build_recorders,
+                    query_access_path_open_recorders,
+                )
                 if config.observer:
                     config.observer.observe(
                         "tracedb.query_explain",
@@ -504,6 +516,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                 dataset.queries
             )
             disk_bytes_after_workload = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
+            disk_bytes_after_workload_by_top_level = _directory_top_level_bytes(
+                os.environ.get("TRACEDB_HTTP_DATA_DIR")
+            )
             ingest_transaction_count = 1 if ingest_mode == "batch" else len(dataset.records)
             ingest_transaction_total_ms = round(sum(ingest_recorder.latencies_ms), 3)
             if ingest_mode == "per_record":
@@ -554,6 +569,39 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "disk_bytes_after_workload": disk_bytes_after_workload,
                 }
             )
+            metrics.update(
+                _recorder_metric_fields("query_phase", query_phase_recorders)
+            )
+            metrics.update(
+                _recorder_metric_fields(
+                    "query_access_path",
+                    {
+                        f"{access_path}_build": recorder
+                        for access_path, recorder in query_access_path_build_recorders.items()
+                    },
+                )
+            )
+            metrics.update(
+                _recorder_metric_fields(
+                    "query_access_path",
+                    {
+                        f"{access_path}_open": recorder
+                        for access_path, recorder in query_access_path_open_recorders.items()
+                    },
+                )
+            )
+            metrics.update(
+                _top_level_byte_metric_fields(
+                    "disk_bytes_after_ingest",
+                    disk_bytes_after_ingest_by_top_level,
+                )
+            )
+            metrics.update(
+                _top_level_byte_metric_fields(
+                    "disk_bytes_after_workload",
+                    disk_bytes_after_workload_by_top_level,
+                )
+            )
             notes = [
                 "TraceDB HTTP/curl records/query/delete smoke passed",
                 ingest_mode_note,
@@ -571,6 +619,22 @@ class TraceDbAdapter(BenchmarkAdapter):
                 notes.append(
                     "TraceDB HTTP data directory bytes measured after ingest: "
                     f"{disk_bytes_after_ingest}; after workload: {disk_bytes_after_workload}"
+                )
+            if query_phase_recorders or query_access_path_build_recorders:
+                notes.append(
+                    "TraceDB HTTP query phase attribution recorded: "
+                    f"phases={len(query_phase_recorders)}; "
+                    f"access_paths={len(query_access_path_build_recorders)}"
+                )
+            if disk_bytes_after_ingest_by_top_level:
+                notes.append(
+                    "TraceDB HTTP storage attribution recorded: "
+                    + ", ".join(
+                        f"{name}={bytes_value}"
+                        for name, bytes_value in sorted(
+                            disk_bytes_after_ingest_by_top_level.items()
+                        )
+                    )
                 )
             return notes, metrics
         except Exception as error:
@@ -622,3 +686,91 @@ def _directory_bytes(path_value: str | None) -> int:
         except OSError:
             continue
     return total
+
+
+def _directory_top_level_bytes(path_value: str | None) -> dict[str, int]:
+    if not path_value:
+        return {}
+    root = Path(path_value)
+    if not root.exists():
+        return {}
+    totals: dict[str, int] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts:
+            continue
+        top_level = _metric_token(relative.parts[0])
+        totals[top_level] = totals.get(top_level, 0) + size
+    return totals
+
+
+def _record_explain_timing_metrics(
+    explain: dict[str, Any],
+    phase_recorders: dict[str, MetricRecorder],
+    access_path_build_recorders: dict[str, MetricRecorder],
+    access_path_open_recorders: dict[str, MetricRecorder],
+) -> None:
+    for phase_timing in explain.get("phase_timings", []):
+        if not isinstance(phase_timing, dict):
+            continue
+        phase = _metric_token(str(phase_timing.get("phase", "")))
+        if not phase:
+            continue
+        elapsed_ms = _float_metric(phase_timing.get("elapsed_ms"))
+        if elapsed_ms is None:
+            continue
+        phase_recorders.setdefault(phase, MetricRecorder()).latencies_ms.append(elapsed_ms)
+    for access_path_timing in explain.get("access_path_timings", []):
+        if not isinstance(access_path_timing, dict):
+            continue
+        access_path = _metric_token(str(access_path_timing.get("access_path_id", "")))
+        if not access_path:
+            continue
+        build_ms = _float_metric(access_path_timing.get("build_ms"))
+        if build_ms is not None:
+            access_path_build_recorders.setdefault(
+                access_path, MetricRecorder()
+            ).latencies_ms.append(build_ms)
+        open_ms = _float_metric(access_path_timing.get("open_ms"))
+        if open_ms is not None:
+            access_path_open_recorders.setdefault(
+                access_path, MetricRecorder()
+            ).latencies_ms.append(open_ms)
+
+
+def _recorder_metric_fields(
+    prefix: str, recorders: dict[str, MetricRecorder]
+) -> dict[str, float | int]:
+    fields: dict[str, float | int] = {}
+    for name, recorder in sorted(recorders.items()):
+        fields[f"{prefix}_{name}_count"] = len(recorder.latencies_ms)
+        for key, value in recorder.summary().items():
+            fields[f"{prefix}_{name}_{key}"] = value
+    return fields
+
+
+def _top_level_byte_metric_fields(prefix: str, values: dict[str, int]) -> dict[str, int]:
+    return {f"{prefix}_{name}": bytes_value for name, bytes_value in sorted(values.items())}
+
+
+def _metric_token(value: str) -> str:
+    token = "".join(character.lower() if character.isalnum() else "_" for character in value)
+    return "_".join(part for part in token.split("_") if part)
+
+
+def _float_metric(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

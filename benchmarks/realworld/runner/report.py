@@ -236,11 +236,25 @@ def _best_metric(
         numeric = float(value)
         if require_positive and numeric <= 0:
             continue
-        candidates.append((numeric, baseline.get("name", "unknown")))
+        candidates.append(
+            (
+                numeric,
+                baseline.get("name", "unknown"),
+                baseline.get("scenario_id"),
+                baseline.get("artifact_dir"),
+            )
+        )
     if not candidates:
-        return {"baseline": None, "value": None}
-    value, name = (min if lower_is_better else max)(candidates, key=lambda item: item[0])
-    return {"baseline": name, "value": value}
+        return {"baseline": None, "value": None, "source_metric": metric}
+    value, name, scenario_id, artifact_dir = (min if lower_is_better else max)(
+        candidates, key=lambda item: item[0]
+    )
+    result = {"baseline": name, "value": value, "source_metric": metric}
+    if scenario_id is not None:
+        result["scenario_id"] = scenario_id
+    if artifact_dir is not None:
+        result["artifact_dir"] = artifact_dir
+    return result
 
 
 def _control_status_sentence(report: dict[str, Any]) -> str:
