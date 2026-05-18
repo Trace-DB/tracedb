@@ -70,6 +70,126 @@ class FakeQdrant:
         return Handler
 
 
+class FakeTraceDb:
+    def __init__(self) -> None:
+        self.records: dict[tuple[str, str, str], dict] = {}
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def base_url(self) -> str:
+        host, port = self.server.server_address
+        return f"http://{host}:{port}"
+
+    def start(self) -> "FakeTraceDb":
+        self.thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def _handler(self):
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+            def _payload(self) -> dict:
+                length = int(self.headers.get("content-length", "0"))
+                if length == 0:
+                    return {}
+                return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+            def _json(self, status: int, payload: dict) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:
+                if self.path == "/ready":
+                    self._json(200, {"ok": True})
+                    return
+                self._json(404, {"error": "not found"})
+
+            def do_POST(self) -> None:
+                payload = self._payload()
+                if self.path == "/v1/schema/apply":
+                    self._json(200, {"ok": True})
+                    return
+                if self.path == "/v1/records/put":
+                    key = (payload["table"], payload["tenant_id"], payload["id"])
+                    owner.records[key] = {
+                        "table": payload["table"],
+                        "tenant_id": payload["tenant_id"],
+                        "record_id": payload["id"],
+                        "fields": dict(payload.get("fields", {})),
+                        "deleted": False,
+                    }
+                    self._json(200, {"epoch": len(owner.records)})
+                    return
+                if self.path == "/v1/records/get":
+                    key = (payload["table"], payload["tenant_id"], payload["id"])
+                    record = owner.records.get(key)
+                    self._json(
+                        200,
+                        {"record": None if record is None or record["deleted"] else record},
+                    )
+                    return
+                if self.path == "/v1/records/patch":
+                    key = (payload["table"], payload["tenant_id"], payload["id"])
+                    owner.records[key]["fields"].update(payload.get("fields", {}))
+                    self._json(200, {"epoch": len(owner.records) + 1})
+                    return
+                if self.path == "/v1/query":
+                    results = []
+                    for record in owner.records.values():
+                        if record["deleted"]:
+                            continue
+                        fields = record["fields"]
+                        if record["table"] != payload["table"]:
+                            continue
+                        if record["tenant_id"] != payload["tenant_id"]:
+                            continue
+                        if fields.get("category") != payload.get("scalar_eq", {}).get("category"):
+                            continue
+                        results.append({"record_id": record["record_id"]})
+                    self._json(
+                        200,
+                        {
+                            "results": results[: int(payload.get("top_k", 5))],
+                            "explain": {
+                                "opened_candidate_streams": ["LexicalPath"],
+                                "fusion_method": "fake",
+                                "freshness_mode": payload.get("freshness", "AllowDirty"),
+                                "scalar_filter_applied": True,
+                                "tenant_mask_visible_records": len(results),
+                                "scalar_filter_visible_records": len(results),
+                                "scalar_filter_removed_records": 0,
+                                "candidate_budget": payload.get("top_k", 5),
+                                "returned_count": len(results[: int(payload.get("top_k", 5))]),
+                            },
+                        },
+                    )
+                    return
+                if self.path in {"/v1/admin/compact", "/v1/admin/snapshot", "/v1/admin/restore"}:
+                    self._json(200, {"ok": True})
+                    return
+                if self.path == "/v1/records/delete":
+                    key = (payload["table"], payload["tenant_id"], payload["id"])
+                    owner.records[key]["deleted"] = True
+                    self._json(200, {"epoch": len(owner.records) + 2})
+                    return
+                self._json(404, {"error": "not found"})
+
+        return Handler
+
+
 class AdapterHardeningTests(unittest.TestCase):
     def test_external_qrels_loaders_use_current_hf_configs(self) -> None:
         class FakeDataset(list):
@@ -358,6 +478,38 @@ class AdapterHardeningTests(unittest.TestCase):
             any("cli_command_count=4" in note for note in result["notes"]),
             result["notes"],
         )
+
+    def test_tracedb_http_surface_reports_split_admin_metrics(self) -> None:
+        fake = FakeTraceDb().start()
+        old_url = os.environ.get("TRACEDB_HTTP_URL")
+        try:
+            os.environ["TRACEDB_HTTP_URL"] = fake.base_url
+            result = TraceDbAdapter().run(
+                generated_dataset(12, 42),
+                RunConfig(
+                    profile="smoke",
+                    target=["tracedb"],
+                    surfaces=["http"],
+                    require_services=False,
+                    repo_root=".",
+                    run_id="admin-split",
+                ),
+            )
+        finally:
+            if old_url is None:
+                os.environ.pop("TRACEDB_HTTP_URL", None)
+            else:
+                os.environ["TRACEDB_HTTP_URL"] = old_url
+            fake.stop()
+
+        self.assertTrue(result["available"], result["notes"])
+        self.assertEqual(result["metrics"]["admin_compact_count"], 1)
+        self.assertEqual(result["metrics"]["admin_snapshot_count"], 1)
+        self.assertEqual(result["metrics"]["admin_restore_count"], 1)
+        self.assertIn("admin_latency_p95_ms", result["metrics"])
+        self.assertIn("admin_compact_latency_p95_ms", result["metrics"])
+        self.assertIn("admin_snapshot_latency_p95_ms", result["metrics"])
+        self.assertIn("admin_restore_latency_p95_ms", result["metrics"])
 
     def test_generated_dataset_labels_are_marked_operational_smoke(self) -> None:
         dataset = generated_dataset(24, 42)

@@ -189,6 +189,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             ingest_recorder = MetricRecorder()
             query_recorder = MetricRecorder()
             admin_recorder = MetricRecorder()
+            admin_compact_recorder = MetricRecorder()
+            admin_snapshot_recorder = MetricRecorder()
+            admin_restore_recorder = MetricRecorder()
 
             def timed(recorder_for_operation: MetricRecorder, operation):
                 return recorder.timed(lambda: recorder_for_operation.timed(operation))
@@ -362,7 +365,9 @@ class TraceDbAdapter(BenchmarkAdapter):
 
             timed(
                 admin_recorder,
-                lambda: call("compact", "POST", "/v1/admin/compact", {}, timeout=admin_timeout),
+                lambda: admin_compact_recorder.timed(
+                    lambda: call("compact", "POST", "/v1/admin/compact", {}, timeout=admin_timeout)
+                ),
             )
             if self._is_local_http_url(base_url):
                 with tempfile.TemporaryDirectory(prefix="tracedb-bench-http-snapshot-") as temp_dir:
@@ -370,22 +375,26 @@ class TraceDbAdapter(BenchmarkAdapter):
                     restore_dir = str(Path(temp_dir) / "restore")
                     timed(
                         admin_recorder,
-                        lambda: call(
-                            "snapshot",
-                            "POST",
-                            "/v1/admin/snapshot",
-                            {"target": snapshot_dir},
-                            timeout=admin_timeout,
+                        lambda: admin_snapshot_recorder.timed(
+                            lambda: call(
+                                "snapshot",
+                                "POST",
+                                "/v1/admin/snapshot",
+                                {"target": snapshot_dir},
+                                timeout=admin_timeout,
+                            )
                         ),
                     )
                     timed(
                         admin_recorder,
-                        lambda: call(
-                            "restore",
-                            "POST",
-                            "/v1/admin/restore",
-                            {"source": snapshot_dir, "target": restore_dir},
-                            timeout=admin_timeout,
+                        lambda: admin_restore_recorder.timed(
+                            lambda: call(
+                                "restore",
+                                "POST",
+                                "/v1/admin/restore",
+                                {"source": snapshot_dir, "target": restore_dir},
+                                timeout=admin_timeout,
+                            )
                         ),
                     )
             else:
@@ -396,22 +405,26 @@ class TraceDbAdapter(BenchmarkAdapter):
                 restore_dir = f"{snapshot_root}/{table}/restore"
                 timed(
                     admin_recorder,
-                    lambda: call(
-                        "snapshot",
-                        "POST",
-                        "/v1/admin/snapshot",
-                        {"target": snapshot_dir},
-                        timeout=admin_timeout,
+                    lambda: admin_snapshot_recorder.timed(
+                        lambda: call(
+                            "snapshot",
+                            "POST",
+                            "/v1/admin/snapshot",
+                            {"target": snapshot_dir},
+                            timeout=admin_timeout,
+                        )
                     ),
                 )
                 timed(
                     admin_recorder,
-                    lambda: call(
-                        "restore",
-                        "POST",
-                        "/v1/admin/restore",
-                        {"source": snapshot_dir, "target": restore_dir},
-                        timeout=admin_timeout,
+                    lambda: admin_restore_recorder.timed(
+                        lambda: call(
+                            "restore",
+                            "POST",
+                            "/v1/admin/restore",
+                            {"source": snapshot_dir, "target": restore_dir},
+                            timeout=admin_timeout,
+                        )
                     ),
                 )
 
@@ -445,6 +458,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                 ("ingest", ingest_recorder.summary()),
                 ("query", query_recorder.summary()),
                 ("admin", admin_recorder.summary()),
+                ("admin_compact", admin_compact_recorder.summary()),
+                ("admin_snapshot", admin_snapshot_recorder.summary()),
+                ("admin_restore", admin_restore_recorder.summary()),
             ]:
                 metrics.update(
                     {
@@ -463,6 +479,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                 {
                     "ingest_count": len(dataset.records),
                     "query_count": len(dataset.queries),
+                    "admin_compact_count": len(admin_compact_recorder.latencies_ms),
+                    "admin_snapshot_count": len(admin_snapshot_recorder.latencies_ms),
+                    "admin_restore_count": len(admin_restore_recorder.latencies_ms),
                     "failure_count": 0,
                     "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
                     "same_file_recall_at_5": round(sum(same_file_recalls) / len(same_file_recalls), 3) if same_file_recalls else 0.0,
