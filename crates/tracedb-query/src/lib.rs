@@ -552,7 +552,7 @@ impl TraceDb {
             .clone();
         let epoch = self.manifest.latest_epoch.next();
         let mut staged = self.store.clone();
-        staged.apply_replacement(&schema, &input, epoch)?;
+        staged.apply_replacement_without_return(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
@@ -595,7 +595,7 @@ impl TraceDb {
                 .table(&input.table)
                 .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
                 .clone();
-            staged.apply_replacement(&schema, input, epoch)?;
+            staged.apply_replacement_without_return(&schema, input, epoch)?;
             feature_invalidations.extend(feature_invalidations_for_mutation(&schema, input));
             for event in module_events_for_schema("record.put", &schema) {
                 if seen_module_events.insert((event.module_id.clone(), event.event.clone())) {
@@ -660,7 +660,7 @@ impl TraceDb {
 
         let store_apply_started = Instant::now();
         for (input, schema) in request.records.iter().zip(schemas.iter()) {
-            staged.apply_replacement(schema, input, epoch)?;
+            staged.apply_replacement_without_return(schema, input, epoch)?;
         }
         let store_apply_ms = elapsed_ms(store_apply_started);
 
@@ -749,7 +749,7 @@ impl TraceDb {
         let mut staged = self.store.clone();
         let store_clone_ms = elapsed_ms(store_clone_started);
         let store_apply_started = Instant::now();
-        staged.apply_replacement(&schema, &input, epoch)?;
+        staged.apply_replacement_without_return(&schema, &input, epoch)?;
         let store_apply_ms = elapsed_ms(store_apply_started);
         let feature_invalidation_started = Instant::now();
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);

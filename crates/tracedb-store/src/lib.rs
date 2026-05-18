@@ -120,16 +120,24 @@ impl RecordStore {
         input: &RecordInput,
         epoch: Epoch,
     ) -> Result<StoredRecord> {
-        validate_record_identity(schema, input, None)?;
-        validate_vector_dimensions(schema, input)?;
-        let tenant_id = if input.tenant_id.is_empty() {
-            return Err(TraceDbError::InvalidRecord(
-                "tenant id cannot be empty".to_string(),
-            ));
-        } else {
-            input.tenant_id.clone()
-        };
-        let key = record_key(&input.table, &tenant_id, &input.id);
+        let (key, record) = build_replacement_record(schema, input, epoch)?;
+        let returned = record.clone();
+        self.install_replacement(key, record, epoch);
+        Ok(returned)
+    }
+
+    pub fn apply_replacement_without_return(
+        &mut self,
+        schema: &TableSchema,
+        input: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<()> {
+        let (key, record) = build_replacement_record(schema, input, epoch)?;
+        self.install_replacement(key, record, epoch);
+        Ok(())
+    }
+
+    fn install_replacement(&mut self, key: String, record: StoredRecord, epoch: Epoch) {
         let versions = self.versions.entry(key).or_default();
 
         if let Some(current) = versions
@@ -140,34 +148,7 @@ impl RecordStore {
             current.header.end_epoch = Some(epoch);
         }
 
-        let mut fields = input.fields.clone();
-        fields.insert(
-            schema.primary_id_column.clone(),
-            Value::String(input.id.clone()),
-        );
-        fields.insert(
-            schema.tenant_id_column.clone(),
-            Value::String(tenant_id.clone()),
-        );
-        validate_record_identity(schema, input, Some(&fields))?;
-
-        let features = build_features(schema, input, &fields, None, epoch);
-        let record = StoredRecord {
-            header: RecordHeader {
-                record_id: input.id.clone(),
-                table_id: input.table.clone(),
-                tenant_id,
-                schema_version: 1,
-                begin_epoch: epoch,
-                end_epoch: None,
-                version_id: VersionId::new(epoch.get()),
-                tombstone: None,
-            },
-            fields,
-            features,
-        };
-        versions.push(record.clone());
-        Ok(record)
+        versions.push(record);
     }
 
     pub fn apply_mutation(
@@ -573,6 +554,51 @@ fn visible_record_at(versions: &[StoredRecord], epoch: Epoch) -> Option<StoredRe
         .cloned()
 }
 
+fn build_replacement_record(
+    schema: &TableSchema,
+    input: &RecordInput,
+    epoch: Epoch,
+) -> Result<(String, StoredRecord)> {
+    validate_record_identity(schema, input, None)?;
+    validate_vector_dimensions(schema, input)?;
+    let tenant_id = if input.tenant_id.is_empty() {
+        return Err(TraceDbError::InvalidRecord(
+            "tenant id cannot be empty".to_string(),
+        ));
+    } else {
+        input.tenant_id.clone()
+    };
+    let key = record_key(&input.table, &tenant_id, &input.id);
+
+    let mut fields = input.fields.clone();
+    fields.insert(
+        schema.primary_id_column.clone(),
+        Value::String(input.id.clone()),
+    );
+    fields.insert(
+        schema.tenant_id_column.clone(),
+        Value::String(tenant_id.clone()),
+    );
+    validate_record_identity(schema, input, Some(&fields))?;
+
+    let features = build_features(schema, input, &fields, None, epoch);
+    let record = StoredRecord {
+        header: RecordHeader {
+            record_id: input.id.clone(),
+            table_id: input.table.clone(),
+            tenant_id,
+            schema_version: 1,
+            begin_epoch: epoch,
+            end_epoch: None,
+            version_id: VersionId::new(epoch.get()),
+            tombstone: None,
+        },
+        fields,
+        features,
+    };
+    Ok((key, record))
+}
+
 fn build_features(
     schema: &TableSchema,
     mutation: &RecordInput,
@@ -634,9 +660,7 @@ fn build_features(
 fn validate_vector_dimensions(schema: &TableSchema, mutation: &RecordInput) -> Result<()> {
     for vector in &schema.vector_columns {
         if let Some(value) = mutation.fields.get(&vector.name) {
-            let actual = value_as_f32_vec(value)
-                .map(|values| values.len())
-                .unwrap_or(0);
+            let actual = vector_dimension_count(value).unwrap_or(0);
             if actual != vector.dimensions {
                 return Err(TraceDbError::InvalidVectorDimensions {
                     column: vector.name.clone(),
@@ -647,6 +671,15 @@ fn validate_vector_dimensions(schema: &TableSchema, mutation: &RecordInput) -> R
         }
     }
     Ok(())
+}
+
+fn vector_dimension_count(value: &Value) -> Option<usize> {
+    let array = value.as_array()?;
+    if array.iter().all(|item| item.as_f64().is_some()) {
+        Some(array.len())
+    } else {
+        None
+    }
 }
 
 fn validate_record_identity(
@@ -782,5 +815,37 @@ mod tests {
         let tenant_b = store.visible_records_at("docs", "tenant-b", Epoch::new(3));
         assert_eq!(tenant_b.len(), 1);
         assert_eq!(tenant_b[0].header.record_id, "b");
+    }
+
+    #[test]
+    fn apply_replacement_without_return_preserves_visible_replacement_behavior() {
+        let schema = schema();
+        let mut store = RecordStore::default();
+        store
+            .apply_replacement(&schema, &record("a", "tenant-a"), Epoch::new(1))
+            .expect("insert original");
+        let mut replacement = record("a", "tenant-a");
+        replacement.fields.insert(
+            "body".to_string(),
+            Value::String("tenant-a replacement".to_string()),
+        );
+
+        store
+            .apply_replacement_without_return(&schema, &replacement, Epoch::new(2))
+            .expect("replace without returned clone");
+
+        let old_epoch = store.visible_records_at("docs", "tenant-a", Epoch::new(1));
+        assert_eq!(old_epoch.len(), 1);
+        assert_eq!(
+            old_epoch[0].fields.get("body"),
+            Some(&Value::String("tenant-a a".to_string()))
+        );
+
+        let new_epoch = store.visible_records_at("docs", "tenant-a", Epoch::new(2));
+        assert_eq!(new_epoch.len(), 1);
+        assert_eq!(
+            new_epoch[0].fields.get("body"),
+            Some(&Value::String("tenant-a replacement".to_string()))
+        );
     }
 }
