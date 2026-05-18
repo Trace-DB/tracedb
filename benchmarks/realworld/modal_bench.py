@@ -39,10 +39,17 @@ QDRANT_RELEASE_URL = (
     f"https://github.com/qdrant/qdrant/releases/download/{QDRANT_VERSION}/"
     "qdrant-x86_64-unknown-linux-musl.tar.gz"
 )
+OPENSEARCH_VERSION = "2.18.0"
+OPENSEARCH_RELEASE_URL = (
+    "https://artifacts.opensearch.org/releases/bundle/opensearch/"
+    f"{OPENSEARCH_VERSION}/opensearch-{OPENSEARCH_VERSION}-linux-x64.tar.gz"
+)
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
 PGVECTOR_DSN_ENV = "BENCH_PGVECTOR_DSN"
 QDRANT_URL_ENV = "BENCH_QDRANT_URL"
 QDRANT_STORAGE_DIR_ENV = "BENCH_QDRANT_STORAGE_DIR"
+OPENSEARCH_URL_ENV = "BENCH_OPENSEARCH_URL"
+OPENSEARCH_STORAGE_DIR_ENV = "BENCH_OPENSEARCH_STORAGE_DIR"
 TRACEDB_HTTP_URL_ENV = "TRACEDB_HTTP_URL"
 TRACEDB_HTTP_DATA_DIR_ENV = "TRACEDB_HTTP_DATA_DIR"
 EXTERNAL_CONTROL_TARGETS = {
@@ -106,10 +113,12 @@ class ModalSmokeConfig:
     postgres_control: bool = False
     pgvector_control: bool = False
     qdrant_control: bool = False
+    opensearch_control: bool = False
     tracedb_port: int = 18_080
     postgres_port: int = 25_432
     pgvector_port: int = 25_433
     qdrant_port: int = 26_333
+    opensearch_port: int = 29_200
     modal_app_name: str = DEFAULT_MODAL_APP_NAME
     modal_image_kind: str = "base"
     source_commit: str | None = None
@@ -150,6 +159,10 @@ def validate_config(config: ModalSmokeConfig) -> None:
         raise ValueError("qdrant_control needs allow_external_controls=True")
     if config.qdrant_control and not target_needs_qdrant(config):
         raise ValueError("qdrant_control needs target including qdrant or all")
+    if config.opensearch_control and not config.allow_external_controls:
+        raise ValueError("opensearch_control needs allow_external_controls=True")
+    if config.opensearch_control and not target_needs_opensearch(config):
+        raise ValueError("opensearch_control needs target including opensearch or all")
     ports = []
     if config.tracedb_engine_control:
         ports.append(("tracedb_engine_control", config.tracedb_port))
@@ -159,6 +172,10 @@ def validate_config(config: ModalSmokeConfig) -> None:
         ports.append(("pgvector_control", config.pgvector_port))
     if config.qdrant_control:
         ports.append(("qdrant_control", config.qdrant_port))
+        ports.append(("qdrant_grpc_control", config.qdrant_port + 1))
+    if config.opensearch_control:
+        ports.append(("opensearch_control", config.opensearch_port))
+        ports.append(("opensearch_transport_control", config.opensearch_port + 100))
     seen_ports: dict[int, str] = {}
     for name, port in ports:
         previous = seen_ports.get(port)
@@ -179,17 +196,22 @@ def modal_image_kind_from_flags(
     pgvector_control: bool,
     postgres_control: bool,
     qdrant_control: bool = False,
+    opensearch_control: bool = False,
 ) -> str:
     if tracedb_engine_control and pgvector_control:
         return "tracedb_pgvector"
     if tracedb_engine_control and qdrant_control:
         return "tracedb_qdrant"
+    if tracedb_engine_control and opensearch_control:
+        return "tracedb_opensearch"
     if tracedb_engine_control:
         return "tracedb"
     if pgvector_control:
         return "pgvector"
     if qdrant_control:
         return "qdrant"
+    if opensearch_control:
+        return "opensearch"
     if postgres_control:
         return "postgres"
     return "base"
@@ -204,6 +226,7 @@ def modal_image_kind_from_args(argv: list[str]) -> str:
         pgvector_control="--pgvector-control" in argv,
         postgres_control="--postgres-control" in argv,
         qdrant_control="--qdrant-control" in argv,
+        opensearch_control="--opensearch-control" in argv,
     )
 
 
@@ -213,9 +236,11 @@ def validate_modal_image_kind(kind: str) -> str:
         "postgres",
         "pgvector",
         "qdrant",
+        "opensearch",
         "tracedb",
         "tracedb_pgvector",
         "tracedb_qdrant",
+        "tracedb_opensearch",
     }
     if kind not in valid:
         raise ValueError(f"{MODAL_IMAGE_KIND_ENV} must be one of {', '.join(sorted(valid))}")
@@ -250,6 +275,11 @@ def target_needs_pgvector(config: ModalSmokeConfig) -> bool:
 def target_needs_qdrant(config: ModalSmokeConfig) -> bool:
     targets = requested_targets(config.target)
     return "all" in targets or "qdrant" in targets
+
+
+def target_needs_opensearch(config: ModalSmokeConfig) -> bool:
+    targets = requested_targets(config.target)
+    return "all" in targets or "opensearch" in targets
 
 
 def surface_needs_http(config: ModalSmokeConfig) -> bool:
@@ -319,6 +349,13 @@ def build_runner_env(
         env[QDRANT_STORAGE_DIR_ENV] = str(qdrant_control_data_dir(config))
     elif config.require_services and target_needs_qdrant(config) and not env.get(QDRANT_URL_ENV):
         raise ValueError(f"{QDRANT_URL_ENV} is required for required Qdrant control runs")
+    if config.opensearch_control:
+        env[OPENSEARCH_URL_ENV] = opensearch_control_url(config)
+        env[OPENSEARCH_STORAGE_DIR_ENV] = str(opensearch_control_data_dir(config))
+    elif config.require_services and target_needs_opensearch(config) and not env.get(
+        OPENSEARCH_URL_ENV
+    ):
+        raise ValueError(f"{OPENSEARCH_URL_ENV} is required for required OpenSearch control runs")
     if config.tracedb_engine_control:
         env[TRACEDB_HTTP_URL_ENV] = tracedb_engine_http_url(config)
         env[TRACEDB_HTTP_DATA_DIR_ENV] = str(tracedb_engine_data_dir(config))
@@ -339,6 +376,14 @@ def qdrant_control_url(config: ModalSmokeConfig) -> str:
 
 def qdrant_control_data_dir(config: ModalSmokeConfig) -> Path:
     return Path("/tmp") / f"tracedb-qdrant-{config.run_id}"
+
+
+def opensearch_control_url(config: ModalSmokeConfig) -> str:
+    return f"http://127.0.0.1:{config.opensearch_port}"
+
+
+def opensearch_control_data_dir(config: ModalSmokeConfig) -> Path:
+    return Path("/tmp") / f"tracedb-opensearch-{config.run_id}"
 
 
 def tracedb_engine_http_url(config: ModalSmokeConfig) -> str:
@@ -513,6 +558,7 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
     postgres_service: PostgresControl | None = None
     pgvector_service: PostgresControl | None = None
     qdrant_service: QdrantControl | None = None
+    opensearch_service: OpenSearchControl | None = None
     try:
         if config.tracedb_engine_control:
             tracedb_service = start_tracedb_engine_control(
@@ -525,6 +571,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             pgvector_service = start_pgvector_control(config)
         if config.qdrant_control:
             qdrant_service = start_qdrant_control(config)
+        if config.opensearch_control:
+            opensearch_service = start_opensearch_control(config)
         completed = subprocess.run(
             command,
             cwd=lab_root,
@@ -535,6 +583,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             check=False,
         )
     finally:
+        if opensearch_service is not None:
+            stop_opensearch_control(opensearch_service)
         if qdrant_service is not None:
             stop_qdrant_control(qdrant_service)
         if pgvector_service is not None:
@@ -579,6 +629,14 @@ class TraceDbEngineControl:
 
 @dataclass(frozen=True)
 class QdrantControl:
+    data_dir: Path
+    log_path: Path
+    port: int
+    process: subprocess.Popen[str]
+
+
+@dataclass(frozen=True)
+class OpenSearchControl:
     data_dir: Path
     log_path: Path
     port: int
@@ -679,6 +737,20 @@ def wait_for_qdrant_ready(base_url: str, *, timeout_seconds: float = 30.0) -> No
     raise TimeoutError(f"{base_url}/readyz did not respond before timeout: {last_error}")
 
 
+def wait_for_opensearch_ready(base_url: str, *, timeout_seconds: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(base_url, timeout=1.0) as response:
+                if 200 <= response.status < 300:
+                    return
+        except Exception as error:  # pragma: no cover - exercised in Modal.
+            last_error = error
+        time.sleep(0.25)
+    raise TimeoutError(f"{base_url} did not respond before timeout: {last_error}")
+
+
 def tail_file(path: Path, *, limit: int = 2000) -> str:
     try:
         return path.read_text(encoding="utf-8", errors="replace")[-limit:]
@@ -755,6 +827,114 @@ def start_qdrant_control(config: ModalSmokeConfig) -> QdrantControl:
     return service
 
 
+def start_opensearch_control(config: ModalSmokeConfig) -> OpenSearchControl:
+    data_dir = opensearch_control_data_dir(config)
+    logs_dir = Path("/tmp") / f"tracedb-opensearch-logs-{config.run_id}"
+    log_path = Path("/tmp") / f"tracedb-opensearch-{config.run_id}.log"
+    config_path = opensearch_config_path()
+    install_dir = opensearch_install_dir()
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    if logs_dir.exists():
+        shutil.rmtree(logs_dir)
+    data_dir.mkdir(parents=True)
+    logs_dir.mkdir(parents=True)
+    opensearch_chown(data_dir)
+    opensearch_chown(logs_dir)
+    config_path.write_text(
+        "\n".join(
+            [
+                "cluster.name: tracedb-bench-opensearch",
+                f"node.name: tracedb-opensearch-{config.run_id}",
+                "network.host: 127.0.0.1",
+                f"http.port: {config.opensearch_port}",
+                f"transport.port: {config.opensearch_port + 100}",
+                "discovery.type: single-node",
+                "node.store.allow_mmap: false",
+                f"path.data: {data_dir}",
+                f"path.logs: {logs_dir}",
+                "plugins.security.disabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    opensearch_chown(config_path)
+    env = os.environ.copy()
+    env["OPENSEARCH_JAVA_OPTS"] = "-Xms512m -Xmx512m"
+    with log_path.open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(
+            [str(install_dir / "bin" / "opensearch")],
+            cwd=install_dir,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+            preexec_fn=opensearch_preexec_fn(),
+        )
+    service = OpenSearchControl(
+        data_dir=data_dir,
+        log_path=log_path,
+        port=config.opensearch_port,
+        process=process,
+    )
+    try:
+        wait_for_opensearch_ready(opensearch_control_url(config))
+    except Exception:
+        stop_opensearch_control(service)
+        raise RuntimeError(
+            f"OpenSearch control failed to become ready; log tail: {tail_file(log_path)}"
+        )
+    return service
+
+
+def opensearch_install_dir() -> Path:
+    override = os.environ.get("OPENSEARCH_HOME")
+    if override:
+        return Path(override)
+    default_dir = Path(f"/opt/opensearch-{OPENSEARCH_VERSION}")
+    if default_dir.exists():
+        return default_dir
+    raise RuntimeError("OpenSearch install directory not found; install OpenSearch in the Modal image")
+
+
+def opensearch_config_path() -> Path:
+    return opensearch_install_dir() / "config" / "opensearch.yml"
+
+
+def opensearch_preexec_fn():
+    try:
+        import grp
+        import pwd
+    except ImportError:  # pragma: no cover - Unix-only in Modal.
+        return None
+    try:
+        user = pwd.getpwnam("opensearch")
+        group = grp.getgrnam("opensearch")
+    except KeyError:
+        return None
+
+    def drop_privileges() -> None:
+        os.setgid(group.gr_gid)
+        os.setuid(user.pw_uid)
+
+    return drop_privileges
+
+
+def opensearch_chown(path: Path) -> None:
+    try:
+        import grp
+        import pwd
+    except ImportError:  # pragma: no cover - Unix-only in Modal.
+        return
+    try:
+        user = pwd.getpwnam("opensearch")
+        group = grp.getgrnam("opensearch")
+    except KeyError:
+        return
+    shutil.chown(path, user=user.pw_name, group=group.gr_name)
+
+
 def qdrant_binary() -> Path:
     override = os.environ.get("QDRANT_BIN")
     if override:
@@ -774,6 +954,17 @@ def stop_qdrant_control(service: QdrantControl) -> None:
     service.process.terminate()
     try:
         service.process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        service.process.kill()
+        service.process.wait(timeout=10)
+
+
+def stop_opensearch_control(service: OpenSearchControl) -> None:
+    if service.process.poll() is not None:
+        return
+    service.process.terminate()
+    try:
+        service.process.wait(timeout=20)
     except subprocess.TimeoutExpired:
         service.process.kill()
         service.process.wait(timeout=10)
@@ -913,10 +1104,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--postgres-control", action="store_true")
     parser.add_argument("--pgvector-control", action="store_true")
     parser.add_argument("--qdrant-control", action="store_true")
+    parser.add_argument("--opensearch-control", action="store_true")
     parser.add_argument("--tracedb-port", type=int, default=18_080)
     parser.add_argument("--postgres-port", type=int, default=25_432)
     parser.add_argument("--pgvector-port", type=int, default=25_433)
     parser.add_argument("--qdrant-port", type=int, default=26_333)
+    parser.add_argument("--opensearch-port", type=int, default=29_200)
     parser.add_argument(
         "--summary-json",
         help="Write the returned Modal benchmark summary to a clean local JSON file.",
@@ -945,16 +1138,19 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         postgres_control=args.postgres_control,
         pgvector_control=args.pgvector_control,
         qdrant_control=args.qdrant_control,
+        opensearch_control=args.opensearch_control,
         tracedb_port=args.tracedb_port,
         postgres_port=args.postgres_port,
         pgvector_port=args.pgvector_port,
         qdrant_port=args.qdrant_port,
+        opensearch_port=args.opensearch_port,
         modal_app_name=modal_app_name(),
         modal_image_kind=modal_image_kind_from_flags(
             tracedb_engine_control=args.tracedb_engine_control,
             pgvector_control=args.pgvector_control,
             postgres_control=args.postgres_control,
             qdrant_control=args.qdrant_control,
+            opensearch_control=args.opensearch_control,
         ),
     )
 
@@ -1089,6 +1285,15 @@ if modal is not None:
             "rm -f /tmp/qdrant.tar.gz"
         )
 
+    def add_opensearch_binary(base_image: modal.Image) -> modal.Image:
+        return base_image.run_commands(
+            "useradd -m -r -s /usr/sbin/nologin opensearch || true && "
+            f"curl -L {OPENSEARCH_RELEASE_URL} -o /tmp/opensearch.tar.gz && "
+            "tar -xzf /tmp/opensearch.tar.gz -C /opt && "
+            f"chown -R opensearch:opensearch /opt/opensearch-{OPENSEARCH_VERSION} && "
+            "rm -f /tmp/opensearch.tar.gz"
+        )
+
     def qdrant_control_image() -> modal.Image:
         return add_repo_source(add_qdrant_binary(modal_base_image()))
 
@@ -1099,18 +1304,32 @@ if modal is not None:
             f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
         )
 
+    def opensearch_control_image() -> modal.Image:
+        return add_repo_source(add_opensearch_binary(modal_base_image()))
+
+    def tracedb_opensearch_control_image() -> modal.Image:
+        return add_repo_source_for_build(
+            add_opensearch_binary(rust_modal_base_image())
+        ).run_commands(
+            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
+        )
+
     def selected_modal_image(kind: str) -> modal.Image:
         kind = validate_modal_image_kind(kind)
         if kind == "tracedb_pgvector":
             return tracedb_pgvector_control_image()
         if kind == "tracedb_qdrant":
             return tracedb_qdrant_control_image()
+        if kind == "tracedb_opensearch":
+            return tracedb_opensearch_control_image()
         if kind == "tracedb":
             return tracedb_engine_image()
         if kind == "pgvector":
             return pgvector_control_image()
         if kind == "qdrant":
             return qdrant_control_image()
+        if kind == "opensearch":
+            return opensearch_control_image()
         if kind == "postgres":
             return modal_image("postgresql", "postgresql-client")
         return modal_image()
@@ -1147,6 +1366,7 @@ if modal is not None:
         postgres_control: bool = False,
         pgvector_control: bool = False,
         qdrant_control: bool = False,
+        opensearch_control: bool = False,
         allow_large: bool = False,
         allow_provider: bool = False,
         summary_json: str = "",
@@ -1167,6 +1387,7 @@ if modal is not None:
             postgres_control=postgres_control,
             pgvector_control=pgvector_control,
             qdrant_control=qdrant_control,
+            opensearch_control=opensearch_control,
             allow_large=allow_large,
             allow_provider=allow_provider,
             modal_app_name=modal_app_name(),

@@ -272,11 +272,68 @@ class ModalBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BENCH_QDRANT_URL"):
             build_runner_env(config, base_env={})
 
+    def test_opensearch_external_control_requires_explicit_guardrails(self) -> None:
+        from modal_bench import (
+            ModalSmokeConfig,
+            build_runner_env,
+            build_suite_command,
+            validate_config,
+        )
+
+        with self.assertRaisesRegex(ValueError, "external controls"):
+            validate_config(ModalSmokeConfig(target="opensearch", opensearch_control=True))
+        with self.assertRaisesRegex(ValueError, "opensearch_control"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="tracedb",
+                    allow_external_controls=True,
+                    opensearch_control=True,
+                )
+            )
+
+        config = ModalSmokeConfig(
+            run_id="modal-opensearch-smoke",
+            target="opensearch",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+            opensearch_control=True,
+            opensearch_port=29_200,
+        )
+
+        validate_config(config)
+        command = build_suite_command(config)
+        env = build_runner_env(config, base_env={"PATH": os.environ.get("PATH", "")})
+
+        self.assertEqual(command[command.index("--target") + 1], "opensearch")
+        self.assertIn("--require-services", command)
+        self.assertEqual(env["BENCH_OPENSEARCH_URL"], "http://127.0.0.1:29200")
+        self.assertEqual(
+            env["BENCH_OPENSEARCH_STORAGE_DIR"],
+            "/tmp/tracedb-opensearch-modal-opensearch-smoke",
+        )
+        self.assertNotIn("BENCH_POSTGRES_DSN", env)
+        self.assertNotIn("BENCH_PGVECTOR_DSN", env)
+        self.assertNotIn("BENCH_QDRANT_URL", env)
+
+    def test_opensearch_external_control_requires_url_when_services_are_required(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_runner_env
+
+        config = ModalSmokeConfig(
+            target="opensearch",
+            scenarios="search_rag_6",
+            allow_external_controls=True,
+            require_services=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "BENCH_OPENSEARCH_URL"):
+            build_runner_env(config, base_env={})
+
     def test_enabled_controls_use_distinct_ports_and_dsns(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env, validate_config
 
         config = ModalSmokeConfig(
-            target="tracedb,postgres,pgvector,qdrant",
+            target="tracedb,postgres,pgvector,qdrant,opensearch",
             surface="http",
             scenarios="search_rag_6",
             allow_external_controls=True,
@@ -285,10 +342,12 @@ class ModalBenchTests(unittest.TestCase):
             postgres_control=True,
             pgvector_control=True,
             qdrant_control=True,
+            opensearch_control=True,
             tracedb_port=18_080,
             postgres_port=25_432,
             pgvector_port=25_433,
             qdrant_port=26_333,
+            opensearch_port=29_200,
         )
 
         validate_config(config)
@@ -303,6 +362,7 @@ class ModalBenchTests(unittest.TestCase):
             "postgresql://tracedb:tracedb@127.0.0.1:25433/tracedb_bench",
         )
         self.assertEqual(env["BENCH_QDRANT_URL"], "http://127.0.0.1:26333")
+        self.assertEqual(env["BENCH_OPENSEARCH_URL"], "http://127.0.0.1:29200")
         self.assertEqual(env["TRACEDB_HTTP_URL"], "http://127.0.0.1:18080")
         with self.assertRaisesRegex(ValueError, "distinct ports"):
             validate_config(
@@ -336,6 +396,17 @@ class ModalBenchTests(unittest.TestCase):
                     qdrant_control=True,
                     pgvector_port=25_433,
                     qdrant_port=25_433,
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "distinct ports"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="qdrant,opensearch",
+                    allow_external_controls=True,
+                    qdrant_control=True,
+                    opensearch_control=True,
+                    qdrant_port=28_998,
+                    opensearch_port=28_999,
                 )
             )
 
@@ -546,6 +617,86 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(
                 run.call_args.kwargs["env"]["BENCH_QDRANT_STORAGE_DIR"],
                 "/tmp/tracedb-qdrant-modal-qdrant-smoke",
+            )
+            self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
+            self.assertIn("--require-services", run.call_args.args[0])
+
+    def test_run_suite_passes_opensearch_env_without_live_opensearch(self) -> None:
+        from modal_bench import ModalSmokeConfig, run_suite_and_bundle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            run_dir = reports / "modal-opensearch-smoke"
+            run_dir.mkdir(parents=True)
+            suite_json = {
+                "suite_id": "modal-opensearch-smoke",
+                "control_status": "external_control_available",
+                "summary": {"failure_count": 0},
+                "control_ledger": {
+                    "available_external_controls": [{"name": "opensearch"}],
+                    "unavailable_external_controls": [],
+                },
+                "number_to_beat": {
+                    "query_p95_ms": {"baseline": "opensearch", "value": 4.0},
+                },
+            }
+            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
+
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": "ok", "stderr": ""},
+            )()
+            config = ModalSmokeConfig(
+                run_id="modal-opensearch-smoke",
+                target="opensearch",
+                scenarios="search_rag_6",
+                reports_dir=str(reports),
+                bundle_dir=str(root / "bundles"),
+                min_free_mb=1_000,
+                allow_external_controls=True,
+                require_services=True,
+                opensearch_control=True,
+            )
+            base_env = {"PATH": os.environ.get("PATH", "")}
+            opensearch_service = type(
+                "OpenSearchControlStub",
+                (),
+                {
+                    "data_dir": root / "opensearch",
+                    "log_path": root / "opensearch.log",
+                    "port": 29200,
+                    "process": None,
+                },
+            )()
+            with patch.dict(os.environ, base_env, clear=True), patch(
+                "modal_bench.git_identity",
+                return_value={"commit": "test", "dirty": False, "status_short": ""},
+            ), patch(
+                "modal_bench.start_opensearch_control", return_value=opensearch_service
+            ) as start_opensearch, patch(
+                "modal_bench.stop_opensearch_control"
+            ) as stop_opensearch, patch(
+                "subprocess.run", return_value=completed
+            ) as run:
+                summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
+
+            start_opensearch.assert_called_once()
+            stop_opensearch.assert_called_once_with(opensearch_service)
+            self.assertEqual(summary["control_status"], "external_control_available")
+            self.assertEqual(summary["available_external_controls"], ["opensearch"])
+            self.assertEqual(
+                summary["number_to_beat"]["query_p95_ms"]["baseline"], "opensearch"
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_OPENSEARCH_URL"],
+                "http://127.0.0.1:29200",
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["BENCH_OPENSEARCH_STORAGE_DIR"],
+                "/tmp/tracedb-opensearch-modal-opensearch-smoke",
             )
             self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
             self.assertIn("--require-services", run.call_args.args[0])
@@ -771,6 +922,10 @@ class ModalBenchTests(unittest.TestCase):
             "qdrant",
         )
         self.assertEqual(
+            modal_image_kind_from_args(["modal_bench.py", "--opensearch-control"]),
+            "opensearch",
+        )
+        self.assertEqual(
             modal_image_kind_from_args(
                 ["modal_bench.py", "--tracedb-engine-control", "--pgvector-control"]
             ),
@@ -782,12 +937,24 @@ class ModalBenchTests(unittest.TestCase):
             ),
             "tracedb_qdrant",
         )
+        self.assertEqual(
+            modal_image_kind_from_args(
+                ["modal_bench.py", "--tracedb-engine-control", "--opensearch-control"]
+            ),
+            "tracedb_opensearch",
+        )
 
     def test_qdrant_modal_release_uses_musl_binary(self) -> None:
         from modal_bench import QDRANT_RELEASE_URL
 
         self.assertIn("unknown-linux-musl", QDRANT_RELEASE_URL)
         self.assertNotIn("unknown-linux-gnu", QDRANT_RELEASE_URL)
+
+    def test_opensearch_modal_release_uses_official_linux_tarball(self) -> None:
+        from modal_bench import OPENSEARCH_RELEASE_URL
+
+        self.assertIn("artifacts.opensearch.org", OPENSEARCH_RELEASE_URL)
+        self.assertIn("linux-x64.tar.gz", OPENSEARCH_RELEASE_URL)
 
     def test_cli_config_can_override_min_free_for_tiny_local_smoke(self) -> None:
         from modal_bench import _parse_args, build_suite_command

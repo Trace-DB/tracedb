@@ -4,6 +4,7 @@ import json
 import os
 import uuid
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from .base import BenchmarkAdapter
@@ -87,6 +88,7 @@ class OpenSearchAdapter(BenchmarkAdapter):
                 ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
                 mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
             metrics = recorder.summary()
+            disk_bytes = _directory_size(os.environ.get("BENCH_OPENSEARCH_STORAGE_DIR"))
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
@@ -95,7 +97,9 @@ class OpenSearchAdapter(BenchmarkAdapter):
                     "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
-                    "disk_bytes": 0,
+                    "disk_bytes": disk_bytes,
+                    "disk_bytes_after_ingest": disk_bytes,
+                    "disk_bytes_after_workload": disk_bytes,
                 }
             )
             return self.ok_result(
@@ -107,3 +111,19 @@ class OpenSearchAdapter(BenchmarkAdapter):
             if config.require_services:
                 raise
             return self.unavailable(f"opensearch unavailable: {error}", dataset)
+
+
+def _directory_size(path_text: str | None) -> int:
+    if not path_text:
+        return 0
+    root = Path(path_text)
+    if not root.exists():
+        return 0
+    total = 0
+    for path in root.rglob("*"):
+        if path.is_file():
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+    return total

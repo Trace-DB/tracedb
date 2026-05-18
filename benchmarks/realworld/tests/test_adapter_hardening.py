@@ -14,6 +14,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from runner.adapters.qdrant import QdrantAdapter
+from runner.adapters.opensearch import OpenSearchAdapter
 from runner.adapters.pgvector import PgVectorAdapter
 from runner.adapters.tracedb import TraceDbAdapter
 from runner.datasets import generated_dataset, load_dataset
@@ -72,6 +73,65 @@ class FakeQdrant:
 
             def do_POST(self) -> None:
                 self._json(200, {"result": []})
+
+        return Handler
+
+
+class FakeOpenSearch:
+    def __init__(self) -> None:
+        self.documents: list[dict[str, object]] = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def base_url(self) -> str:
+        host, port = self.server.server_address
+        return f"http://{host}:{port}"
+
+    def start(self) -> "FakeOpenSearch":
+        self.thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def _handler(self):
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+            def _json(self, status: int, payload: dict) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_PUT(self) -> None:
+                self._json(200, {"acknowledged": True})
+
+            def do_POST(self) -> None:
+                length = int(self.headers.get("content-length", "0"))
+                payload = self.rfile.read(length).decode("utf-8")
+                if self.path.endswith("/_bulk?refresh=true"):
+                    lines = [line for line in payload.splitlines() if line.strip()]
+                    for body_line in lines[1::2]:
+                        owner.documents.append(json.loads(body_line))
+                    self._json(200, {"errors": False})
+                    return
+                if self.path.endswith("/_search"):
+                    hits = [
+                        {"_source": {"record_id": document["record_id"]}}
+                        for document in owner.documents[:5]
+                    ]
+                    self._json(200, {"hits": {"hits": hits}})
+                    return
+                self._json(404, {"error": "not found"})
 
         return Handler
 
@@ -551,6 +611,46 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["disk_bytes"], 1234)
         self.assertEqual(metrics["disk_bytes_after_ingest"], 1234)
         self.assertEqual(metrics["disk_bytes_after_workload"], 1234)
+
+    def test_opensearch_reports_query_and_storage_metrics(self) -> None:
+        fake = FakeOpenSearch().start()
+        old_url = os.environ.get("BENCH_OPENSEARCH_URL")
+        old_storage_dir = os.environ.get("BENCH_OPENSEARCH_STORAGE_DIR")
+        os.environ["BENCH_OPENSEARCH_URL"] = fake.base_url
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                storage_dir = Path(temp_dir)
+                (storage_dir / "nodes" / "0").mkdir(parents=True)
+                (storage_dir / "nodes" / "0" / "segment.bin").write_bytes(b"x" * 2048)
+                os.environ["BENCH_OPENSEARCH_STORAGE_DIR"] = str(storage_dir)
+
+                result = OpenSearchAdapter().run(
+                    generated_dataset(12, 42),
+                    RunConfig(
+                        profile="smoke",
+                        target=["opensearch"],
+                        surfaces=["sdk"],
+                        require_services=False,
+                        repo_root=".",
+                    ),
+                )
+        finally:
+            if old_url is None:
+                os.environ.pop("BENCH_OPENSEARCH_URL", None)
+            else:
+                os.environ["BENCH_OPENSEARCH_URL"] = old_url
+            if old_storage_dir is None:
+                os.environ.pop("BENCH_OPENSEARCH_STORAGE_DIR", None)
+            else:
+                os.environ["BENCH_OPENSEARCH_STORAGE_DIR"] = old_storage_dir
+            fake.stop()
+
+        metrics = result["metrics"]
+        self.assertTrue(result["available"], result["notes"])
+        self.assertIn("latency_p95_ms", metrics)
+        self.assertEqual(metrics["disk_bytes"], 2048)
+        self.assertEqual(metrics["disk_bytes_after_ingest"], 2048)
+        self.assertEqual(metrics["disk_bytes_after_workload"], 2048)
 
     def test_pgvector_reports_ingest_query_and_storage_metrics(self) -> None:
         fake_psycopg = FakePsycopg(storage_bytes=65_536)
