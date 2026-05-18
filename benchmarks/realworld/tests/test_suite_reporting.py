@@ -226,6 +226,7 @@ class SuiteReportingTests(unittest.TestCase):
 
         attribution = suite["tracedb_attribution"][0]
         self.assertEqual(attribution["scenario_id"], "search_rag_6")
+        self.assertNotIn("latency_p95_ms", attribution["query"])
         self.assertEqual(attribution["query"]["query_latency_p95_ms"], 3.5)
         self.assertEqual(
             attribution["query_phases"]["access_path_build_latency_p95_ms"],

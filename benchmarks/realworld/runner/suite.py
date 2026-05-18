@@ -535,7 +535,6 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
                 "query": {
                     key: metrics[key]
                     for key in [
-                        "latency_p95_ms",
                         "query_latency_p50_ms",
                         "query_latency_p95_ms",
                         "query_latency_p99_ms",
