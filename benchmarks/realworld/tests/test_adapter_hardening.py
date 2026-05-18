@@ -645,7 +645,14 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("admin_compact_latency_p95_ms", result["metrics"])
         self.assertIn("admin_snapshot_latency_p95_ms", result["metrics"])
         self.assertIn("admin_restore_latency_p95_ms", result["metrics"])
+        self.assertEqual(result["metrics"]["freshness_query_count"], 2)
+        self.assertIn("freshness_query_latency_p95_ms", result["metrics"])
         self.assertGreaterEqual(result["metrics"]["disk_bytes"], 128)
+        self.assertEqual(
+            result["metrics"]["disk_bytes"],
+            result["metrics"]["disk_bytes_after_ingest"],
+        )
+        self.assertGreaterEqual(result["metrics"]["disk_bytes_after_workload"], 128)
         self.assertTrue(
             any("data directory bytes measured" in note for note in result["notes"]),
             result["notes"],

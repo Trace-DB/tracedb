@@ -215,16 +215,19 @@ class ModalBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BENCH_PGVECTOR_DSN"):
             build_runner_env(config, base_env={})
 
-    def test_postgres_and_pgvector_controls_use_distinct_ports_and_dsns(self) -> None:
+    def test_enabled_controls_use_distinct_ports_and_dsns(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env, validate_config
 
         config = ModalSmokeConfig(
-            target="postgres,pgvector",
+            target="tracedb,postgres,pgvector",
+            surface="http",
             scenarios="search_rag_6",
             allow_external_controls=True,
             require_services=True,
+            tracedb_engine_control=True,
             postgres_control=True,
             pgvector_control=True,
+            tracedb_port=18_080,
             postgres_port=25_432,
             pgvector_port=25_433,
         )
@@ -240,6 +243,7 @@ class ModalBenchTests(unittest.TestCase):
             env["BENCH_PGVECTOR_DSN"],
             "postgresql://tracedb:tracedb@127.0.0.1:25433/tracedb_bench",
         )
+        self.assertEqual(env["TRACEDB_HTTP_URL"], "http://127.0.0.1:18080")
         with self.assertRaisesRegex(ValueError, "distinct ports"):
             validate_config(
                 ModalSmokeConfig(
@@ -249,6 +253,18 @@ class ModalBenchTests(unittest.TestCase):
                     pgvector_control=True,
                     postgres_port=25_432,
                     pgvector_port=25_432,
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "distinct ports"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="tracedb,pgvector",
+                    surface="http",
+                    allow_external_controls=True,
+                    tracedb_engine_control=True,
+                    pgvector_control=True,
+                    tracedb_port=25_433,
+                    pgvector_port=25_433,
                 )
             )
 

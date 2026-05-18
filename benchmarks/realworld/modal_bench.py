@@ -134,12 +134,19 @@ def validate_config(config: ModalSmokeConfig) -> None:
         raise ValueError("pgvector_control needs allow_external_controls=True")
     if config.pgvector_control and not target_needs_pgvector(config):
         raise ValueError("pgvector_control needs target including pgvector or all")
-    if (
-        config.postgres_control
-        and config.pgvector_control
-        and config.postgres_port == config.pgvector_port
-    ):
-        raise ValueError("postgres_control and pgvector_control need distinct ports")
+    ports = []
+    if config.tracedb_engine_control:
+        ports.append(("tracedb_engine_control", config.tracedb_port))
+    if config.postgres_control:
+        ports.append(("postgres_control", config.postgres_port))
+    if config.pgvector_control:
+        ports.append(("pgvector_control", config.pgvector_port))
+    seen_ports: dict[int, str] = {}
+    for name, port in ports:
+        previous = seen_ports.get(port)
+        if previous is not None:
+            raise ValueError(f"{previous} and {name} need distinct ports")
+        seen_ports[port] = name
     if config.min_free_mb < 1_000:
         raise ValueError("min_free_mb is too low for reproducible report artifact runs")
 
@@ -584,7 +591,7 @@ def wait_for_http_ready(base_url: str, *, timeout_seconds: float = 30.0) -> None
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(f"{base_url}/ready", timeout=1.0) as response:
-                if 200 <= response.status < 500:
+                if 200 <= response.status < 300:
                     return
         except Exception as error:  # pragma: no cover - exercised in Modal.
             last_error = error

@@ -188,6 +188,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             recorder = MetricRecorder()
             ingest_recorder = MetricRecorder()
             query_recorder = MetricRecorder()
+            freshness_query_recorder = MetricRecorder()
             admin_recorder = MetricRecorder()
             admin_compact_recorder = MetricRecorder()
             admin_snapshot_recorder = MetricRecorder()
@@ -215,6 +216,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             )
             if fresh_get.get("record") is None:
                 return ["surface unavailable: TraceDB HTTP fresh write was not visible"], None
+            disk_bytes_after_ingest = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
             isolated_get = call(
                 "tenant isolation get",
                 "POST",
@@ -345,7 +347,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 query = dataset.queries[0]
                 for freshness in ["Strict", "Lazy"]:
                     timed(
-                        query_recorder,
+                        freshness_query_recorder,
                         lambda query=query, freshness=freshness: call(
                             f"query {freshness.lower()}",
                             "POST",
@@ -457,6 +459,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             for prefix, operation_summary in [
                 ("ingest", ingest_recorder.summary()),
                 ("query", query_recorder.summary()),
+                ("freshness_query", freshness_query_recorder.summary()),
                 ("admin", admin_recorder.summary()),
                 ("admin_compact", admin_compact_recorder.summary()),
                 ("admin_snapshot", admin_snapshot_recorder.summary()),
@@ -475,11 +478,12 @@ class TraceDbAdapter(BenchmarkAdapter):
             category_filter_applied = bool(dataset.queries) and scalar_filter_applied_count == len(
                 dataset.queries
             )
-            disk_bytes = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
+            disk_bytes_after_workload = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
                     "query_count": len(dataset.queries),
+                    "freshness_query_count": len(freshness_query_recorder.latencies_ms),
                     "admin_compact_count": len(admin_compact_recorder.latencies_ms),
                     "admin_snapshot_count": len(admin_snapshot_recorder.latencies_ms),
                     "admin_restore_count": len(admin_restore_recorder.latencies_ms),
@@ -496,7 +500,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "category_filter_applied": category_filter_applied,
                     "off_category_result_count": off_category_result_count,
                     "queries_with_off_category_results_count": queries_with_off_category_results,
-                    "disk_bytes": disk_bytes,
+                    "disk_bytes": disk_bytes_after_ingest,
+                    "disk_bytes_after_ingest": disk_bytes_after_ingest,
+                    "disk_bytes_after_workload": disk_bytes_after_workload,
                 }
             )
             notes = [
@@ -511,8 +517,11 @@ class TraceDbAdapter(BenchmarkAdapter):
                 f"off_category_result_count={off_category_result_count}; "
                 f"queries_with_off_category_results={queries_with_off_category_results}",
             ]
-            if disk_bytes > 0:
-                notes.append(f"TraceDB HTTP data directory bytes measured: {disk_bytes}")
+            if disk_bytes_after_ingest > 0:
+                notes.append(
+                    "TraceDB HTTP data directory bytes measured after ingest: "
+                    f"{disk_bytes_after_ingest}; after workload: {disk_bytes_after_workload}"
+                )
             return notes, metrics
         except Exception as error:
             return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None
