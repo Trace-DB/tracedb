@@ -175,6 +175,11 @@ class SuiteReportingTests(unittest.TestCase):
                         "query_count": 4,
                         "latency_p95_ms": 7.0,
                         "query_latency_p95_ms": 3.5,
+                        "query_http_client_latency_p95_ms": 3.5,
+                        "query_http_client_overhead_latency_p95_ms": 1.0,
+                        "query_server_engine_latency_p95_ms": 2.0,
+                        "query_server_prewrite_total_latency_p95_ms": 2.5,
+                        "query_engine_phase_total_latency_p95_ms": 2.25,
                         "query_phase_access_path_build_latency_p95_ms": 2.25,
                         "query_access_path_lexicalpath_build_latency_p95_ms": 1.25,
                         "disk_bytes": 4096,
@@ -236,6 +241,10 @@ class SuiteReportingTests(unittest.TestCase):
             attribution["access_paths"]["lexicalpath_build_latency_p95_ms"],
             1.25,
         )
+        self.assertEqual(attribution["http_client"]["latency_p95_ms"], 3.5)
+        self.assertEqual(attribution["http_client"]["overhead_latency_p95_ms"], 1.0)
+        self.assertEqual(attribution["server"]["engine_latency_p95_ms"], 2.0)
+        self.assertEqual(attribution["engine"]["phase_total_latency_p95_ms"], 2.25)
         self.assertEqual(attribution["storage_after_ingest"]["wal"], 1024)
         self.assertEqual(attribution["storage_after_ingest"]["manifest_tdb"], 256)
 
@@ -245,6 +254,8 @@ class SuiteReportingTests(unittest.TestCase):
             markdown = path.read_text()
 
         self.assertIn("## TraceDB Attribution", markdown)
+        self.assertIn("engine_latency_p95_ms=2.0", markdown)
+        self.assertIn("overhead_latency_p95_ms=1.0", markdown)
         self.assertIn("access_path_build_latency_p95_ms", markdown)
         self.assertIn("wal=1024", markdown)
 

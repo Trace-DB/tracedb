@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 use tracedb_query::{
     HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput, RecordPatchRequest,
     RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
@@ -38,7 +39,9 @@ fn handle(mut stream: TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Result<()>
 }
 
 fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Result<String> {
+    let request_start = Instant::now();
     let request = read_request(stream)?;
+    let read_ms = elapsed_ms(request_start);
     let mut lines = request.lines();
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
@@ -164,15 +167,57 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
             ok(serde_json::to_value(output).map_err(to_io_error)?)
         }
         ("POST", "/v1/query") => {
+            let parse_start = Instant::now();
             let query: HybridQuery = serde_json::from_str(body).map_err(to_io_error)?;
-            let output = db.lock().unwrap().query(query).map_err(to_io_error)?;
-            ok(serde_json::to_value(output).map_err(to_io_error)?)
+            let parse_ms = elapsed_ms(parse_start);
+            let lock_start = Instant::now();
+            let guard = db.lock().unwrap();
+            let lock_wait_ms = elapsed_ms(lock_start);
+            let engine_start = Instant::now();
+            let output = guard.query(query).map_err(to_io_error)?;
+            let engine_ms = elapsed_ms(engine_start);
+            drop(guard);
+            let encode_start = Instant::now();
+            let value = serde_json::to_value(output).map_err(to_io_error)?;
+            let value_encode_ms = elapsed_ms(encode_start);
+            ok_timed(
+                value,
+                request_start,
+                value_encode_ms,
+                &[
+                    ("read", read_ms),
+                    ("parse", parse_ms),
+                    ("lock_wait", lock_wait_ms),
+                    ("engine", engine_ms),
+                ],
+            )
         }
         ("POST", "/v1/explain") => {
+            let parse_start = Instant::now();
             let mut query: HybridQuery = serde_json::from_str(body).map_err(to_io_error)?;
             query.explain = true;
-            let output = db.lock().unwrap().query(query).map_err(to_io_error)?;
-            ok(serde_json::to_value(output.explain).map_err(to_io_error)?)
+            let parse_ms = elapsed_ms(parse_start);
+            let lock_start = Instant::now();
+            let guard = db.lock().unwrap();
+            let lock_wait_ms = elapsed_ms(lock_start);
+            let engine_start = Instant::now();
+            let output = guard.query(query).map_err(to_io_error)?;
+            let engine_ms = elapsed_ms(engine_start);
+            drop(guard);
+            let encode_start = Instant::now();
+            let value = serde_json::to_value(output.explain).map_err(to_io_error)?;
+            let value_encode_ms = elapsed_ms(encode_start);
+            ok_timed(
+                value,
+                request_start,
+                value_encode_ms,
+                &[
+                    ("read", read_ms),
+                    ("parse", parse_ms),
+                    ("lock_wait", lock_wait_ms),
+                    ("engine", engine_ms),
+                ],
+            )
         }
         ("POST", "/v1/admin/compact") => {
             db.lock().unwrap().compact().map_err(to_io_error)?;
@@ -331,11 +376,54 @@ fn log_request(service: &str, request_id: &str, method: &str, path: &str) {
 
 fn ok(value: Value) -> String {
     let body = value.to_string();
-    format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-        body.len(),
-        body
+    ok_body_with_headers(body, &[])
+}
+
+fn ok_timed(
+    value: Value,
+    request_start: Instant,
+    prior_encode_ms: f64,
+    timings: &[(&str, f64)],
+) -> String {
+    let encode_start = Instant::now();
+    let body = value.to_string();
+    let encode_ms = prior_encode_ms + elapsed_ms(encode_start);
+    let prewrite_total_ms = elapsed_ms(request_start);
+    let mut all_timings = timings.to_vec();
+    all_timings.push(("encode", encode_ms));
+    all_timings.push(("prewrite_total", prewrite_total_ms));
+    ok_body_with_headers(
+        body,
+        &[("server-timing", server_timing_header(&all_timings))],
     )
+}
+
+fn ok_body_with_headers(body: String, extra_headers: &[(&str, String)]) -> String {
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n",
+        body.len()
+    );
+    for (name, value) in extra_headers {
+        response.push_str(name);
+        response.push_str(": ");
+        response.push_str(value);
+        response.push_str("\r\n");
+    }
+    response.push_str("\r\n");
+    response.push_str(&body);
+    response
+}
+
+fn server_timing_header(timings: &[(&str, f64)]) -> String {
+    timings
+        .iter()
+        .map(|(name, value)| format!("{name};dur={:.3}", value.max(0.0)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 fn not_found() -> String {

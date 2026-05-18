@@ -223,6 +223,30 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         r#"{"table":"docs","tenant_id":"tenant-a","limit":10}"#,
         "\"returned_count\":2",
     );
+    let query_response = http_response(
+        addr,
+        "POST",
+        "/v1/query",
+        r#"{"table":"docs","tenant_id":"tenant-a","text":"rust","vector":[1.0,0.0,0.0],"top_k":5,"freshness":"AllowDirty","explain":true}"#,
+    );
+    let lowered_query_response = query_response.to_ascii_lowercase();
+    assert!(
+        lowered_query_response.contains("server-timing:"),
+        "query response should include server timing header: {query_response}"
+    );
+    for token in [
+        "read;dur=",
+        "parse;dur=",
+        "lock_wait;dur=",
+        "engine;dur=",
+        "encode;dur=",
+        "prewrite_total;dur=",
+    ] {
+        assert!(
+            lowered_query_response.contains(token),
+            "query server timing should include {token}: {query_response}"
+        );
+    }
     assert_http_contains(
         addr,
         "POST",
@@ -347,6 +371,18 @@ fn assert_http_contains(
     body: &str,
     expected: &str,
 ) {
+    let response = http_response(addr, method, path, body);
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected response: {response}"
+    );
+    assert!(
+        response.contains(expected),
+        "expected {expected} in {response}"
+    );
+}
+
+fn http_response(addr: std::net::SocketAddr, method: &str, path: &str, body: &str) -> String {
     let mut stream = TcpStream::connect(addr).unwrap();
     let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -356,12 +392,5 @@ fn assert_http_contains(
     stream.write_all(request.as_bytes()).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
-    assert!(
-        response.starts_with("HTTP/1.1 200 OK"),
-        "unexpected response: {response}"
-    );
-    assert!(
-        response.contains(expected),
-        "expected {expected} in {response}"
-    );
+    response
 }

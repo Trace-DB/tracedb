@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .base import BenchmarkAdapter, command_exists, in_memory_search_metrics
-from ..http import request_json
+from ..http import request_json, request_json_with_headers
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k, same_file_recall_at_k
 from ..types import DatasetBundle, RunConfig
 
@@ -164,6 +164,20 @@ class TraceDbAdapter(BenchmarkAdapter):
             except Exception as error:
                 raise RuntimeError(f"{label} failed: {error}") from error
 
+        def call_with_headers(
+            label: str,
+            method: str,
+            path: str,
+            body: dict[str, Any] | None = None,
+            timeout: float = http_timeout,
+        ) -> tuple[dict[str, Any], dict[str, str]]:
+            try:
+                return request_json_with_headers(
+                    method, f"{base_url}{path}", body, timeout=timeout
+                )
+            except Exception as error:
+                raise RuntimeError(f"{label} failed: {error}") from error
+
         try:
             call("ready", "GET", "/ready", timeout=http_timeout)
         except Exception as error:
@@ -289,10 +303,13 @@ class TraceDbAdapter(BenchmarkAdapter):
             query_phase_recorders: dict[str, MetricRecorder] = {}
             query_access_path_build_recorders: dict[str, MetricRecorder] = {}
             query_access_path_open_recorders: dict[str, MetricRecorder] = {}
+            query_server_timing_recorders: dict[str, MetricRecorder] = {}
+            query_engine_phase_total_recorder = MetricRecorder()
+            query_http_client_overhead_recorder = MetricRecorder()
             for query in dataset.queries:
-                result = timed(
+                result, response_headers = timed(
                     query_recorder,
-                    lambda query=query: call(
+                    lambda query=query: call_with_headers(
                         "query allow-dirty",
                         "POST",
                         "/v1/query",
@@ -308,6 +325,15 @@ class TraceDbAdapter(BenchmarkAdapter):
                         },
                     )
                 )
+                query_client_ms = query_recorder.latencies_ms[-1]
+                server_timings = _record_server_timing_metrics(
+                    response_headers, query_server_timing_recorders
+                )
+                server_prewrite_ms = server_timings.get("prewrite_total")
+                if server_prewrite_ms is not None:
+                    query_http_client_overhead_recorder.latencies_ms.append(
+                        max(query_client_ms - server_prewrite_ms, 0.0)
+                    )
                 ids = [row.get("record_id") for row in result.get("results", [])]
                 off_category_ids = [
                     record_id
@@ -347,6 +373,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                     ], None
                 if explain.get("scalar_filter_applied") is True:
                     scalar_filter_applied_count += 1
+                phase_total_ms = _explain_phase_total_ms(explain)
+                if phase_total_ms is not None:
+                    query_engine_phase_total_recorder.latencies_ms.append(phase_total_ms)
                 _record_explain_timing_metrics(
                     explain,
                     query_phase_recorders,
@@ -572,6 +601,18 @@ class TraceDbAdapter(BenchmarkAdapter):
             metrics.update(
                 _recorder_metric_fields("query_phase", query_phase_recorders)
             )
+            metrics.update(_single_recorder_metric_fields("query_http_client", query_recorder))
+            metrics.update(
+                _single_recorder_metric_fields(
+                    "query_engine_phase_total", query_engine_phase_total_recorder
+                )
+            )
+            metrics.update(
+                _single_recorder_metric_fields(
+                    "query_http_client_overhead", query_http_client_overhead_recorder
+                )
+            )
+            metrics.update(_recorder_metric_fields("query_server", query_server_timing_recorders))
             metrics.update(
                 _recorder_metric_fields(
                     "query_access_path",
@@ -625,6 +666,12 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "TraceDB HTTP query phase attribution recorded: "
                     f"phases={len(query_phase_recorders)}; "
                     f"access_paths={len(query_access_path_build_recorders)}"
+                )
+            if query_server_timing_recorders or query_http_client_overhead_recorder.latencies_ms:
+                notes.append(
+                    "TraceDB HTTP server/client query attribution recorded: "
+                    f"server_timing_fields={len(query_server_timing_recorders)}; "
+                    f"client_overhead_samples={len(query_http_client_overhead_recorder.latencies_ms)}"
                 )
             if disk_bytes_after_ingest_by_top_level:
                 notes.append(
@@ -745,6 +792,53 @@ def _record_explain_timing_metrics(
             access_path_open_recorders.setdefault(
                 access_path, MetricRecorder()
             ).latencies_ms.append(open_ms)
+
+
+def _explain_phase_total_ms(explain: dict[str, Any]) -> float | None:
+    total = 0.0
+    found = False
+    for phase_timing in explain.get("phase_timings", []):
+        if not isinstance(phase_timing, dict):
+            continue
+        elapsed_ms = _float_metric(phase_timing.get("elapsed_ms"))
+        if elapsed_ms is None:
+            continue
+        total += elapsed_ms
+        found = True
+    return total if found else None
+
+
+def _record_server_timing_metrics(
+    headers: dict[str, str],
+    recorders: dict[str, MetricRecorder],
+) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for entry in headers.get("server-timing", "").split(","):
+        name_and_params = [part.strip() for part in entry.split(";") if part.strip()]
+        if not name_and_params:
+            continue
+        name = _metric_token(name_and_params[0])
+        if not name:
+            continue
+        duration_ms = None
+        for param in name_and_params[1:]:
+            key, separator, value = param.partition("=")
+            if separator and key.strip().lower() == "dur":
+                duration_ms = _float_metric(value.strip().strip('"'))
+                break
+        if duration_ms is None:
+            continue
+        recorders.setdefault(name, MetricRecorder()).latencies_ms.append(duration_ms)
+        values[name] = duration_ms
+    return values
+
+
+def _single_recorder_metric_fields(
+    prefix: str, recorder: MetricRecorder
+) -> dict[str, float | int]:
+    fields: dict[str, float | int] = {f"{prefix}_count": len(recorder.latencies_ms)}
+    fields.update({f"{prefix}_{key}": value for key, value in recorder.summary().items()})
+    return fields
 
 
 def _recorder_metric_fields(

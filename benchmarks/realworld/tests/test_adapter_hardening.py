@@ -50,11 +50,15 @@ class FakeQdrant:
             def log_message(self, _format: str, *_args: object) -> None:
                 return
 
-            def _json(self, status: int, payload: dict) -> None:
+            def _json(
+                self, status: int, payload: dict, headers: dict[str, str] | None = None
+            ) -> None:
                 body = json.dumps(payload).encode("utf-8")
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(body)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -105,11 +109,15 @@ class FakeTraceDb:
                     return {}
                 return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
 
-            def _json(self, status: int, payload: dict) -> None:
+            def _json(
+                self, status: int, payload: dict, headers: dict[str, str] | None = None
+            ) -> None:
                 body = json.dumps(payload).encode("utf-8")
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(body)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -211,6 +219,12 @@ class FakeTraceDb:
                                     },
                                 ],
                             },
+                        },
+                        {
+                            "Server-Timing": (
+                                "read;dur=0.01, parse;dur=0.02, lock_wait;dur=0.03, "
+                                "engine;dur=0.04, encode;dur=0.05, prewrite_total;dur=0.15"
+                            )
                         },
                     )
                     return
@@ -744,6 +758,14 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["query_phase_materialization_latency_p95_ms"], 0.5)
         self.assertEqual(metrics["query_access_path_lexicalpath_build_latency_p95_ms"], 1.5)
         self.assertEqual(metrics["query_access_path_vectorpath_open_latency_p95_ms"], 0.5)
+        self.assertEqual(metrics["query_server_engine_latency_p95_ms"], 0.04)
+        self.assertEqual(metrics["query_server_prewrite_total_latency_p95_ms"], 0.15)
+        self.assertEqual(metrics["query_engine_phase_total_latency_p95_ms"], 5.0)
+        self.assertEqual(
+            metrics["query_http_client_latency_p95_ms"],
+            metrics["query_latency_p95_ms"],
+        )
+        self.assertIn("query_http_client_overhead_latency_p95_ms", metrics)
         self.assertEqual(metrics["disk_bytes_after_ingest_manifest_tdb"], 32)
         self.assertEqual(metrics["disk_bytes_after_ingest_wal"], 128)
         self.assertEqual(metrics["disk_bytes_after_ingest_segments"], 256)
@@ -753,6 +775,10 @@ class AdapterHardeningTests(unittest.TestCase):
         )
         self.assertTrue(
             any("storage attribution" in note for note in result["notes"]),
+            result["notes"],
+        )
+        self.assertTrue(
+            any("server/client query attribution" in note for note in result["notes"]),
             result["notes"],
         )
 

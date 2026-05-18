@@ -736,6 +736,12 @@ class ModalBenchTests(unittest.TestCase):
                         "scenario_id": "search_rag_6",
                         "query": {"query_latency_p95_ms": 4.0},
                         "query_phases": {"access_path_build_latency_p95_ms": 1.5},
+                        "http_client": {
+                            "latency_p95_ms": 4.0,
+                            "overhead_latency_p95_ms": 2.5,
+                        },
+                        "server": {"engine_latency_p95_ms": 1.0},
+                        "engine": {"phase_total_latency_p95_ms": 1.5},
                         "access_paths": {},
                         "storage_after_ingest": {"wal": 512},
                         "storage_after_workload": {"wal": 1024},
@@ -783,6 +789,10 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(
             summary["tracedb_attribution"][0]["query"]["query_latency_p95_ms"],
             4.0,
+        )
+        self.assertEqual(
+            summary["tracedb_attribution"][0]["http_client"]["overhead_latency_p95_ms"],
+            2.5,
         )
 
 

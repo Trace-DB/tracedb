@@ -16,6 +16,19 @@ def request_json(
     timeout: float | None = None,
     retries: int | None = None,
 ) -> dict[str, Any]:
+    payload, _headers = request_json_with_headers(
+        method, url, body, timeout=timeout, retries=retries
+    )
+    return payload
+
+
+def request_json_with_headers(
+    method: str,
+    url: str,
+    body: dict[str, Any] | None = None,
+    timeout: float | None = None,
+    retries: int | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
     data = None if body is None else json.dumps(body).encode("utf-8")
     headers = {"content-type": "application/json"}
     token = os.environ.get("TRACEDB_HTTP_BEARER_TOKEN") or os.environ.get("TRACEDB_API_TOKEN")
@@ -35,7 +48,10 @@ def request_json(
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 text = response.read().decode("utf-8")
-                return json.loads(text) if text else {}
+                response_headers = {
+                    name.lower(): value for name, value in response.headers.items()
+                }
+                return (json.loads(text) if text else {}, response_headers)
         except urllib.error.HTTPError as error:
             payload = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"HTTP {error.code} from {url}: {payload}") from error

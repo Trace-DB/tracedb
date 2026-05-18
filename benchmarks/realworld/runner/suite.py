@@ -321,17 +321,19 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
             "",
             "## TraceDB Attribution",
             "",
-            "| scenario | query p95 ms | query phases | access paths | storage after ingest | storage after workload |",
-            "| --- | ---: | --- | --- | --- | --- |",
+            "| scenario | query p95 ms | query phases | server timings | http/client | access paths | storage after ingest | storage after workload |",
+            "| --- | ---: | --- | --- | --- | --- | --- | --- |",
         ]
     )
     if report.get("tracedb_attribution"):
         for item in report["tracedb_attribution"]:
             lines.append(
-                "| {scenario} | {query_p95} | {query_phases} | {access_paths} | {storage_ingest} | {storage_workload} |".format(
+                "| {scenario} | {query_p95} | {query_phases} | {server} | {http_client} | {access_paths} | {storage_ingest} | {storage_workload} |".format(
                     scenario=item["scenario_id"],
                     query_p95=item.get("query", {}).get("query_latency_p95_ms", "n/a"),
                     query_phases=_metric_map_summary(item.get("query_phases", {})),
+                    server=_metric_map_summary(item.get("server", {})),
+                    http_client=_metric_map_summary(item.get("http_client", {})),
                     access_paths=_metric_map_summary(item.get("access_paths", {})),
                     storage_ingest=_metric_map_summary(
                         item.get("storage_after_ingest", {})
@@ -342,7 +344,7 @@ def write_suite_markdown(report: dict[str, Any], path: Path) -> None:
                 )
             )
     else:
-        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a |")
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
 
     lines.extend(
         [
@@ -524,9 +526,22 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
         metrics = tracedb.get("metrics", {})
         query_phases = _strip_metric_prefix(metrics, "query_phase_")
         access_paths = _strip_metric_prefix(metrics, "query_access_path_")
+        http_client = _strip_metric_prefix(metrics, "query_http_client_")
+        server = _strip_metric_prefix(metrics, "query_server_")
+        engine = _strip_metric_prefix(metrics, "query_engine_")
         storage_after_ingest = _strip_metric_prefix(metrics, "disk_bytes_after_ingest_")
         storage_after_workload = _strip_metric_prefix(metrics, "disk_bytes_after_workload_")
-        if not any([query_phases, access_paths, storage_after_ingest, storage_after_workload]):
+        if not any(
+            [
+                query_phases,
+                access_paths,
+                http_client,
+                server,
+                engine,
+                storage_after_ingest,
+                storage_after_workload,
+            ]
+        ):
             continue
         attribution.append(
             {
@@ -542,6 +557,9 @@ def _tracedb_attribution(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]
                     if key in metrics
                 },
                 "query_phases": query_phases,
+                "http_client": http_client,
+                "server": server,
+                "engine": engine,
                 "access_paths": access_paths,
                 "storage_after_ingest": storage_after_ingest,
                 "storage_after_workload": storage_after_workload,
