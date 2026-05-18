@@ -343,6 +343,11 @@ class TraceDbAdapter(BenchmarkAdapter):
             query_output_probe_explain_returned_count_mismatch_count = 0
             query_output_probe_required_explain_field_missing_count = 0
             query_output_probe_explain_false_explain_returned_count = 0
+            query_output_probe_shapes = (
+                "explain_false",
+                "explain_true",
+                "explain_endpoint",
+            )
 
             def query_body(
                 query, *, freshness: str = "AllowDirty", explain: bool
@@ -425,17 +430,6 @@ class TraceDbAdapter(BenchmarkAdapter):
                     + int(response_meta.get("content_length_mismatch", 0))
                 )
 
-            def record_existing_query_output_probe(
-                shape: str,
-                elapsed_ms: float,
-                response_headers: dict[str, str],
-                response_meta: dict[str, float | int],
-            ) -> None:
-                query_output_probe_latency_recorders.setdefault(
-                    shape, MetricRecorder()
-                ).latencies_ms.append(elapsed_ms)
-                record_query_output_probe_metadata(shape, response_headers, response_meta)
-
             def call_query_output_probe(
                 shape: str,
                 label: str,
@@ -450,6 +444,13 @@ class TraceDbAdapter(BenchmarkAdapter):
                 )
                 record_query_output_probe_metadata(shape, probe_headers, probe_meta)
                 return probe_result, probe_recorder.latencies_ms[-1]
+
+            def query_output_probe_order(candidate_index: int) -> tuple[str, ...]:
+                rotation = candidate_index % len(query_output_probe_shapes)
+                return (
+                    query_output_probe_shapes[rotation:]
+                    + query_output_probe_shapes[:rotation]
+                )
 
             for query_index, query in enumerate(dataset.queries):
                 result, response_headers, response_meta = timed(
@@ -548,36 +549,63 @@ class TraceDbAdapter(BenchmarkAdapter):
                         }
                     )
 
-            for candidate in query_output_probe_candidates:
+            for probe_index, candidate in enumerate(query_output_probe_candidates):
                 query = candidate["query"]
                 ids = candidate["ids"]
-                query_client_ms = float(candidate["query_client_ms"])
-                record_existing_query_output_probe(
-                    "explain_false",
-                    query_client_ms,
-                    candidate["response_headers"],
-                    candidate["response_meta"],
-                )
-                if isinstance(candidate.get("primary_explain"), dict):
-                    query_output_probe_explain_false_explain_returned_count += 1
-                explain_true_result, explain_true_ms = call_query_output_probe(
-                    "explain_true",
-                    "query allow-dirty explain probe",
-                    "/v1/query",
-                    query_body(query, explain=True),
-                )
-                explain_endpoint, explain_endpoint_ms = call_query_output_probe(
-                    "explain_endpoint",
-                    "explain endpoint probe",
-                    "/v1/explain",
-                    query_body(query, explain=True),
-                )
+                explain_false_result: dict[str, Any] | None = None
+                explain_false_ms: float | None = None
+                explain_true_result: dict[str, Any] | None = None
+                explain_true_ms: float | None = None
+                explain_endpoint: dict[str, Any] | None = None
+                explain_endpoint_ms: float | None = None
+                for shape in query_output_probe_order(probe_index):
+                    if shape == "explain_false":
+                        explain_false_result, explain_false_ms = call_query_output_probe(
+                            "explain_false",
+                            "query allow-dirty lean probe",
+                            "/v1/query",
+                            query_body(query, explain=False),
+                        )
+                        if isinstance(explain_false_result.get("explain"), dict):
+                            query_output_probe_explain_false_explain_returned_count += 1
+                    elif shape == "explain_true":
+                        explain_true_result, explain_true_ms = call_query_output_probe(
+                            "explain_true",
+                            "query allow-dirty explain probe",
+                            "/v1/query",
+                            query_body(query, explain=True),
+                        )
+                    else:
+                        explain_endpoint, explain_endpoint_ms = call_query_output_probe(
+                            "explain_endpoint",
+                            "explain endpoint probe",
+                            "/v1/explain",
+                            query_body(query, explain=True),
+                        )
+                if (
+                    explain_false_result is None
+                    or explain_false_ms is None
+                    or explain_true_result is None
+                    or explain_true_ms is None
+                    or explain_endpoint is None
+                    or explain_endpoint_ms is None
+                ):
+                    return [
+                        "surface unavailable: TraceDB HTTP output-shape probe rotation failed"
+                    ], None
                 query_output_probe_true_over_false_deltas.append(
-                    explain_true_ms - query_client_ms
+                    explain_true_ms - explain_false_ms
                 )
                 query_output_probe_explain_endpoint_over_false_deltas.append(
-                    explain_endpoint_ms - query_client_ms
+                    explain_endpoint_ms - explain_false_ms
                 )
+                explain_false_ids = [
+                    row.get("record_id") for row in explain_false_result.get("results", [])
+                ]
+                if [str(record_id) for record_id in explain_false_ids] != [
+                    str(record_id) for record_id in ids
+                ]:
+                    query_output_probe_result_id_mismatch_count += 1
                 explain_true_ids = [
                     row.get("record_id") for row in explain_true_result.get("results", [])
                 ]
@@ -891,14 +919,27 @@ class TraceDbAdapter(BenchmarkAdapter):
                 query_http_response_content_length_mismatch_count
             )
             metrics.update(_recorder_metric_fields("query_server", query_server_timing_recorders))
+            query_output_probe_order_balance_remainder = (
+                query_output_probe_count % len(query_output_probe_shapes)
+                if query_output_probe_count
+                else 0
+            )
             metrics["query_output_probe_count"] = query_output_probe_count
             metrics["query_output_probe_order_mode"] = (
-                "fixed_explain_false_then_explain_true_then_explain_endpoint"
+                "rotated_explain_false_explain_true_explain_endpoint"
             )
             metrics["query_output_probe_shape_count"] = 3 if query_output_probe_count else 0
             metrics["query_output_probe_replication_count"] = query_output_probe_count
             metrics["query_output_probe_randomized_order"] = 0
-            metrics["query_output_probe_order_valid_for_latency_comparison"] = 0
+            metrics["query_output_probe_order_valid_for_latency_comparison"] = (
+                1
+                if query_output_probe_count
+                and query_output_probe_order_balance_remainder == 0
+                else 0
+            )
+            metrics["query_output_probe_order_balance_remainder"] = (
+                query_output_probe_order_balance_remainder
+            )
             metrics["query_output_probe_result_id_mismatch_count"] = (
                 query_output_probe_result_id_mismatch_count
             )
@@ -1053,8 +1094,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "TraceDB HTTP output-shape attribution recorded: "
                     f"probe_count={query_output_probe_count}; "
                     "shapes=explain_false,explain_true,explain_endpoint; "
-                    "order=fixed_explain_false_then_explain_true_then_explain_endpoint; "
-                    "latency_comparison=order_biased; "
+                    "order=rotated_explain_false_explain_true_explain_endpoint; "
+                    "latency_comparison="
+                    f"{'balanced' if metrics.get('query_output_probe_order_valid_for_latency_comparison') else 'order_biased'}; "
                     "explain_false_returned_explain="
                     f"{query_output_probe_explain_false_explain_returned_count}"
                 )

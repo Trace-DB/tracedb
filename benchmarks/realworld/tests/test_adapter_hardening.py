@@ -788,7 +788,7 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["query_server_prewrite_total_latency_p95_ms"], 0.35)
         self.assertEqual(
             metrics["query_output_probe_order_mode"],
-            "fixed_explain_false_then_explain_true_then_explain_endpoint",
+            "rotated_explain_false_explain_true_explain_endpoint",
         )
         self.assertEqual(metrics["query_output_probe_shape_count"], 3)
         self.assertEqual(
@@ -798,8 +798,9 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["query_output_probe_randomized_order"], 0)
         self.assertEqual(
             metrics["query_output_probe_order_valid_for_latency_comparison"],
-            0,
+            1,
         )
+        self.assertEqual(metrics["query_output_probe_order_balance_remainder"], 0)
         self.assertEqual(metrics["query_engine_phase_total_latency_p95_ms"], 5.0)
         self.assertEqual(
             metrics["query_http_client_latency_p95_ms"],
@@ -864,6 +865,29 @@ class AdapterHardeningTests(unittest.TestCase):
         )
         self.assertEqual(result["metrics"]["query_phase_probe_sample_count"], 3)
         self.assertEqual(result["metrics"]["query_access_path_probe_sample_count"], 3)
+        probe_requests = fake.query_requests[result["metrics"]["query_count"] :]
+        probe_shapes = [
+            "explain_endpoint"
+            if request["path"] == "/v1/explain"
+            else "explain_true"
+            if request["explain"] is True
+            else "explain_false"
+            for request in probe_requests
+        ]
+        self.assertEqual(
+            probe_shapes[:9],
+            [
+                "explain_false",
+                "explain_true",
+                "explain_endpoint",
+                "explain_true",
+                "explain_endpoint",
+                "explain_false",
+                "explain_endpoint",
+                "explain_false",
+                "explain_true",
+            ],
+        )
 
     def test_request_json_with_response_reports_response_metadata(self) -> None:
         from runner.http import request_json_with_response

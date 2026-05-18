@@ -201,12 +201,13 @@ class SuiteReportingTests(unittest.TestCase):
                         "query_output_probe_result_id_mismatch_count": 0,
                         "query_output_probe_explain_false_explain_returned_count": 0,
                         "query_output_probe_order_mode": (
-                            "fixed_explain_false_then_explain_true_then_explain_endpoint"
+                            "rotated_explain_false_explain_true_explain_endpoint"
                         ),
                         "query_output_probe_shape_count": 3,
                         "query_output_probe_replication_count": 3,
                         "query_output_probe_randomized_order": 0,
-                        "query_output_probe_order_valid_for_latency_comparison": 0,
+                        "query_output_probe_order_valid_for_latency_comparison": 1,
+                        "query_output_probe_order_balance_remainder": 0,
                         "query_phase_probe_sample_count": 3,
                         "query_access_path_probe_sample_count": 3,
                         "query_phase_access_path_build_latency_p95_ms": 2.25,
@@ -300,6 +301,10 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(attribution["server"]["engine_core_latency_p95_ms"], 1.1)
         self.assertEqual(
             attribution["output_shape_probe"]["order_valid_for_latency_comparison"],
+            1,
+        )
+        self.assertEqual(
+            attribution["output_shape_probe"]["order_balance_remainder"],
             0,
         )
         self.assertEqual(attribution["engine"]["phase_total_latency_p95_ms"], 2.25)
@@ -319,6 +324,7 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("output shape probe", markdown)
         self.assertIn("explain_false_body_bytes_p95=1024", markdown)
         self.assertIn("explain_false_explain_returned_count=0", markdown)
+        self.assertIn("order_valid_for_latency_comparison=1", markdown)
         self.assertIn("probe_sample_count=3", markdown)
         self.assertIn("access_path_build_latency_p95_ms", markdown)
         self.assertIn("wal=1024", markdown)
