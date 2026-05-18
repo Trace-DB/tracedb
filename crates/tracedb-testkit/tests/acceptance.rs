@@ -13,7 +13,7 @@ use tracedb_modules::{AccessPathDescriptor, ModuleRegistry, TraceDbModule};
 use tracedb_planner::QueryOutput;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordScanRequest, TableSchema, TraceDb, VectorColumnSchema,
+    RecordPutRequest, RecordScanRequest, TableSchema, TraceDb, VectorColumnSchema,
 };
 
 fn db() -> (TempDir, TraceDb) {
@@ -1911,6 +1911,124 @@ fn failed_insert_does_not_alter_wal_or_recovery() {
         before_epoch
     );
     assert_eq!(recovered.query(query()).unwrap().results.len(), 2);
+}
+
+#[test]
+fn failed_put_does_not_alter_memory_wal_or_recovery() {
+    let (temp, mut db) = seeded_db();
+    let before_epoch = db.inspect_manifest().unwrap().latest_epoch;
+    let before_wal_entries = db.inspect_wal().unwrap().len();
+    let before = db
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("get before")
+        .expect("row before");
+
+    let err = db
+        .put(RecordPutRequest::new(RecordInput {
+            table: "docs".to_string(),
+            id: "a".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            fields: json!({
+                "id": "a",
+                "tenant": "tenant-a",
+                "body": "bad replacement should not become visible",
+                "embedding": [1.0, 0.0],
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }))
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid vector dimensions"));
+    assert_eq!(db.inspect_wal().unwrap().len(), before_wal_entries);
+    assert_eq!(db.inspect_manifest().unwrap().latest_epoch, before_epoch);
+    assert_eq!(
+        db.get(RecordGetRequest::new("docs", "tenant-a", "a"))
+            .expect("get after")
+            .expect("row after")
+            .fields,
+        before.fields
+    );
+
+    drop(db);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(
+        recovered.inspect_manifest().unwrap().latest_epoch,
+        before_epoch
+    );
+    assert_eq!(
+        recovered
+            .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+            .expect("recovered get")
+            .expect("recovered row")
+            .fields,
+        before.fields
+    );
+}
+
+#[test]
+fn put_full_replacement_wal_recovery_and_dirty_feature_state_match() {
+    let (temp, mut db) = seeded_db();
+
+    let epoch = db
+        .put(RecordPutRequest::new(RecordInput {
+            table: "docs".to_string(),
+            id: "a".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            fields: json!({
+                "id": "a",
+                "tenant": "tenant-a",
+                "body": "full replacement without embedding",
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }))
+        .expect("put replacement");
+
+    let hot = db
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("hot get")
+        .expect("hot row");
+    assert_eq!(
+        hot.fields["body"],
+        json!("full replacement without embedding")
+    );
+    assert!(
+        !hot.fields.contains_key("conversation"),
+        "put should replace the record fields rather than patching them"
+    );
+    assert!(
+        !hot.fields.contains_key("embedding"),
+        "omitted vector field should not be preserved by put replacement"
+    );
+    assert_eq!(
+        db.feature_state("docs", "tenant-a", "a", "embedding")
+            .expect("hot feature state")
+            .status,
+        FeatureStatus::Dirty
+    );
+    let wal = db.inspect_wal().expect("wal");
+    let last = &wal.last().expect("last commit").commit;
+    assert_eq!(last.epoch, epoch);
+    assert_eq!(last.replacements.len(), 1);
+    assert!(last.mutations.is_empty());
+    assert_eq!(last.feature_invalidations.len(), 1);
+
+    drop(db);
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    let recovered_row = recovered
+        .get(RecordGetRequest::new("docs", "tenant-a", "a"))
+        .expect("recovered get")
+        .expect("recovered row");
+    assert_eq!(recovered_row.fields, hot.fields);
+    assert_eq!(
+        recovered
+            .feature_state("docs", "tenant-a", "a", "embedding")
+            .expect("recovered feature state")
+            .status,
+        FeatureStatus::Dirty
+    );
 }
 
 #[test]
