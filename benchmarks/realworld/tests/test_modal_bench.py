@@ -163,6 +163,45 @@ class ModalBenchTests(unittest.TestCase):
         )
         self.assertNotIn("BENCH_POSTGRES_DSN", env)
 
+    def test_tracedb_engine_control_requires_http_surface_and_tracedb_target(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_runner_env, validate_config
+
+        with self.assertRaisesRegex(ValueError, "target including tracedb"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="pgvector",
+                    surface="http",
+                    allow_external_controls=True,
+                    tracedb_engine_control=True,
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "surface including http or curl"):
+            validate_config(
+                ModalSmokeConfig(
+                    target="tracedb",
+                    surface="sdk",
+                    tracedb_engine_control=True,
+                )
+            )
+
+        config = ModalSmokeConfig(
+            run_id="modal-tracedb-engine-smoke",
+            target="tracedb",
+            surface="http",
+            scenarios="search_rag_6",
+            tracedb_engine_control=True,
+            tracedb_port=18_081,
+        )
+
+        validate_config(config)
+        env = build_runner_env(config, base_env={"PATH": os.environ.get("PATH", "")})
+
+        self.assertEqual(env["TRACEDB_HTTP_URL"], "http://127.0.0.1:18081")
+        self.assertEqual(
+            env["TRACEDB_HTTP_DATA_DIR"],
+            "/tmp/tracedb-engine-modal-tracedb-engine-smoke",
+        )
+
     def test_pgvector_external_control_requires_dsn_when_services_are_required(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 
@@ -344,6 +383,79 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
             self.assertIn("--require-services", run.call_args.args[0])
 
+    def test_run_suite_starts_tracedb_engine_control_and_passes_http_env(self) -> None:
+        from modal_bench import ModalSmokeConfig, run_suite_and_bundle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            run_dir = reports / "modal-tracedb-engine-smoke"
+            run_dir.mkdir(parents=True)
+            suite_json = {
+                "suite_id": "modal-tracedb-engine-smoke",
+                "control_status": "internal_only_smoke",
+                "summary": {"failure_count": 0},
+                "control_ledger": {
+                    "available_external_controls": [],
+                    "unavailable_external_controls": [],
+                },
+                "number_to_beat": {
+                    "query_p95_ms": {"baseline": None, "value": None},
+                },
+            }
+            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
+
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": "ok", "stderr": ""},
+            )()
+            config = ModalSmokeConfig(
+                run_id="modal-tracedb-engine-smoke",
+                target="tracedb",
+                surface="http",
+                scenarios="search_rag_6",
+                reports_dir=str(reports),
+                bundle_dir=str(root / "bundles"),
+                min_free_mb=1_000,
+                tracedb_engine_control=True,
+            )
+            service = type(
+                "TraceDbEngineControlStub",
+                (),
+                {
+                    "data_dir": root / "tracedb",
+                    "log_path": root / "tracedb.log",
+                    "port": 18080,
+                    "process": None,
+                },
+            )()
+            with patch.dict(os.environ, {"PATH": os.environ.get("PATH", "")}, clear=True), patch(
+                "modal_bench.git_identity",
+                return_value={"commit": "test", "dirty": False, "status_short": ""},
+            ), patch(
+                "modal_bench.start_tracedb_engine_control", return_value=service
+            ) as start_tracedb, patch(
+                "modal_bench.stop_tracedb_engine_control"
+            ) as stop_tracedb, patch(
+                "subprocess.run", return_value=completed
+            ) as run:
+                summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
+
+            start_tracedb.assert_called_once()
+            stop_tracedb.assert_called_once_with(service)
+            self.assertEqual(summary["control_status"], "internal_only_smoke")
+            self.assertEqual(
+                run.call_args.kwargs["env"]["TRACEDB_HTTP_URL"],
+                "http://127.0.0.1:18080",
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["TRACEDB_HTTP_DATA_DIR"],
+                "/tmp/tracedb-engine-modal-tracedb-engine-smoke",
+            )
+            self.assertEqual(run.call_args.kwargs["env"]["BENCH_DISABLE_ENV_FILE"], "1")
+
     def test_manifest_redacts_postgres_dsn(self) -> None:
         from modal_bench import ModalSmokeConfig, build_manifest
 
@@ -385,6 +497,26 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("BENCH_PGVECTOR_DSN", manifest_text)
         self.assertNotIn("secret", manifest_text)
         self.assertEqual(manifest["runner_env"]["BENCH_PGVECTOR_DSN"], "[redacted]")
+
+    def test_manifest_records_tracedb_http_engine_env_without_secrets(self) -> None:
+        from modal_bench import ModalSmokeConfig, build_manifest
+
+        manifest = build_manifest(
+            ModalSmokeConfig(run_id="redaction-tracedb-engine"),
+            ["python3", "-m", "runner", "suite"],
+            runner_env={
+                "TRACEDB_HTTP_URL": "http://127.0.0.1:18080",
+                "TRACEDB_HTTP_DATA_DIR": "/tmp/tracedb-engine-redaction",
+                "TRACEDB_HTTP_BEARER_TOKEN": "secret-token",
+            },
+        )
+
+        manifest_text = json.dumps(manifest)
+
+        self.assertIn("TRACEDB_HTTP_URL", manifest_text)
+        self.assertIn("TRACEDB_HTTP_DATA_DIR", manifest_text)
+        self.assertNotIn("secret-token", manifest_text)
+        self.assertEqual(manifest["runner_env"]["TRACEDB_HTTP_BEARER_TOKEN"], "[redacted]")
 
     def test_manifest_records_git_identity_for_reproducibility(self) -> None:
         from modal_bench import ModalSmokeConfig, build_manifest

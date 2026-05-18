@@ -475,6 +475,7 @@ class TraceDbAdapter(BenchmarkAdapter):
             category_filter_applied = bool(dataset.queries) and scalar_filter_applied_count == len(
                 dataset.queries
             )
+            disk_bytes = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
@@ -495,10 +496,10 @@ class TraceDbAdapter(BenchmarkAdapter):
                     "category_filter_applied": category_filter_applied,
                     "off_category_result_count": off_category_result_count,
                     "queries_with_off_category_results_count": queries_with_off_category_results,
-                    "disk_bytes": 0,
+                    "disk_bytes": disk_bytes,
                 }
             )
-            return [
+            notes = [
                 "TraceDB HTTP/curl records/query/delete smoke passed",
                 "TraceDB HTTP falsification checks passed: fresh-write, patch, tenant isolation, freshness modes, compact, snapshot, restore, explain, tombstone",
                 "TraceDB HTTP retrieval diagnostics: "
@@ -509,7 +510,10 @@ class TraceDbAdapter(BenchmarkAdapter):
                 f"category_filter_applied={str(category_filter_applied).lower()}; "
                 f"off_category_result_count={off_category_result_count}; "
                 f"queries_with_off_category_results={queries_with_off_category_results}",
-            ], metrics
+            ]
+            if disk_bytes > 0:
+                notes.append(f"TraceDB HTTP data directory bytes measured: {disk_bytes}")
+            return notes, metrics
         except Exception as error:
             return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None
 
@@ -542,3 +546,20 @@ class TraceDbAdapter(BenchmarkAdapter):
             return float(os.environ.get(name, ""))
         except ValueError:
             return default
+
+
+def _directory_bytes(path_value: str | None) -> int:
+    if not path_value:
+        return 0
+    root = Path(path_value)
+    if not root.exists():
+        return 0
+    total = 0
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return total

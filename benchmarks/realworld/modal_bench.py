@@ -8,6 +8,8 @@ import shlex
 import shutil
 import subprocess
 import tarfile
+import time
+import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +33,8 @@ MODAL_APP_NAME_ENV = "TRACEDB_MODAL_APP_NAME"
 PGVECTOR_VERSION = "v0.8.2"
 POSTGRES_DSN_ENV = "BENCH_POSTGRES_DSN"
 PGVECTOR_DSN_ENV = "BENCH_PGVECTOR_DSN"
+TRACEDB_HTTP_URL_ENV = "TRACEDB_HTTP_URL"
+TRACEDB_HTTP_DATA_DIR_ENV = "TRACEDB_HTTP_DATA_DIR"
 EXTERNAL_CONTROL_TARGETS = {
     "postgres",
     "pgvector",
@@ -45,6 +49,7 @@ SENSITIVE_ENV_KEYS = {
     PGVECTOR_DSN_ENV,
     "BENCH_MONGO_URI",
     "OPENROUTER_API_KEY",
+    "TRACEDB_HTTP_BEARER_TOKEN",
 }
 MODAL_IGNORE_PATTERNS = [
     "target/**",
@@ -86,8 +91,10 @@ class ModalSmokeConfig:
     allow_external_controls: bool = False
     allow_provider: bool = False
     require_services: bool = False
+    tracedb_engine_control: bool = False
     postgres_control: bool = False
     pgvector_control: bool = False
+    tracedb_port: int = 18_080
     postgres_port: int = 25_432
     pgvector_port: int = 25_433
     modal_app_name: str = DEFAULT_MODAL_APP_NAME
@@ -115,6 +122,10 @@ def validate_config(config: ModalSmokeConfig) -> None:
         raise ValueError("postgres_control needs allow_external_controls=True")
     if config.postgres_control and not target_needs_postgres(config):
         raise ValueError("postgres_control needs target including postgres or all")
+    if config.tracedb_engine_control and not target_needs_tracedb(config):
+        raise ValueError("tracedb_engine_control needs target including tracedb or all")
+    if config.tracedb_engine_control and not surface_needs_http(config):
+        raise ValueError("tracedb_engine_control needs surface including http or curl")
     if config.pgvector_control and not config.allow_external_controls:
         raise ValueError("pgvector_control needs allow_external_controls=True")
     if config.pgvector_control and not target_needs_pgvector(config):
@@ -148,9 +159,19 @@ def target_needs_postgres(config: ModalSmokeConfig) -> bool:
     return "all" in targets or "postgres" in targets
 
 
+def target_needs_tracedb(config: ModalSmokeConfig) -> bool:
+    targets = requested_targets(config.target)
+    return "all" in targets or "tracedb" in targets
+
+
 def target_needs_pgvector(config: ModalSmokeConfig) -> bool:
     targets = requested_targets(config.target)
     return "all" in targets or "pgvector" in targets
+
+
+def surface_needs_http(config: ModalSmokeConfig) -> bool:
+    surfaces = {part.strip() for part in config.surface.split(",") if part.strip()}
+    return bool(surfaces & {"http", "curl"})
 
 
 def build_suite_command(config: ModalSmokeConfig) -> list[str]:
@@ -208,6 +229,9 @@ def build_runner_env(
         PGVECTOR_DSN_ENV
     ):
         raise ValueError(f"{PGVECTOR_DSN_ENV} is required for required pgvector control runs")
+    if config.tracedb_engine_control:
+        env[TRACEDB_HTTP_URL_ENV] = tracedb_engine_http_url(config)
+        env[TRACEDB_HTTP_DATA_DIR_ENV] = str(tracedb_engine_data_dir(config))
     return env
 
 
@@ -219,12 +243,20 @@ def pgvector_control_dsn(config: ModalSmokeConfig) -> str:
     return f"postgresql://tracedb:tracedb@127.0.0.1:{config.pgvector_port}/tracedb_bench"
 
 
+def tracedb_engine_http_url(config: ModalSmokeConfig) -> str:
+    return f"http://127.0.0.1:{config.tracedb_port}"
+
+
+def tracedb_engine_data_dir(config: ModalSmokeConfig) -> Path:
+    return Path("/tmp") / f"tracedb-engine-{config.run_id}"
+
+
 def redacted_env(env: Mapping[str, str]) -> dict[str, str]:
     redacted = {}
     for key, value in env.items():
         if key in SENSITIVE_ENV_KEYS:
             redacted[key] = "[redacted]"
-        elif key.startswith("BENCH_") or key.startswith("OPENROUTER_"):
+        elif key.startswith("BENCH_") or key.startswith("OPENROUTER_") or key.startswith("TRACEDB_"):
             redacted[key] = value
     return redacted
 
@@ -378,9 +410,15 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
     bundle_dir = Path(config.bundle_dir)
     command = build_suite_command(config)
     env = build_runner_env(config)
+    tracedb_service: TraceDbEngineControl | None = None
     postgres_service: PostgresControl | None = None
     pgvector_service: PostgresControl | None = None
     try:
+        if config.tracedb_engine_control:
+            tracedb_service = start_tracedb_engine_control(
+                config,
+                repo_root=lab_root.parent.parent,
+            )
         if config.postgres_control:
             postgres_service = start_postgres_control(config)
         if config.pgvector_control:
@@ -399,6 +437,8 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             stop_postgres_control(pgvector_service)
         if postgres_service is not None:
             stop_postgres_control(postgres_service)
+        if tracedb_service is not None:
+            stop_tracedb_engine_control(tracedb_service)
     manifest = build_manifest(config, command, repo_root=lab_root.parent.parent, runner_env=env)
     manifest["process"] = {
         "returncode": completed.returncode,
@@ -423,6 +463,101 @@ class PostgresControl:
     data_dir: Path
     log_path: Path
     port: int
+
+
+@dataclass(frozen=True)
+class TraceDbEngineControl:
+    data_dir: Path
+    log_path: Path
+    port: int
+    process: subprocess.Popen[str]
+
+
+def start_tracedb_engine_control(
+    config: ModalSmokeConfig,
+    *,
+    repo_root: Path,
+) -> TraceDbEngineControl:
+    data_dir = tracedb_engine_data_dir(config)
+    log_path = Path("/tmp") / f"tracedb-engine-{config.run_id}.log"
+    binary = tracedb_server_binary(repo_root)
+    if not binary.exists():
+        raise RuntimeError(f"tracedb-server binary not found at {binary}")
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True)
+    env = os.environ.copy()
+    env["TRACEDB_DATA_DIR"] = str(data_dir)
+    env["TRACEDB_BIND"] = f"127.0.0.1:{config.tracedb_port}"
+    with log_path.open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(
+            [str(binary)],
+            cwd=repo_root,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    try:
+        wait_for_http_ready(tracedb_engine_http_url(config))
+    except Exception:
+        stop_tracedb_engine_control(
+            TraceDbEngineControl(
+                data_dir=data_dir,
+                log_path=log_path,
+                port=config.tracedb_port,
+                process=process,
+            )
+        )
+        raise RuntimeError(f"TraceDB engine failed to become ready; log tail: {tail_file(log_path)}")
+    return TraceDbEngineControl(
+        data_dir=data_dir,
+        log_path=log_path,
+        port=config.tracedb_port,
+        process=process,
+    )
+
+
+def tracedb_server_binary(repo_root: Path) -> Path:
+    override = os.environ.get("TRACEDB_SERVER_BIN")
+    if override:
+        return Path(override)
+    release_binary = repo_root / "target" / "release" / "tracedb-server"
+    if release_binary.exists():
+        return release_binary
+    return repo_root / "target" / "debug" / "tracedb-server"
+
+
+def stop_tracedb_engine_control(service: TraceDbEngineControl) -> None:
+    if service.process.poll() is not None:
+        return
+    service.process.terminate()
+    try:
+        service.process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        service.process.kill()
+        service.process.wait(timeout=10)
+
+
+def wait_for_http_ready(base_url: str, *, timeout_seconds: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"{base_url}/ready", timeout=1.0) as response:
+                if 200 <= response.status < 500:
+                    return
+        except Exception as error:  # pragma: no cover - exercised in Modal.
+            last_error = error
+        time.sleep(0.1)
+    raise TimeoutError(f"{base_url}/ready did not respond before timeout: {last_error}")
+
+
+def tail_file(path: Path, *, limit: int = 2000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError as error:
+        return str(error)
 
 
 def start_postgres_control(config: ModalSmokeConfig) -> PostgresControl:
@@ -566,8 +701,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-external-controls", action="store_true")
     parser.add_argument("--allow-provider", action="store_true")
     parser.add_argument("--require-services", action="store_true")
+    parser.add_argument("--tracedb-engine-control", action="store_true")
     parser.add_argument("--postgres-control", action="store_true")
     parser.add_argument("--pgvector-control", action="store_true")
+    parser.add_argument("--tracedb-port", type=int, default=18_080)
     parser.add_argument("--postgres-port", type=int, default=25_432)
     parser.add_argument("--pgvector-port", type=int, default=25_433)
     parser.add_argument(
@@ -593,8 +730,10 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         allow_external_controls=args.allow_external_controls,
         allow_provider=args.allow_provider,
         require_services=args.require_services,
+        tracedb_engine_control=args.tracedb_engine_control,
         postgres_control=args.postgres_control,
         pgvector_control=args.pgvector_control,
+        tracedb_port=args.tracedb_port,
         postgres_port=args.postgres_port,
         pgvector_port=args.pgvector_port,
         modal_app_name=modal_app_name(),
@@ -662,8 +801,23 @@ if modal is not None:
             ignore=MODAL_IGNORE_PATTERNS,
         )
 
+    def add_repo_source_for_build(base_image: modal.Image) -> modal.Image:
+        return base_image.add_local_dir(
+            str(REPO_ROOT),
+            remote_path=REMOTE_REPO,
+            ignore=MODAL_IGNORE_PATTERNS,
+            copy=True,
+        )
+
     def modal_image(*extra_packages: str) -> modal.Image:
         return add_repo_source(modal_base_image(*extra_packages))
+
+    def tracedb_engine_image(*extra_packages: str) -> modal.Image:
+        return add_repo_source_for_build(
+            modal_base_image("cargo", "postgresql", "postgresql-client", *extra_packages)
+        ).run_commands(
+            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
+        )
 
     image = modal_image()
     postgres_image = modal_image("postgresql", "postgresql-client")
@@ -681,6 +835,25 @@ if modal is not None:
             "make install && "
             "rm -rf /tmp/pgvector"
         )
+    )
+    tracedb_image = tracedb_engine_image()
+    tracedb_pgvector_image = add_repo_source_for_build(
+        modal_base_image(
+            "cargo",
+            "git",
+            "postgresql",
+            "postgresql-client",
+            "postgresql-server-dev-all",
+        ).run_commands(
+            "cd /tmp && "
+            f"git clone --branch {PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && "
+            "cd pgvector && "
+            "make && "
+            "make install && "
+            "rm -rf /tmp/pgvector"
+        )
+    ).run_commands(
+        f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
     )
     app = modal.App(modal_app_name())
 
@@ -717,6 +890,28 @@ if modal is not None:
         config = ModalSmokeConfig(**kwargs)
         return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
 
+    @app.function(
+        image=tracedb_image,
+        cpu=ModalSmokeConfig.cpu,
+        memory=ModalSmokeConfig.memory_mb,
+        timeout=ModalSmokeConfig.timeout_seconds,
+        ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
+    )
+    def run_smoke_with_tracedb_engine(**kwargs: Any) -> dict[str, Any]:
+        config = ModalSmokeConfig(**kwargs)
+        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
+
+    @app.function(
+        image=tracedb_pgvector_image,
+        cpu=ModalSmokeConfig.cpu,
+        memory=ModalSmokeConfig.memory_mb,
+        timeout=ModalSmokeConfig.timeout_seconds,
+        ephemeral_disk=ModalSmokeConfig.ephemeral_disk_mb,
+    )
+    def run_smoke_with_tracedb_engine_and_pgvector(**kwargs: Any) -> dict[str, Any]:
+        config = ModalSmokeConfig(**kwargs)
+        return run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
+
     @app.local_entrypoint()
     def main(
         run_id: str = "modal-smoke",
@@ -729,6 +924,7 @@ if modal is not None:
         seed: int = 42,
         allow_external_controls: bool = False,
         require_services: bool = False,
+        tracedb_engine_control: bool = False,
         postgres_control: bool = False,
         pgvector_control: bool = False,
         allow_large: bool = False,
@@ -736,6 +932,11 @@ if modal is not None:
         summary_json: str = "",
     ) -> None:
         remote_function = (
+            run_smoke_with_tracedb_engine_and_pgvector
+            if tracedb_engine_control and pgvector_control
+            else run_smoke_with_tracedb_engine
+            if tracedb_engine_control
+            else
             run_smoke_with_pgvector
             if pgvector_control
             else run_smoke_with_postgres
@@ -753,6 +954,7 @@ if modal is not None:
             seed=seed,
             allow_external_controls=allow_external_controls,
             require_services=require_services,
+            tracedb_engine_control=tracedb_engine_control,
             postgres_control=postgres_control,
             pgvector_control=pgvector_control,
             allow_large=allow_large,

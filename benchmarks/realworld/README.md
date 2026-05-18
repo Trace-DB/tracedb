@@ -258,6 +258,29 @@ modal run benchmarks/realworld/modal_bench.py \
   --summary-json /tmp/tracedb-modal-summaries/modal-pgvector-smoke-a.json
 ```
 
+TraceDB actual-engine HTTP smoke on Modal:
+
+```bash
+TRACEDB_MODAL_APP_NAME=tracedb-engine-http-smoke-a \
+modal run benchmarks/realworld/modal_bench.py \
+  --run-id modal-tracedb-engine-http-a \
+  --records 128 \
+  --seed 42 \
+  --target tracedb \
+  --surface http \
+  --scenarios search_rag_6 \
+  --tracedb-engine-control \
+  --summary-json /tmp/tracedb-modal-summaries/modal-tracedb-engine-http-a.json
+```
+
+Use `--tracedb-engine-control` when TraceDB needs to be measured through the
+real server process instead of SDK request-builder smoke. The Modal image builds
+the release `tracedb-server` binary, starts it on loopback, sets
+`TRACEDB_HTTP_URL`, and records `TRACEDB_HTTP_DATA_DIR` so HTTP runs can report
+actual data-directory bytes. Side-by-side pgvector comparisons should use this
+flag together with `--pgvector-control`; otherwise TraceDB results remain
+development evidence rather than an exported product benchmark claim.
+
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
 `manifest.json`. The manifest records the run config, seed, Modal app name,
 resource class, redacted benchmark environment, and git commit/dirty state. Use

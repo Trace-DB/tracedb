@@ -609,24 +609,32 @@ class AdapterHardeningTests(unittest.TestCase):
     def test_tracedb_http_surface_reports_split_admin_metrics(self) -> None:
         fake = FakeTraceDb().start()
         old_url = os.environ.get("TRACEDB_HTTP_URL")
+        old_data_dir = os.environ.get("TRACEDB_HTTP_DATA_DIR")
         try:
-            os.environ["TRACEDB_HTTP_URL"] = fake.base_url
-            result = TraceDbAdapter().run(
-                generated_dataset(12, 42),
-                RunConfig(
-                    profile="smoke",
-                    target=["tracedb"],
-                    surfaces=["http"],
-                    require_services=False,
-                    repo_root=".",
-                    run_id="admin-split",
-                ),
-            )
+            with tempfile.TemporaryDirectory() as data_dir:
+                Path(data_dir, "wal.twal").write_bytes(b"x" * 128)
+                os.environ["TRACEDB_HTTP_URL"] = fake.base_url
+                os.environ["TRACEDB_HTTP_DATA_DIR"] = data_dir
+                result = TraceDbAdapter().run(
+                    generated_dataset(12, 42),
+                    RunConfig(
+                        profile="smoke",
+                        target=["tracedb"],
+                        surfaces=["http"],
+                        require_services=False,
+                        repo_root=".",
+                        run_id="admin-split",
+                    ),
+                )
         finally:
             if old_url is None:
                 os.environ.pop("TRACEDB_HTTP_URL", None)
             else:
                 os.environ["TRACEDB_HTTP_URL"] = old_url
+            if old_data_dir is None:
+                os.environ.pop("TRACEDB_HTTP_DATA_DIR", None)
+            else:
+                os.environ["TRACEDB_HTTP_DATA_DIR"] = old_data_dir
             fake.stop()
 
         self.assertTrue(result["available"], result["notes"])
@@ -637,6 +645,11 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("admin_compact_latency_p95_ms", result["metrics"])
         self.assertIn("admin_snapshot_latency_p95_ms", result["metrics"])
         self.assertIn("admin_restore_latency_p95_ms", result["metrics"])
+        self.assertGreaterEqual(result["metrics"]["disk_bytes"], 128)
+        self.assertTrue(
+            any("data directory bytes measured" in note for note in result["notes"]),
+            result["notes"],
+        )
 
     def test_generated_dataset_labels_are_marked_operational_smoke(self) -> None:
         dataset = generated_dataset(24, 42)
