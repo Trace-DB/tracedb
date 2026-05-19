@@ -45,6 +45,6 @@ In a second terminal:
 cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000
 ```
 
-The SDK quickstart uses typed convenience response methods over the current HTTP
-JSON shapes and accepts `--timeout-ms` for the blocking SDK request timeout. SQL
-compatibility remains unimplemented.
+The SDK quickstart uses typed convenience response methods, including typed
+query rows, over the current HTTP JSON shapes and accepts `--timeout-ms` for the
+blocking SDK request timeout. SQL compatibility remains unimplemented.

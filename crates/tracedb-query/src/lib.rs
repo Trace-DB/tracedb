@@ -37,7 +37,10 @@ pub use tracedb_core::{
     FeatureInvalidation, ModuleManifest, RecordDeletion, RecordInput, TableSchema,
     VectorColumnSchema,
 };
-pub use tracedb_planner::{ExplainOutput as HybridExplain, QueryOutput as HybridQueryOutput};
+pub use tracedb_planner::{
+    ExplainOutput as HybridExplain, QueryOutput as HybridQueryOutput, QueryRow as HybridQueryRow,
+    ScoreComponents as HybridScoreComponents,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum FreshnessMode {

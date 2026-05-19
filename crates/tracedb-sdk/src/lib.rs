@@ -9,9 +9,9 @@ use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tracedb_features::FeatureFreshnessMode;
 use tracedb_query::{
-    HybridExplain, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput, RecordOutput,
-    RecordPatchRequest, RecordPutBatchRequest, RecordScanOutput, RecordScanRequest, TableSchema,
-    WritePathTiming,
+    HybridExplain, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
+    RecordOutput, RecordPatchRequest, RecordPutBatchRequest, RecordScanOutput, RecordScanRequest,
+    TableSchema, WritePathTiming,
 };
 
 pub type TraceDbClientResult<T> = std::result::Result<T, TraceDbClientError>;
@@ -409,7 +409,7 @@ pub struct GetRecordResponse {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryResponse {
-    pub results: Vec<Value>,
+    pub results: Vec<HybridQueryRow>,
     #[serde(default)]
     pub explain: Option<HybridExplain>,
 }

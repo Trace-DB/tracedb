@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 use tracedb_query::{
-    FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
+    FreshnessMode, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{TraceDbClient, TraceDbClientConfig, TraceDbClientError};
@@ -429,6 +429,13 @@ fn client_executes_typed_http_product_path() {
     let lean = client.query_typed(&query(false)).expect("query");
     assert_eq!(lean.results.len(), 2);
     assert!(lean.explain.is_none());
+    let typed_rows: Vec<&HybridQueryRow> = lean.results.iter().collect();
+    assert!(typed_rows.iter().any(|row| {
+        row.record_id == "intro"
+            && row.tenant_id == "tenant-a"
+            && row.fields["id"] == "intro"
+            && row.score.final_score.is_finite()
+    }));
 
     let explained = client.explain_typed(&query(false)).expect("explain");
     assert_eq!(explained.returned_count, 2);
