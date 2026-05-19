@@ -34,6 +34,8 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
             &format!("http://{addr}"),
             "--token",
             "dev-token",
+            "--timeout-ms",
+            "5000",
         ])
         .output()
         .expect("run quickstart example");

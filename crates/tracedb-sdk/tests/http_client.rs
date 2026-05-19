@@ -124,6 +124,18 @@ fn http_response_server(response: &'static [u8]) -> String {
     format!("http://{addr}")
 }
 
+fn stalled_response_server(stall_for: Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buffer = [0; 1024];
+        let _ = stream.read(&mut buffer);
+        std::thread::sleep(stall_for);
+    });
+    format!("http://{addr}")
+}
+
 #[test]
 fn managed_client_injects_database_and_branch_ids_into_json_posts() {
     let (url, request_body) = capture_json_body_server();
@@ -150,6 +162,34 @@ fn managed_client_injects_database_and_branch_ids_into_json_posts() {
     assert_eq!(body["tenant_id"], "tenant-a");
     assert_eq!(body["database_id"], "db_prod");
     assert_eq!(body["branch_id"], "db_prod:beta");
+}
+
+#[test]
+fn request_timeout_errors_include_method_path_and_timeout() {
+    let url = stalled_response_server(Duration::from_millis(250));
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_timeout(Duration::from_millis(25)),
+    );
+
+    let error = client
+        .request_json("GET", "/v1/ready", None)
+        .expect_err("stalled response should time out");
+    let message = error.to_string();
+
+    match error {
+        TraceDbClientError::Timeout {
+            method,
+            path,
+            timeout_ms,
+        } => {
+            assert_eq!(method, "GET");
+            assert_eq!(path, "/v1/ready");
+            assert_eq!(timeout_ms, 25);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(message.contains("GET /v1/ready"), "{message}");
+    assert!(message.contains("timed out after 25 ms"), "{message}");
 }
 
 #[test]

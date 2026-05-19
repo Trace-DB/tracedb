@@ -5,7 +5,8 @@ use serde_json::{json, Map, Value};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::Duration;
 use tracedb_features::FeatureFreshnessMode;
 use tracedb_query::{
     HybridExplain, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput, RecordOutput,
@@ -20,6 +21,11 @@ pub enum TraceDbClientError {
     InvalidUrl(String),
     Io(std::io::Error),
     Json(serde_json::Error),
+    Timeout {
+        method: String,
+        path: String,
+        timeout_ms: u64,
+    },
     InvalidResponse {
         method: String,
         path: String,
@@ -39,6 +45,14 @@ impl Display for TraceDbClientError {
             Self::InvalidUrl(url) => write!(f, "invalid TraceDB URL {url}"),
             Self::Io(error) => write!(f, "TraceDB HTTP I/O error: {error}"),
             Self::Json(error) => write!(f, "TraceDB JSON error: {error}"),
+            Self::Timeout {
+                method,
+                path,
+                timeout_ms,
+            } => write!(
+                f,
+                "TraceDB HTTP request {method} {path} timed out after {timeout_ms} ms"
+            ),
             Self::InvalidResponse {
                 method,
                 path,
@@ -67,7 +81,10 @@ impl Error for TraceDbClientError {
         match self {
             Self::Io(error) => Some(error),
             Self::Json(error) => Some(error),
-            Self::InvalidUrl(_) | Self::InvalidResponse { .. } | Self::HttpStatus { .. } => None,
+            Self::InvalidUrl(_)
+            | Self::Timeout { .. }
+            | Self::InvalidResponse { .. }
+            | Self::HttpStatus { .. } => None,
         }
     }
 }
@@ -92,6 +109,8 @@ pub struct TraceDbClientConfig {
     pub database_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_id: Option<String>,
+    #[serde(default = "default_request_timeout_ms")]
+    pub request_timeout_ms: u64,
 }
 
 impl TraceDbClientConfig {
@@ -101,6 +120,7 @@ impl TraceDbClientConfig {
             token: token.into(),
             database_id: None,
             branch_id: None,
+            request_timeout_ms: default_request_timeout_ms(),
         }
     }
 
@@ -120,6 +140,15 @@ impl TraceDbClientConfig {
         branch_id: impl Into<String>,
     ) -> Self {
         self.with_database(database_id).with_branch(branch_id)
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout_ms = timeout_ms(timeout);
+        self
+    }
+
+    fn request_timeout(&self) -> Duration {
+        Duration::from_millis(self.request_timeout_ms.max(1))
     }
 }
 
@@ -243,7 +272,8 @@ impl TraceDbClient {
         let target = HttpTarget::parse(&self.config.url)?;
         let request_path = target.path(path);
         let body_bytes = self.request_body_bytes(body)?;
-        let mut stream = TcpStream::connect(target.socket_addr())?;
+        let timeout = self.config.request_timeout();
+        let mut stream = target.connect(method, &request_path, timeout)?;
         let mut request = format!(
             "{method} {request_path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n",
             target.authority,
@@ -256,13 +286,21 @@ impl TraceDbClient {
             request.push_str("Content-Type: application/json\r\n");
         }
         request.push_str("\r\n");
-        stream.write_all(request.as_bytes())?;
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|error| map_request_io_error(method, &request_path, timeout, error))?;
         if !body_bytes.is_empty() {
-            stream.write_all(&body_bytes)?;
+            stream
+                .write_all(&body_bytes)
+                .map_err(|error| map_request_io_error(method, &request_path, timeout, error))?;
         }
-        stream.flush()?;
+        stream
+            .flush()
+            .map_err(|error| map_request_io_error(method, &request_path, timeout, error))?;
         let mut response = String::new();
-        stream.read_to_string(&mut response)?;
+        stream
+            .read_to_string(&mut response)
+            .map_err(|error| map_request_io_error(method, &request_path, timeout, error))?;
         parse_response(method, &request_path, &response)
     }
 
@@ -420,8 +458,35 @@ impl HttpTarget {
         })
     }
 
-    fn socket_addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+    fn connect(
+        &self,
+        method: &str,
+        path: &str,
+        timeout: Duration,
+    ) -> TraceDbClientResult<TcpStream> {
+        let socket_addr = self.socket_addr(method, path, timeout)?;
+        let stream = TcpStream::connect_timeout(&socket_addr, timeout)
+            .map_err(|error| map_request_io_error(method, path, timeout, error))?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|error| map_request_io_error(method, path, timeout, error))?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|error| map_request_io_error(method, path, timeout, error))?;
+        Ok(stream)
+    }
+
+    fn socket_addr(
+        &self,
+        method: &str,
+        path: &str,
+        timeout: Duration,
+    ) -> TraceDbClientResult<SocketAddr> {
+        (self.host.as_str(), self.port)
+            .to_socket_addrs()
+            .map_err(|error| map_request_io_error(method, path, timeout, error))?
+            .next()
+            .ok_or_else(|| TraceDbClientError::InvalidUrl(self.authority.clone()))
     }
 
     fn path(&self, path: &str) -> String {
@@ -434,6 +499,34 @@ impl HttpTarget {
                 path.trim_start_matches('/')
             )
         }
+    }
+}
+
+fn default_request_timeout_ms() -> u64 {
+    30_000
+}
+
+fn timeout_ms(timeout: Duration) -> u64 {
+    timeout.as_millis().clamp(1, u64::MAX as u128) as u64
+}
+
+fn map_request_io_error(
+    method: &str,
+    path: &str,
+    timeout: Duration,
+    error: std::io::Error,
+) -> TraceDbClientError {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) {
+        TraceDbClientError::Timeout {
+            method: method.to_string(),
+            path: path.to_string(),
+            timeout_ms: timeout_ms(timeout),
+        }
+    } else {
+        TraceDbClientError::Io(error)
     }
 }
 

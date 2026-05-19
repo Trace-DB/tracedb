@@ -42,8 +42,9 @@ TRACEDB_DATA_DIR=/tmp/tracedb-sdk-demo TRACEDB_BIND=127.0.0.1:8090 cargo run -p 
 In a second terminal:
 
 ```bash
-cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token
+cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000
 ```
 
 The SDK quickstart uses typed convenience response methods over the current HTTP
-JSON shapes. SQL compatibility remains unimplemented.
+JSON shapes and accepts `--timeout-ms` for the blocking SDK request timeout. SQL
+compatibility remains unimplemented.

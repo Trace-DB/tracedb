@@ -1,6 +1,7 @@
 use serde_json::json;
 use std::env;
 use std::error::Error;
+use std::time::Duration;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
@@ -27,6 +28,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if let Some(branch_id) = args.branch_id {
         config = config.with_branch(branch_id);
+    }
+    if let Some(timeout_ms) = args.timeout_ms {
+        config = config.with_timeout(Duration::from_millis(timeout_ms));
     }
     let client = TraceDbClient::new(config);
 
@@ -80,6 +84,7 @@ struct QuickstartArgs {
     token: String,
     database_id: Option<String>,
     branch_id: Option<String>,
+    timeout_ms: Option<u64>,
     help: bool,
 }
 
@@ -90,6 +95,10 @@ impl QuickstartArgs {
             token: env::var("TRACEDB_TOKEN").unwrap_or_default(),
             database_id: env::var("TRACEDB_DATABASE_ID").ok(),
             branch_id: env::var("TRACEDB_BRANCH_ID").ok(),
+            timeout_ms: env::var("TRACEDB_TIMEOUT_MS")
+                .ok()
+                .map(|value| parse_timeout_ms(&value))
+                .transpose()?,
             help: false,
         };
         let mut cli = env::args().skip(1);
@@ -99,6 +108,10 @@ impl QuickstartArgs {
                 "--token" => args.token = next_value(&mut cli, "--token")?,
                 "--database-id" => args.database_id = Some(next_value(&mut cli, "--database-id")?),
                 "--branch-id" => args.branch_id = Some(next_value(&mut cli, "--branch-id")?),
+                "--timeout-ms" => {
+                    args.timeout_ms =
+                        Some(parse_timeout_ms(&next_value(&mut cli, "--timeout-ms")?)?)
+                }
                 "--help" | "-h" => args.help = true,
                 unknown => return Err(format!("unknown argument {unknown}\n{}", Self::usage())),
             }
@@ -107,7 +120,7 @@ impl QuickstartArgs {
     }
 
     fn usage() -> &'static str {
-        "Usage: cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8080 [--token TOKEN] [--database-id DB] [--branch-id BRANCH]"
+        "Usage: cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8080 [--token TOKEN] [--database-id DB] [--branch-id BRANCH] [--timeout-ms MS]"
     }
 }
 
@@ -115,6 +128,16 @@ fn next_value(cli: &mut impl Iterator<Item = String>, name: &str) -> Result<Stri
     cli.next()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("{name} requires a value"))
+}
+
+fn parse_timeout_ms(value: &str) -> Result<u64, String> {
+    let timeout_ms = value
+        .parse::<u64>()
+        .map_err(|_| format!("--timeout-ms must be a positive integer, got {value}"))?;
+    if timeout_ms == 0 {
+        return Err("--timeout-ms must be greater than 0".to_string());
+    }
+    Ok(timeout_ms)
 }
 
 fn schema() -> TableSchema {
