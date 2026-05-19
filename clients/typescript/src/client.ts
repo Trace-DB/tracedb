@@ -174,7 +174,10 @@ export interface HybridExplain extends JsonObject {
 export interface HybridQuery extends JsonObject {
   explain?: boolean;
   freshness?: string;
+  graph_seed?: string | null;
+  scalar_eq?: JsonObject;
   table?: string;
+  temporal_as_of?: number | null;
   tenant_id?: string;
   text?: string | null;
   top_k?: number;

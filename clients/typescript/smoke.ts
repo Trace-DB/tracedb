@@ -92,11 +92,18 @@ const queryBody: HybridQuery = {
   tenant_id: "tenant-a",
   text: "hello",
   vector: [1, 0, 0],
+  scalar_eq: { status: "active" },
+  graph_seed: "root-a",
+  temporal_as_of: 123,
   top_k: 5,
 };
 const queryResponse: QueryResponse = await client.query(queryBody);
 assert.equal(queryResponse.ok, true);
-assert.equal(JSON.parse(calls[3].init.body ?? "{}").vector.length, 3);
+const queryRequest = JSON.parse(calls[3].init.body ?? "{}");
+assert.equal(queryRequest.vector.length, 3);
+assert.equal(queryRequest.scalar_eq.status, "active");
+assert.equal(queryRequest.graph_seed, "root-a");
+assert.equal(queryRequest.temporal_as_of, 123);
 
 const typedScore: HybridScoreComponents = {
   final_score: 1,

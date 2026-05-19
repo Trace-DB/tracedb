@@ -854,6 +854,21 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         "RecordScanOutput should expose returned_count"
     );
     assert_eq!(
+        spec["components"]["schemas"]["HybridQuery"]["properties"]["scalar_eq"]["type"],
+        json!("object"),
+        "HybridQuery should expose scalar_eq predicates"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridQuery"]["properties"]["graph_seed"]["type"],
+        json!(["string", "null"]),
+        "HybridQuery should expose graph_seed"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridQuery"]["properties"]["temporal_as_of"]["type"],
+        json!(["integer", "null"]),
+        "HybridQuery should expose temporal_as_of"
+    );
+    assert_eq!(
         spec["components"]["schemas"]["HybridQueryRow"]["properties"]["version_id"]["type"],
         json!("integer"),
         "HybridQueryRow should expose version_id"
@@ -953,6 +968,9 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "record?: RecordOutput | null;",
         "version_id?: number;",
         "export interface HybridQuery extends JsonObject",
+        "scalar_eq?: JsonObject;",
+        "graph_seed?: string | null;",
+        "temporal_as_of?: number | null;",
         "export interface QueryResponse extends JsonObject",
         "export interface SnapshotRequest extends JsonObject",
         "export interface RestoreResponse extends JsonObject",

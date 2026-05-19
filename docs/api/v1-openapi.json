@@ -308,8 +308,25 @@
           "freshness": {
             "type": "string"
           },
+          "graph_seed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scalar_eq": {
+            "additionalProperties": true,
+            "description": "Scalar equality predicates keyed by schema scalar column.",
+            "type": "object"
+          },
           "table": {
             "type": "string"
+          },
+          "temporal_as_of": {
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "tenant_id": {
             "type": "string"

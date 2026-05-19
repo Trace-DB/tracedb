@@ -100,7 +100,9 @@ domain enforcement to the server. The OpenAPI schema for
 `POST /v1/records/put` uses `RecordPutBody`, a `oneOf` union matching current
 server behavior: callers may send `RecordInput` directly or the wrapper
 `RecordPutRequest`. `GetRecordResponse.record` references `RecordOutput | null`;
-`RecordOutput` includes the serialized `version_id` field.
+`RecordOutput` includes the serialized `version_id` field. `HybridQuery`
+includes the existing JSON request knobs for `scalar_eq`, `graph_seed`, and
+`temporal_as_of`; these are native API fields, not SQL compatibility.
 
 ## Health And Catalog
 
@@ -138,7 +140,7 @@ mutating writes.
 | --- | --- | --- |
 | `POST /v1/records/get` | `RecordGetRequest`: `table`, `tenant_id`, and `id`. | `{ "record": RecordOutput \| null }`. |
 | `POST /v1/records/scan` | `RecordScanRequest`: `table`, `tenant_id`, and optional `limit`. | `RecordScanOutput` with `records: RecordOutput[]` and `returned_count`. No cursor metadata is emitted today. |
-| `POST /v1/query` | `HybridQuery`: `table`, `tenant_id`, optional `text`, optional `vector`, scalar filters, `top_k`, `freshness`, and `explain`. | With `explain: false`, returns `{ "results": HybridQueryRow[] }`; with `explain: true`, returns results plus `HybridExplain` metadata. |
+| `POST /v1/query` | `HybridQuery`: `table`, `tenant_id`, optional `text`, optional `vector`, optional `scalar_eq`, optional `graph_seed`, optional `temporal_as_of`, `top_k`, `freshness`, and `explain`. | With `explain: false`, returns `{ "results": HybridQueryRow[] }`; with `explain: true`, returns results plus `HybridExplain` metadata. |
 | `POST /v1/explain` | Same query shape as `POST /v1/query`; the server forces explain mode. | `HybridExplain` only, including current access-path, candidate, counter, and timing fields. |
 
 Query responses include `Server-Timing` phase attribution for read, parse,

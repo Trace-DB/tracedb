@@ -119,9 +119,11 @@ helpers such as `HybridQueryRow`, `HybridScoreComponents`, `AccessPathExplain`,
 `Candidate`, and timing entries. These are permissive
 compile-time helpers: known fields are optional, unknown JSON fields are still
 allowed, and server-side runtime validation remains authoritative. The OpenAPI
-artifact and generated client now also expose the server's `/v1/records/put`
-direct-or-wrapper body as `RecordPutBody`, and `getRecord` responses type
-`record` as `RecordOutput | null` with the serialized `version_id` field.
+artifact and generated client now also expose `HybridQuery.scalar_eq`,
+`HybridQuery.graph_seed`, and `HybridQuery.temporal_as_of` request fields, the
+server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
+`getRecord` responses type `record` as `RecordOutput | null` with the serialized
+`version_id` field.
 
 ## Current Boundaries
 

@@ -16,8 +16,10 @@ They are compile-time ergonomics for the current HTTP API, not strict domain
 validators. The generated `RecordPutBody` alias mirrors current server behavior:
 `putRecord` accepts either `RecordInput` directly or `{ record: RecordInput }`.
 `GetRecordResponse.record` is typed as `RecordOutput | null`, and
-`RecordOutput` exposes the server's serialized `version_id` field. The scan,
-query, and explain response aliases now expose current server fields for
+`RecordOutput` exposes the server's serialized `version_id` field.
+`HybridQuery` now explicitly includes the current JSON request fields
+`scalar_eq`, `graph_seed`, and `temporal_as_of`. The scan, query, and explain
+response aliases now expose current server fields for
 `RecordScanOutput.records`, `RecordScanOutput.returned_count`,
 `QueryResponse.results`, optional `QueryResponse.explain`, `HybridQueryRow`,
 `HybridScoreComponents`, access-path explain entries, planner candidates, and

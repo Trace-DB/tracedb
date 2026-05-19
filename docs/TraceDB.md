@@ -87,12 +87,13 @@ fields are optional, unknown JSON fields remain allowed, and runtime validation
 stays server-side. The generated `RecordPutBody` alias matches the current
 server route by allowing either direct `RecordInput` or `{ record: RecordInput
 }`, and `GetRecordResponse.record` is now typed as `RecordOutput | null` with
-the serialized `version_id` field. `RecordScanOutput`, `QueryResponse`,
-`HybridQueryRow`, `HybridScoreComponents`, and `HybridExplain` now expose the
-current server response shape for scan/query/explain, including access-path,
-candidate, counter, and timing explain fields. It is not a published npm
-package, not a hand-maintained managed SDK, not a strict runtime validator, and
-not a SQL compatibility claim.
+the serialized `version_id` field. `HybridQuery` now explicitly includes
+`scalar_eq`, `graph_seed`, and `temporal_as_of` request fields. `RecordScanOutput`,
+`QueryResponse`, `HybridQueryRow`, `HybridScoreComponents`, and `HybridExplain`
+now expose the current server response shape for scan/query/explain, including
+access-path, candidate, counter, and timing explain fields. It is not a
+published npm package, not a hand-maintained managed SDK, not a strict runtime
+validator, and not a SQL compatibility claim.
 `node --experimental-strip-types clients/typescript/smoke.ts` verifies the
 artifact imports and executes in the local Node runtime with fake-fetch coverage
 for representative generated aliases, GET no-body behavior, POST routing
