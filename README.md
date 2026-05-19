@@ -54,7 +54,8 @@ current HTTP response shapes and accepts a configurable SDK request timeout; the
 original raw `serde_json::Value` methods remain available. Bounded safe retries
 are available for SDK health/read routes only. Callers can manually attach
 `Idempotency-Key` per write/admin request with `TraceDbRequestOptions`; the SDK
-does not automatically retry those routes.
+does not automatically retry those routes. The SDK also exposes typed local
+admin helpers for compact, snapshot, and restore.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
 machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
@@ -66,10 +67,11 @@ machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
   current engine API plus the original request-builder helpers. It can attach
   managed `database_id` and `branch_id` routing metadata to JSON POST bodies,
   includes typed convenience response methods and typed query rows for the
-  current product path, supports a configurable blocking socket request timeout,
-  supports bounded safe retries for health/read routes, and non-2xx SDK errors
-  include request method, request path, HTTP status, and response body. It is
-  not yet a full managed/cloud SDK.
+  current product path, includes typed local admin helpers for compact,
+  snapshot, and restore, supports a configurable blocking socket request
+  timeout, supports bounded safe retries for health/read routes, and non-2xx
+  SDK errors include request method, request path, HTTP status, and response
+  body. It is not yet a full managed/cloud SDK.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash, not cross-replica, and does not enable

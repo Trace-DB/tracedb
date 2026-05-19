@@ -112,6 +112,11 @@ They accept optional `Idempotency-Key` for local in-process replay, but the
 contract is not durable across restart/crash and the SDK still does not
 automatically retry admin requests.
 
+The Rust SDK provides typed `SnapshotRequest`, `SnapshotResponse`,
+`RestoreRequest`, and `RestoreResponse` wrappers plus raw/typed snapshot and
+restore helpers over these local admin routes. The wire contract remains JSON
+string paths.
+
 ## Minimal Product Path
 
 The current runnable HTTP product path is:

@@ -396,6 +396,57 @@ impl TraceDbClient {
         self.post_typed_with_options("/v1/admin/compact", &json!({}), options)
     }
 
+    pub fn snapshot(&self, request: &SnapshotRequest) -> TraceDbClientResult<Value> {
+        self.post_json("/v1/admin/snapshot", request)
+    }
+
+    pub fn snapshot_with_options(
+        &self,
+        request: &SnapshotRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/admin/snapshot", request, options)
+    }
+
+    pub fn snapshot_typed(
+        &self,
+        request: &SnapshotRequest,
+    ) -> TraceDbClientResult<SnapshotResponse> {
+        self.post_typed("/v1/admin/snapshot", request)
+    }
+
+    pub fn snapshot_typed_with_options(
+        &self,
+        request: &SnapshotRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<SnapshotResponse> {
+        self.post_typed_with_options("/v1/admin/snapshot", request, options)
+    }
+
+    pub fn restore(&self, request: &RestoreRequest) -> TraceDbClientResult<Value> {
+        self.post_json("/v1/admin/restore", request)
+    }
+
+    pub fn restore_with_options(
+        &self,
+        request: &RestoreRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/admin/restore", request, options)
+    }
+
+    pub fn restore_typed(&self, request: &RestoreRequest) -> TraceDbClientResult<RestoreResponse> {
+        self.post_typed("/v1/admin/restore", request)
+    }
+
+    pub fn restore_typed_with_options(
+        &self,
+        request: &RestoreRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<RestoreResponse> {
+        self.post_typed_with_options("/v1/admin/restore", request, options)
+    }
+
     pub fn request_json(
         &self,
         method: &str,
@@ -608,6 +659,47 @@ pub struct QueryResponse {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CompactResponse {
     pub compacted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotRequest {
+    pub target: String,
+}
+
+impl SnapshotRequest {
+    pub fn new(target: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotResponse {
+    pub snapshot: bool,
+    pub target: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RestoreRequest {
+    pub source: String,
+    pub target: String,
+}
+
+impl RestoreRequest {
+    pub fn new(source: impl Into<String>, target: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RestoreResponse {
+    pub restored: bool,
+    pub source: String,
+    pub target: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

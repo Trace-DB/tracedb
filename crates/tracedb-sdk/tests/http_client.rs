@@ -1,4 +1,5 @@
 use serde_json::json;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{
@@ -10,7 +11,10 @@ use tracedb_query::{
     FreshnessMode, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
-use tracedb_sdk::{TraceDbClient, TraceDbClientConfig, TraceDbClientError, TraceDbRequestOptions};
+use tracedb_sdk::{
+    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
+    TraceDbRequestOptions,
+};
 
 fn schema() -> TableSchema {
     TableSchema {
@@ -61,6 +65,12 @@ fn query(explain: bool) -> HybridQuery {
 }
 
 fn capture_json_body_server() -> (String, std::thread::JoinHandle<serde_json::Value>) {
+    capture_json_body_response_server(r#"{"ok":true}"#)
+}
+
+fn capture_json_body_response_server(
+    response_body: &'static str,
+) -> (String, std::thread::JoinHandle<serde_json::Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
@@ -85,11 +95,12 @@ fn capture_json_body_server() -> (String, std::thread::JoinHandle<serde_json::Va
                 Err(error) => panic!("read request: {error}"),
             }
         }
-        stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
-            )
-            .unwrap();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
         let request_text = String::from_utf8(request).expect("utf8 request");
         let (_, body) = request_text
             .split_once("\r\n\r\n")
@@ -273,6 +284,44 @@ fn managed_client_injects_database_and_branch_ids_into_json_posts() {
 }
 
 #[test]
+fn snapshot_typed_posts_target_and_decodes_response() {
+    let (url, request_body) =
+        capture_json_body_response_server(r#"{"snapshot":true,"target":"/tmp/tracedb-snapshot"}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = client
+        .snapshot_typed(&SnapshotRequest::new("/tmp/tracedb-snapshot"))
+        .expect("snapshot");
+    let body = request_body.join().expect("request body");
+
+    assert!(response.snapshot);
+    assert_eq!(response.target, "/tmp/tracedb-snapshot");
+    assert_eq!(body["target"], "/tmp/tracedb-snapshot");
+}
+
+#[test]
+fn restore_typed_posts_source_target_and_decodes_response() {
+    let (url, request_body) = capture_json_body_response_server(
+        r#"{"restored":true,"source":"/tmp/tracedb-snapshot","target":"/tmp/tracedb-restore"}"#,
+    );
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = client
+        .restore_typed(&RestoreRequest::new(
+            "/tmp/tracedb-snapshot",
+            "/tmp/tracedb-restore",
+        ))
+        .expect("restore");
+    let body = request_body.join().expect("request body");
+
+    assert!(response.restored);
+    assert_eq!(response.source, "/tmp/tracedb-snapshot");
+    assert_eq!(response.target, "/tmp/tracedb-restore");
+    assert_eq!(body["source"], "/tmp/tracedb-snapshot");
+    assert_eq!(body["target"], "/tmp/tracedb-restore");
+}
+
+#[test]
 fn request_options_send_idempotency_key_header_without_enabling_write_retries() {
     let (url, request) = capture_http_request_server();
     let client =
@@ -338,6 +387,27 @@ fn write_routes_with_idempotency_key_still_do_not_retry_5xx() {
     let error = client
         .apply_schema_with_options(&schema(), &options)
         .expect_err("schema writes should not retry automatically");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn admin_snapshot_restore_do_not_retry_5xx_even_with_idempotency_key() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+    let options = TraceDbRequestOptions::new().with_idempotency_key("snapshot-1");
+
+    let error = client
+        .snapshot_typed_with_options(&SnapshotRequest::new("/tmp/tracedb-snapshot"), &options)
+        .expect_err("snapshot should not retry automatically");
 
     match error {
         TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
@@ -693,4 +763,72 @@ fn client_idempotency_options_replay_write_response_against_real_server() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn client_executes_typed_snapshot_restore_with_idempotency_options() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().join("engine");
+    let server_data_dir = data_dir.clone();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(server_data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(
+        format!("http://{addr}"),
+        "dev-token",
+    ));
+    client.apply_schema_typed(&schema()).expect("schema");
+    let batch = RecordPutBatchRequest::new(vec![record(
+        "intro",
+        "tenant-a",
+        "rust database api quickstart",
+        [1.0, 0.0, 0.0],
+    )]);
+    client.put_batch_typed(&batch).expect("put batch");
+
+    let snapshot_dir = temp.path().join("snapshot-copy");
+    let snapshot_target = snapshot_dir.to_string_lossy().to_string();
+    let snapshot_request = SnapshotRequest::new(snapshot_target.clone());
+    let snapshot_options = TraceDbRequestOptions::new().with_idempotency_key("snapshot-1");
+    let snapshot = client
+        .snapshot_typed_with_options(&snapshot_request, &snapshot_options)
+        .expect("snapshot");
+    assert!(snapshot.snapshot);
+    assert_eq!(snapshot.target, snapshot_target);
+    let snapshot_marker = snapshot_dir.join("idempotency-marker");
+    fs::write(&snapshot_marker, "preserve").expect("write snapshot marker");
+    let replayed_snapshot = client
+        .snapshot_typed_with_options(&snapshot_request, &snapshot_options)
+        .expect("replayed snapshot");
+    assert_eq!(replayed_snapshot.target, snapshot_target);
+    assert!(
+        snapshot_marker.exists(),
+        "idempotent snapshot replay should not recopy over the target"
+    );
+
+    let restore_dir = temp.path().join("restore-copy");
+    let restore_target = restore_dir.to_string_lossy().to_string();
+    let restore_request = RestoreRequest::new(snapshot_target.clone(), restore_target.clone());
+    let restore_options = TraceDbRequestOptions::new().with_idempotency_key("restore-1");
+    let restore = client
+        .restore_typed_with_options(&restore_request, &restore_options)
+        .expect("restore");
+    assert!(restore.restored);
+    assert_eq!(restore.source, snapshot_target);
+    assert_eq!(restore.target, restore_target);
+    let restore_marker = restore_dir.join("idempotency-marker");
+    fs::write(&restore_marker, "preserve").expect("write restore marker");
+    let replayed_restore = client
+        .restore_typed_with_options(&restore_request, &restore_options)
+        .expect("replayed restore");
+    assert_eq!(replayed_restore.target, restore_target);
+    assert!(
+        restore_marker.exists(),
+        "idempotent restore replay should not recopy over the target"
+    );
 }
