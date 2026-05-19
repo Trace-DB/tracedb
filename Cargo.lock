@@ -321,6 +321,7 @@ name = "tracedb-cli"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tempfile",
  "tracedb-bench",
  "tracedb-catalog",
  "tracedb-query",
@@ -505,7 +506,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "tracedb-features",
+ "tracedb-query",
+ "tracedb-server",
 ]
 
 [[package]]

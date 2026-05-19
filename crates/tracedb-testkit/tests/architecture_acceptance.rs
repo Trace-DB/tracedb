@@ -369,6 +369,44 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     assert!(runtime_response.contains("\"engine\":true"));
     assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 1);
 
+    let batch_body = json!({
+        "database_id": database.database_id,
+        "branch_id": branch.branch_id,
+        "records": [{
+            "table": "docs",
+            "tenant_id": "tenant-a",
+            "id": "a",
+            "fields": {
+                "id": "a",
+                "tenant": "tenant-a",
+                "body": "gateway batch ingest",
+                "embedding": [1.0, 0.0]
+            }
+        }]
+    })
+    .to_string();
+    let batch_request = format!(
+        "POST /v1/records/put-batch HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer secret-token\r\ncontent-length: {}\r\n\r\n{}",
+        batch_body.len(),
+        batch_body
+    );
+    let batch_config = GatewayServerConfig {
+        bind: "127.0.0.1:0".to_string(),
+        engine_url: engine_url.clone(),
+        required_token: Some("secret-token".to_string()),
+        catalog: catalog.clone(),
+        meter: Arc::clone(&runtime_meter),
+        rate_limit_enabled: true,
+        rate_limit_requests: 10,
+    };
+    let batch_response = tracedb_gateway::handle_gateway_request_text(&batch_request, batch_config);
+    assert!(
+        batch_response.starts_with("HTTP/1.1 200 OK"),
+        "gateway should forward batch ingest route: {batch_response}"
+    );
+    assert!(batch_response.contains("\"path\":\"/v1/records/put-batch\""));
+    assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 2);
+
     let mut jobs = JobCatalog::default();
     jobs.enqueue(JobKind::VerifyDatabase, "branch/main", "verify-main")
         .expect("enqueue");
@@ -512,7 +550,7 @@ fn spawn_engine_stub() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind engine stub");
     let addr = listener.local_addr().expect("engine stub address");
     thread::spawn(move || {
-        for _ in 0..3 {
+        for _ in 0..4 {
             let (mut stream, _) = listener.accept().expect("accept engine request");
             let mut buffer = [0u8; 4096];
             let read = stream.read(&mut buffer).expect("read engine request");

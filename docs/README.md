@@ -20,5 +20,13 @@ This repo keeps only lightweight stubs required for local handoff and test stabi
 
 Start with:
 
+- `README.md`
 - `docs/TraceDB.md`
 - `docs/Operations/Local Cloud.md`
+
+Local product smoke:
+
+```bash
+cargo run -p tracedb-cli -- --data /tmp/tracedb-demo demo
+cargo run -p tracedb-cli -- --data /tmp/tracedb-demo verify
+```

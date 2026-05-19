@@ -1,0 +1,166 @@
+use serde_json::json;
+use std::env;
+use std::error::Error;
+use tracedb_query::{
+    FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
+    RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
+};
+use tracedb_sdk::{TraceDbClient, TraceDbClientConfig};
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("tracedb-sdk quickstart: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
+    let args = QuickstartArgs::from_env()?;
+    if args.help {
+        println!("{}", QuickstartArgs::usage());
+        return Ok(());
+    }
+
+    let mut config = TraceDbClientConfig::managed(args.url, args.token);
+    if let Some(database_id) = args.database_id {
+        config = config.with_database(database_id);
+    }
+    if let Some(branch_id) = args.branch_id {
+        config = config.with_branch(branch_id);
+    }
+    let client = TraceDbClient::new(config);
+
+    let ready = client.ready_typed()?;
+    let schema = client.apply_schema_typed(&schema())?;
+    let batch = RecordPutBatchRequest::new(vec![
+        record(
+            "intro",
+            "tenant-a",
+            "rust database api quickstart",
+            [1.0, 0.0, 0.0],
+        ),
+        record("ops", "tenant-a", "snapshot restore flow", [0.0, 1.0, 0.0]),
+    ]);
+    let ingest = client.put_batch_typed(&batch)?;
+    let scan = client.scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10))?;
+    let query_response = client.query_typed(&query(false))?;
+    let explain = client.explain_typed(&query(false))?;
+    let delete = client.delete_typed(&RecordDeleteRequest::new("docs", "tenant-a", "ops"))?;
+    let deleted = client.get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "ops"))?;
+
+    let summary = json!({
+        "ok": true,
+        "server_ready": ready.ready,
+        "schema_epoch": schema.epoch,
+        "records_inserted": ingest.record_count,
+        "records_scanned": scan.returned_count,
+        "query_result_count": query_response.results.len(),
+        "explain_returned_count": explain.returned_count,
+        "deleted": delete.deleted,
+        "deleted_hidden": deleted.record.is_none(),
+        "sql_module": "not_implemented",
+        "steps": {
+            "ready": true,
+            "schema_apply": true,
+            "batch_ingest": true,
+            "scan": true,
+            "query": true,
+            "explain": true,
+            "delete": true,
+        },
+    });
+    println!("{}", serde_json::to_string_pretty(&summary)?);
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct QuickstartArgs {
+    url: String,
+    token: String,
+    database_id: Option<String>,
+    branch_id: Option<String>,
+    help: bool,
+}
+
+impl QuickstartArgs {
+    fn from_env() -> Result<Self, String> {
+        let mut args = Self {
+            url: env::var("TRACEDB_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
+            token: env::var("TRACEDB_TOKEN").unwrap_or_default(),
+            database_id: env::var("TRACEDB_DATABASE_ID").ok(),
+            branch_id: env::var("TRACEDB_BRANCH_ID").ok(),
+            help: false,
+        };
+        let mut cli = env::args().skip(1);
+        while let Some(arg) = cli.next() {
+            match arg.as_str() {
+                "--url" => args.url = next_value(&mut cli, "--url")?,
+                "--token" => args.token = next_value(&mut cli, "--token")?,
+                "--database-id" => args.database_id = Some(next_value(&mut cli, "--database-id")?),
+                "--branch-id" => args.branch_id = Some(next_value(&mut cli, "--branch-id")?),
+                "--help" | "-h" => args.help = true,
+                unknown => return Err(format!("unknown argument {unknown}\n{}", Self::usage())),
+            }
+        }
+        Ok(args)
+    }
+
+    fn usage() -> &'static str {
+        "Usage: cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8080 [--token TOKEN] [--database-id DB] [--branch-id BRANCH]"
+    }
+}
+
+fn next_value(cli: &mut impl Iterator<Item = String>, name: &str) -> Result<String, String> {
+    cli.next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{name} requires a value"))
+}
+
+fn schema() -> TableSchema {
+    TableSchema {
+        name: "docs".to_string(),
+        primary_id_column: "id".to_string(),
+        tenant_id_column: "tenant".to_string(),
+        scalar_columns: vec!["status".to_string()],
+        text_indexed_columns: vec!["body".to_string()],
+        vector_columns: vec![VectorColumnSchema {
+            name: "embedding".to_string(),
+            dimensions: 3,
+            source_columns: vec!["body".to_string()],
+        }],
+    }
+}
+
+fn record(id: &str, tenant: &str, body: &str, embedding: [f32; 3]) -> RecordInput {
+    RecordInput {
+        table: "docs".to_string(),
+        id: id.to_string(),
+        tenant_id: tenant.to_string(),
+        fields: json!({
+            "id": id,
+            "tenant": tenant,
+            "status": "published",
+            "body": body,
+            "embedding": embedding,
+        })
+        .as_object()
+        .expect("object fields")
+        .clone(),
+    }
+}
+
+fn query(explain: bool) -> HybridQuery {
+    HybridQuery {
+        table: "docs".to_string(),
+        tenant_id: "tenant-a".to_string(),
+        text: Some("rust api".to_string()),
+        vector: Some(vec![1.0, 0.0, 0.0]),
+        scalar_eq: Default::default(),
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k: 5,
+        freshness: FreshnessMode::Strict,
+        explain,
+    }
+}

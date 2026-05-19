@@ -8,8 +8,9 @@ use std::process::Command;
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::Catalog;
 use tracedb_query::{
-    HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput, RecordPatchRequest,
-    RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
+    FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
+    RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema,
+    TraceDb, VectorColumnSchema,
 };
 
 fn main() {
@@ -268,6 +269,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "doctor" => {
             print_json(run_doctor(&data_dir));
         }
+        "demo" => {
+            run_demo(&data_dir)?;
+        }
         "compose" => {
             let action = args.get(1).map(String::as_str).unwrap_or("status");
             run_compose(action, &args[2..])?;
@@ -437,6 +441,160 @@ fn run_doctor(data_dir: &std::path::Path) -> Value {
     })
 }
 
+fn run_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(data_dir)?;
+    let table = "demo_docs";
+    let tenant = "demo-tenant";
+    db.apply_schema(demo_schema(table))?;
+    let (_epoch, write_timing) =
+        db.put_batch_with_write_timing(RecordPutBatchRequest::new(vec![
+            demo_record(
+                table,
+                tenant,
+                "intro",
+                "TraceDB local demo quickstart",
+                "published",
+                [1.0, 0.0, 0.0],
+            ),
+            demo_record(
+                table,
+                tenant,
+                "sdk",
+                "TraceDB SDK and HTTP API surface",
+                "published",
+                [0.8, 0.2, 0.0],
+            ),
+            demo_record(
+                table,
+                tenant,
+                "ops",
+                "TraceDB snapshot restore and WAL recovery",
+                "draft",
+                [0.0, 1.0, 0.0],
+            ),
+        ]))?;
+
+    let query = HybridQuery {
+        table: table.to_string(),
+        tenant_id: tenant.to_string(),
+        text: Some("TraceDB API".to_string()),
+        vector: Some(vec![1.0, 0.0, 0.0]),
+        scalar_eq: Default::default(),
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k: 3,
+        freshness: FreshnessMode::Strict,
+        explain: true,
+    };
+    let query_output = db.query(query.clone())?;
+    let query_ids = query_output
+        .results
+        .iter()
+        .map(|row| row.record_id.clone())
+        .collect::<Vec<_>>();
+
+    let scan_before_delete = db.scan(RecordScanRequest::new(table, tenant).limit(10))?;
+    db.delete(RecordDeleteRequest::new(table, tenant, "ops").tombstone("demo_cleanup"))?;
+    let deleted_hidden = db
+        .get(RecordGetRequest::new(table, tenant, "ops"))?
+        .is_none();
+    db.compact()?;
+
+    let snapshot_dir = data_dir.join("demo-snapshot");
+    if snapshot_dir.exists() {
+        fs::remove_dir_all(&snapshot_dir)?;
+    }
+    db.create_snapshot(&snapshot_dir)?;
+    let restore_dir = data_dir.join("demo-restore");
+    if restore_dir.exists() {
+        fs::remove_dir_all(&restore_dir)?;
+    }
+    let restored = TraceDb::restore_snapshot(&snapshot_dir, &restore_dir)?;
+    let restored_scan = restored.scan(RecordScanRequest::new(table, tenant).limit(10))?;
+    let manifest = db.inspect_manifest()?;
+    let restored_manifest = restored.inspect_manifest()?;
+
+    print_json(json!({
+        "ok": true,
+        "mode": "embedded-local-demo",
+        "data_dir": data_dir,
+        "table": table,
+        "tenant_id": tenant,
+        "steps": {
+            "schema_apply": true,
+            "batch_ingest": true,
+            "query": true,
+            "scan": true,
+            "delete": true,
+            "compact": true,
+            "snapshot": true,
+            "restore": true,
+        },
+        "records_before_delete": scan_before_delete.returned_count,
+        "records_after_restore": restored_scan.returned_count,
+        "query_result_ids": query_ids,
+        "explain": {
+            "read_epoch": query_output.explain.read_epoch.get(),
+            "fusion_method": query_output.explain.fusion_method,
+            "returned_count": query_output.explain.returned_count,
+            "access_path_count": query_output.explain.access_paths.len(),
+        },
+        "write_timing": {
+            "total_ms": write_timing.total_ms,
+            "store_apply_ms": write_timing.store_apply_ms,
+            "wal_total_ms": write_timing.wal_total_ms,
+            "manifest_total_ms": write_timing.manifest_total_ms,
+        },
+        "deleted_hidden": deleted_hidden,
+        "latest_epoch": manifest.latest_epoch.get(),
+        "restored_latest_epoch": restored_manifest.latest_epoch.get(),
+        "snapshot_dir": snapshot_dir,
+        "restore_dir": restore_dir,
+        "sql_module": "not_implemented",
+    }));
+    Ok(())
+}
+
+fn demo_schema(table: &str) -> TableSchema {
+    TableSchema {
+        name: table.to_string(),
+        primary_id_column: "id".to_string(),
+        tenant_id_column: "tenant".to_string(),
+        scalar_columns: vec!["status".to_string()],
+        text_indexed_columns: vec!["body".to_string()],
+        vector_columns: vec![VectorColumnSchema {
+            name: "embedding".to_string(),
+            dimensions: 3,
+            source_columns: vec!["body".to_string()],
+        }],
+    }
+}
+
+fn demo_record(
+    table: &str,
+    tenant: &str,
+    id: &str,
+    body: &str,
+    status: &str,
+    embedding: [f32; 3],
+) -> RecordInput {
+    RecordInput {
+        table: table.to_string(),
+        id: id.to_string(),
+        tenant_id: tenant.to_string(),
+        fields: json!({
+            "id": id,
+            "tenant": tenant,
+            "body": body,
+            "status": status,
+            "embedding": embedding,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    }
+}
+
 fn run_compose(action: &str, extra: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut command = Command::new("docker");
     command.arg("compose").arg("-f").arg("docker-compose.yml");
@@ -509,6 +667,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }

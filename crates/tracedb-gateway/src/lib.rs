@@ -273,6 +273,7 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
         | ("POST", "/v1/insert")
         | ("POST", "/v1/schema/apply")
         | ("POST", "/v1/records/put")
+        | ("POST", "/v1/records/put-batch")
         | ("POST", "/v1/records/patch")
         | ("POST", "/v1/records/delete")
         | ("POST", "/v1/records/get")
