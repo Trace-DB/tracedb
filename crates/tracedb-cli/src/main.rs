@@ -275,7 +275,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "doctor" if args.get(1).map(String::as_str) == Some("http") => {
             let config = parse_http_doctor_config(&args[2..])?;
-            print_json(run_http_doctor(config));
+            run_http_doctor_command(config)?;
         }
         "doctor" => {
             print_json(run_doctor(&data_dir));
@@ -598,6 +598,17 @@ fn run_http_doctor(config: HttpDoctorConfig) -> Value {
         },
         "sql_module": "not_implemented",
     })
+}
+
+fn run_http_doctor_command(config: HttpDoctorConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let summary = run_http_doctor(config);
+    let ok = summary.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    print_json(summary);
+    if ok {
+        Ok(())
+    } else {
+        Err("doctor http endpoint checks failed".into())
+    }
 }
 
 fn routed_admin_jobs_path(database_id: Option<&str>, branch_id: Option<&str>) -> String {

@@ -140,8 +140,9 @@ including parsed server error-envelope text when available. Optional
 `--database-id` and `--branch-id` add managed-routing metadata to gateway
 diagnostics; for the bodyless admin-jobs route, the gateway receives those IDs
 as query metadata before proxying `/v1/admin/jobs` to the engine. The command
-does not mutate data, does not probe SQL compatibility, and is not benchmark
-evidence.
+exits non-zero when any check fails while preserving the JSON summary on
+stdout. It does not mutate data, does not probe SQL compatibility, and is not
+benchmark evidence.
 
 Error responses use the current JSON envelope `{ "error": string }` for server
 and gateway failures such as validation errors, not found routes, idempotency

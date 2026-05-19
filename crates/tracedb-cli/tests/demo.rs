@@ -135,6 +135,37 @@ fn doctor_http_reports_endpoint_diagnostics() {
     assert_eq!(summary["sql_module"], "not_implemented");
 }
 
+#[test]
+fn doctor_http_exits_nonzero_for_unhealthy_endpoint_and_preserves_json_summary() {
+    let url = format!("http://{}", free_loopback_bind());
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("doctor")
+        .arg("http")
+        .arg("--url")
+        .arg(&url)
+        .arg("--token")
+        .arg("dev-token")
+        .arg("--timeout-ms")
+        .arg("25")
+        .arg("--safe-retries")
+        .arg("0")
+        .output()
+        .expect("run tracedb doctor http against unavailable endpoint");
+
+    assert!(
+        !output.status.success(),
+        "doctor http should fail the process when endpoint checks fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("doctor json");
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["mode"], "http-endpoint-diagnostics");
+    assert_eq!(summary["server_url"], url);
+    assert_eq!(summary["checks"]["health"]["ok"], false);
+    assert_eq!(summary["sql_module"], "not_implemented");
+}
+
 struct ServerChild {
     child: Child,
 }

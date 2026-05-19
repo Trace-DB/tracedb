@@ -70,7 +70,8 @@ The HTTP doctor checks the current health, readiness, catalog, public-safe
 metrics, and admin-jobs routes, returns a JSON summary with per-route responses
 or parsed error envelopes, and reports `sql_module: not_implemented`. Optional
 `--database-id` and `--branch-id` add managed-routing metadata for gateway
-diagnostics, including the bodyless admin-jobs route. It is a
+diagnostics, including the bodyless admin-jobs route. The command exits
+non-zero when any check fails while keeping the JSON summary on stdout. It is a
 local/managed-style endpoint diagnostic, not a SQL probe or benchmark.
 
 The SDK example applies schema, batch-ingests records, scans, queries, explains,
