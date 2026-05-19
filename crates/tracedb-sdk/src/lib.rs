@@ -4,8 +4,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::pin::Pin;
+use std::sync::{
+    mpsc::{self, TryRecvError},
+    Arc, Mutex,
+};
+use std::task::{Context, Poll, Waker};
+use std::thread;
 use std::time::Duration;
 use tracedb_features::FeatureFreshnessMode;
 use tracedb_query::{
@@ -680,6 +688,177 @@ impl TraceDbClient {
             });
             if let Some(branch_id) = branch_id {
                 body.insert("branch_id".to_string(), Value::String(branch_id));
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TraceDbAsyncClient {
+    inner: TraceDbClient,
+}
+
+impl TraceDbAsyncClient {
+    pub fn new(config: TraceDbClientConfig) -> Self {
+        Self {
+            inner: TraceDbClient::new(config),
+        }
+    }
+
+    pub fn from_blocking(client: TraceDbClient) -> Self {
+        Self { inner: client }
+    }
+
+    pub fn blocking_client(&self) -> &TraceDbClient {
+        &self.inner
+    }
+
+    pub async fn request_json(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> TraceDbClientResult<Value> {
+        self.request_json_with_options(method, path, body, &TraceDbRequestOptions::default())
+            .await
+    }
+
+    pub async fn request_json_with_options(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        let method = method.to_string();
+        let path = path.to_string();
+        let body = body.cloned();
+        let options = options.clone();
+        self.run(move |client| {
+            client.request_json_with_options(&method, &path, body.as_ref(), &options)
+        })
+        .await
+    }
+
+    pub async fn ready(&self) -> TraceDbClientResult<Value> {
+        self.run(|client| client.ready()).await
+    }
+
+    pub async fn ready_typed(&self) -> TraceDbClientResult<ReadyResponse> {
+        self.run(|client| client.ready_typed()).await
+    }
+
+    pub async fn health(&self) -> TraceDbClientResult<Value> {
+        self.run(|client| client.health()).await
+    }
+
+    pub async fn health_typed(&self) -> TraceDbClientResult<HealthResponse> {
+        self.run(|client| client.health_typed()).await
+    }
+
+    pub async fn list_databases_typed(&self) -> TraceDbClientResult<DatabasesResponse> {
+        self.run(|client| client.list_databases_typed()).await
+    }
+
+    pub async fn list_branches_typed(&self) -> TraceDbClientResult<BranchesResponse> {
+        self.run(|client| client.list_branches_typed()).await
+    }
+
+    pub async fn public_safe_metrics_typed(&self) -> TraceDbClientResult<MetricsResponse> {
+        self.run(|client| client.public_safe_metrics_typed()).await
+    }
+
+    pub async fn list_admin_jobs_typed(&self) -> TraceDbClientResult<JobsResponse> {
+        self.run(|client| client.list_admin_jobs_typed()).await
+    }
+
+    pub async fn get_record_typed(
+        &self,
+        request: &RecordGetRequest,
+    ) -> TraceDbClientResult<GetRecordResponse> {
+        let request = request.clone();
+        self.run(move |client| client.get_record_typed(&request))
+            .await
+    }
+
+    pub async fn scan_typed(
+        &self,
+        request: &RecordScanRequest,
+    ) -> TraceDbClientResult<RecordScanOutput> {
+        let request = request.clone();
+        self.run(move |client| client.scan_typed(&request)).await
+    }
+
+    pub async fn query_typed(&self, query: &HybridQuery) -> TraceDbClientResult<QueryResponse> {
+        let query = query.clone();
+        self.run(move |client| client.query_typed(&query)).await
+    }
+
+    pub async fn explain_typed(&self, query: &HybridQuery) -> TraceDbClientResult<HybridExplain> {
+        let query = query.clone();
+        self.run(move |client| client.explain_typed(&query)).await
+    }
+
+    async fn run<T>(
+        &self,
+        operation: impl FnOnce(TraceDbClient) -> TraceDbClientResult<T> + Send + 'static,
+    ) -> TraceDbClientResult<T>
+    where
+        T: Send + 'static,
+    {
+        let client = self.inner.clone();
+        BackgroundRequest::spawn(move || operation(client)).await
+    }
+}
+
+struct BackgroundRequest<T> {
+    receiver: mpsc::Receiver<T>,
+    waker: Arc<Mutex<Option<Waker>>>,
+}
+
+impl<T> BackgroundRequest<T>
+where
+    T: Send + 'static,
+{
+    fn spawn(operation: impl FnOnce() -> T + Send + 'static) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        let background_waker = Arc::clone(&waker);
+        thread::spawn(move || {
+            let _ = sender.send(operation());
+            if let Some(waker) = background_waker
+                .lock()
+                .expect("background request waker poisoned")
+                .take()
+            {
+                waker.wake();
+            }
+        });
+        Self { receiver, waker }
+    }
+}
+
+impl<T> Future for BackgroundRequest<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.receiver.try_recv() {
+            Ok(value) => Poll::Ready(value),
+            Err(TryRecvError::Empty) => {
+                *self
+                    .waker
+                    .lock()
+                    .expect("background request waker poisoned") = Some(context.waker().clone());
+                match self.receiver.try_recv() {
+                    Ok(value) => Poll::Ready(value),
+                    Err(TryRecvError::Empty) => Poll::Pending,
+                    Err(TryRecvError::Disconnected) => {
+                        panic!("background TraceDB request ended without a response")
+                    }
+                }
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("background TraceDB request ended without a response")
             }
         }
     }

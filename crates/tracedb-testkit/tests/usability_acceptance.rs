@@ -726,6 +726,8 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "SQL compatibility is not implemented",
         "Idempotency-Key supports local data-dir-backed replay",
         "exits non-zero when any check fails while preserving the JSON summary",
+        "TraceDbAsyncClient",
+        "background thread per request",
         "Internal TraceDB-only runs are development evidence",
         "No cursor metadata is emitted today",
     ] {

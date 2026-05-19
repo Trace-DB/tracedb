@@ -96,6 +96,11 @@ machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`. A checked
 generated TypeScript `fetch` client artifact lives at
 `clients/typescript/src/client.ts` and is regenerated from the OpenAPI artifact
 with `python3 scripts/generate_typescript_client.py`.
+The Rust SDK also exposes `TraceDbAsyncClient`, a minimal async facade over the
+same HTTP contract. It runs the existing transport on a background thread per
+request, preserving timeout, retry, routing metadata, and error behavior while
+making the current read/diagnostic methods awaitable. This is not yet a
+runtime-native Tokio/async-std transport.
 The TypeScript client smoke runs with local Node type stripping:
 
 ```bash

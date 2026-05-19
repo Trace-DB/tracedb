@@ -1,20 +1,23 @@
 use serde_json::json;
 use std::fs;
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Duration, Instant};
 use tracedb_query::{
     FreshnessMode, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
     BranchesResponse, DatabasesResponse, ErrorResponse, HealthResponse, JobsResponse,
-    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TraceDbClient,
-    TraceDbClientConfig, TraceDbClientError, TraceDbRequestOptions,
+    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TraceDbAsyncClient,
+    TraceDbClient, TraceDbClientConfig, TraceDbClientError, TraceDbRequestOptions,
 };
 
 fn schema() -> TableSchema {
@@ -284,6 +287,87 @@ fn http_request_is_complete(request: &[u8]) -> bool {
         .and_then(|value| value.trim().parse::<usize>().ok())
         .unwrap_or(0);
     request.len() >= header_end + 4 + content_length
+}
+
+struct TestWake {
+    notified: AtomicBool,
+}
+
+impl Wake for TestWake {
+    fn wake(self: Arc<Self>) {
+        self.notified.store(true, Ordering::SeqCst);
+    }
+}
+
+fn test_waker() -> Waker {
+    Waker::from(Arc::new(TestWake {
+        notified: AtomicBool::new(false),
+    }))
+}
+
+fn poll_once<F: Future>(future: Pin<&mut F>) -> (Poll<F::Output>, Duration) {
+    let waker = test_waker();
+    let mut context = Context::from_waker(&waker);
+    let started = Instant::now();
+    let poll = future.poll(&mut context);
+    (poll, started.elapsed())
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop {
+        let (poll, _) = poll_once(future.as_mut());
+        if let Poll::Ready(output) = poll {
+            return output;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn async_client_decodes_typed_readiness_response() {
+    let url = http_response_server(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 42\r\nConnection: close\r\n\r\n{\"ready\":true,\"service\":\"tracedb-engine\"}",
+    );
+    let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = block_on(client.ready_typed()).expect("async ready");
+
+    assert!(response.ready);
+    assert_eq!(response.service.as_deref(), Some("tracedb-engine"));
+}
+
+#[test]
+fn async_client_starts_http_work_without_blocking_first_poll() {
+    let url = stalled_response_server(Duration::from_millis(250));
+    let client = TraceDbAsyncClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_timeout(Duration::from_millis(200)),
+    );
+    let mut future = Box::pin(client.ready_typed());
+
+    let (poll, elapsed) = poll_once(future.as_mut());
+
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "first async poll should not block on socket I/O; elapsed {elapsed:?}"
+    );
+    assert!(
+        poll.is_pending(),
+        "first async poll should hand work to the background transport"
+    );
+    let error = block_on(future).expect_err("stalled response should time out");
+    match error {
+        TraceDbClientError::Timeout {
+            method,
+            path,
+            timeout_ms,
+        } => {
+            assert_eq!(method, "GET");
+            assert_eq!(path, "/v1/ready");
+            assert_eq!(timeout_ms, 200);
+        }
+        other => panic!("unexpected async error: {other:?}"),
+    }
 }
 
 #[test]
@@ -956,6 +1040,55 @@ fn client_executes_real_http_product_path() {
             .get(&RecordGetRequest::new("docs", "tenant-a", "ops"))
             .expect("get deleted")["record"],
         serde_json::Value::Null
+    );
+}
+
+#[test]
+fn async_client_executes_real_http_read_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(
+        format!("http://{addr}"),
+        "dev-token",
+    ));
+
+    assert!(block_on(client.ready_typed()).expect("async ready").ready);
+    block_on(client.request_json(
+        "POST",
+        "/v1/schema/apply",
+        Some(&serde_json::to_value(schema()).expect("schema json")),
+    ))
+    .expect("async schema apply");
+    let batch = RecordPutBatchRequest::new(vec![
+        record("async-intro", "tenant-a", "async rust sdk", [1.0, 0.0, 0.0]),
+        record("async-ops", "tenant-a", "async read path", [0.0, 1.0, 0.0]),
+    ]);
+    block_on(client.request_json(
+        "POST",
+        "/v1/records/put-batch",
+        Some(&serde_json::to_value(batch).expect("batch json")),
+    ))
+    .expect("async batch ingest");
+
+    let scan = block_on(client.scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10)))
+        .expect("async scan");
+    assert_eq!(scan.returned_count, 2);
+    let query = block_on(client.query_typed(&query(false))).expect("async query");
+    assert!(
+        query
+            .results
+            .iter()
+            .any(|row| row.record_id.as_str() == "async-intro"),
+        "async query results: {:?}",
+        query.results
     );
 }
 
