@@ -126,6 +126,20 @@ Fields remain optional where local-engine and gateway shapes differ.
 Local compatibility aliases also exist for development: `GET /health`,
 `GET /ready`, and `GET /metrics`.
 
+The CLI can run a read-only diagnostic against a running local engine or
+managed-style endpoint:
+
+```bash
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1
+```
+
+The diagnostic checks `GET /v1/health`, `GET /v1/ready`, `GET /v1/databases`,
+`GET /v1/branches`, `GET /v1/metrics/public-safe`, and `GET /v1/admin/jobs`.
+It emits a single JSON summary with per-route responses or SDK error details,
+including parsed server error-envelope text when available. The command does
+not mutate data, does not probe SQL compatibility, and is not benchmark
+evidence.
+
 Error responses use the current JSON envelope `{ "error": string }` for server
 and gateway failures such as validation errors, not found routes, idempotency
 conflicts, unauthorized gateway calls, gateway rate limits, and upstream
@@ -214,6 +228,12 @@ The current runnable HTTP product path is:
 7. Delete with `POST /v1/records/delete`.
 8. Optionally compact, snapshot, and restore through the admin routes when
    using explicit server-side local paths.
+
+For endpoint diagnostics before or after the product path, run:
+
+```bash
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token
+```
 
 The SDK quickstart exercises this path and reports `sql_module:
 not_implemented`. Passing `--admin-dir SERVER_SIDE_DIR` also exercises compact,

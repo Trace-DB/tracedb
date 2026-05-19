@@ -60,6 +60,17 @@ In a second terminal:
 cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000 --safe-retries 1 --idempotency-retries 1 --admin-dir /tmp/tracedb-sdk-demo/admin
 ```
 
+For a read-only endpoint diagnostic against that running server:
+
+```bash
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1
+```
+
+The HTTP doctor checks the current health, readiness, catalog, public-safe
+metrics, and admin-jobs routes, returns a JSON summary with per-route responses
+or parsed error envelopes, and reports `sql_module: not_implemented`. It is a
+local/managed-style endpoint diagnostic, not a SQL probe or benchmark.
+
 The SDK example applies schema, batch-ingests records, scans, queries, explains,
 deletes, verifies deleted-record hiding, optionally compacts/snapshots/restores
 when `--admin-dir` points at an absolute server-side local scratch directory,

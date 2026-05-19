@@ -16,7 +16,8 @@ use tracedb_query::{
     TraceDb, VectorColumnSchema,
 };
 use tracedb_sdk::{
-    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbRequestOptions,
+    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
+    TraceDbRequestOptions,
 };
 
 fn main() {
@@ -272,6 +273,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        "doctor" if args.get(1).map(String::as_str) == Some("http") => {
+            let config = parse_http_doctor_config(&args[2..])?;
+            print_json(run_http_doctor(config));
+        }
         "doctor" => {
             print_json(run_doctor(&data_dir));
         }
@@ -448,6 +453,160 @@ fn run_doctor(data_dir: &std::path::Path) -> Value {
             "mode": "local-minio-when-compose-running",
         }
     })
+}
+
+struct HttpDoctorConfig {
+    url: String,
+    token: String,
+    timeout_ms: u64,
+    safe_retries: u8,
+}
+
+fn parse_http_doctor_config(
+    args: &[String],
+) -> Result<HttpDoctorConfig, Box<dyn std::error::Error>> {
+    let mut url = env::var("TRACEDB_URL").ok();
+    let mut token = env::var("TRACEDB_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
+    let mut timeout_ms = env::var("TRACEDB_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1_000)
+        .max(1);
+    let mut safe_retries = env::var("TRACEDB_SAFE_RETRIES")
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(1);
+
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--url" => {
+                idx += 1;
+                url = Some(
+                    args.get(idx)
+                        .ok_or("missing value for --url")?
+                        .trim_end_matches('/')
+                        .to_string(),
+                );
+            }
+            "--token" => {
+                idx += 1;
+                token = args.get(idx).ok_or("missing value for --token")?.clone();
+            }
+            "--timeout-ms" => {
+                idx += 1;
+                timeout_ms = args
+                    .get(idx)
+                    .ok_or("missing value for --timeout-ms")?
+                    .parse::<u64>()
+                    .map_err(|_| "--timeout-ms must be an unsigned integer")?
+                    .max(1);
+            }
+            "--safe-retries" => {
+                idx += 1;
+                safe_retries = args
+                    .get(idx)
+                    .ok_or("missing value for --safe-retries")?
+                    .parse::<u8>()
+                    .map_err(|_| "--safe-retries must fit in u8")?;
+            }
+            other => return Err(format!("unknown doctor http option {other}").into()),
+        }
+        idx += 1;
+    }
+
+    let url = url
+        .ok_or("missing --url or TRACEDB_URL for doctor http")?
+        .trim_end_matches('/')
+        .to_string();
+    Ok(HttpDoctorConfig {
+        url,
+        token,
+        timeout_ms,
+        safe_retries,
+    })
+}
+
+fn run_http_doctor(config: HttpDoctorConfig) -> Value {
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(config.url.clone(), config.token)
+            .with_timeout(Duration::from_millis(config.timeout_ms))
+            .with_safe_retries(config.safe_retries),
+    );
+
+    let health = http_doctor_check(|| client.health());
+    let ready = http_doctor_check(|| client.ready());
+    let databases = http_doctor_check(|| client.list_databases());
+    let branches = http_doctor_check(|| client.list_branches());
+    let metrics = http_doctor_check(|| client.public_safe_metrics());
+    let admin_jobs = http_doctor_check(|| client.list_admin_jobs());
+    let ok = http_doctor_check_ok(&health)
+        && http_doctor_ready_ok(&ready)
+        && http_doctor_check_ok(&databases)
+        && http_doctor_check_ok(&branches)
+        && http_doctor_check_ok(&metrics)
+        && http_doctor_check_ok(&admin_jobs);
+
+    json!({
+        "ok": ok,
+        "mode": "http-endpoint-diagnostics",
+        "server_url": config.url,
+        "request_timeout_ms": config.timeout_ms,
+        "safe_retries": config.safe_retries,
+        "checks": {
+            "health": health,
+            "ready": ready,
+            "databases": databases,
+            "branches": branches,
+            "metrics": metrics,
+            "admin_jobs": admin_jobs,
+        },
+        "sql_module": "not_implemented",
+    })
+}
+
+fn http_doctor_check(probe: impl FnOnce() -> Result<Value, TraceDbClientError>) -> Value {
+    match probe() {
+        Ok(response) => json!({ "ok": true, "response": response }),
+        Err(error) => http_doctor_error(error),
+    }
+}
+
+fn http_doctor_error(error: TraceDbClientError) -> Value {
+    let server_error = error.server_error();
+    let mut value = json!({
+        "ok": false,
+        "error": error.to_string(),
+    });
+    if let Some(object) = value.as_object_mut() {
+        if let Some(server_error) = server_error {
+            object.insert("server_error".to_string(), json!(server_error));
+        }
+        if let TraceDbClientError::HttpStatus {
+            method,
+            path,
+            status,
+            ..
+        } = error
+        {
+            object.insert("method".to_string(), json!(method));
+            object.insert("path".to_string(), json!(path));
+            object.insert("http_status".to_string(), json!(status));
+        }
+    }
+    value
+}
+
+fn http_doctor_check_ok(check: &Value) -> bool {
+    check.get("ok").and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn http_doctor_ready_ok(check: &Value) -> bool {
+    http_doctor_check_ok(check)
+        && check
+            .pointer("/response/ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn run_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -873,6 +1032,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
