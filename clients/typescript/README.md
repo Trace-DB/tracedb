@@ -140,10 +140,12 @@ await managedClient.putBatch({
 ## Idempotency Boundary
 
 Mutation and admin methods accept `TraceDbRequestOptions.idempotencyKey`, which
-sends `Idempotency-Key`. Current TraceDB support is local in-process replay for
-mutation/admin routes. It is not durable across restart/crash, not cross-replica,
-and not exactly-once managed-cloud semantics. The generated client rejects empty
-or CR/LF-containing idempotency keys before network I/O with
+sends `Idempotency-Key`. Current TraceDB support is local data-dir-backed replay
+for mutation/admin routes and survives a clean engine reopen from the same data
+directory after a successful local cache write. It is not cross-replica, not
+crash-atomic exactly-once, and not managed-cloud exactly-once semantics. The
+generated client rejects empty or CR/LF-containing idempotency keys before
+network I/O with
 `TraceDbRequestError`.
 
 ```ts

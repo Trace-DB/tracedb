@@ -1,14 +1,16 @@
 #![forbid(unsafe_code)]
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracedb_query::{
     HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput, RecordPatchRequest,
     RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
@@ -16,7 +18,7 @@ use tracedb_query::{
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-type IdempotencyCache = Arc<Mutex<HashMap<IdempotencyCacheKey, IdempotencyEntry>>>;
+type IdempotencyCache = Arc<Mutex<IdempotencyCacheState>>;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct IdempotencyCacheKey {
@@ -35,26 +37,140 @@ impl IdempotencyCacheKey {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct IdempotencyEntry {
     body: String,
     response: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DurableIdempotencyEntry {
+    method: String,
+    path: String,
+    key: String,
+    body: String,
+    response: String,
+}
+
+#[derive(Debug)]
+struct IdempotencyCacheState {
+    path: PathBuf,
+    entries: HashMap<IdempotencyCacheKey, IdempotencyEntry>,
+}
+
+impl IdempotencyCacheState {
+    fn load(path: PathBuf) -> std::io::Result<Self> {
+        if !path.exists() {
+            return Ok(Self {
+                path,
+                entries: HashMap::new(),
+            });
+        }
+        let entries =
+            serde_json::from_str::<Vec<DurableIdempotencyEntry>>(&fs::read_to_string(&path)?)
+                .map_err(to_io_error)?
+                .into_iter()
+                .map(|entry| {
+                    (
+                        IdempotencyCacheKey {
+                            method: entry.method,
+                            path: entry.path,
+                            key: entry.key,
+                        },
+                        IdempotencyEntry {
+                            body: entry.body,
+                            response: entry.response,
+                        },
+                    )
+                })
+                .collect();
+        Ok(Self { path, entries })
+    }
+
+    fn get(&self, key: &IdempotencyCacheKey) -> Option<IdempotencyEntry> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: IdempotencyCacheKey, entry: IdempotencyEntry) -> std::io::Result<()> {
+        self.entries.insert(key.clone(), entry);
+        if let Err(error) = self.persist() {
+            self.entries.remove(&key);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn persist(&self) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let entries = self
+            .entries
+            .iter()
+            .map(|(key, entry)| DurableIdempotencyEntry {
+                method: key.method.clone(),
+                path: key.path.clone(),
+                key: key.key.clone(),
+                body: entry.body.clone(),
+                response: entry.response.clone(),
+            })
+            .collect::<Vec<_>>();
+        let tmp = self.path.with_extension("json.tmp");
+        fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(&entries).map_err(to_io_error)?,
+        )?;
+        fs::rename(tmp, &self.path)
+    }
+}
+
 pub fn serve(db_path: impl AsRef<Path>, bind: &str) -> std::io::Result<()> {
-    let db = TraceDb::open(db_path).map_err(to_io_error)?;
-    let db = Arc::new(Mutex::new(db));
-    let idempotency_cache = Arc::new(Mutex::new(HashMap::new()));
+    let (db, idempotency_cache) = open_server_state(db_path)?;
     let listener = TcpListener::bind(bind)?;
     for stream in listener.incoming() {
-        let stream = stream?;
-        let db = Arc::clone(&db);
-        let idempotency_cache = Arc::clone(&idempotency_cache);
-        thread::spawn(move || {
-            let _ = handle(stream, db, idempotency_cache);
-        });
+        spawn_handler(stream?, Arc::clone(&db), Arc::clone(&idempotency_cache));
     }
     Ok(())
+}
+
+pub fn serve_with_shutdown(
+    db_path: impl AsRef<Path>,
+    bind: &str,
+    should_shutdown: impl Fn() -> bool,
+) -> std::io::Result<()> {
+    let (db, idempotency_cache) = open_server_state(db_path)?;
+    let listener = TcpListener::bind(bind)?;
+    listener.set_nonblocking(true)?;
+    while !should_shutdown() {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                spawn_handler(stream, Arc::clone(&db), Arc::clone(&idempotency_cache));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn open_server_state(
+    db_path: impl AsRef<Path>,
+) -> std::io::Result<(Arc<Mutex<TraceDb>>, IdempotencyCache)> {
+    let db_path = db_path.as_ref().to_path_buf();
+    let db = TraceDb::open(&db_path).map_err(to_io_error)?;
+    let db = Arc::new(Mutex::new(db));
+    let idempotency_cache = Arc::new(Mutex::new(IdempotencyCacheState::load(
+        db_path.join("http-idempotency-cache.json"),
+    )?));
+    Ok((db, idempotency_cache))
+}
+
+fn spawn_handler(stream: TcpStream, db: Arc<Mutex<TraceDb>>, idempotency_cache: IdempotencyCache) {
+    thread::spawn(move || {
+        let _ = handle(stream, db, idempotency_cache);
+    });
 }
 
 fn handle(
@@ -103,7 +219,7 @@ fn handle_inner(
         idempotency_cache_key.as_ref(),
         idempotency_cache_guard.as_ref(),
     ) {
-        if let Some(entry) = cache.get(cache_key).cloned() {
+        if let Some(entry) = cache.get(cache_key) {
             if entry.body == body {
                 return Ok(entry.response);
             }
@@ -350,13 +466,15 @@ fn handle_inner(
         (idempotency_cache_key, idempotency_cache_guard.as_mut())
     {
         if response.starts_with("HTTP/1.1 200 OK") {
-            cache.insert(
+            if let Err(error) = cache.insert(
                 cache_key,
                 IdempotencyEntry {
                     body: body.to_string(),
                     response: response.clone(),
                 },
-            );
+            ) {
+                eprintln!("tracedb-server: failed to persist idempotency response: {error}");
+            }
         }
     }
     Ok(response)

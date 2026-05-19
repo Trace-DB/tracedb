@@ -742,7 +742,7 @@
     }
   },
   "info": {
-    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nIdempotency-Key supports local in-process replay for mutation and admin routes; SDK idempotent retries are opt-in and require an Idempotency-Key; durable cross-restart idempotency remains future work.",
+    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nIdempotency-Key supports local data-dir-backed replay for mutation and admin routes after successful local cache writes; SDK idempotent retries are opt-in and require an Idempotency-Key; cross-replica and crash-atomic exactly-once idempotency remain future work.",
     "title": "TraceDB v1 HTTP API",
     "version": "0.1.0-development"
   },
@@ -754,7 +754,7 @@
         "operationId": "postAdminCompact",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -869,7 +869,7 @@
         "tags": [
           "admin"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -978,7 +978,7 @@
         "operationId": "postAdminRestore",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -1093,7 +1093,7 @@
         "tags": [
           "admin"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -1106,7 +1106,7 @@
         "operationId": "postAdminSnapshot",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -1221,7 +1221,7 @@
         "tags": [
           "admin"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -1628,7 +1628,7 @@
         "operationId": "postInsert",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -1743,7 +1743,7 @@
         "tags": [
           "records"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -2054,7 +2054,7 @@
         "operationId": "postRecordsDelete",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -2169,7 +2169,7 @@
         "tags": [
           "records"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -2288,7 +2288,7 @@
         "operationId": "postRecordsPatch",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -2403,7 +2403,7 @@
         "tags": [
           "records"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -2416,7 +2416,7 @@
         "operationId": "postRecordsPut",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -2531,7 +2531,7 @@
         "tags": [
           "records"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -2544,7 +2544,7 @@
         "operationId": "postRecordsPutBatch",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -2659,7 +2659,7 @@
         "tags": [
           "records"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
@@ -2778,7 +2778,7 @@
         "operationId": "postSchemaApply",
         "parameters": [
           {
-            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "description": "Optional local data-dir-backed replay key scoped by method and path. After a successful local cache write, same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -2893,7 +2893,7 @@
         "tags": [
           "schema"
         ],
-        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,

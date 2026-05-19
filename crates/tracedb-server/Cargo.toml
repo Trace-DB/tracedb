@@ -9,6 +9,7 @@ name = "tracedb-server"
 path = "src/main.rs"
 
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
 tracedb-gateway = { path = "../tracedb-gateway" }
 tracedb-query = { path = "../tracedb-query" }

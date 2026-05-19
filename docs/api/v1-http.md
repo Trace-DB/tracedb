@@ -59,12 +59,16 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
-- Idempotency-Key supports local in-process replay for mutation and admin routes.
-  Same key plus same method/path/raw body replays the first successful
+- Idempotency-Key supports local data-dir-backed replay for mutation and admin
+  routes. Same key plus same method/path/raw body replays the first successful
   response; same key with a different body returns `409 Conflict`.
-- The idempotency cache is local-engine-only and in-process. It is not durable
-  across restart/crash, not cross-replica, and not a managed-cloud exactly-once
-  guarantee.
+- The idempotency cache is local-engine-only and scoped to the same data
+  directory. It survives a clean engine reopen from that data directory, but it
+  is not cross-replica, not crash-atomic exactly-once, and not a managed-cloud
+  exactly-once guarantee.
+- Filesystem cache-write failures are logged and do not roll back the original
+  successful mutation; clean-reopen replay requires the local cache write to
+  have succeeded.
 - The generated TypeScript client rejects empty or CR/LF-containing
   `idempotencyKey` options before network I/O as `TraceDbRequestError`.
 - The Rust SDK can manually send `Idempotency-Key` with
@@ -129,7 +133,7 @@ Local compatibility aliases also exist for development: `GET /health`,
 | `POST /v1/records/delete` | `RecordDeleteRequest`: `table`, `tenant_id`, `id`, and optional `tombstone`. | `{ "deleted": true, "epoch": number }`. |
 
 Write routes allocate epochs and mutate TraceDB state. They accept optional
-`Idempotency-Key` for local in-process replay. The SDK only retries writes when
+`Idempotency-Key` for local data-dir-backed replay. The SDK only retries writes when
 `TraceDbClientConfig::with_idempotency_retries` is enabled and the individual
 request includes an `Idempotency-Key`; `safe_retries` alone never retries
 mutating writes.
@@ -158,11 +162,14 @@ claims.
 | `GET /v1/admin/jobs` | No body. | Idle job queue state for segment compaction, snapshot creation, and feature indexing. |
 
 Admin routes can mutate durable files or create out-of-band filesystem state.
-They accept optional `Idempotency-Key` for local in-process replay, but the
-contract is not durable across restart/crash. The SDK only retries admin
-requests when `TraceDbClientConfig::with_idempotency_retries` is enabled and the
-individual request includes an `Idempotency-Key`; `safe_retries` alone never
-retries admin requests.
+They accept optional `Idempotency-Key` for local data-dir-backed replay. Replay
+survives a clean engine reopen from the same data directory, but the contract is
+not cross-replica or crash-atomic exactly-once, and filesystem cache-write
+failures are logged without rolling back the original successful operation. The
+SDK only retries admin requests when
+`TraceDbClientConfig::with_idempotency_retries` is enabled and the individual
+request includes an `Idempotency-Key`; `safe_retries` alone never retries admin
+requests.
 
 The Rust SDK provides typed `SnapshotRequest`, `SnapshotResponse`,
 `RestoreRequest`, and `RestoreResponse` wrappers plus raw/typed snapshot and

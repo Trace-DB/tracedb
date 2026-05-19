@@ -1,9 +1,15 @@
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread::JoinHandle;
 use std::time::Duration;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
@@ -389,6 +395,105 @@ fn http_idempotency_key_replays_write_response_and_rejects_mismatched_body() {
 }
 
 #[test]
+fn http_idempotency_key_replays_after_engine_reopen_from_same_data_dir() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_dir = temp.path().to_path_buf();
+    let (addr, first_shutdown, first_handle) = start_stoppable_server(data_dir.clone());
+
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/schema/apply",
+        &serde_json::to_string(&schema()).unwrap(),
+        "\"epoch\":1",
+    );
+    let first_body = serde_json::to_string(&record(
+        "a",
+        "tenant-a",
+        "rust database kernel",
+        "draft",
+        [1.0, 0.0, 0.0],
+    ))
+    .unwrap();
+    let first_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/records/put",
+        &[("Idempotency-Key", "put-a-reopen-1")],
+        &first_body,
+    );
+    assert!(
+        first_response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected first response: {first_response}"
+    );
+    assert_eq!(http_json_body(&first_response)["epoch"], json!(2));
+    let cache_json: Value = serde_json::from_str(
+        &fs::read_to_string(data_dir.join("http-idempotency-cache.json"))
+            .expect("idempotency cache file"),
+    )
+    .expect("idempotency cache JSON");
+    assert!(
+        cache_json.as_array().unwrap().iter().any(|entry| {
+            entry["method"] == json!("POST")
+                && entry["path"] == json!("/v1/records/put")
+                && entry["key"] == json!("put-a-reopen-1")
+        }),
+        "first engine should persist the replay entry before clean reopen: {cache_json}"
+    );
+    stop_stoppable_server(first_shutdown, first_handle);
+
+    let (reopened_addr, reopened_shutdown, reopened_handle) = start_stoppable_server(data_dir);
+
+    let replay_response = http_response_with_headers(
+        reopened_addr,
+        "POST",
+        "/v1/records/put",
+        &[("Idempotency-Key", "put-a-reopen-1")],
+        &first_body,
+    );
+    assert!(
+        replay_response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected cross-reopen replay response: {replay_response}"
+    );
+    assert_eq!(
+        http_json_body(&replay_response)["epoch"],
+        json!(2),
+        "reopened engine should replay the first idempotent response"
+    );
+
+    let mismatched_body = serde_json::to_string(&record(
+        "b",
+        "tenant-a",
+        "different record under reused key after reopen",
+        "draft",
+        [0.0, 1.0, 0.0],
+    ))
+    .unwrap();
+    let mismatch_response = http_response_with_headers(
+        reopened_addr,
+        "POST",
+        "/v1/records/put",
+        &[("Idempotency-Key", "put-a-reopen-1")],
+        &mismatched_body,
+    );
+    assert!(
+        mismatch_response.starts_with("HTTP/1.1 409 Conflict"),
+        "reopened engine should preserve mismatched-body conflicts: {mismatch_response}"
+    );
+
+    let scan_response = http_response(
+        reopened_addr,
+        "POST",
+        "/v1/records/scan",
+        r#"{"table":"docs","tenant_id":"tenant-a","limit":10}"#,
+    );
+    let scan = http_json_body(&scan_response);
+    assert_eq!(scan["returned_count"], json!(1));
+    assert_eq!(scan["records"][0]["id"], json!("a"));
+    stop_stoppable_server(reopened_shutdown, reopened_handle);
+}
+
+#[test]
 fn http_query_explain_false_is_lean_while_explain_surfaces_remain_full() {
     let temp = tempfile::tempdir().expect("tempdir");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -619,7 +724,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
 
     for boundary in [
         "SQL compatibility is not implemented",
-        "Idempotency-Key supports local in-process replay for mutation and admin routes",
+        "Idempotency-Key supports local data-dir-backed replay",
         "Internal TraceDB-only runs are development evidence",
         "No cursor metadata is emitted today",
     ] {
@@ -673,7 +778,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     for boundary in [
         "SQL compatibility is not implemented",
         "Internal TraceDB-only runs are development evidence",
-        "Idempotency-Key supports local in-process replay for mutation and admin routes",
+        "Idempotency-Key supports local data-dir-backed replay for mutation and admin routes",
     ] {
         assert!(
             description.contains(boundary),
@@ -767,7 +872,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
             );
             assert_eq!(
                 operation["x-tracedb-idempotency-durability"],
-                json!("in-process-local-only"),
+                json!("local-data-dir-reopen"),
                 "OpenAPI artifact should state local-only idempotency durability for {method} {path}"
             );
             assert_eq!(
@@ -1298,6 +1403,31 @@ fn connect_with_retry(addr: std::net::SocketAddr) -> TcpStream {
             .map(|error| error.to_string())
             .unwrap_or_else(|| "no connection attempt made".to_string())
     );
+}
+
+fn start_stoppable_server(
+    data_dir: PathBuf,
+) -> (SocketAddr, Arc<AtomicBool>, JoinHandle<std::io::Result<()>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let server_shutdown = Arc::clone(&shutdown);
+    let handle = std::thread::spawn(move || {
+        tracedb_server::serve_with_shutdown(data_dir, &addr.to_string(), || {
+            server_shutdown.load(Ordering::SeqCst)
+        })
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    (addr, shutdown, handle)
+}
+
+fn stop_stoppable_server(shutdown: Arc<AtomicBool>, handle: JoinHandle<std::io::Result<()>>) {
+    shutdown.store(true, Ordering::SeqCst);
+    handle
+        .join()
+        .expect("server thread panicked")
+        .expect("server shutdown");
 }
 
 fn http_json_body(response: &str) -> Value {

@@ -108,6 +108,10 @@ temporary data directory and drives the generated TypeScript client over real
 HTTP routes for ready, schema apply, direct put, batch ingest, get, scan, query,
 explain, delete, compact, snapshot, restore, and admin jobs.
 Mutation and admin routes accept optional `Idempotency-Key` for local
-in-process engine replay, and the gateway forwards that header. Durable
-cross-restart/cross-replica idempotency remains future work. SDK write/admin
-retries are opt-in, bounded, transient-only, and require an idempotency key.
+data-dir-backed engine replay, and the gateway forwards that header. Replay
+survives a clean engine reopen from the same data directory after a successful
+local cache write; filesystem cache-write failures are logged and do not roll
+back the original mutation. Cross-replica idempotency, crash-atomic exactly-once
+semantics, and managed-cloud exactly-once guarantees remain future work. SDK
+write/admin retries are opt-in, bounded, transient-only, and require an
+idempotency key.

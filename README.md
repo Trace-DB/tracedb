@@ -149,9 +149,13 @@ server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
   validation; it does not declare package publishing fields. It rejects empty or
   CR/LF-containing `idempotencyKey` request options before `fetchImpl` is called.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
-  in-process replay on the engine, and the gateway forwards that header. This
-  is not durable across restart/crash and not cross-replica. The Rust SDK can
-  manually send the header per request through `TraceDbRequestOptions`, and
-  opt-in SDK idempotent retries require that header.
+  data-dir-backed replay on the engine, and the gateway forwards that header.
+  After a successful local cache write, replay survives a clean engine reopen
+  from the same data directory; filesystem cache-write failures are logged and
+  do not roll back the original mutation. This is not cross-replica, not
+  crash-atomic exactly-once, and not a managed-cloud exactly-once guarantee. The
+  Rust SDK can manually send the header per request through
+  `TraceDbRequestOptions`, and opt-in SDK idempotent retries require that
+  header.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require external controls and a number to beat.
