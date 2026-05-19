@@ -435,7 +435,7 @@
     }
   },
   "info": {
-    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nIdempotency-Key supports local in-process replay for mutation and admin routes; durable cross-restart idempotency and automatic SDK write retries remain future work.",
+    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nIdempotency-Key supports local in-process replay for mutation and admin routes; SDK idempotent retries are opt-in and require an Idempotency-Key; durable cross-restart idempotency remains future work.",
     "title": "TraceDB v1 HTTP API",
     "version": "0.1.0-development"
   },
@@ -565,6 +565,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -660,6 +661,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -787,6 +789,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -914,6 +917,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -1009,6 +1013,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -1104,6 +1109,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -1209,6 +1215,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": true
       }
     },
@@ -1304,6 +1311,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": true
       }
     },
@@ -1431,6 +1439,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -1526,6 +1535,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -1631,6 +1641,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": true
       }
     },
@@ -1726,6 +1737,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": true
       }
     },
@@ -1853,6 +1865,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -1958,6 +1971,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": true
       }
     },
@@ -2085,6 +2099,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -2212,6 +2227,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -2339,6 +2355,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     },
@@ -2444,6 +2461,7 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
         "x-tracedb-sdk-safe-retry": true
       }
     },
@@ -2571,6 +2589,7 @@
         "x-tracedb-idempotency-durability": "in-process-local-only",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
       }
     }

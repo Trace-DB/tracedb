@@ -38,10 +38,12 @@ python3 scripts/generate_openapi_v1.py --check
   response; same key with a different body returns `409 Conflict`.
 - The idempotency cache is local-engine-only and in-process. It is not durable
   across restart/crash, not cross-replica, and not a managed-cloud exactly-once
-  guarantee. Automatic SDK write/admin retries remain future work.
+  guarantee.
 - The Rust SDK can manually send `Idempotency-Key` with
-  `TraceDbRequestOptions` on individual requests, but `safe_retries` still
-  applies only to health/read routes.
+  `TraceDbRequestOptions` on individual requests. `safe_retries` still applies
+  only to health/read routes. `idempotency_retries` is a separate opt-in policy
+  for transient 5xx/timeout retries on mutation/admin routes and is only active
+  when the individual request includes an `Idempotency-Key`.
 - Gateway metering, request logging, and rate limiting may still observe each
   HTTP attempt.
 
@@ -81,8 +83,10 @@ Local compatibility aliases also exist for development: `GET /health`,
 | `POST /v1/records/delete` | `RecordDeleteRequest`: `table`, `tenant_id`, `id`, and optional `tombstone`. | `{ "deleted": true, "epoch": number }`. |
 
 Write routes allocate epochs and mutate TraceDB state. They accept optional
-`Idempotency-Key` for local in-process replay, but the SDK still does not
-automatically retry writes.
+`Idempotency-Key` for local in-process replay. The SDK only retries writes when
+`TraceDbClientConfig::with_idempotency_retries` is enabled and the individual
+request includes an `Idempotency-Key`; `safe_retries` alone never retries
+mutating writes.
 
 ## Reads And Retrieval
 
@@ -109,8 +113,10 @@ claims.
 
 Admin routes can mutate durable files or create out-of-band filesystem state.
 They accept optional `Idempotency-Key` for local in-process replay, but the
-contract is not durable across restart/crash and the SDK still does not
-automatically retry admin requests.
+contract is not durable across restart/crash. The SDK only retries admin
+requests when `TraceDbClientConfig::with_idempotency_retries` is enabled and the
+individual request includes an `Idempotency-Key`; `safe_retries` alone never
+retries admin requests.
 
 The Rust SDK provides typed `SnapshotRequest`, `SnapshotResponse`,
 `RestoreRequest`, and `RestoreResponse` wrappers plus raw/typed snapshot and

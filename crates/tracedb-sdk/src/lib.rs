@@ -127,6 +127,8 @@ pub struct TraceDbClientConfig {
     pub request_timeout_ms: u64,
     #[serde(default)]
     pub safe_retries: u8,
+    #[serde(default)]
+    pub idempotency_retries: u8,
 }
 
 impl TraceDbClientConfig {
@@ -138,6 +140,7 @@ impl TraceDbClientConfig {
             branch_id: None,
             request_timeout_ms: default_request_timeout_ms(),
             safe_retries: 0,
+            idempotency_retries: 0,
         }
     }
 
@@ -166,6 +169,11 @@ impl TraceDbClientConfig {
 
     pub fn with_safe_retries(mut self, retries: u8) -> Self {
         self.safe_retries = retries;
+        self
+    }
+
+    pub fn with_idempotency_retries(mut self, retries: u8) -> Self {
+        self.idempotency_retries = retries;
         self
     }
 
@@ -463,11 +471,7 @@ impl TraceDbClient {
         body: Option<&Value>,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<Value> {
-        let attempts = if is_retry_safe_request(method, path) {
-            self.config.safe_retries.saturating_add(1)
-        } else {
-            1
-        };
+        let attempts = self.request_attempts(method, path, options);
         let mut last_error = None;
         for _ in 0..attempts {
             match self.request_json_once(method, path, body, options) {
@@ -477,6 +481,21 @@ impl TraceDbClient {
             }
         }
         Err(last_error.expect("at least one request attempt"))
+    }
+
+    fn request_attempts(&self, method: &str, path: &str, options: &TraceDbRequestOptions) -> u8 {
+        if is_retry_safe_request(method, path) {
+            self.config.safe_retries.saturating_add(1)
+        } else if is_idempotent_retry_request(method, path)
+            && options
+                .idempotency_key
+                .as_deref()
+                .is_some_and(|key| !key.is_empty())
+        {
+            self.config.idempotency_retries.saturating_add(1)
+        } else {
+            1
+        }
     }
 
     fn request_json_once(
@@ -840,6 +859,21 @@ fn is_retry_safe_request(method: &str, path: &str) -> bool {
             | ("POST", "/v1/records/scan")
             | ("POST", "/v1/query")
             | ("POST", "/v1/explain")
+    )
+}
+
+fn is_idempotent_retry_request(method: &str, path: &str) -> bool {
+    matches!(
+        (method, strip_query(path)),
+        ("POST", "/v1/schema/apply")
+            | ("POST", "/v1/insert")
+            | ("POST", "/v1/records/put")
+            | ("POST", "/v1/records/put-batch")
+            | ("POST", "/v1/records/patch")
+            | ("POST", "/v1/records/delete")
+            | ("POST", "/v1/admin/compact")
+            | ("POST", "/v1/admin/snapshot")
+            | ("POST", "/v1/admin/restore")
     )
 }
 

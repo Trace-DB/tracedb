@@ -739,6 +739,10 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
             operation["x-tracedb-sdk-safe-retry"].is_boolean(),
             "OpenAPI artifact missing SDK retry marker for {method} {path}"
         );
+        assert!(
+            operation["x-tracedb-sdk-idempotency-retry-supported"].is_boolean(),
+            "OpenAPI artifact missing SDK idempotency retry marker for {method} {path}"
+        );
         if operation["x-tracedb-mutates-state"] == json!(true) {
             assert!(
                 operation["responses"]["409"]["content"]["application/json"]["schema"].is_object(),
@@ -764,6 +768,11 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
                 operation["x-tracedb-idempotency-durability"],
                 json!("in-process-local-only"),
                 "OpenAPI artifact should state local-only idempotency durability for {method} {path}"
+            );
+            assert_eq!(
+                operation["x-tracedb-sdk-idempotency-retry-supported"],
+                json!(true),
+                "OpenAPI artifact should mark idempotency retry eligibility for {method} {path}"
             );
         }
     }

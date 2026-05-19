@@ -220,6 +220,71 @@ fn stalled_response_server(stall_for: Duration) -> String {
     format!("http://{addr}")
 }
 
+fn stalled_then_response_server(
+    stall_for: Duration,
+    response: &'static [u8],
+) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen_attempts = Arc::clone(&attempts);
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        seen_attempts.fetch_add(1, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            let _stream = stream;
+            std::thread::sleep(stall_for);
+        });
+
+        let (mut stream, _) = listener.accept().unwrap();
+        seen_attempts.fetch_add(1, Ordering::SeqCst);
+        read_complete_http_request_for_test(&mut stream);
+        stream.write_all(response).unwrap();
+    });
+    (format!("http://{addr}"), attempts)
+}
+
+fn read_complete_http_request_for_test(stream: &mut std::net::TcpStream) {
+    stream
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
+    let mut request = Vec::new();
+    let mut buffer = [0; 1024];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                request.extend_from_slice(&buffer[..read]);
+                if http_request_is_complete(&request) {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break
+            }
+            Err(error) => panic!("read request: {error}"),
+        }
+    }
+}
+
+fn http_request_is_complete(request: &[u8]) -> bool {
+    let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&request[..header_end]);
+    let content_length = head
+        .lines()
+        .find_map(|line| line.strip_prefix("Content-Length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    request.len() >= header_end + 4 + content_length
+}
+
 #[test]
 fn retryable_health_requests_retry_5xx_then_return_success() {
     let (url, attempts) = sequence_response_server(vec![
@@ -396,10 +461,10 @@ fn write_routes_with_idempotency_key_still_do_not_retry_5xx() {
 }
 
 #[test]
-fn admin_snapshot_restore_do_not_retry_5xx_even_with_idempotency_key() {
+fn admin_snapshot_safe_retries_do_not_retry_even_with_idempotency_key() {
     let (url, attempts) = sequence_response_server(vec![
         b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 54\r\nConnection: close\r\n\r\n{\"snapshot\":true,\"target\":\"/tmp/tracedb-snapshot\"}",
     ]);
     let client =
         TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
@@ -407,13 +472,172 @@ fn admin_snapshot_restore_do_not_retry_5xx_even_with_idempotency_key() {
 
     let error = client
         .snapshot_typed_with_options(&SnapshotRequest::new("/tmp/tracedb-snapshot"), &options)
-        .expect_err("snapshot should not retry automatically");
+        .expect_err("safe_retries should not retry admin requests");
 
     match error {
         TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
         other => panic!("unexpected error: {other:?}"),
     }
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn idempotency_retries_skip_writes_without_idempotency_key() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+
+    let error = client
+        .apply_schema(&schema())
+        .expect_err("idempotency retries should not apply without Idempotency-Key");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn write_routes_with_idempotency_key_retry_5xx_when_enabled() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let options = TraceDbRequestOptions::new().with_idempotency_key("schema-1");
+
+    let response = client
+        .apply_schema_with_options(&schema(), &options)
+        .expect("schema write should retry when idempotent retries are enabled");
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn admin_snapshot_retries_5xx_with_idempotency_key_when_enabled() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 54\r\nConnection: close\r\n\r\n{\"snapshot\":true,\"target\":\"/tmp/tracedb-snapshot\"}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let options = TraceDbRequestOptions::new().with_idempotency_key("snapshot-1");
+
+    let response = client
+        .snapshot_typed_with_options(&SnapshotRequest::new("/tmp/tracedb-snapshot"), &options)
+        .expect("snapshot should retry when idempotent retries are enabled");
+
+    assert!(response.snapshot);
+    assert_eq!(response.target, "/tmp/tracedb-snapshot");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn write_routes_with_idempotency_key_retry_timeout_when_enabled() {
+    let (url, attempts) = stalled_then_response_server(
+        Duration::from_millis(250),
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    );
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token")
+            .with_timeout(Duration::from_millis(25))
+            .with_idempotency_retries(1),
+    );
+    let options = TraceDbRequestOptions::new().with_idempotency_key("schema-timeout-1");
+
+    let response = client
+        .apply_schema_with_options(&schema(), &options)
+        .expect("schema write timeout should retry when idempotency retries are enabled");
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn idempotency_retries_do_not_retry_conflicts_or_4xx() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 24\r\nConnection: close\r\n\r\n{\"error\":\"body changed\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let options = TraceDbRequestOptions::new().with_idempotency_key("schema-conflict-1");
+
+    let error = client
+        .apply_schema_with_options(&schema(), &options)
+        .expect_err("idempotency retries should not retry 409 conflicts");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 409),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn idempotency_retries_do_not_apply_to_read_routes() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let options = TraceDbRequestOptions::new().with_idempotency_key("query-1");
+
+    let error = client
+        .request_json_with_options("POST", "/v1/query", Some(&json!({})), &options)
+        .expect_err("idempotency retries should not apply to read routes");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn idempotency_retries_do_not_apply_to_unsupported_routes() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let options = TraceDbRequestOptions::new().with_idempotency_key("jobs-1");
+
+    let error = client
+        .request_json_with_options("GET", "/v1/admin/jobs", None, &options)
+        .expect_err("idempotency retries should not apply to unsupported routes");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn client_config_defaults_idempotency_retries_for_older_json() {
+    let config: TraceDbClientConfig = serde_json::from_value(json!({
+        "url": "http://127.0.0.1:1",
+        "token": "dev-token"
+    }))
+    .expect("old config shape should deserialize");
+
+    assert_eq!(config.safe_retries, 0);
+    assert_eq!(config.idempotency_retries, 0);
 }
 
 #[test]

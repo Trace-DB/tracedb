@@ -57,8 +57,9 @@ methods over the current HTTP response shapes and accepts a configurable SDK
 request timeout; the original raw `serde_json::Value` methods remain available.
 Bounded safe retries are available for SDK health/read routes only. Callers can
 manually attach `Idempotency-Key` per write/admin request with
-`TraceDbRequestOptions`; the SDK does not automatically retry those routes. The
-SDK also exposes typed local admin helpers for compact, snapshot, and restore.
+`TraceDbRequestOptions`; `TraceDbClientConfig::with_idempotency_retries` can then
+opt into bounded transient retries for those keyed write/admin requests. The SDK
+also exposes typed local admin helpers for compact, snapshot, and restore.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
 machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
@@ -72,13 +73,14 @@ machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
   includes typed convenience response methods and typed query rows for the
   current product path, includes typed local admin helpers for compact,
   snapshot, and restore, supports a configurable blocking socket request
-  timeout, supports bounded safe retries for health/read routes, and non-2xx
-  SDK errors include request method, request path, HTTP status, and response
-  body. It is not yet a full managed/cloud SDK.
+  timeout, supports bounded safe retries for health/read routes, supports
+  opt-in idempotency-key-gated transient retries for mutation/admin routes, and
+  non-2xx SDK errors include request method, request path, HTTP status, and
+  response body. It is not yet a full managed/cloud SDK.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
-  is not durable across restart/crash, not cross-replica, and does not enable
-  automatic SDK write/admin retries yet. The Rust SDK can manually send the
-  header per request through `TraceDbRequestOptions`.
+  is not durable across restart/crash and not cross-replica. The Rust SDK can
+  manually send the header per request through `TraceDbRequestOptions`, and
+  opt-in SDK idempotent retries require that header.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require external controls and a number to beat.

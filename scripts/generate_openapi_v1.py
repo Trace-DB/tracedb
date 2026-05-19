@@ -15,7 +15,7 @@ ARTIFACT = ROOT / "docs" / "api" / "v1-openapi.json"
 BOUNDARIES = [
     "SQL compatibility is not implemented.",
     "Internal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.",
-    "Idempotency-Key supports local in-process replay for mutation and admin routes; durable cross-restart idempotency and automatic SDK write retries remain future work.",
+    "Idempotency-Key supports local in-process replay for mutation and admin routes; SDK idempotent retries are opt-in and require an Idempotency-Key; durable cross-restart idempotency remains future work.",
 ]
 
 SAFE_RETRY_ROUTES = {
@@ -242,6 +242,7 @@ def route_operation(
         },
         "x-tracedb-mutates-state": mutates_state,
         "x-tracedb-sdk-safe-retry": (method, path) in SAFE_RETRY_ROUTES,
+        "x-tracedb-sdk-idempotency-retry-supported": mutates_state,
         "x-tracedb-idempotency-key-supported": mutates_state,
     }
     if mutates_state:
