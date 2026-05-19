@@ -32,6 +32,7 @@ not hand-maintained as a second route manifest:
 python3 scripts/generate_typescript_client.py
 python3 scripts/generate_typescript_client.py --check
 node --experimental-strip-types clients/typescript/smoke.ts
+(cd clients/typescript && npm ci && npm run check)
 ```
 
 ## Boundaries
@@ -44,7 +45,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
   dependency-free `fetch` client artifact for this API surface. It is not a
   published npm package, not a managed-cloud SDK promise, and not a SQL
   compatibility claim. Its local runtime smoke uses Node's experimental
-  TypeScript strip support.
+  TypeScript strip support. The private package under `clients/typescript`
+  exists only for local typechecking and smoke validation; it does not declare
+  package publishing fields.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.

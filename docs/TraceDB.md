@@ -86,6 +86,9 @@ package, not a hand-maintained managed SDK, and not a SQL compatibility claim.
 artifact imports and executes in the local Node runtime with fake-fetch coverage
 for GET no-body behavior, POST routing metadata injection, explicit routing
 field precedence, idempotency headers, and HTTP error shape.
+`cd clients/typescript && npm ci && npm run check` installs the locked private
+tooling and typechecks the generated artifact plus smoke script. The package is
+private and does not declare publishing fields.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 in-process engine replay, and the gateway forwards that header. Durable
 cross-restart/cross-replica idempotency remains future work. SDK write/admin

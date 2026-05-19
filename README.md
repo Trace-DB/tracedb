@@ -88,6 +88,15 @@ The TypeScript client smoke runs with local Node type stripping:
 node --experimental-strip-types clients/typescript/smoke.ts
 ```
 
+The generated TypeScript client also has a private local package boundary for
+typechecking the artifact and smoke script:
+
+```bash
+cd clients/typescript
+npm ci
+npm run check
+```
+
 ## Current Boundaries
 
 - SQL compatibility is not implemented.
@@ -104,7 +113,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - `clients/typescript/src/client.ts` is a generated dependency-free transport
   artifact for the current HTTP API. It is not a published npm package, not a
   hand-maintained managed SDK, and not a broader SDK compatibility claim. Its
-  current runtime smoke uses Node's experimental TypeScript strip support.
+  current runtime smoke uses Node's experimental TypeScript strip support. The
+  private package under `clients/typescript` exists only for local typechecking
+  and smoke validation; it does not declare package publishing fields.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash and not cross-replica. The Rust SDK can

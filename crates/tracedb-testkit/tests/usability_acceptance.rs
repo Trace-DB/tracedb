@@ -934,6 +934,90 @@ fn generated_typescript_client_smoke_executes_in_node_runtime() {
     );
 }
 
+#[test]
+fn typescript_client_package_declares_private_typecheck_boundary() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let package_json = root.join("clients/typescript/package.json");
+    let package_lock_json = root.join("clients/typescript/package-lock.json");
+    let tsconfig_json = root.join("clients/typescript/tsconfig.json");
+
+    let package: Value = serde_json::from_str(
+        &std::fs::read_to_string(&package_json)
+            .unwrap_or_else(|error| panic!("read {}: {error}", package_json.display())),
+    )
+    .expect("parse TypeScript client package.json");
+    assert_eq!(package["private"], json!(true));
+    assert_eq!(package["type"], json!("module"));
+    assert_eq!(
+        package["scripts"]["typecheck"],
+        json!("tsc --noEmit -p tsconfig.json")
+    );
+    assert_eq!(
+        package["scripts"]["smoke"],
+        json!("node --experimental-strip-types smoke.ts")
+    );
+    assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));
+    assert_eq!(package["devDependencies"]["@types/node"], json!("25.9.0"));
+    assert!(
+        package.get("exports").is_none(),
+        "private TypeScript package should not expose publishing exports"
+    );
+    assert!(
+        package.get("publishConfig").is_none(),
+        "private TypeScript package should not declare publish config"
+    );
+
+    let package_lock: Value = serde_json::from_str(
+        &std::fs::read_to_string(&package_lock_json)
+            .unwrap_or_else(|error| panic!("read {}: {error}", package_lock_json.display())),
+    )
+    .expect("parse TypeScript client package-lock.json");
+    assert_eq!(package_lock["lockfileVersion"], json!(3));
+    assert_eq!(
+        package_lock["packages"][""]["devDependencies"]["typescript"],
+        json!("6.0.3")
+    );
+    assert_eq!(
+        package_lock["packages"][""]["devDependencies"]["@types/node"],
+        json!("25.9.0")
+    );
+
+    let tsconfig: Value = serde_json::from_str(
+        &std::fs::read_to_string(&tsconfig_json)
+            .unwrap_or_else(|error| panic!("read {}: {error}", tsconfig_json.display())),
+    )
+    .expect("parse TypeScript client tsconfig.json");
+    assert_eq!(tsconfig["compilerOptions"]["module"], json!("NodeNext"));
+    assert_eq!(
+        tsconfig["compilerOptions"]["moduleResolution"],
+        json!("NodeNext")
+    );
+    assert_eq!(tsconfig["compilerOptions"]["strict"], json!(true));
+    assert_eq!(tsconfig["compilerOptions"]["noEmit"], json!(true));
+    assert_eq!(
+        tsconfig["compilerOptions"]["allowImportingTsExtensions"],
+        json!(true)
+    );
+    assert_eq!(tsconfig["include"], json!(["src/client.ts", "smoke.ts"]));
+
+    let readme = std::fs::read_to_string(root.join("clients/typescript/README.md"))
+        .expect("read TypeScript client README");
+    for command in [
+        "npm ci",
+        "npm run typecheck",
+        "npm run smoke",
+        "not a package publishing pipeline",
+    ] {
+        assert!(
+            readme.contains(command),
+            "TypeScript client README should document {command}"
+        );
+    }
+}
+
 fn gateway_or_worker_mount_engine_data(compose: &str) -> bool {
     let mut current_service = "";
     for line in compose.lines() {

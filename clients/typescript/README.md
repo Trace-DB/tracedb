@@ -28,6 +28,21 @@ checks `Idempotency-Key`, and checks `TraceDbHttpError` method/path/status/body
 context. This is runtime smoke coverage for the checked artifact, not a package
 publishing pipeline.
 
+Install the local private package tooling and run the typecheck boundary:
+
+```bash
+cd clients/typescript
+npm ci
+npm run typecheck
+npm run smoke
+npm run check
+```
+
+The package is marked `private: true` and exists to typecheck the generated
+artifact plus smoke script. This is not a package publishing pipeline. It
+deliberately does not declare package publishing fields such as `exports`,
+`main`, `types`, `files`, or `publishConfig`.
+
 ## Local Usage
 
 ```ts
