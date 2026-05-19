@@ -13,7 +13,10 @@ schemas and uses them in method signatures. These aliases intentionally preserve
 the API's permissive `additionalProperties` boundary: known fields are optional,
 unknown JSON fields remain allowed, and runtime validation stays server-side.
 They are compile-time ergonomics for the current HTTP API, not strict domain
-validators.
+validators. The generated `RecordPutBody` alias mirrors current server behavior:
+`putRecord` accepts either `RecordInput` directly or `{ record: RecordInput }`.
+`GetRecordResponse.record` is typed as `RecordOutput | null`, and
+`RecordOutput` exposes the server's serialized `version_id` field.
 
 Regenerate or check it from the repo root:
 
@@ -72,6 +75,12 @@ const schema: TableSchema = {
 
 await client.ready();
 await client.applySchema(schema);
+await client.putRecord({
+  table: "docs",
+  id: "a",
+  tenant_id: "tenant-a",
+  fields: { body: "hello" },
+});
 ```
 
 ## Managed-Routing Metadata

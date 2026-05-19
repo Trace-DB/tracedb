@@ -4,8 +4,10 @@ import {
   TraceDbHttpError,
   type HybridQuery,
   type JsonObject,
+  type RecordInput,
   type PutBatchResponse,
   type QueryResponse,
+  type GetRecordResponse,
   type RecordPutBatchRequest,
   type SnapshotRequest,
   type SnapshotResponse,
@@ -94,6 +96,15 @@ const snapshotResponse: SnapshotResponse = await client.snapshot(snapshotBody);
 assert.equal(snapshotResponse.ok, true);
 assert.equal(JSON.parse(calls[4].init.body ?? "{}").target, "/tmp/tracedb-snapshot");
 
+const directPutBody: RecordInput = {
+  table: "docs",
+  id: "direct",
+  tenant_id: "tenant-a",
+  fields: { body: "direct" },
+};
+await client.putRecord(directPutBody);
+assert.equal(JSON.parse(calls[5].init.body ?? "{}").id, "direct");
+
 await client.putRecord({
   database_id: "explicit-db",
   branch_id: "explicit-branch",
@@ -104,9 +115,16 @@ await client.putRecord({
     fields: { body: "hello" },
   },
 });
-const explicitRoutingRequest = JSON.parse(calls[5].init.body ?? "{}");
+const explicitRoutingRequest = JSON.parse(calls[6].init.body ?? "{}");
 assert.equal(explicitRoutingRequest.database_id, "explicit-db");
 assert.equal(explicitRoutingRequest.branch_id, "explicit-branch");
+
+const getResponse: GetRecordResponse = await client.getRecord({
+  table: "docs",
+  tenant_id: "tenant-a",
+  id: "direct",
+});
+assert.equal(getResponse.ok, true);
 
 const failingClient = new TraceDbClient({
   baseUrl: "http://127.0.0.1:8090",

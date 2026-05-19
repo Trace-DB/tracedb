@@ -89,7 +89,7 @@ export interface ErrorResponse extends JsonObject {
 }
 
 export interface GetRecordResponse extends JsonObject {
-  record?: JsonObject | null;
+  record?: RecordOutput | null;
 }
 
 export interface HealthResponse extends JsonObject {
@@ -159,7 +159,7 @@ export interface RecordOutput extends JsonObject {
   id?: string;
   table?: string;
   tenant_id?: string;
-  version?: number;
+  version_id?: number;
 }
 
 export interface RecordPatchRequest extends JsonObject {
@@ -173,6 +173,8 @@ export interface RecordPutBatchRequest extends JsonObject {
   include_write_timing?: boolean;
   records?: RecordInput[];
 }
+
+export type RecordPutBody = RecordInput | RecordPutRequest;
 
 export interface RecordPutRequest extends JsonObject {
   record?: RecordInput;
@@ -284,7 +286,7 @@ export class TraceDbClient {
 
   // postRecordsPut: POST /v1/records/put
   /** Put record. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async putRecord(body: RecordPutRequest, options: TraceDbRequestOptions = {}): Promise<EpochResponse> {
+  async putRecord(body: RecordPutBody, options: TraceDbRequestOptions = {}): Promise<EpochResponse> {
     return this.request<EpochResponse>("POST", "/v1/records/put", body, options);
   }
 

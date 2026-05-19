@@ -35,7 +35,7 @@ ROUTES = [
     ("get", "/v1/metrics/public-safe", "metrics", "Read public-safe metrics", None, "MetricsResponse", False),
     ("post", "/v1/schema/apply", "schema", "Apply table schema", "TableSchema", "EpochResponse", True),
     ("post", "/v1/insert", "records", "Insert record compatibility route", "RecordInput", "EpochResponse", True),
-    ("post", "/v1/records/put", "records", "Put record", "RecordPutRequest", "EpochResponse", True),
+    ("post", "/v1/records/put", "records", "Put record", "RecordPutBody", "EpochResponse", True),
     ("post", "/v1/records/put-batch", "records", "Put record batch", "RecordPutBatchRequest", "PutBatchResponse", True),
     ("post", "/v1/records/patch", "records", "Patch record", "RecordPatchRequest", "EpochResponse", True),
     ("post", "/v1/records/delete", "records", "Delete record", "RecordDeleteRequest", "DeleteResponse", True),
@@ -88,11 +88,15 @@ def components() -> dict[str, Any]:
                 "id": {"type": "string"},
                 "tenant_id": {"type": "string"},
                 "fields": object_schema("Record field map."),
-                "version": {"type": "integer"},
+                "version_id": {"type": "integer"},
             }),
             "RecordPutRequest": object_schema("Full replacement record write. The server also accepts RecordInput directly.", {
                 "record": schema_ref("RecordInput"),
             }),
+            "RecordPutBody": {
+                "description": "Full replacement record write body. The server accepts either RecordInput directly or a wrapper with record.",
+                "oneOf": [schema_ref("RecordInput"), schema_ref("RecordPutRequest")],
+            },
             "RecordPutBatchRequest": object_schema("Batch record write.", {
                 "records": array_schema(schema_ref("RecordInput")),
                 "include_write_timing": {"type": "boolean"},
@@ -149,7 +153,7 @@ def components() -> dict[str, Any]:
                 "epoch": {"type": "integer"},
             }),
             "GetRecordResponse": object_schema("Get record response.", {
-                "record": {"oneOf": [object_schema("Record output."), {"type": "null"}]},
+                "record": {"oneOf": [schema_ref("RecordOutput"), {"type": "null"}]},
             }),
             "RecordScanOutput": object_schema("Scan output."),
             "HybridQueryRow": object_schema("Hybrid query result row.", {

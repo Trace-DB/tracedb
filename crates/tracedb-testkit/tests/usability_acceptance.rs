@@ -781,6 +781,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         "TableSchema",
         "RecordInput",
         "RecordOutput",
+        "RecordPutBody",
         "RecordGetRequest",
         "RecordScanRequest",
         "RecordScanOutput",
@@ -796,6 +797,46 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
             "OpenAPI artifact missing component schema {schema_name}"
         );
     }
+    let put_schema = &spec["paths"]["/v1/records/put"]["post"]["requestBody"]["content"]
+        ["application/json"]["schema"];
+    assert_eq!(
+        put_schema["$ref"],
+        json!("#/components/schemas/RecordPutBody"),
+        "OpenAPI artifact should expose the server's direct-or-wrapper put body"
+    );
+    assert!(
+        spec["components"]["schemas"]["RecordPutBody"]["oneOf"]
+            .as_array()
+            .is_some_and(|schemas| {
+                schemas
+                    .iter()
+                    .any(|schema| schema["$ref"] == json!("#/components/schemas/RecordInput"))
+                    && schemas.iter().any(|schema| {
+                        schema["$ref"] == json!("#/components/schemas/RecordPutRequest")
+                    })
+            }),
+        "RecordPutBody should allow direct RecordInput and wrapper RecordPutRequest"
+    );
+    assert!(
+        spec["components"]["schemas"]["GetRecordResponse"]["properties"]["record"]["oneOf"]
+            .as_array()
+            .is_some_and(|schemas| {
+                schemas
+                    .iter()
+                    .any(|schema| schema["$ref"] == json!("#/components/schemas/RecordOutput"))
+                    && schemas.iter().any(|schema| schema["type"] == json!("null"))
+            }),
+        "GetRecordResponse.record should reference RecordOutput or null"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["RecordOutput"]["properties"]["version_id"]["type"],
+        json!("integer"),
+        "RecordOutput should expose the server's serialized version_id field"
+    );
+    assert!(
+        spec["components"]["schemas"]["RecordOutput"]["properties"]["version"].is_null(),
+        "RecordOutput should not document a non-serialized version field"
+    );
 
     let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
     assert!(
@@ -841,7 +882,10 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "Generated schema aliases keep OpenAPI's permissive additionalProperties boundary",
         "export interface TableSchema extends JsonObject",
         "export interface RecordInput extends JsonObject",
+        "export type RecordPutBody = RecordInput | RecordPutRequest;",
         "export interface RecordPutBatchRequest extends JsonObject",
+        "record?: RecordOutput | null;",
+        "version_id?: number;",
         "export interface HybridQuery extends JsonObject",
         "export interface QueryResponse extends JsonObject",
         "export interface SnapshotRequest extends JsonObject",
@@ -895,6 +939,7 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
     for signature in [
         "async ready(options: TraceDbRequestOptions = {}): Promise<ReadyResponse>",
         "async applySchema(body: TableSchema, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
+        "async putRecord(body: RecordPutBody, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
         "async putBatch(body: RecordPutBatchRequest, options: TraceDbRequestOptions = {}): Promise<PutBatchResponse>",
         "async query(body: HybridQuery, options: TraceDbRequestOptions = {}): Promise<QueryResponse>",
         "async snapshot(body: SnapshotRequest, options: TraceDbRequestOptions = {}): Promise<SnapshotResponse>",

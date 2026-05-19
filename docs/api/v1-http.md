@@ -88,7 +88,11 @@ Generated TypeScript aliases are sourced from the OpenAPI component schemas and
 are used in route method signatures. They are intentionally loose: the current
 HTTP API accepts additive JSON fields in several request and response shapes, so
 the generated aliases extend `JsonObject`, mark known fields optional, and leave
-domain enforcement to the server.
+domain enforcement to the server. The OpenAPI schema for
+`POST /v1/records/put` uses `RecordPutBody`, a `oneOf` union matching current
+server behavior: callers may send `RecordInput` directly or the wrapper
+`RecordPutRequest`. `GetRecordResponse.record` references `RecordOutput | null`;
+`RecordOutput` includes the serialized `version_id` field.
 
 ## Health And Catalog
 

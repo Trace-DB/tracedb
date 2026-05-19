@@ -66,9 +66,7 @@
           "record": {
             "oneOf": [
               {
-                "additionalProperties": true,
-                "description": "Record output.",
-                "type": "object"
+                "$ref": "#/components/schemas/RecordOutput"
               },
               {
                 "type": "null"
@@ -262,7 +260,7 @@
           "tenant_id": {
             "type": "string"
           },
-          "version": {
+          "version_id": {
             "type": "integer"
           }
         },
@@ -304,6 +302,17 @@
           }
         },
         "type": "object"
+      },
+      "RecordPutBody": {
+        "description": "Full replacement record write body. The server accepts either RecordInput directly or a wrapper with record.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RecordInput"
+          },
+          {
+            "$ref": "#/components/schemas/RecordPutRequest"
+          }
+        ]
       },
       "RecordPutRequest": {
         "additionalProperties": true,
@@ -2122,7 +2131,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RecordPutRequest"
+                "$ref": "#/components/schemas/RecordPutBody"
               }
             }
           },

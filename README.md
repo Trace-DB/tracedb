@@ -102,7 +102,10 @@ as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and
 `SnapshotRequest`, and its route methods return OpenAPI response aliases such as
 `ReadyResponse`, `PutBatchResponse`, and `QueryResponse`. These are permissive
 compile-time helpers: known fields are optional, unknown JSON fields are still
-allowed, and server-side runtime validation remains authoritative.
+allowed, and server-side runtime validation remains authoritative. The OpenAPI
+artifact and generated client now also expose the server's `/v1/records/put`
+direct-or-wrapper body as `RecordPutBody`, and `getRecord` responses type
+`record` as `RecordOutput | null` with the serialized `version_id` field.
 
 ## Current Boundaries
 
