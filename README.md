@@ -38,24 +38,27 @@ cargo run -p tracedb-cli -- --data /tmp/tracedb-demo verify
 Run the SDK quickstart against a local HTTP server:
 
 ```bash
-TRACEDB_DATA_DIR=/tmp/tracedb-sdk-demo TRACEDB_BIND=127.0.0.1:8090 cargo run -p tracedb-server
+TRACEDB_DATA_DIR=/tmp/tracedb-sdk-demo/data TRACEDB_BIND=127.0.0.1:8090 cargo run -p tracedb-server
 ```
 
 In a second terminal:
 
 ```bash
-cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000 --safe-retries 1
+cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000 --safe-retries 1 --admin-dir /tmp/tracedb-sdk-demo/admin
 ```
 
 The SDK example applies schema, batch-ingests records, scans, queries, explains,
-deletes, verifies deleted-record hiding, and reports `sql_module:
-not_implemented`. The example uses typed SDK convenience methods over the
-current HTTP response shapes and accepts a configurable SDK request timeout; the
-original raw `serde_json::Value` methods remain available. Bounded safe retries
-are available for SDK health/read routes only. Callers can manually attach
-`Idempotency-Key` per write/admin request with `TraceDbRequestOptions`; the SDK
-does not automatically retry those routes. The SDK also exposes typed local
-admin helpers for compact, snapshot, and restore.
+deletes, verifies deleted-record hiding, optionally compacts/snapshots/restores
+when `--admin-dir` points at an absolute server-side local scratch directory,
+and reports `sql_module: not_implemented`. The admin path is interpreted by the
+`tracedb-server` process, and restore creates a separate database directory
+instead of replacing the running server. The example uses typed SDK convenience
+methods over the current HTTP response shapes and accepts a configurable SDK
+request timeout; the original raw `serde_json::Value` methods remain available.
+Bounded safe retries are available for SDK health/read routes only. Callers can
+manually attach `Idempotency-Key` per write/admin request with
+`TraceDbRequestOptions`; the SDK does not automatically retry those routes. The
+SDK also exposes typed local admin helpers for compact, snapshot, and restore.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
 machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.

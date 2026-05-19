@@ -128,7 +128,12 @@ The current runnable HTTP product path is:
 5. Read with `POST /v1/records/get` or `POST /v1/records/scan`.
 6. Retrieve with `POST /v1/query` and inspect with `POST /v1/explain`.
 7. Delete with `POST /v1/records/delete`.
-8. Optionally compact or snapshot through the admin routes.
+8. Optionally compact, snapshot, and restore through the admin routes when
+   using explicit server-side local paths.
 
 The SDK quickstart exercises this path and reports `sql_module:
-not_implemented`.
+not_implemented`. Passing `--admin-dir SERVER_SIDE_DIR` also exercises compact,
+snapshot, and restore with typed SDK admin helpers. The argument must be an
+absolute path interpreted by the server process and is intended as local scratch
+space. Restore creates a separate database directory; it does not replace the
+running server's data directory and is not managed-cloud backup/DR semantics.
