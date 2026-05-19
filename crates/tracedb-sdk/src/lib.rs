@@ -772,6 +772,100 @@ impl TraceDbAsyncClient {
         self.run(|client| client.list_admin_jobs_typed()).await
     }
 
+    pub async fn apply_schema_typed(
+        &self,
+        schema: &TableSchema,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let schema = schema.clone();
+        self.run(move |client| client.apply_schema_typed(&schema))
+            .await
+    }
+
+    pub async fn apply_schema_typed_with_options(
+        &self,
+        schema: &TableSchema,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let schema = schema.clone();
+        let options = options.clone();
+        self.run(move |client| client.apply_schema_typed_with_options(&schema, &options))
+            .await
+    }
+
+    pub async fn put_typed(&self, record: &RecordInput) -> TraceDbClientResult<EpochResponse> {
+        let record = record.clone();
+        self.run(move |client| client.put_typed(&record)).await
+    }
+
+    pub async fn put_typed_with_options(
+        &self,
+        record: &RecordInput,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let record = record.clone();
+        let options = options.clone();
+        self.run(move |client| client.put_typed_with_options(&record, &options))
+            .await
+    }
+
+    pub async fn put_batch_typed(
+        &self,
+        request: &RecordPutBatchRequest,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        let request = request.clone();
+        self.run(move |client| client.put_batch_typed(&request))
+            .await
+    }
+
+    pub async fn put_batch_typed_with_options(
+        &self,
+        request: &RecordPutBatchRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        let request = request.clone();
+        let options = options.clone();
+        self.run(move |client| client.put_batch_typed_with_options(&request, &options))
+            .await
+    }
+
+    pub async fn patch_typed(
+        &self,
+        request: &RecordPatchRequest,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let request = request.clone();
+        self.run(move |client| client.patch_typed(&request)).await
+    }
+
+    pub async fn patch_typed_with_options(
+        &self,
+        request: &RecordPatchRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let request = request.clone();
+        let options = options.clone();
+        self.run(move |client| client.patch_typed_with_options(&request, &options))
+            .await
+    }
+
+    pub async fn delete_typed(
+        &self,
+        request: &RecordDeleteRequest,
+    ) -> TraceDbClientResult<DeleteResponse> {
+        let request = request.clone();
+        self.run(move |client| client.delete_typed(&request)).await
+    }
+
+    pub async fn delete_typed_with_options(
+        &self,
+        request: &RecordDeleteRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<DeleteResponse> {
+        let request = request.clone();
+        let options = options.clone();
+        self.run(move |client| client.delete_typed_with_options(&request, &options))
+            .await
+    }
+
     pub async fn get_record_typed(
         &self,
         request: &RecordGetRequest,
@@ -797,6 +891,58 @@ impl TraceDbAsyncClient {
     pub async fn explain_typed(&self, query: &HybridQuery) -> TraceDbClientResult<HybridExplain> {
         let query = query.clone();
         self.run(move |client| client.explain_typed(&query)).await
+    }
+
+    pub async fn compact_typed(&self) -> TraceDbClientResult<CompactResponse> {
+        self.run(|client| client.compact_typed()).await
+    }
+
+    pub async fn compact_typed_with_options(
+        &self,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<CompactResponse> {
+        let options = options.clone();
+        self.run(move |client| client.compact_typed_with_options(&options))
+            .await
+    }
+
+    pub async fn snapshot_typed(
+        &self,
+        request: &SnapshotRequest,
+    ) -> TraceDbClientResult<SnapshotResponse> {
+        let request = request.clone();
+        self.run(move |client| client.snapshot_typed(&request))
+            .await
+    }
+
+    pub async fn snapshot_typed_with_options(
+        &self,
+        request: &SnapshotRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<SnapshotResponse> {
+        let request = request.clone();
+        let options = options.clone();
+        self.run(move |client| client.snapshot_typed_with_options(&request, &options))
+            .await
+    }
+
+    pub async fn restore_typed(
+        &self,
+        request: &RestoreRequest,
+    ) -> TraceDbClientResult<RestoreResponse> {
+        let request = request.clone();
+        self.run(move |client| client.restore_typed(&request)).await
+    }
+
+    pub async fn restore_typed_with_options(
+        &self,
+        request: &RestoreRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<RestoreResponse> {
+        let request = request.clone();
+        let options = options.clone();
+        self.run(move |client| client.restore_typed_with_options(&request, &options))
+            .await
     }
 
     async fn run<T>(

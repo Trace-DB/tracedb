@@ -371,6 +371,24 @@ fn async_client_starts_http_work_without_blocking_first_poll() {
 }
 
 #[test]
+fn async_client_typed_write_options_retry_5xx_when_idempotent() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"epoch\":7}",
+    ]);
+    let client = TraceDbAsyncClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let options = TraceDbRequestOptions::new().with_idempotency_key("async-schema-1");
+
+    let response = block_on(client.apply_schema_typed_with_options(&schema(), &options))
+        .expect("async schema write should retry when idempotent retries are enabled");
+
+    assert_eq!(response.epoch, 7);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn retryable_health_requests_retry_5xx_then_return_success() {
     let (url, attempts) = sequence_response_server(vec![
         b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
@@ -1044,7 +1062,7 @@ fn client_executes_real_http_product_path() {
 }
 
 #[test]
-fn async_client_executes_real_http_read_path() {
+fn async_client_executes_real_typed_http_read_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1061,22 +1079,12 @@ fn async_client_executes_real_http_read_path() {
     ));
 
     assert!(block_on(client.ready_typed()).expect("async ready").ready);
-    block_on(client.request_json(
-        "POST",
-        "/v1/schema/apply",
-        Some(&serde_json::to_value(schema()).expect("schema json")),
-    ))
-    .expect("async schema apply");
+    block_on(client.apply_schema_typed(&schema())).expect("async schema apply");
     let batch = RecordPutBatchRequest::new(vec![
         record("async-intro", "tenant-a", "async rust sdk", [1.0, 0.0, 0.0]),
         record("async-ops", "tenant-a", "async read path", [0.0, 1.0, 0.0]),
     ]);
-    block_on(client.request_json(
-        "POST",
-        "/v1/records/put-batch",
-        Some(&serde_json::to_value(batch).expect("batch json")),
-    ))
-    .expect("async batch ingest");
+    block_on(client.put_batch_typed(&batch)).expect("async batch ingest");
 
     let scan = block_on(client.scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10)))
         .expect("async scan");
@@ -1090,6 +1098,89 @@ fn async_client_executes_real_http_read_path() {
         "async query results: {:?}",
         query.results
     );
+}
+
+#[test]
+fn async_client_executes_real_typed_write_admin_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().join("engine");
+    let server_data_dir = data_dir.clone();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(server_data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    let client = TraceDbAsyncClient::new(
+        TraceDbClientConfig::managed(format!("http://{addr}"), "dev-token")
+            .with_idempotency_retries(1),
+    );
+
+    assert!(block_on(client.ready_typed()).expect("async ready").ready);
+    assert_eq!(
+        block_on(client.apply_schema_typed(&schema()))
+            .expect("async schema")
+            .epoch,
+        1
+    );
+    let batch = RecordPutBatchRequest::new(vec![
+        record(
+            "async-intro",
+            "tenant-a",
+            "async rust sdk product path",
+            [1.0, 0.0, 0.0],
+        ),
+        record(
+            "async-ops",
+            "tenant-a",
+            "async snapshot restore flow",
+            [0.0, 1.0, 0.0],
+        ),
+    ]);
+    let batch_options = TraceDbRequestOptions::new().with_idempotency_key("async-batch-1");
+    let batch_response =
+        block_on(client.put_batch_typed_with_options(&batch, &batch_options)).expect("async batch");
+    assert_eq!(batch_response.epoch, 2);
+    assert_eq!(batch_response.record_count, 2);
+
+    let got = block_on(client.get_record_typed(&RecordGetRequest::new(
+        "docs",
+        "tenant-a",
+        "async-intro",
+    )))
+    .expect("async get");
+    assert_eq!(got.record.expect("record").id, "async-intro");
+
+    let delete =
+        block_on(client.delete_typed(&RecordDeleteRequest::new("docs", "tenant-a", "async-ops")))
+            .expect("async delete");
+    assert!(delete.deleted);
+    assert_eq!(delete.epoch, 3);
+
+    let compact = block_on(client.compact_typed()).expect("async compact");
+    assert!(compact.compacted);
+
+    let snapshot_dir = temp.path().join("async-snapshot-copy");
+    let snapshot_target = snapshot_dir.to_string_lossy().to_string();
+    let snapshot_request = SnapshotRequest::new(snapshot_target.clone());
+    let snapshot_options = TraceDbRequestOptions::new().with_idempotency_key("async-snapshot-1");
+    let snapshot =
+        block_on(client.snapshot_typed_with_options(&snapshot_request, &snapshot_options))
+            .expect("async snapshot");
+    assert!(snapshot.snapshot);
+    assert_eq!(snapshot.target, snapshot_target);
+
+    let restore_dir = temp.path().join("async-restore-copy");
+    let restore_target = restore_dir.to_string_lossy().to_string();
+    let restore_request = RestoreRequest::new(snapshot_target.clone(), restore_target.clone());
+    let restore_options = TraceDbRequestOptions::new().with_idempotency_key("async-restore-1");
+    let restore = block_on(client.restore_typed_with_options(&restore_request, &restore_options))
+        .expect("async restore");
+    assert!(restore.restored);
+    assert_eq!(restore.source, snapshot_target);
+    assert_eq!(restore.target, restore_target);
 }
 
 #[test]

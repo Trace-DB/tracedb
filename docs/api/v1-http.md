@@ -44,9 +44,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - The current Rust SDK is a minimal blocking HTTP client for this API surface.
   It also exposes `TraceDbAsyncClient` as a minimal async facade over the same
   HTTP contract. This first async surface runs the existing transport on a
-  background thread per request so callers can await read/diagnostic methods
-  without blocking the first Future poll on socket I/O; it is not yet a
-  runtime-native Tokio/async-std transport.
+  background thread per request so callers can await typed read, write, and
+  admin helpers without blocking the first Future poll on socket I/O; it is not
+  yet a runtime-native Tokio/async-std transport.
 - The TypeScript client under `clients/typescript/src/client.ts` is a generated
   dependency-free `fetch` client artifact for this API surface. It is not a
   published npm package, not a managed-cloud SDK promise, and not a SQL
@@ -97,11 +97,13 @@ can omit those fields.
 
 `TraceDbAsyncClient` wraps the same Rust SDK configuration and exposes
 awaitable `ready`, `health`, catalog, metrics, admin-jobs, get, scan, query,
-explain, and generic JSON request methods. It preserves the same timeout,
-retry, error-envelope, and managed-routing behavior as the blocking client.
-The implementation uses a background thread per request, so it is suitable for
-basic async integration tests and scripts but not a final high-concurrency
-runtime-native transport.
+explain, and generic JSON request methods. It also exposes async typed write/admin helpers
+for schema apply, record put/batch/patch/delete, compact,
+snapshot, and restore, including the same option-aware idempotency helpers as
+the blocking client. It preserves the same timeout, retry, error-envelope, and
+managed-routing behavior as the blocking client. The implementation uses a
+background thread per request, so it is suitable for basic async integration
+tests and scripts but not a final high-concurrency runtime-native transport.
 
 The generated TypeScript client follows the same routing metadata boundary:
 configured `databaseId` and `branchId` are added only to absent root

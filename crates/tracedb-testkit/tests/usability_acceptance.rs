@@ -728,6 +728,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "exits non-zero when any check fails while preserving the JSON summary",
         "TraceDbAsyncClient",
         "background thread per request",
+        "async typed write/admin helpers",
         "Internal TraceDB-only runs are development evidence",
         "No cursor metadata is emitted today",
     ] {

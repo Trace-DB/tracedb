@@ -99,8 +99,11 @@ with `python3 scripts/generate_typescript_client.py`.
 The Rust SDK also exposes `TraceDbAsyncClient`, a minimal async facade over the
 same HTTP contract. It runs the existing transport on a background thread per
 request, preserving timeout, retry, routing metadata, and error behavior while
-making the current read/diagnostic methods awaitable. This is not yet a
-runtime-native Tokio/async-std transport.
+making the current typed read, write, and admin helpers awaitable. Async typed
+write/admin helpers include schema apply, record put/batch/patch/delete,
+compact, snapshot, and restore, including the same option-aware idempotency
+helpers as the blocking client. This is not yet a runtime-native
+Tokio/async-std transport.
 The TypeScript client smoke runs with local Node type stripping:
 
 ```bash
