@@ -33,6 +33,19 @@ The demo exercises schema apply, batch ingest, query/explain, scan, delete,
 compact, snapshot, and restore through the embedded engine. SQL compatibility is
 not implemented.
 
+The local HTTP plus SDK smoke is also available as one command:
+
+```bash
+cargo run -p tracedb-cli -- --data /tmp/tracedb-http-demo http-demo
+```
+
+It starts a loopback `tracedb-server` child process, drives the Rust SDK over
+HTTP through ready, schema apply, batch ingest, scan, query, explain, delete,
+compact, snapshot, and restore, uses keyed SDK write/admin retries for
+mutation/admin steps, and reports `sql_module: not_implemented`. This proves the
+local HTTP SDK product path; it does not claim managed-cloud deployment health,
+backup/DR semantics, cross-replica idempotency, or SQL compatibility.
+
 The SDK quickstart is also runnable against a local HTTP server:
 
 ```bash

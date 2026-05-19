@@ -325,6 +325,7 @@ dependencies = [
  "tracedb-bench",
  "tracedb-catalog",
  "tracedb-query",
+ "tracedb-sdk",
  "tracedb-server",
 ]
 

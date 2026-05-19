@@ -3,14 +3,20 @@
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
+use std::net::TcpListener;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::Catalog;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema,
     TraceDb, VectorColumnSchema,
+};
+use tracedb_sdk::{
+    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbRequestOptions,
 };
 
 fn main() {
@@ -271,6 +277,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "demo" => {
             run_demo(&data_dir)?;
+        }
+        "http-demo" => {
+            run_http_demo(&data_dir)?;
         }
         "compose" => {
             let action = args.get(1).map(String::as_str).unwrap_or("status");
@@ -555,6 +564,203 @@ fn run_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let bind = listener.local_addr()?;
+    drop(listener);
+
+    let _server = LocalServerChild::start(data_dir, &bind.to_string())?;
+
+    let url = format!("http://{bind}");
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url.clone(), "dev-token")
+            .with_timeout(Duration::from_millis(500))
+            .with_safe_retries(1)
+            .with_idempotency_retries(1),
+    );
+    wait_for_ready(&client)?;
+
+    let table = "demo_docs";
+    let tenant = "demo-tenant";
+    let run_id = http_demo_run_id()?;
+    let schema = client.apply_schema_typed_with_options(
+        &demo_schema(table),
+        &http_demo_idempotency_options(&run_id, "schema-apply"),
+    )?;
+    let ingest = client.put_batch_typed_with_options(
+        &RecordPutBatchRequest::new(vec![
+            demo_record(
+                table,
+                tenant,
+                "intro",
+                "TraceDB local HTTP SDK quickstart",
+                "published",
+                [1.0, 0.0, 0.0],
+            ),
+            demo_record(
+                table,
+                tenant,
+                "sdk",
+                "TraceDB SDK and HTTP API surface",
+                "published",
+                [0.8, 0.2, 0.0],
+            ),
+            demo_record(
+                table,
+                tenant,
+                "ops",
+                "TraceDB snapshot restore and WAL recovery",
+                "draft",
+                [0.0, 1.0, 0.0],
+            ),
+        ]),
+        &http_demo_idempotency_options(&run_id, "put-batch"),
+    )?;
+    let scan = client.scan_typed(&RecordScanRequest::new(table, tenant).limit(10))?;
+    let query = HybridQuery {
+        table: table.to_string(),
+        tenant_id: tenant.to_string(),
+        text: Some("TraceDB API".to_string()),
+        vector: Some(vec![1.0, 0.0, 0.0]),
+        scalar_eq: Default::default(),
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k: 3,
+        freshness: FreshnessMode::Strict,
+        explain: true,
+    };
+    let query_response = client.query_typed(&query)?;
+    let query_ids = query_response
+        .results
+        .iter()
+        .map(|row| row.record_id.clone())
+        .collect::<Vec<_>>();
+    let explain = client.explain_typed(&query)?;
+    let delete = client.delete_typed_with_options(
+        &RecordDeleteRequest::new(table, tenant, "ops").tombstone("http_demo_cleanup"),
+        &http_demo_idempotency_options(&run_id, "delete-ops"),
+    )?;
+    let deleted_hidden = client
+        .get_record_typed(&RecordGetRequest::new(table, tenant, "ops"))?
+        .record
+        .is_none();
+    let compact =
+        client.compact_typed_with_options(&http_demo_idempotency_options(&run_id, "compact"))?;
+
+    let admin_dir = data_dir.join("http-demo-admin");
+    fs::create_dir_all(&admin_dir)?;
+    let snapshot_dir = admin_dir.join("snapshot");
+    if snapshot_dir.exists() {
+        fs::remove_dir_all(&snapshot_dir)?;
+    }
+    let restore_dir = admin_dir.join("restore");
+    if restore_dir.exists() {
+        fs::remove_dir_all(&restore_dir)?;
+    }
+    let snapshot = client.snapshot_typed_with_options(
+        &SnapshotRequest::new(snapshot_dir.to_string_lossy().to_string()),
+        &http_demo_idempotency_options(&run_id, "snapshot"),
+    )?;
+    let restore = client.restore_typed_with_options(
+        &RestoreRequest::new(
+            snapshot_dir.to_string_lossy().to_string(),
+            restore_dir.to_string_lossy().to_string(),
+        ),
+        &http_demo_idempotency_options(&run_id, "restore"),
+    )?;
+    let restored = TraceDb::open(&restore_dir)?;
+    let restored_scan = restored.scan(RecordScanRequest::new(table, tenant).limit(10))?;
+
+    print_json(json!({
+        "ok": true,
+        "mode": "local-http-sdk-demo",
+        "server_url": url,
+        "data_dir": data_dir,
+        "table": table,
+        "tenant_id": tenant,
+        "steps": {
+            "server_start": true,
+            "ready": true,
+            "schema_apply": true,
+            "batch_ingest": true,
+            "scan": true,
+            "query": true,
+            "explain": true,
+            "delete": delete.deleted,
+            "compact": compact.compacted,
+            "snapshot": snapshot.snapshot,
+            "restore": restore.restored,
+        },
+        "schema_epoch": schema.epoch,
+        "records_inserted": ingest.record_count,
+        "records_scanned": scan.returned_count,
+        "records_after_restore": restored_scan.returned_count,
+        "query_result_ids": query_ids,
+        "explain_returned_count": explain.returned_count,
+        "deleted_hidden": deleted_hidden,
+        "snapshot_dir": snapshot.target,
+        "restore_dir": restore.target,
+        "idempotency_retries": 1,
+        "idempotency_keys": true,
+        "sql_module": "not_implemented",
+    }));
+    Ok(())
+}
+
+fn wait_for_ready(client: &TraceDbClient) -> Result<(), Box<dyn std::error::Error>> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.ready_typed() {
+            Ok(ready) if ready.ready => return Ok(()),
+            Ok(_) => {}
+            Err(error) => last_error = Some(error),
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let message = last_error
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| "server did not report ready".to_string());
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!("timed out waiting for local http demo server: {message}"),
+    )
+    .into())
+}
+
+struct LocalServerChild {
+    child: Child,
+}
+
+impl LocalServerChild {
+    fn start(data_dir: &std::path::Path, bind: &str) -> std::io::Result<Self> {
+        let child = Command::new(env::current_exe()?)
+            .arg("--data")
+            .arg(data_dir)
+            .arg("serve")
+            .arg(bind)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        Ok(Self { child })
+    }
+}
+
+impl Drop for LocalServerChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn http_demo_run_id() -> Result<String, std::time::SystemTimeError> {
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    Ok(format!("{}-{}", std::process::id(), elapsed.as_millis()))
+}
+
+fn http_demo_idempotency_options(run_id: &str, step: &str) -> TraceDbRequestOptions {
+    TraceDbRequestOptions::new().with_idempotency_key(format!("http-demo-{run_id}-{step}"))
+}
+
 fn demo_schema(table: &str) -> TableSchema {
     TableSchema {
         name: table.to_string(),
@@ -667,6 +873,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }

@@ -125,6 +125,18 @@ string paths.
 
 ## Minimal Product Path
 
+Run the complete local HTTP plus Rust SDK smoke with one command:
+
+```bash
+cargo run -p tracedb-cli -- --data /tmp/tracedb-http-demo http-demo
+```
+
+The command starts a loopback `tracedb-server` child process, drives the current
+typed Rust SDK over HTTP, and reports `sql_module: not_implemented`. It covers
+ready, schema apply, batch ingest, scan, query, explain, delete, compact,
+snapshot, restore, and keyed mutation/admin retries. The child server's output
+is not mixed into the command JSON summary.
+
 The current runnable HTTP product path is:
 
 1. Start the local engine with `tracedb-server`.

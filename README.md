@@ -35,6 +35,19 @@ Verify the same data directory afterward:
 cargo run -p tracedb-cli -- --data /tmp/tracedb-demo verify
 ```
 
+Run the local HTTP plus SDK product smoke with one command:
+
+```bash
+cargo run -p tracedb-cli -- --data /tmp/tracedb-http-demo http-demo
+```
+
+The command starts a local loopback `tracedb-server` child process, drives the
+Rust SDK over HTTP through ready, schema apply, batch ingest, scan, query,
+explain, delete, compact, snapshot, and restore, then emits a JSON summary. It
+uses keyed SDK write/admin retries for its mutation/admin steps and still
+reports `sql_module: not_implemented`. This is local product-path evidence, not
+managed-cloud deployment or backup/DR evidence.
+
 Run the SDK quickstart against a local HTTP server:
 
 ```bash
