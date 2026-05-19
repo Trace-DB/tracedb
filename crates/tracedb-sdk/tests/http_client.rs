@@ -10,7 +10,7 @@ use tracedb_query::{
     FreshnessMode, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
-use tracedb_sdk::{TraceDbClient, TraceDbClientConfig, TraceDbClientError};
+use tracedb_sdk::{TraceDbClient, TraceDbClientConfig, TraceDbClientError, TraceDbRequestOptions};
 
 fn schema() -> TableSchema {
     TableSchema {
@@ -95,6 +95,41 @@ fn capture_json_body_server() -> (String, std::thread::JoinHandle<serde_json::Va
             .split_once("\r\n\r\n")
             .expect("request header boundary");
         serde_json::from_str(body).expect("json request body")
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn capture_http_request_server() -> (String, std::thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => request.extend_from_slice(&buffer[..read]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break
+                }
+                Err(error) => panic!("read request: {error}"),
+            }
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+            )
+            .unwrap();
+        String::from_utf8(request).expect("utf8 request")
     });
     (format!("http://{addr}"), handle)
 }
@@ -235,6 +270,80 @@ fn managed_client_injects_database_and_branch_ids_into_json_posts() {
     assert_eq!(body["tenant_id"], "tenant-a");
     assert_eq!(body["database_id"], "db_prod");
     assert_eq!(body["branch_id"], "db_prod:beta");
+}
+
+#[test]
+fn request_options_send_idempotency_key_header_without_enabling_write_retries() {
+    let (url, request) = capture_http_request_server();
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(2));
+    let options = TraceDbRequestOptions::new().with_idempotency_key("batch-1");
+
+    let response = client
+        .request_json_with_options(
+            "POST",
+            "/v1/records/put-batch",
+            Some(&json!({ "records": [] })),
+            &options,
+        )
+        .expect("post with idempotency key");
+    let request = request.join().expect("request");
+
+    assert_eq!(response["ok"], true);
+    assert!(
+        request.contains("Idempotency-Key: batch-1\r\n"),
+        "request should include Idempotency-Key header: {request}"
+    );
+}
+
+#[test]
+fn request_options_reject_invalid_idempotency_key_header_values() {
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(
+        "http://127.0.0.1:1",
+        "dev-token",
+    ));
+    let options = TraceDbRequestOptions::new().with_idempotency_key("bad\r\nx-extra: true");
+
+    let error = client
+        .request_json_with_options("POST", "/v1/records/put-batch", Some(&json!({})), &options)
+        .expect_err("invalid header value should be rejected before network I/O");
+    let message = error.to_string();
+
+    match error {
+        TraceDbClientError::InvalidRequest {
+            method,
+            path,
+            message,
+        } => {
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/v1/records/put-batch");
+            assert!(message.contains("idempotency key"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(message.contains("POST /v1/records/put-batch"), "{message}");
+    assert!(message.contains("idempotency key"), "{message}");
+}
+
+#[test]
+fn write_routes_with_idempotency_key_still_do_not_retry_5xx() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+    let options = TraceDbRequestOptions::new().with_idempotency_key("schema-1");
+
+    let error = client
+        .apply_schema_with_options(&schema(), &options)
+        .expect_err("schema writes should not retry automatically");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -522,4 +631,66 @@ fn client_executes_typed_http_product_path() {
         .get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "ops"))
         .expect("get deleted");
     assert!(deleted.record.is_none());
+}
+
+#[test]
+fn client_idempotency_options_replay_write_response_against_real_server() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(format!("http://{addr}"), "dev-token").with_safe_retries(2),
+    );
+    client.apply_schema_typed(&schema()).expect("schema");
+    let batch = RecordPutBatchRequest::new(vec![record(
+        "intro",
+        "tenant-a",
+        "rust database api quickstart",
+        [1.0, 0.0, 0.0],
+    )]);
+    let options = TraceDbRequestOptions::new().with_idempotency_key("batch-intro-1");
+
+    let first = client
+        .put_batch_typed_with_options(&batch, &options)
+        .expect("first batch");
+    let replay = client
+        .put_batch_typed_with_options(&batch, &options)
+        .expect("replayed batch");
+
+    assert_eq!(first.epoch, 2);
+    assert_eq!(replay.epoch, 2);
+    assert_eq!(
+        client
+            .scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10))
+            .expect("scan")
+            .returned_count,
+        1
+    );
+
+    let changed_batch = RecordPutBatchRequest::new(vec![record(
+        "other",
+        "tenant-a",
+        "same idempotency key with a different body",
+        [0.0, 1.0, 0.0],
+    )]);
+    let error = client
+        .put_batch_typed_with_options(&changed_batch, &options)
+        .expect_err("same key with changed body should conflict");
+    match error {
+        TraceDbClientError::HttpStatus { status, body, .. } => {
+            assert_eq!(status, 409);
+            assert!(
+                body.contains("idempotency key reused with different request body"),
+                "conflict body: {body}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

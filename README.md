@@ -52,7 +52,9 @@ deletes, verifies deleted-record hiding, and reports `sql_module:
 not_implemented`. The example uses typed SDK convenience methods over the
 current HTTP response shapes and accepts a configurable SDK request timeout; the
 original raw `serde_json::Value` methods remain available. Bounded safe retries
-are available for SDK health/read routes only.
+are available for SDK health/read routes only. Callers can manually attach
+`Idempotency-Key` per write/admin request with `TraceDbRequestOptions`; the SDK
+does not automatically retry those routes.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
 machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
@@ -71,6 +73,7 @@ machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash, not cross-replica, and does not enable
-  automatic SDK write/admin retries yet.
+  automatic SDK write/admin retries yet. The Rust SDK can manually send the
+  header per request through `TraceDbRequestOptions`.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require external controls and a number to beat.

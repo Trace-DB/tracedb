@@ -39,6 +39,9 @@ python3 scripts/generate_openapi_v1.py --check
 - The idempotency cache is local-engine-only and in-process. It is not durable
   across restart/crash, not cross-replica, and not a managed-cloud exactly-once
   guarantee. Automatic SDK write/admin retries remain future work.
+- The Rust SDK can manually send `Idempotency-Key` with
+  `TraceDbRequestOptions` on individual requests, but `safe_retries` still
+  applies only to health/read routes.
 - Gateway metering, request logging, and rate limiting may still observe each
   HTTP attempt.
 

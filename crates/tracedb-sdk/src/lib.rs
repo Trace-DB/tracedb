@@ -19,6 +19,11 @@ pub type TraceDbClientResult<T> = std::result::Result<T, TraceDbClientError>;
 #[derive(Debug)]
 pub enum TraceDbClientError {
     InvalidUrl(String),
+    InvalidRequest {
+        method: String,
+        path: String,
+        message: String,
+    },
     Io(std::io::Error),
     Json(serde_json::Error),
     Timeout {
@@ -43,6 +48,14 @@ impl Display for TraceDbClientError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidUrl(url) => write!(f, "invalid TraceDB URL {url}"),
+            Self::InvalidRequest {
+                method,
+                path,
+                message,
+            } => write!(
+                f,
+                "invalid TraceDB HTTP request for {method} {path}: {message}"
+            ),
             Self::Io(error) => write!(f, "TraceDB HTTP I/O error: {error}"),
             Self::Json(error) => write!(f, "TraceDB JSON error: {error}"),
             Self::Timeout {
@@ -82,6 +95,7 @@ impl Error for TraceDbClientError {
             Self::Io(error) => Some(error),
             Self::Json(error) => Some(error),
             Self::InvalidUrl(_)
+            | Self::InvalidRequest { .. }
             | Self::Timeout { .. }
             | Self::InvalidResponse { .. }
             | Self::HttpStatus { .. } => None,
@@ -160,6 +174,23 @@ impl TraceDbClientConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TraceDbRequestOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+impl TraceDbRequestOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TraceDbClient {
     pub config: TraceDbClientConfig,
@@ -186,20 +217,60 @@ impl TraceDbClient {
         self.post_json("/v1/schema/apply", schema)
     }
 
+    pub fn apply_schema_with_options(
+        &self,
+        schema: &TableSchema,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/schema/apply", schema, options)
+    }
+
     pub fn apply_schema_typed(&self, schema: &TableSchema) -> TraceDbClientResult<EpochResponse> {
         self.post_typed("/v1/schema/apply", schema)
+    }
+
+    pub fn apply_schema_typed_with_options(
+        &self,
+        schema: &TableSchema,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        self.post_typed_with_options("/v1/schema/apply", schema, options)
     }
 
     pub fn put(&self, record: &RecordInput) -> TraceDbClientResult<Value> {
         self.post_json("/v1/records/put", record)
     }
 
+    pub fn put_with_options(
+        &self,
+        record: &RecordInput,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/records/put", record, options)
+    }
+
     pub fn put_typed(&self, record: &RecordInput) -> TraceDbClientResult<EpochResponse> {
         self.post_typed("/v1/records/put", record)
     }
 
+    pub fn put_typed_with_options(
+        &self,
+        record: &RecordInput,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        self.post_typed_with_options("/v1/records/put", record, options)
+    }
+
     pub fn put_batch(&self, request: &RecordPutBatchRequest) -> TraceDbClientResult<Value> {
         self.post_json("/v1/records/put-batch", request)
+    }
+
+    pub fn put_batch_with_options(
+        &self,
+        request: &RecordPutBatchRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/records/put-batch", request, options)
     }
 
     pub fn put_batch_typed(
@@ -209,16 +280,48 @@ impl TraceDbClient {
         self.post_typed("/v1/records/put-batch", request)
     }
 
+    pub fn put_batch_typed_with_options(
+        &self,
+        request: &RecordPutBatchRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        self.post_typed_with_options("/v1/records/put-batch", request, options)
+    }
+
     pub fn patch(&self, request: &RecordPatchRequest) -> TraceDbClientResult<Value> {
         self.post_json("/v1/records/patch", request)
+    }
+
+    pub fn patch_with_options(
+        &self,
+        request: &RecordPatchRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/records/patch", request, options)
     }
 
     pub fn patch_typed(&self, request: &RecordPatchRequest) -> TraceDbClientResult<EpochResponse> {
         self.post_typed("/v1/records/patch", request)
     }
 
+    pub fn patch_typed_with_options(
+        &self,
+        request: &RecordPatchRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        self.post_typed_with_options("/v1/records/patch", request, options)
+    }
+
     pub fn delete(&self, request: &RecordDeleteRequest) -> TraceDbClientResult<Value> {
         self.post_json("/v1/records/delete", request)
+    }
+
+    pub fn delete_with_options(
+        &self,
+        request: &RecordDeleteRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/records/delete", request, options)
     }
 
     pub fn delete_typed(
@@ -226,6 +329,14 @@ impl TraceDbClient {
         request: &RecordDeleteRequest,
     ) -> TraceDbClientResult<DeleteResponse> {
         self.post_typed("/v1/records/delete", request)
+    }
+
+    pub fn delete_typed_with_options(
+        &self,
+        request: &RecordDeleteRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<DeleteResponse> {
+        self.post_typed_with_options("/v1/records/delete", request, options)
     }
 
     pub fn get(&self, request: &RecordGetRequest) -> TraceDbClientResult<Value> {
@@ -267,8 +378,22 @@ impl TraceDbClient {
         self.post_json("/v1/admin/compact", &json!({}))
     }
 
+    pub fn compact_with_options(
+        &self,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/admin/compact", &json!({}), options)
+    }
+
     pub fn compact_typed(&self) -> TraceDbClientResult<CompactResponse> {
         self.post_typed("/v1/admin/compact", &json!({}))
+    }
+
+    pub fn compact_typed_with_options(
+        &self,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<CompactResponse> {
+        self.post_typed_with_options("/v1/admin/compact", &json!({}), options)
     }
 
     pub fn request_json(
@@ -277,6 +402,16 @@ impl TraceDbClient {
         path: &str,
         body: Option<&Value>,
     ) -> TraceDbClientResult<Value> {
+        self.request_json_with_options(method, path, body, &TraceDbRequestOptions::default())
+    }
+
+    pub fn request_json_with_options(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
         let attempts = if is_retry_safe_request(method, path) {
             self.config.safe_retries.saturating_add(1)
         } else {
@@ -284,7 +419,7 @@ impl TraceDbClient {
         };
         let mut last_error = None;
         for _ in 0..attempts {
-            match self.request_json_once(method, path, body) {
+            match self.request_json_once(method, path, body, options) {
                 Ok(value) => return Ok(value),
                 Err(error) if is_retryable_error(&error) => last_error = Some(error),
                 Err(error) => return Err(error),
@@ -298,11 +433,13 @@ impl TraceDbClient {
         method: &str,
         path: &str,
         body: Option<&Value>,
+        options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<Value> {
         let target = HttpTarget::parse(&self.config.url)?;
         let request_path = target.path(path);
         let body_bytes = self.request_body_bytes(body)?;
         let timeout = self.config.request_timeout();
+        let idempotency_key_header = idempotency_key_header(method, &request_path, options)?;
         let mut stream = target.connect(method, &request_path, timeout)?;
         let mut request = format!(
             "{method} {request_path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n",
@@ -312,6 +449,7 @@ impl TraceDbClient {
         if !self.config.token.is_empty() {
             request.push_str(&format!("Authorization: Bearer {}\r\n", self.config.token));
         }
+        request.push_str(&idempotency_key_header);
         if !body_bytes.is_empty() {
             request.push_str("Content-Type: application/json\r\n");
         }
@@ -360,12 +498,35 @@ impl TraceDbClient {
         self.request_json("POST", path, Some(&value))
     }
 
+    fn post_json_with_options<T: Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        let value = serde_json::to_value(body)?;
+        self.request_json_with_options("POST", path, Some(&value), options)
+    }
+
     fn post_typed<T: Serialize, R: for<'de> Deserialize<'de>>(
         &self,
         path: &str,
         body: &T,
     ) -> TraceDbClientResult<R> {
         decode_typed("POST", path, self.post_json(path, body)?)
+    }
+
+    fn post_typed_with_options<T: Serialize, R: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+        body: &T,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<R> {
+        decode_typed(
+            "POST",
+            path,
+            self.post_json_with_options(path, body, options)?,
+        )
     }
 
     fn request_body_bytes(&self, body: Option<&Value>) -> TraceDbClientResult<Vec<u8>> {
@@ -538,6 +699,24 @@ fn default_request_timeout_ms() -> u64 {
 
 fn timeout_ms(timeout: Duration) -> u64 {
     timeout.as_millis().clamp(1, u64::MAX as u128) as u64
+}
+
+fn idempotency_key_header(
+    method: &str,
+    path: &str,
+    options: &TraceDbRequestOptions,
+) -> TraceDbClientResult<String> {
+    let Some(key) = &options.idempotency_key else {
+        return Ok(String::new());
+    };
+    if key.is_empty() || key.contains('\r') || key.contains('\n') {
+        return Err(TraceDbClientError::InvalidRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            message: "idempotency key must be non-empty and must not contain CR or LF".to_string(),
+        });
+    }
+    Ok(format!("Idempotency-Key: {key}\r\n"))
 }
 
 fn map_request_io_error(
