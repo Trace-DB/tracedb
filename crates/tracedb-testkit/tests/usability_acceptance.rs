@@ -906,6 +906,34 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
     );
 }
 
+#[test]
+fn generated_typescript_client_smoke_executes_in_node_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let smoke = root.join("clients/typescript/smoke.ts");
+
+    let check = Command::new("node")
+        .arg("--experimental-strip-types")
+        .arg(&smoke)
+        .current_dir(root)
+        .output()
+        .unwrap_or_else(|error| panic!("run Node TypeScript smoke: {error}"));
+    assert!(
+        check.status.success(),
+        "generated TypeScript client smoke should execute in Node\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&check.stdout).contains("typescript client smoke ok"),
+        "Node smoke should print success sentinel\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
 fn gateway_or_worker_mount_engine_data(compose: &str) -> bool {
     let mut current_service = "";
     for line in compose.lines() {

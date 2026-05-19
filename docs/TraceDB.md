@@ -82,6 +82,10 @@ current v1 HTTP routes, can add configured `database_id` and `branch_id` to
 copied JSON POST bodies when absent, and can send caller-supplied
 `Idempotency-Key` through `TraceDbRequestOptions`. It is not a published npm
 package, not a hand-maintained managed SDK, and not a SQL compatibility claim.
+`node --experimental-strip-types clients/typescript/smoke.ts` verifies the
+artifact imports and executes in the local Node runtime with fake-fetch coverage
+for GET no-body behavior, POST routing metadata injection, explicit routing
+field precedence, idempotency headers, and HTTP error shape.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 in-process engine replay, and the gateway forwards that header. Durable
 cross-restart/cross-replica idempotency remains future work. SDK write/admin

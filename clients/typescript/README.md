@@ -15,6 +15,19 @@ python3 scripts/generate_typescript_client.py
 python3 scripts/generate_typescript_client.py --check
 ```
 
+Run the local dependency-free Node smoke:
+
+```bash
+node --experimental-strip-types clients/typescript/smoke.ts
+```
+
+The smoke imports `src/client.ts`, uses a fake `fetchImpl`, verifies GET routes
+send no body, verifies POST routing metadata is added without mutating caller
+objects, verifies explicit `database_id` / `branch_id` request fields win,
+checks `Idempotency-Key`, and checks `TraceDbHttpError` method/path/status/body
+context. This is runtime smoke coverage for the checked artifact, not a package
+publishing pipeline.
+
 ## Local Usage
 
 ```ts

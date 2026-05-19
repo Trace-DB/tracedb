@@ -82,6 +82,11 @@ machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`. A checked
 generated TypeScript `fetch` client artifact lives at
 `clients/typescript/src/client.ts` and is regenerated from the OpenAPI artifact
 with `python3 scripts/generate_typescript_client.py`.
+The TypeScript client smoke runs with local Node type stripping:
+
+```bash
+node --experimental-strip-types clients/typescript/smoke.ts
+```
 
 ## Current Boundaries
 
@@ -98,7 +103,8 @@ with `python3 scripts/generate_typescript_client.py`.
   response body. It is not yet a full managed/cloud SDK.
 - `clients/typescript/src/client.ts` is a generated dependency-free transport
   artifact for the current HTTP API. It is not a published npm package, not a
-  hand-maintained managed SDK, and not a broader SDK compatibility claim.
+  hand-maintained managed SDK, and not a broader SDK compatibility claim. Its
+  current runtime smoke uses Node's experimental TypeScript strip support.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash and not cross-replica. The Rust SDK can
