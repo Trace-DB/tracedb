@@ -45,9 +45,10 @@ schema aliases typecheck in representative schema, batch, query, and admin
 calls, verifies GET routes send no body, verifies POST routing metadata is added
 without mutating caller objects, verifies explicit `database_id` / `branch_id`
 request fields win, checks `Idempotency-Key`, and checks `TraceDbHttpError`
-method/path/status/body context. It also verifies the client rejects empty or
-CR/LF-containing idempotency keys as `TraceDbRequestError` before `fetchImpl` is
-called, and verifies current scan/query/explain response aliases typecheck.
+method/path/status/body context plus parsed JSON error-envelope fields. It also
+verifies the client rejects empty or CR/LF-containing idempotency keys as
+`TraceDbRequestError` before `fetchImpl` is called, and verifies current
+scan/query/explain response aliases typecheck.
 It also typechecks the read-only product response aliases for health,
 readiness, database catalog, branch catalog, public-safe metrics, and admin
 jobs.

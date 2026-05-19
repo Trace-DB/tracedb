@@ -12,9 +12,9 @@ use tracedb_query::{
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
-    BranchesResponse, DatabasesResponse, HealthResponse, JobsResponse, MetricsResponse,
-    ReadyResponse, RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig,
-    TraceDbClientError, TraceDbRequestOptions,
+    BranchesResponse, DatabasesResponse, ErrorResponse, HealthResponse, JobsResponse,
+    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TraceDbClient,
+    TraceDbClientConfig, TraceDbClientError, TraceDbRequestOptions,
 };
 
 fn schema() -> TableSchema {
@@ -681,12 +681,20 @@ fn http_status_errors_include_method_path_status_and_body() {
         .expect_err("missing route should fail");
     let message = error.to_string();
 
+    assert_eq!(
+        error.error_response(),
+        Some(ErrorResponse {
+            error: "not found".to_string()
+        })
+    );
+    assert_eq!(error.server_error().as_deref(), Some("not found"));
     match error {
         TraceDbClientError::HttpStatus {
             method,
             path,
             status,
             body,
+            ..
         } => {
             assert_eq!(method, "POST");
             assert_eq!(path, "/v1/missing");
@@ -1092,6 +1100,10 @@ fn client_idempotency_options_replay_write_response_against_real_server() {
     let error = client
         .put_batch_typed_with_options(&changed_batch, &options)
         .expect_err("same key with changed body should conflict");
+    assert_eq!(
+        error.server_error().as_deref(),
+        Some("idempotency key reused with different request body")
+    );
     match error {
         TraceDbClientError::HttpStatus { status, body, .. } => {
             assert_eq!(status, 409);

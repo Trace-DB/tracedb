@@ -138,7 +138,9 @@ server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
   bounded safe retries for health/read routes, supports opt-in
   idempotency-key-gated transient retries for mutation/admin routes, and non-2xx
   SDK errors include request method, request path, HTTP status, and response
-  body. It is not yet a full managed/cloud SDK.
+  body. When the response body is the current `{ "error": string }` envelope,
+  the SDK also exposes that parsed error through `error_response()` and
+  `server_error()`. It is not yet a full managed/cloud SDK.
 - `clients/typescript/src/client.ts` is a generated dependency-free transport
   artifact for the current HTTP API. It now includes OpenAPI-derived schema
   aliases and typed method signatures, including concrete health, readiness,
@@ -150,7 +152,9 @@ server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
   `clients/typescript` exists only for local typechecking plus fake-fetch and
   real local HTTP smoke validation; it does not declare package publishing
   fields. It rejects empty or CR/LF-containing `idempotencyKey` request options
-  before `fetchImpl` is called.
+  before `fetchImpl` is called. `TraceDbHttpError` preserves the raw response
+  body and exposes parsed `responseJson`, `errorResponse`, and `responseError`
+  when the server or gateway returns the current JSON error envelope.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   data-dir-backed replay on the engine, and the gateway forwards that header.
   After a successful local cache write, replay survives a clean engine reopen

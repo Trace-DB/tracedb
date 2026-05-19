@@ -220,11 +220,37 @@ export type TraceDbClientConfig = {
   fetchImpl?: TraceDbFetch;
 };
 
+function parseTraceDbJsonBody(body: string): JsonValue | undefined {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed) as JsonValue;
+  } catch {
+    return undefined;
+  }
+}
+
+function errorResponseFromJson(value: JsonValue | undefined): ErrorResponse | undefined {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const error = (value as JsonObject).error;
+  if (typeof error !== "string") {
+    return undefined;
+  }
+  return { error };
+}
+
 export class TraceDbHttpError extends Error {
   readonly method: TraceDbMethod;
   readonly path: string;
   readonly status: number;
   readonly body: string;
+  readonly responseJson?: JsonValue;
+  readonly errorResponse?: ErrorResponse;
+  readonly responseError?: string;
 
   constructor(method: TraceDbMethod, path: string, status: number, body: string) {
     super(`TraceDB ${method} ${path} failed with HTTP ${status}: ${body}`);
@@ -233,6 +259,9 @@ export class TraceDbHttpError extends Error {
     this.path = path;
     this.status = status;
     this.body = body;
+    this.responseJson = parseTraceDbJsonBody(body);
+    this.errorResponse = errorResponseFromJson(this.responseJson);
+    this.responseError = this.errorResponse?.error;
   }
 }
 

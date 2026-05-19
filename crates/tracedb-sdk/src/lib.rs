@@ -115,6 +115,24 @@ impl From<serde_json::Error> for TraceDbClientError {
     }
 }
 
+impl TraceDbClientError {
+    pub fn error_response(&self) -> Option<ErrorResponse> {
+        match self {
+            Self::HttpStatus { body, .. } => serde_json::from_str::<ErrorResponse>(body).ok(),
+            _ => None,
+        }
+    }
+
+    pub fn server_error(&self) -> Option<String> {
+        let Self::HttpStatus { body, .. } = self else {
+            return None;
+        };
+        serde_json::from_str::<ErrorResponse>(body)
+            .ok()
+            .map(|response| response.error)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraceDbClientConfig {
     pub url: String,
@@ -779,6 +797,11 @@ pub struct MetricsResponse {
     pub rate_limit_enabled: Option<bool>,
     #[serde(default)]
     pub rate_limit_requests: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    pub error: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

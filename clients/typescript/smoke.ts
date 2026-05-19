@@ -248,6 +248,9 @@ await assert.rejects(
     assert.equal(error.path, "/v1/health");
     assert.equal(error.status, 503);
     assert.equal(error.body, "{\"error\":\"down\"}");
+    assert.deepEqual(error.responseJson, { error: "down" });
+    assert.deepEqual(error.errorResponse, { error: "down" });
+    assert.equal(error.responseError, "down");
     return true;
   },
 );

@@ -126,6 +126,14 @@ Fields remain optional where local-engine and gateway shapes differ.
 Local compatibility aliases also exist for development: `GET /health`,
 `GET /ready`, and `GET /metrics`.
 
+Error responses use the current JSON envelope `{ "error": string }` for server
+and gateway failures such as validation errors, not found routes, idempotency
+conflicts, unauthorized gateway calls, gateway rate limits, and upstream
+unavailability. The Rust SDK and generated TypeScript transport preserve the raw
+response body and now expose parsed error-envelope helpers. This is client
+ergonomics for the current envelope, not a broader RFC 7807/problem-details
+contract.
+
 ## Schema And Writes
 
 | Route | Request | Response |

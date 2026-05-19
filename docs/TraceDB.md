@@ -100,8 +100,9 @@ runtime validator, and not a SQL compatibility claim.
 artifact imports and executes in the local Node runtime with fake-fetch coverage
 for representative generated aliases, GET no-body behavior, POST routing
 metadata injection, explicit routing field precedence, idempotency headers, and
-HTTP error shape. It rejects empty or CR/LF-containing `idempotencyKey` request
-options before `fetchImpl` as `TraceDbRequestError`.
+HTTP error shape, including parsed `{ "error": string }` envelopes on
+`TraceDbHttpError`. It rejects empty or CR/LF-containing `idempotencyKey`
+request options before `fetchImpl` as `TraceDbRequestError`.
 `cd clients/typescript && npm ci && npm run check` installs the locked private
 tooling and typechecks the generated artifact plus smoke script. The package is
 private and does not declare publishing fields. `cd clients/typescript && npm
