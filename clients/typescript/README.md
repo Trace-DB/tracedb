@@ -16,7 +16,14 @@ They are compile-time ergonomics for the current HTTP API, not strict domain
 validators. The generated `RecordPutBody` alias mirrors current server behavior:
 `putRecord` accepts either `RecordInput` directly or `{ record: RecordInput }`.
 `GetRecordResponse.record` is typed as `RecordOutput | null`, and
-`RecordOutput` exposes the server's serialized `version_id` field.
+`RecordOutput` exposes the server's serialized `version_id` field. The scan,
+query, and explain response aliases now expose current server fields for
+`RecordScanOutput.records`, `RecordScanOutput.returned_count`,
+`QueryResponse.results`, optional `QueryResponse.explain`, `HybridQueryRow`,
+`HybridScoreComponents`, access-path explain entries, planner candidates, and
+timing entries.
+Those fields are still optional compile-time helpers rather than strict runtime
+validators.
 
 Regenerate or check it from the repo root:
 
@@ -38,7 +45,7 @@ without mutating caller objects, verifies explicit `database_id` / `branch_id`
 request fields win, checks `Idempotency-Key`, and checks `TraceDbHttpError`
 method/path/status/body context. It also verifies the client rejects empty or
 CR/LF-containing idempotency keys as `TraceDbRequestError` before `fetchImpl` is
-called.
+called, and verifies current scan/query/explain response aliases typecheck.
 This is runtime smoke coverage for the checked artifact, not a package
 publishing pipeline.
 

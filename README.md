@@ -113,7 +113,10 @@ transport artifact, not managed-cloud health or package publishing evidence.
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and
 `SnapshotRequest`, and its route methods return OpenAPI response aliases such as
-`ReadyResponse`, `PutBatchResponse`, and `QueryResponse`. These are permissive
+`ReadyResponse`, `PutBatchResponse`, `RecordScanOutput`, `QueryResponse`, and
+`HybridExplain`. The query/explain aliases include current response-shape
+helpers such as `HybridQueryRow`, `HybridScoreComponents`, `AccessPathExplain`,
+`Candidate`, and timing entries. These are permissive
 compile-time helpers: known fields are optional, unknown JSON fields are still
 allowed, and server-side runtime validation remains authoritative. The OpenAPI
 artifact and generated client now also expose the server's `/v1/records/put`

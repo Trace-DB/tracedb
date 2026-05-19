@@ -1,9 +1,75 @@
 {
   "components": {
     "schemas": {
+      "AccessPathExplain": {
+        "additionalProperties": true,
+        "description": "Access path explain entry.",
+        "properties": {
+          "access_path_id": {
+            "type": "string"
+          },
+          "candidates": {
+            "type": "integer"
+          },
+          "opened": {
+            "type": "boolean"
+          },
+          "visibility_checked_before_open": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "AccessPathTiming": {
+        "additionalProperties": true,
+        "description": "Access path timing entry.",
+        "properties": {
+          "access_path_id": {
+            "type": "string"
+          },
+          "build_ms": {
+            "type": "number"
+          },
+          "open_ms": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
       "BranchesResponse": {
         "additionalProperties": true,
         "description": "Branch catalog response.",
+        "type": "object"
+      },
+      "Candidate": {
+        "additionalProperties": true,
+        "description": "Planner candidate explain row.",
+        "properties": {
+          "freshness": {
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string"
+          },
+          "score_components": {
+            "$ref": "#/components/schemas/HybridScoreComponents"
+          },
+          "score_upper_bound": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "integer"
+          },
+          "visibility_checked": {
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "CompactResponse": {
@@ -84,6 +150,152 @@
       "HybridExplain": {
         "additionalProperties": true,
         "description": "Explain response.",
+        "properties": {
+          "access_path_timings": {
+            "items": {
+              "$ref": "#/components/schemas/AccessPathTiming"
+            },
+            "type": "array"
+          },
+          "access_paths": {
+            "items": {
+              "$ref": "#/components/schemas/AccessPathExplain"
+            },
+            "type": "array"
+          },
+          "candidate_budget": {
+            "type": "integer"
+          },
+          "deduped_candidate_count": {
+            "type": "integer"
+          },
+          "dirty_feature_count": {
+            "type": "integer"
+          },
+          "early_stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exact_fallback_triggered": {
+            "type": "boolean"
+          },
+          "failed_feature_count": {
+            "type": "integer"
+          },
+          "final_visibility_guard_count": {
+            "type": "integer"
+          },
+          "final_visibility_guard_removed": {
+            "type": "integer"
+          },
+          "freshness_mode": {
+            "type": "string"
+          },
+          "fusion_method": {
+            "type": "string"
+          },
+          "hot_overlay_searched": {
+            "type": "boolean"
+          },
+          "lexical_cache_hits": {
+            "type": "integer"
+          },
+          "lexical_cache_misses": {
+            "type": "integer"
+          },
+          "lexical_indexed_documents": {
+            "type": "integer"
+          },
+          "lexical_scored_documents": {
+            "type": "integer"
+          },
+          "materialized_count": {
+            "type": "integer"
+          },
+          "missing_feature_count": {
+            "type": "integer"
+          },
+          "module_versions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "opened_candidate_streams": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pending_feature_count": {
+            "type": "integer"
+          },
+          "phase_timings": {
+            "items": {
+              "$ref": "#/components/schemas/QueryPhaseTiming"
+            },
+            "type": "array"
+          },
+          "planner_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "type": "array"
+          },
+          "policy_epoch": {
+            "type": "integer"
+          },
+          "read_epoch": {
+            "type": "integer"
+          },
+          "returned_count": {
+            "type": "integer"
+          },
+          "scalar_filter_applied": {
+            "type": "boolean"
+          },
+          "scalar_filter_predicates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scalar_filter_removed_records": {
+            "type": "integer"
+          },
+          "scalar_filter_visible_records": {
+            "type": "integer"
+          },
+          "schema_epoch": {
+            "type": "integer"
+          },
+          "segments_scanned": {
+            "type": "integer"
+          },
+          "selected_strategy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "skipped_access_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tenant_mask_visible_records": {
+            "type": "integer"
+          },
+          "text_candidates": {
+            "type": "integer"
+          },
+          "vector_candidates": {
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "HybridQuery": {
@@ -137,13 +349,47 @@
             "type": "string"
           },
           "score": {
-            "type": "number"
-          },
-          "table": {
-            "type": "string"
+            "$ref": "#/components/schemas/HybridScoreComponents"
           },
           "tenant_id": {
             "type": "string"
+          },
+          "version_id": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "HybridScoreComponents": {
+        "additionalProperties": true,
+        "description": "Hybrid query score components.",
+        "properties": {
+          "final_score": {
+            "type": "number"
+          },
+          "freshness_penalty": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lexical": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "relational": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "vector": {
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -176,9 +422,33 @@
         },
         "type": "object"
       },
+      "QueryPhaseTiming": {
+        "additionalProperties": true,
+        "description": "Query phase timing entry.",
+        "properties": {
+          "elapsed_ms": {
+            "type": "number"
+          },
+          "phase": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "QueryResponse": {
         "additionalProperties": true,
         "description": "Query response.",
+        "properties": {
+          "explain": {
+            "$ref": "#/components/schemas/HybridExplain"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/HybridQueryRow"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "ReadyResponse": {
@@ -327,6 +597,17 @@
       "RecordScanOutput": {
         "additionalProperties": true,
         "description": "Scan output.",
+        "properties": {
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/RecordOutput"
+            },
+            "type": "array"
+          },
+          "returned_count": {
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "RecordScanRequest": {

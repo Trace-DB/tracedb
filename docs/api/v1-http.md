@@ -47,7 +47,10 @@ node --experimental-strip-types clients/typescript/smoke.ts
   published npm package, not a managed-cloud SDK promise, and not a SQL
   compatibility claim. It includes OpenAPI-derived schema aliases and typed
   method signatures while keeping known fields optional and unknown JSON fields
-  allowed. Runtime validation remains server-side. Its local runtime smoke uses
+  allowed. Runtime validation remains server-side. Scan/query/explain response
+  aliases expose current server fields, including record scan counts, query
+  rows, score components, access-path explain entries, planner candidates, and
+  timing entries. Its local runtime smoke uses
   Node's experimental TypeScript strip support. The private package under
   `clients/typescript` exists only for local typechecking plus fake-fetch and
   real local HTTP smoke validation; it does not declare package publishing
@@ -134,9 +137,9 @@ mutating writes.
 | Route | Request | Response |
 | --- | --- | --- |
 | `POST /v1/records/get` | `RecordGetRequest`: `table`, `tenant_id`, and `id`. | `{ "record": RecordOutput \| null }`. |
-| `POST /v1/records/scan` | `RecordScanRequest`: `table`, `tenant_id`, optional `limit`, and optional cursor fields. | `RecordScanOutput` with `records`, `returned_count`, and cursor metadata. |
-| `POST /v1/query` | `HybridQuery`: `table`, `tenant_id`, optional `text`, optional `vector`, scalar filters, `top_k`, `freshness`, and `explain`. | With `explain: false`, returns `{ "results": [...] }`; with `explain: true`, returns results plus explain metadata. |
-| `POST /v1/explain` | Same query shape as `POST /v1/query`; the server forces explain mode. | `HybridExplain` only. |
+| `POST /v1/records/scan` | `RecordScanRequest`: `table`, `tenant_id`, and optional `limit`. | `RecordScanOutput` with `records: RecordOutput[]` and `returned_count`. No cursor metadata is emitted today. |
+| `POST /v1/query` | `HybridQuery`: `table`, `tenant_id`, optional `text`, optional `vector`, scalar filters, `top_k`, `freshness`, and `explain`. | With `explain: false`, returns `{ "results": HybridQueryRow[] }`; with `explain: true`, returns results plus `HybridExplain` metadata. |
+| `POST /v1/explain` | Same query shape as `POST /v1/query`; the server forces explain mode. | `HybridExplain` only, including current access-path, candidate, counter, and timing fields. |
 
 Query responses include `Server-Timing` phase attribution for read, parse,
 lock wait, engine, explain build, materialization, response shaping, and encode

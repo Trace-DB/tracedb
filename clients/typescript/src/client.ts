@@ -74,7 +74,30 @@ export class TraceDbRequestError extends Error {
 // Generated schema aliases keep OpenAPI's permissive additionalProperties boundary.
 // Known fields are optional; runtime validation remains server-side.
 
+export interface AccessPathExplain extends JsonObject {
+  access_path_id?: string;
+  candidates?: number;
+  opened?: boolean;
+  visibility_checked_before_open?: boolean;
+}
+
+export interface AccessPathTiming extends JsonObject {
+  access_path_id?: string;
+  build_ms?: number;
+  open_ms?: number;
+}
+
 export interface BranchesResponse extends JsonObject {
+}
+
+export interface Candidate extends JsonObject {
+  freshness?: string;
+  record_id?: string;
+  score_components?: HybridScoreComponents;
+  score_upper_bound?: number | null;
+  source?: string;
+  version_id?: number;
+  visibility_checked?: boolean;
 }
 
 export interface CompactResponse extends JsonObject {
@@ -108,6 +131,44 @@ export interface HealthResponse extends JsonObject {
 }
 
 export interface HybridExplain extends JsonObject {
+  access_path_timings?: AccessPathTiming[];
+  access_paths?: AccessPathExplain[];
+  candidate_budget?: number;
+  deduped_candidate_count?: number;
+  dirty_feature_count?: number;
+  early_stop_reason?: string | null;
+  exact_fallback_triggered?: boolean;
+  failed_feature_count?: number;
+  final_visibility_guard_count?: number;
+  final_visibility_guard_removed?: number;
+  freshness_mode?: string;
+  fusion_method?: string;
+  hot_overlay_searched?: boolean;
+  lexical_cache_hits?: number;
+  lexical_cache_misses?: number;
+  lexical_indexed_documents?: number;
+  lexical_scored_documents?: number;
+  materialized_count?: number;
+  missing_feature_count?: number;
+  module_versions?: string[];
+  opened_candidate_streams?: string[];
+  pending_feature_count?: number;
+  phase_timings?: QueryPhaseTiming[];
+  planner_candidates?: Candidate[];
+  policy_epoch?: number;
+  read_epoch?: number;
+  returned_count?: number;
+  scalar_filter_applied?: boolean;
+  scalar_filter_predicates?: string[];
+  scalar_filter_removed_records?: number;
+  scalar_filter_visible_records?: number;
+  schema_epoch?: number;
+  segments_scanned?: number;
+  selected_strategy?: string | null;
+  skipped_access_paths?: string[];
+  tenant_mask_visible_records?: number;
+  text_candidates?: number;
+  vector_candidates?: number;
 }
 
 export interface HybridQuery extends JsonObject {
@@ -123,9 +184,17 @@ export interface HybridQuery extends JsonObject {
 export interface HybridQueryRow extends JsonObject {
   fields?: JsonObject;
   record_id?: string;
-  score?: number;
-  table?: string;
+  score?: HybridScoreComponents;
   tenant_id?: string;
+  version_id?: number;
+}
+
+export interface HybridScoreComponents extends JsonObject {
+  final_score?: number;
+  freshness_penalty?: number | null;
+  lexical?: number | null;
+  relational?: number | null;
+  vector?: number | null;
 }
 
 export interface JobsResponse extends JsonObject {
@@ -140,7 +209,14 @@ export interface PutBatchResponse extends JsonObject {
   write_timing?: JsonObject;
 }
 
+export interface QueryPhaseTiming extends JsonObject {
+  elapsed_ms?: number;
+  phase?: string;
+}
+
 export interface QueryResponse extends JsonObject {
+  explain?: HybridExplain;
+  results?: HybridQueryRow[];
 }
 
 export interface ReadyResponse extends JsonObject {
@@ -193,6 +269,8 @@ export interface RecordPutRequest extends JsonObject {
 }
 
 export interface RecordScanOutput extends JsonObject {
+  records?: RecordOutput[];
+  returned_count?: number;
 }
 
 export interface RecordScanRequest extends JsonObject {

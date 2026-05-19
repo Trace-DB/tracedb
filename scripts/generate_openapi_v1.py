@@ -65,6 +65,13 @@ def array_schema(items: dict[str, Any]) -> dict[str, Any]:
     return {"type": "array", "items": items}
 
 
+def nullable_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    schema_type = schema.get("type")
+    if isinstance(schema_type, str):
+        return {**schema, "type": [schema_type, "null"]}
+    return {"oneOf": [schema, {"type": "null"}]}
+
+
 def components() -> dict[str, Any]:
     return {
         "schemas": {
@@ -132,6 +139,13 @@ def components() -> dict[str, Any]:
                 "freshness": {"type": "string"},
                 "explain": {"type": "boolean"},
             }),
+            "HybridScoreComponents": object_schema("Hybrid query score components.", {
+                "vector": nullable_schema({"type": "number"}),
+                "lexical": nullable_schema({"type": "number"}),
+                "relational": nullable_schema({"type": "number"}),
+                "freshness_penalty": nullable_schema({"type": "number"}),
+                "final_score": {"type": "number"},
+            }),
             "SnapshotRequest": object_schema("Snapshot creation request.", {"target": {"type": "string"}}),
             "RestoreRequest": object_schema("Snapshot restore request.", {
                 "source": {"type": "string"},
@@ -155,16 +169,85 @@ def components() -> dict[str, Any]:
             "GetRecordResponse": object_schema("Get record response.", {
                 "record": {"oneOf": [schema_ref("RecordOutput"), {"type": "null"}]},
             }),
-            "RecordScanOutput": object_schema("Scan output."),
+            "RecordScanOutput": object_schema("Scan output.", {
+                "records": array_schema(schema_ref("RecordOutput")),
+                "returned_count": {"type": "integer"},
+            }),
             "HybridQueryRow": object_schema("Hybrid query result row.", {
-                "table": {"type": "string"},
                 "record_id": {"type": "string"},
+                "version_id": {"type": "integer"},
                 "tenant_id": {"type": "string"},
                 "fields": object_schema("Record field map."),
-                "score": {"type": "number"},
+                "score": schema_ref("HybridScoreComponents"),
             }),
-            "QueryResponse": object_schema("Query response."),
-            "HybridExplain": object_schema("Explain response."),
+            "AccessPathExplain": object_schema("Access path explain entry.", {
+                "access_path_id": {"type": "string"},
+                "opened": {"type": "boolean"},
+                "visibility_checked_before_open": {"type": "boolean"},
+                "candidates": {"type": "integer"},
+            }),
+            "Candidate": object_schema("Planner candidate explain row.", {
+                "record_id": {"type": "string"},
+                "version_id": {"type": "integer"},
+                "score_components": schema_ref("HybridScoreComponents"),
+                "score_upper_bound": nullable_schema({"type": "number"}),
+                "source": {"type": "string"},
+                "freshness": {"type": "string"},
+                "visibility_checked": {"type": "boolean"},
+            }),
+            "QueryPhaseTiming": object_schema("Query phase timing entry.", {
+                "phase": {"type": "string"},
+                "elapsed_ms": {"type": "number"},
+            }),
+            "AccessPathTiming": object_schema("Access path timing entry.", {
+                "access_path_id": {"type": "string"},
+                "build_ms": {"type": "number"},
+                "open_ms": {"type": "number"},
+            }),
+            "QueryResponse": object_schema("Query response.", {
+                "results": array_schema(schema_ref("HybridQueryRow")),
+                "explain": schema_ref("HybridExplain"),
+            }),
+            "HybridExplain": object_schema("Explain response.", {
+                "read_epoch": {"type": "integer"},
+                "schema_epoch": {"type": "integer"},
+                "policy_epoch": {"type": "integer"},
+                "tenant_mask_visible_records": {"type": "integer"},
+                "scalar_filter_applied": {"type": "boolean"},
+                "scalar_filter_predicates": array_schema({"type": "string"}),
+                "scalar_filter_visible_records": {"type": "integer"},
+                "scalar_filter_removed_records": {"type": "integer"},
+                "opened_candidate_streams": array_schema({"type": "string"}),
+                "access_paths": array_schema(schema_ref("AccessPathExplain")),
+                "planner_candidates": array_schema(schema_ref("Candidate")),
+                "candidate_budget": {"type": "integer"},
+                "text_candidates": {"type": "integer"},
+                "vector_candidates": {"type": "integer"},
+                "hot_overlay_searched": {"type": "boolean"},
+                "freshness_mode": {"type": "string"},
+                "dirty_feature_count": {"type": "integer"},
+                "pending_feature_count": {"type": "integer"},
+                "failed_feature_count": {"type": "integer"},
+                "missing_feature_count": {"type": "integer"},
+                "fusion_method": {"type": "string"},
+                "deduped_candidate_count": {"type": "integer"},
+                "materialized_count": {"type": "integer"},
+                "final_visibility_guard_count": {"type": "integer"},
+                "final_visibility_guard_removed": {"type": "integer"},
+                "returned_count": {"type": "integer"},
+                "segments_scanned": {"type": "integer"},
+                "module_versions": array_schema({"type": "string"}),
+                "selected_strategy": nullable_schema({"type": "string"}),
+                "skipped_access_paths": array_schema({"type": "string"}),
+                "exact_fallback_triggered": {"type": "boolean"},
+                "early_stop_reason": nullable_schema({"type": "string"}),
+                "lexical_cache_hits": {"type": "integer"},
+                "lexical_cache_misses": {"type": "integer"},
+                "lexical_indexed_documents": {"type": "integer"},
+                "lexical_scored_documents": {"type": "integer"},
+                "phase_timings": array_schema(schema_ref("QueryPhaseTiming")),
+                "access_path_timings": array_schema(schema_ref("AccessPathTiming")),
+            }),
             "CompactResponse": object_schema("Compact response.", {"compacted": {"type": "boolean"}}),
             "SnapshotResponse": object_schema("Snapshot response.", {
                 "snapshot": {"type": "boolean"},

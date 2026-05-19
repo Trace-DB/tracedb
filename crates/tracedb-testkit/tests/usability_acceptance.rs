@@ -621,6 +621,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "SQL compatibility is not implemented",
         "Idempotency-Key supports local in-process replay for mutation and admin routes",
         "Internal TraceDB-only runs are development evidence",
+        "No cursor metadata is emitted today",
     ] {
         assert!(
             markdown.contains(boundary),
@@ -789,7 +790,12 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         "RecordDeleteRequest",
         "RecordPutBatchRequest",
         "HybridQuery",
+        "HybridScoreComponents",
         "HybridQueryRow",
+        "AccessPathExplain",
+        "Candidate",
+        "QueryPhaseTiming",
+        "AccessPathTiming",
         "HybridExplain",
     ] {
         assert!(
@@ -836,6 +842,60 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     assert!(
         spec["components"]["schemas"]["RecordOutput"]["properties"]["version"].is_null(),
         "RecordOutput should not document a non-serialized version field"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["RecordScanOutput"]["properties"]["records"]["items"]["$ref"],
+        json!("#/components/schemas/RecordOutput"),
+        "RecordScanOutput.records should reference RecordOutput"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["RecordScanOutput"]["properties"]["returned_count"]["type"],
+        json!("integer"),
+        "RecordScanOutput should expose returned_count"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridQueryRow"]["properties"]["version_id"]["type"],
+        json!("integer"),
+        "HybridQueryRow should expose version_id"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridQueryRow"]["properties"]["score"]["$ref"],
+        json!("#/components/schemas/HybridScoreComponents"),
+        "HybridQueryRow.score should reference HybridScoreComponents"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["QueryResponse"]["properties"]["results"]["items"]["$ref"],
+        json!("#/components/schemas/HybridQueryRow"),
+        "QueryResponse.results should reference HybridQueryRow"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["QueryResponse"]["properties"]["explain"]["$ref"],
+        json!("#/components/schemas/HybridExplain"),
+        "QueryResponse.explain should reference HybridExplain"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridExplain"]["properties"]["access_paths"]["items"]
+            ["$ref"],
+        json!("#/components/schemas/AccessPathExplain"),
+        "HybridExplain.access_paths should reference AccessPathExplain"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridExplain"]["properties"]["planner_candidates"]["items"]
+            ["$ref"],
+        json!("#/components/schemas/Candidate"),
+        "HybridExplain.planner_candidates should reference Candidate"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridExplain"]["properties"]["phase_timings"]["items"]
+            ["$ref"],
+        json!("#/components/schemas/QueryPhaseTiming"),
+        "HybridExplain.phase_timings should reference QueryPhaseTiming"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HybridExplain"]["properties"]["access_path_timings"]
+            ["items"]["$ref"],
+        json!("#/components/schemas/AccessPathTiming"),
+        "HybridExplain.access_path_timings should reference AccessPathTiming"
     );
 
     let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
@@ -885,6 +945,11 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "export interface RecordInput extends JsonObject",
         "export type RecordPutBody = RecordInput | RecordPutRequest;",
         "export interface RecordPutBatchRequest extends JsonObject",
+        "export interface HybridScoreComponents extends JsonObject",
+        "export interface AccessPathExplain extends JsonObject",
+        "export interface Candidate extends JsonObject",
+        "export interface QueryPhaseTiming extends JsonObject",
+        "export interface AccessPathTiming extends JsonObject",
         "record?: RecordOutput | null;",
         "version_id?: number;",
         "export interface HybridQuery extends JsonObject",
@@ -893,6 +958,11 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "export interface RestoreResponse extends JsonObject",
         "name?: string;",
         "records?: RecordInput[];",
+        "records?: RecordOutput[];",
+        "results?: HybridQueryRow[];",
+        "score?: HybridScoreComponents;",
+        "planner_candidates?: Candidate[];",
+        "phase_timings?: QueryPhaseTiming[];",
         "vector?: number[] | null;",
         "record_count?: number;",
         "source?: string;",
@@ -1119,6 +1189,9 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "npm run http-smoke",
         "TraceDbRequestError",
         "CR/LF-containing idempotency keys",
+        "RecordScanOutput.records",
+        "QueryResponse.results",
+        "HybridScoreComponents",
         "not a package publishing pipeline",
     ] {
         assert!(
