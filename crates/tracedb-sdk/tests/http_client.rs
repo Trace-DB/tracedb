@@ -1,6 +1,10 @@
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tracedb_query::{
     FreshnessMode, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
@@ -124,6 +128,40 @@ fn http_response_server(response: &'static [u8]) -> String {
     format!("http://{addr}")
 }
 
+fn sequence_response_server(responses: Vec<&'static [u8]>) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen_attempts = Arc::clone(&attempts);
+    std::thread::spawn(move || {
+        for response in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            seen_attempts.fetch_add(1, Ordering::SeqCst);
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .unwrap();
+            let mut buffer = [0; 1024];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        break
+                    }
+                    Err(error) => panic!("read request: {error}"),
+                }
+            }
+            stream.write_all(response).unwrap();
+        }
+    });
+    (format!("http://{addr}"), attempts)
+}
+
 fn stalled_response_server(stall_for: Duration) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -134,6 +172,41 @@ fn stalled_response_server(stall_for: Duration) -> String {
         std::thread::sleep(stall_for);
     });
     format!("http://{addr}")
+}
+
+#[test]
+fn retryable_health_requests_retry_5xx_then_return_success() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+
+    let response = client.health().expect("health retry");
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn write_routes_do_not_retry_5xx_without_idempotency_contract() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+
+    let error = client
+        .apply_schema(&schema())
+        .expect_err("schema writes should not retry");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 503),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
 #[test]

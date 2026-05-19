@@ -32,6 +32,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     if let Some(timeout_ms) = args.timeout_ms {
         config = config.with_timeout(Duration::from_millis(timeout_ms));
     }
+    if let Some(safe_retries) = args.safe_retries {
+        config = config.with_safe_retries(safe_retries);
+    }
     let client = TraceDbClient::new(config);
 
     let ready = client.ready_typed()?;
@@ -85,6 +88,7 @@ struct QuickstartArgs {
     database_id: Option<String>,
     branch_id: Option<String>,
     timeout_ms: Option<u64>,
+    safe_retries: Option<u8>,
     help: bool,
 }
 
@@ -99,6 +103,10 @@ impl QuickstartArgs {
                 .ok()
                 .map(|value| parse_timeout_ms(&value))
                 .transpose()?,
+            safe_retries: env::var("TRACEDB_SAFE_RETRIES")
+                .ok()
+                .map(|value| parse_safe_retries(&value))
+                .transpose()?,
             help: false,
         };
         let mut cli = env::args().skip(1);
@@ -112,6 +120,12 @@ impl QuickstartArgs {
                     args.timeout_ms =
                         Some(parse_timeout_ms(&next_value(&mut cli, "--timeout-ms")?)?)
                 }
+                "--safe-retries" => {
+                    args.safe_retries = Some(parse_safe_retries(&next_value(
+                        &mut cli,
+                        "--safe-retries",
+                    )?)?)
+                }
                 "--help" | "-h" => args.help = true,
                 unknown => return Err(format!("unknown argument {unknown}\n{}", Self::usage())),
             }
@@ -120,7 +134,7 @@ impl QuickstartArgs {
     }
 
     fn usage() -> &'static str {
-        "Usage: cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8080 [--token TOKEN] [--database-id DB] [--branch-id BRANCH] [--timeout-ms MS]"
+        "Usage: cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8080 [--token TOKEN] [--database-id DB] [--branch-id BRANCH] [--timeout-ms MS] [--safe-retries N]"
     }
 }
 
@@ -138,6 +152,12 @@ fn parse_timeout_ms(value: &str) -> Result<u64, String> {
         return Err("--timeout-ms must be greater than 0".to_string());
     }
     Ok(timeout_ms)
+}
+
+fn parse_safe_retries(value: &str) -> Result<u8, String> {
+    value
+        .parse::<u8>()
+        .map_err(|_| format!("--safe-retries must fit in 0..=255, got {value}"))
 }
 
 fn schema() -> TableSchema {

@@ -44,14 +44,15 @@ TRACEDB_DATA_DIR=/tmp/tracedb-sdk-demo TRACEDB_BIND=127.0.0.1:8090 cargo run -p 
 In a second terminal:
 
 ```bash
-cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000
+cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000 --safe-retries 1
 ```
 
 The SDK example applies schema, batch-ingests records, scans, queries, explains,
 deletes, verifies deleted-record hiding, and reports `sql_module:
 not_implemented`. The example uses typed SDK convenience methods over the
 current HTTP response shapes and accepts a configurable SDK request timeout; the
-original raw `serde_json::Value` methods remain available.
+original raw `serde_json::Value` methods remain available. Bounded safe retries
+are available for SDK health/read routes only.
 
 ## Current Boundaries
 
@@ -61,7 +62,8 @@ original raw `serde_json::Value` methods remain available.
   managed `database_id` and `branch_id` routing metadata to JSON POST bodies,
   includes typed convenience response methods and typed query rows for the
   current product path, supports a configurable blocking socket request timeout,
-  and non-2xx SDK errors include request method, request path, HTTP status, and
-  response body. It is not yet a full managed/cloud SDK.
+  supports bounded safe retries for health/read routes, and non-2xx SDK errors
+  include request method, request path, HTTP status, and response body. It is
+  not yet a full managed/cloud SDK.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require external controls and a number to beat.

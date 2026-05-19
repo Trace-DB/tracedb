@@ -111,6 +111,8 @@ pub struct TraceDbClientConfig {
     pub branch_id: Option<String>,
     #[serde(default = "default_request_timeout_ms")]
     pub request_timeout_ms: u64,
+    #[serde(default)]
+    pub safe_retries: u8,
 }
 
 impl TraceDbClientConfig {
@@ -121,6 +123,7 @@ impl TraceDbClientConfig {
             database_id: None,
             branch_id: None,
             request_timeout_ms: default_request_timeout_ms(),
+            safe_retries: 0,
         }
     }
 
@@ -144,6 +147,11 @@ impl TraceDbClientConfig {
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout_ms = timeout_ms(timeout);
+        self
+    }
+
+    pub fn with_safe_retries(mut self, retries: u8) -> Self {
+        self.safe_retries = retries;
         self
     }
 
@@ -264,6 +272,28 @@ impl TraceDbClient {
     }
 
     pub fn request_json(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> TraceDbClientResult<Value> {
+        let attempts = if is_retry_safe_request(method, path) {
+            self.config.safe_retries.saturating_add(1)
+        } else {
+            1
+        };
+        let mut last_error = None;
+        for _ in 0..attempts {
+            match self.request_json_once(method, path, body) {
+                Ok(value) => return Ok(value),
+                Err(error) if is_retryable_error(&error) => last_error = Some(error),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_error.expect("at least one request attempt"))
+    }
+
+    fn request_json_once(
         &self,
         method: &str,
         path: &str,
@@ -528,6 +558,27 @@ fn map_request_io_error(
     } else {
         TraceDbClientError::Io(error)
     }
+}
+
+fn is_retry_safe_request(method: &str, path: &str) -> bool {
+    matches!(
+        (method, strip_query(path)),
+        ("GET", "/v1/health")
+            | ("GET", "/v1/ready")
+            | ("POST", "/v1/records/get")
+            | ("POST", "/v1/records/scan")
+            | ("POST", "/v1/query")
+            | ("POST", "/v1/explain")
+    )
+}
+
+fn strip_query(path: &str) -> &str {
+    path.split_once('?').map(|(path, _)| path).unwrap_or(path)
+}
+
+fn is_retryable_error(error: &TraceDbClientError) -> bool {
+    matches!(error, TraceDbClientError::Timeout { .. })
+        || matches!(error, TraceDbClientError::HttpStatus { status, .. } if *status >= 500)
 }
 
 fn parse_response(method: &str, path: &str, response: &str) -> TraceDbClientResult<Value> {
