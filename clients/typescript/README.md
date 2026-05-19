@@ -39,6 +39,21 @@ request fields win, checks `Idempotency-Key`, and checks `TraceDbHttpError`
 method/path/status/body context. This is runtime smoke coverage for the checked
 artifact, not a package publishing pipeline.
 
+Run the real local HTTP smoke from the TypeScript package directory:
+
+```bash
+cd clients/typescript
+npm run http-smoke
+```
+
+The HTTP smoke starts a local `tracedb-server` child process with an isolated
+temporary data directory, waits for readiness, then drives the generated client
+through schema apply, direct put, batch ingest, get, scan, query, explain,
+delete, compact, snapshot, restore, and admin jobs. It emits a JSON summary and
+`typescript client http smoke ok`. This is local loopback product evidence for
+the generated artifact, not a package publishing pipeline, managed-cloud health,
+or benchmark evidence.
+
 Install the local private package tooling and run the typecheck boundary:
 
 ```bash
@@ -46,6 +61,7 @@ cd clients/typescript
 npm ci
 npm run typecheck
 npm run smoke
+npm run http-smoke
 npm run check
 ```
 

@@ -12,6 +12,7 @@
   },
   "include": [
     "src/client.ts",
-    "smoke.ts"
+    "smoke.ts",
+    "http-smoke.ts"
   ]
 }

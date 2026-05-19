@@ -1031,6 +1031,14 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         package["scripts"]["smoke"],
         json!("node --experimental-strip-types smoke.ts")
     );
+    assert_eq!(
+        package["scripts"]["http-smoke"],
+        json!("node --experimental-strip-types http-smoke.ts")
+    );
+    assert_eq!(
+        package["scripts"]["check"],
+        json!("npm run typecheck && npm run smoke")
+    );
     assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));
     assert_eq!(package["devDependencies"]["@types/node"], json!("25.9.0"));
     assert!(
@@ -1073,7 +1081,30 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         tsconfig["compilerOptions"]["allowImportingTsExtensions"],
         json!(true)
     );
-    assert_eq!(tsconfig["include"], json!(["src/client.ts", "smoke.ts"]));
+    assert_eq!(
+        tsconfig["include"],
+        json!(["src/client.ts", "smoke.ts", "http-smoke.ts"])
+    );
+
+    let http_smoke = std::fs::read_to_string(root.join("clients/typescript/http-smoke.ts"))
+        .expect("read TypeScript HTTP smoke");
+    for token in [
+        "typescript client http smoke ok",
+        "spawn(\"cargo\"",
+        "TRACEDB_DATA_DIR",
+        "TRACEDB_BIND",
+        "await client.ready()",
+        "await client.applySchema",
+        "await client.putBatch",
+        "await client.query",
+        "await client.snapshot",
+        "sql_module: \"not_implemented\"",
+    ] {
+        assert!(
+            http_smoke.contains(token),
+            "TypeScript HTTP smoke should include {token}"
+        );
+    }
 
     let readme = std::fs::read_to_string(root.join("clients/typescript/README.md"))
         .expect("read TypeScript client README");
@@ -1081,6 +1112,7 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "npm ci",
         "npm run typecheck",
         "npm run smoke",
+        "npm run http-smoke",
         "not a package publishing pipeline",
     ] {
         assert!(

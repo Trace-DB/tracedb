@@ -97,6 +97,19 @@ npm ci
 npm run check
 ```
 
+Run the generated TypeScript client against a real local HTTP server with:
+
+```bash
+cd clients/typescript
+npm run http-smoke
+```
+
+This starts a loopback `tracedb-server` child process with an isolated temporary
+data directory and drives the generated client through ready, schema apply,
+direct put, batch ingest, get, scan, query, explain, delete, compact, snapshot,
+restore, and admin jobs. It is local product-path evidence for the generated
+transport artifact, not managed-cloud health or package publishing evidence.
+
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and
 `SnapshotRequest`, and its route methods return OpenAPI response aliases such as
@@ -127,8 +140,8 @@ direct-or-wrapper body as `RecordPutBody`, and `getRecord` responses type
   hand-maintained managed SDK, not a strict runtime validator, and not a broader
   SDK compatibility claim. Its current runtime smoke uses Node's experimental
   TypeScript strip support. The private package under `clients/typescript`
-  exists only for local typechecking and smoke validation; it does not declare
-  package publishing fields.
+  exists only for local typechecking plus fake-fetch and real local HTTP smoke
+  validation; it does not declare package publishing fields.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash and not cross-replica. The Rust SDK can

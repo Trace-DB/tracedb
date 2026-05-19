@@ -33,6 +33,7 @@ python3 scripts/generate_typescript_client.py
 python3 scripts/generate_typescript_client.py --check
 node --experimental-strip-types clients/typescript/smoke.ts
 (cd clients/typescript && npm ci && npm run check)
+(cd clients/typescript && npm run http-smoke)
 ```
 
 ## Boundaries
@@ -48,8 +49,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
   method signatures while keeping known fields optional and unknown JSON fields
   allowed. Runtime validation remains server-side. Its local runtime smoke uses
   Node's experimental TypeScript strip support. The private package under
-  `clients/typescript` exists only for local typechecking and smoke validation;
-  it does not declare package publishing fields.
+  `clients/typescript` exists only for local typechecking plus fake-fetch and
+  real local HTTP smoke validation; it does not declare package publishing
+  fields.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
@@ -194,3 +196,15 @@ demonstrates the keyed write/admin retry path by generating per-run
 `Idempotency-Key` values for the quickstart's mutation/admin steps. Restore
 creates a separate database directory; it does not replace the running server's
 data directory and is not managed-cloud backup/DR semantics.
+
+The generated TypeScript client has its own local HTTP smoke:
+
+```bash
+cd clients/typescript
+npm run http-smoke
+```
+
+That smoke starts `tracedb-server` with an isolated temporary data directory and
+uses the generated client against real HTTP routes for ready, schema apply,
+direct put, batch ingest, get, scan, query, explain, delete, compact, snapshot,
+restore, and admin jobs.

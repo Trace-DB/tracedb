@@ -97,7 +97,11 @@ metadata injection, explicit routing field precedence, idempotency headers, and
 HTTP error shape.
 `cd clients/typescript && npm ci && npm run check` installs the locked private
 tooling and typechecks the generated artifact plus smoke script. The package is
-private and does not declare publishing fields.
+private and does not declare publishing fields. `cd clients/typescript && npm
+run http-smoke` starts a local `tracedb-server` child process with an isolated
+temporary data directory and drives the generated TypeScript client over real
+HTTP routes for ready, schema apply, direct put, batch ingest, get, scan, query,
+explain, delete, compact, snapshot, restore, and admin jobs.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 in-process engine replay, and the gateway forwards that header. Durable
 cross-restart/cross-replica idempotency remains future work. SDK write/admin
