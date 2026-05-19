@@ -5,7 +5,7 @@ tags:
   - docs
 status: stub
 type: repo-handoff
-updated: 2026-05-16
+updated: 2026-05-19
 ---
 
 # TraceDB Repo Docs
@@ -22,6 +22,7 @@ Start with:
 
 - `README.md`
 - `docs/TraceDB.md`
+- `docs/api/v1-http.md`
 - `docs/Operations/Local Cloud.md`
 
 Local product smoke:

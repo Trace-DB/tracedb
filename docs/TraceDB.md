@@ -7,7 +7,7 @@ tags:
   - docs
 status: stub
 type: repo-handoff
-updated: 2026-05-18
+updated: 2026-05-19
 ---
 
 # TraceDB
@@ -49,3 +49,5 @@ The SDK quickstart uses typed convenience response methods, including typed
 query rows, over the current HTTP JSON shapes and accepts `--timeout-ms` for the
 blocking SDK request timeout plus `--safe-retries` for bounded health/read route
 retries. SQL compatibility remains unimplemented.
+
+The current versioned HTTP API route reference is `docs/api/v1-http.md`.

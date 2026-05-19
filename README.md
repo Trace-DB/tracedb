@@ -54,6 +54,8 @@ current HTTP response shapes and accepts a configurable SDK request timeout; the
 original raw `serde_json::Value` methods remain available. Bounded safe retries
 are available for SDK health/read routes only.
 
+The current versioned HTTP route reference is in `docs/api/v1-http.md`.
+
 ## Current Boundaries
 
 - SQL compatibility is not implemented.

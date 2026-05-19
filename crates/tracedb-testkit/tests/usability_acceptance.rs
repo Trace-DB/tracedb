@@ -489,6 +489,61 @@ fn local_cloud_packaging_declares_cloud_shape_without_engine_volume_leaks() {
     assert!(!gateway_or_worker_mount_engine_data(&compose));
 }
 
+#[test]
+fn versioned_http_api_reference_tracks_current_product_routes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let api_doc = root.join("docs/api/v1-http.md");
+    let markdown = std::fs::read_to_string(&api_doc)
+        .unwrap_or_else(|error| panic!("read {}: {error}", api_doc.display()));
+
+    for route in [
+        "GET /v1/health",
+        "GET /v1/ready",
+        "GET /v1/databases",
+        "GET /v1/branches",
+        "GET /v1/metrics/public-safe",
+        "POST /v1/schema/apply",
+        "POST /v1/insert",
+        "POST /v1/records/put",
+        "POST /v1/records/put-batch",
+        "POST /v1/records/patch",
+        "POST /v1/records/delete",
+        "POST /v1/records/get",
+        "POST /v1/records/scan",
+        "POST /v1/query",
+        "POST /v1/explain",
+        "POST /v1/admin/compact",
+        "POST /v1/admin/snapshot",
+        "POST /v1/admin/restore",
+        "GET /v1/admin/jobs",
+    ] {
+        assert!(
+            markdown.contains(&format!("`{route}`")),
+            "versioned API reference missing `{route}`"
+        );
+    }
+
+    for boundary in [
+        "SQL compatibility is not implemented",
+        "Mutation and admin routes are not retried by the SDK without an explicit idempotency contract",
+        "Internal TraceDB-only runs are development evidence",
+    ] {
+        assert!(
+            markdown.contains(boundary),
+            "versioned API reference missing boundary: {boundary}"
+        );
+    }
+
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
+    assert!(
+        readme.contains("docs/api/v1-http.md"),
+        "README should link to the versioned v1 API reference"
+    );
+}
+
 fn gateway_or_worker_mount_engine_data(compose: &str) -> bool {
     let mut current_service = "";
     for line in compose.lines() {
