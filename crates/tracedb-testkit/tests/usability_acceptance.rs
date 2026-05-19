@@ -1317,6 +1317,10 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         json!("node --experimental-strip-types quickstart.ts")
     );
     assert_eq!(
+        package["scripts"]["gateway-smoke"],
+        json!("node --experimental-strip-types gateway-smoke.ts")
+    );
+    assert_eq!(
         package["scripts"]["check"],
         json!("npm run typecheck && npm run smoke")
     );
@@ -1368,7 +1372,8 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
             "src/client.ts",
             "smoke.ts",
             "http-smoke.ts",
-            "quickstart.ts"
+            "quickstart.ts",
+            "gateway-smoke.ts"
         ])
     );
 
@@ -1415,6 +1420,29 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         );
     }
 
+    let gateway_smoke = std::fs::read_to_string(root.join("clients/typescript/gateway-smoke.ts"))
+        .expect("read TypeScript gateway smoke");
+    for token in [
+        "typescript client gateway smoke ok",
+        "TRACEDB_SERVICE_MODE",
+        "gateway",
+        "TRACEDB_REQUIRE_API_KEY",
+        "TRACEDB_API_TOKEN",
+        "TRACEDB_ENGINE_URL",
+        "TRACEDB_DATABASE_ID",
+        "TRACEDB_BRANCH_ID",
+        "TraceDbHttpError",
+        "invalid api token",
+        "unknown branch db_missing:main",
+        "typescript client endpoint quickstart ok",
+        "sql_module: \"not_implemented\"",
+    ] {
+        assert!(
+            gateway_smoke.contains(token),
+            "TypeScript gateway smoke should include {token}"
+        );
+    }
+
     let readme = std::fs::read_to_string(root.join("clients/typescript/README.md"))
         .expect("read TypeScript client README");
     for command in [
@@ -1423,8 +1451,11 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "npm run smoke",
         "npm run http-smoke",
         "npm run quickstart",
+        "npm run gateway-smoke",
         "TRACEDB_URL",
         "TRACEDB_ADMIN_DIR",
+        "TRACEDB_REQUIRE_API_KEY",
+        "TRACEDB_DATABASE_ID",
         "TraceDbRequestError",
         "CR/LF-containing idempotency keys",
         "RecordScanOutput.records",

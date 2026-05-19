@@ -128,7 +128,13 @@ routing metadata, and optional absolute `TRACEDB_ADMIN_DIR` enables local
 compact/snapshot/restore against server-side scratch paths. The quickstart
 reports `sql_module: not_implemented` and is endpoint example evidence, not a
 package publishing claim, SQL compatibility, managed-cloud backup/DR, or
-benchmark evidence.
+benchmark evidence. `cd clients/typescript && npm run gateway-smoke` starts a
+local engine plus gateway-mode server with `TRACEDB_REQUIRE_API_KEY=true`,
+`TRACEDB_API_TOKEN=dev-token`, and `TRACEDB_ENGINE_URL` pointing at the engine,
+proves missing-token `401` and bad-branch `400` enforcement, then runs the
+endpoint quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local` and
+`TRACEDB_BRANCH_ID=db_local:main`. This is local gateway auth/routing evidence
+for the generated artifact, not managed-cloud proof or benchmark evidence.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

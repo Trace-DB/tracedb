@@ -90,6 +90,23 @@ separate directory. The quickstart emits a JSON summary and
 for the generated artifact, not package publishing readiness, not SQL
 compatibility, and not benchmark evidence.
 
+Run the generated TypeScript client through a local gateway that requires a
+bearer token and routes by managed metadata:
+
+```bash
+cd clients/typescript
+npm run gateway-smoke
+```
+
+The gateway smoke starts a local engine plus `tracedb-gateway` mode with
+`TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
+`TRACEDB_ENGINE_URL` pointing at the engine. It then runs the endpoint
+quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local`,
+`TRACEDB_BRANCH_ID=db_local:main`, and a local `TRACEDB_ADMIN_DIR`. It emits
+`typescript client gateway smoke ok`. This proves bearer-auth forwarding and
+managed-routing metadata on the generated client against the local gateway
+path; it is still not managed-cloud proof or benchmark evidence.
+
 Install the local private package tooling and run the typecheck boundary:
 
 ```bash
@@ -99,6 +116,7 @@ npm run typecheck
 npm run smoke
 npm run http-smoke
 npm run quickstart
+npm run gateway-smoke
 npm run check
 ```
 

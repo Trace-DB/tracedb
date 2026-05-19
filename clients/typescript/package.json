@@ -8,6 +8,7 @@
     "smoke": "node --experimental-strip-types smoke.ts",
     "http-smoke": "node --experimental-strip-types http-smoke.ts",
     "quickstart": "node --experimental-strip-types quickstart.ts",
+    "gateway-smoke": "node --experimental-strip-types gateway-smoke.ts",
     "check": "npm run typecheck && npm run smoke"
   },
   "devDependencies": {

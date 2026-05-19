@@ -137,6 +137,21 @@ explain, delete, and admin jobs. It emits `sql_module: not_implemented` and is
 an endpoint example for the generated artifact, not package publishing or
 benchmark evidence.
 
+Run the generated TypeScript gateway smoke with:
+
+```bash
+cd clients/typescript
+npm run gateway-smoke
+```
+
+This starts a local engine plus a gateway-mode `tracedb-server` with
+`TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
+`TRACEDB_ENGINE_URL` pointing at the engine. It then runs the endpoint
+quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local`,
+`TRACEDB_BRANCH_ID=db_local:main`, and a local admin scratch directory. It is
+local gateway auth/routing evidence for the generated TypeScript artifact, not
+managed-cloud proof, package publishing readiness, or benchmark evidence.
+
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and
 `SnapshotRequest`, and its route methods return OpenAPI response aliases such as

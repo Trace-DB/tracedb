@@ -273,3 +273,18 @@ readiness, health, catalog, metrics, schema apply, batch ingest, scan, query,
 explain, delete, and admin jobs. The quickstart emits `sql_module:
 not_implemented` and remains endpoint example evidence, not SQL compatibility,
 managed-cloud backup/DR, or benchmark evidence.
+
+The generated TypeScript client also has a local gateway smoke:
+
+```bash
+cd clients/typescript
+npm run gateway-smoke
+```
+
+That smoke starts an engine plus a gateway-mode server with
+`TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
+`TRACEDB_ENGINE_URL` pointing at the engine. It runs the endpoint quickstart
+through the gateway with `TRACEDB_DATABASE_ID=db_local`,
+`TRACEDB_BRANCH_ID=db_local:main`, and a local admin scratch path. This is local
+gateway bearer-auth and managed-routing evidence for the generated TypeScript
+artifact, not managed-cloud proof or benchmark evidence.

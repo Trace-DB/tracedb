@@ -14,6 +14,7 @@
     "src/client.ts",
     "smoke.ts",
     "http-smoke.ts",
-    "quickstart.ts"
+    "quickstart.ts",
+    "gateway-smoke.ts"
   ]
 }
