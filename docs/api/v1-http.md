@@ -24,12 +24,25 @@ python3 scripts/generate_openapi_v1.py
 python3 scripts/generate_openapi_v1.py --check
 ```
 
+The checked generated TypeScript transport artifact is
+`clients/typescript/src/client.ts`. It is generated from the OpenAPI artifact,
+not hand-maintained as a second route manifest:
+
+```bash
+python3 scripts/generate_typescript_client.py
+python3 scripts/generate_typescript_client.py --check
+```
+
 ## Boundaries
 
 - SQL compatibility is not implemented.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require an external control and a number to beat.
 - The current Rust SDK is a minimal blocking HTTP client for this API surface.
+- The TypeScript client under `clients/typescript/src/client.ts` is a generated
+  dependency-free `fetch` client artifact for this API surface. It is not a
+  published npm package, not a managed-cloud SDK promise, and not a SQL
+  compatibility claim.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
@@ -57,6 +70,12 @@ the engine.
 The minimal SDK can add `database_id` and `branch_id` fields to object-shaped
 POST bodies when configured for managed routing. Direct engine-local requests
 can omit those fields.
+
+The generated TypeScript client follows the same routing metadata boundary:
+configured `databaseId` and `branchId` are added only to absent root
+`database_id` and `branch_id` fields on copied JSON POST bodies. Explicit
+request fields win, the caller's object is not mutated, and GET routes send no
+JSON body.
 
 ## Health And Catalog
 

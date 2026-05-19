@@ -78,7 +78,10 @@ steps. The SDK also exposes typed local admin helpers for compact, snapshot, and
 restore.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
-machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
+machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`. A checked
+generated TypeScript `fetch` client artifact lives at
+`clients/typescript/src/client.ts` and is regenerated from the OpenAPI artifact
+with `python3 scripts/generate_typescript_client.py`.
 
 ## Current Boundaries
 
@@ -93,6 +96,9 @@ machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
   opt-in idempotency-key-gated transient retries for mutation/admin routes, and
   non-2xx SDK errors include request method, request path, HTTP status, and
   response body. It is not yet a full managed/cloud SDK.
+- `clients/typescript/src/client.ts` is a generated dependency-free transport
+  artifact for the current HTTP API. It is not a published npm package, not a
+  hand-maintained managed SDK, and not a broader SDK compatibility claim.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash and not cross-replica. The Rust SDK can

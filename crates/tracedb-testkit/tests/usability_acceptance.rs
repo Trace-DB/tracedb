@@ -804,6 +804,108 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     );
 }
 
+#[test]
+fn generated_typescript_client_artifact_tracks_openapi_routes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let generator = root.join("scripts/generate_typescript_client.py");
+    let client = root.join("clients/typescript/src/client.ts");
+
+    let check = Command::new("python3")
+        .arg(&generator)
+        .arg("--check")
+        .current_dir(root)
+        .output()
+        .unwrap_or_else(|error| panic!("run {} --check: {error}", generator.display()));
+    assert!(
+        check.status.success(),
+        "TypeScript client artifact should be reproducible from generator\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let spec: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("docs/api/v1-openapi.json"))
+            .expect("read OpenAPI artifact"),
+    )
+    .expect("parse OpenAPI JSON");
+    let source = std::fs::read_to_string(&client)
+        .unwrap_or_else(|error| panic!("read {}: {error}", client.display()));
+
+    for token in [
+        "export class TraceDbClient",
+        "export type TraceDbRequestOptions",
+        "export class TraceDbHttpError",
+        "Idempotency-Key",
+        "SQL compatibility is not implemented.",
+        "database_id",
+        "branch_id",
+        "if (method !== \"GET\")",
+        "const routed: JsonObject = { ...body };",
+        "routed.database_id === undefined",
+        "routed.branch_id === undefined",
+    ] {
+        assert!(
+            source.contains(token),
+            "generated TypeScript client missing {token}"
+        );
+    }
+
+    for method_name in [
+        "health",
+        "ready",
+        "listDatabases",
+        "listBranches",
+        "publicSafeMetrics",
+        "applySchema",
+        "insert",
+        "putRecord",
+        "putBatch",
+        "patchRecord",
+        "deleteRecord",
+        "getRecord",
+        "scanRecords",
+        "query",
+        "explain",
+        "compact",
+        "snapshot",
+        "restore",
+        "listAdminJobs",
+    ] {
+        assert!(
+            source.contains(&format!("async {method_name}(")),
+            "generated TypeScript client missing method {method_name}"
+        );
+    }
+
+    let paths = spec["paths"].as_object().expect("OpenAPI paths object");
+    for (path, methods) in paths {
+        let methods = methods.as_object().expect("OpenAPI path methods object");
+        for (method, operation) in methods {
+            let operation_id = operation["operationId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("OpenAPI operationId for {method} {path}"));
+            let method_literal = method.to_ascii_uppercase();
+            assert!(
+                source.contains(&format!("\"{method_literal}\", \"{path}\"")),
+                "generated TypeScript client missing {method_literal} {path} for {operation_id}"
+            );
+            assert!(
+                source.contains(&format!("// {operation_id}: {method_literal} {path}")),
+                "generated TypeScript client missing provenance comment for {operation_id}"
+            );
+        }
+    }
+
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
+    assert!(
+        readme.contains("clients/typescript/src/client.ts"),
+        "README should link to the generated TypeScript client artifact"
+    );
+}
+
 fn gateway_or_worker_mount_engine_data(compose: &str) -> bool {
     let mut current_service = "";
     for line in compose.lines() {
