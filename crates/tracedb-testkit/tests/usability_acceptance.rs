@@ -896,6 +896,15 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         "RecordPutBatchRequest",
         "HybridQuery",
         "HybridScoreComponents",
+        "HealthResponse",
+        "ReadyResponse",
+        "DatabaseSummary",
+        "DatabasesResponse",
+        "BranchSummary",
+        "BranchesResponse",
+        "MetricsResponse",
+        "AdminJob",
+        "JobsResponse",
         "HybridQueryRow",
         "AccessPathExplain",
         "Candidate",
@@ -1017,6 +1026,58 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         json!("#/components/schemas/AccessPathTiming"),
         "HybridExplain.access_path_timings should reference AccessPathTiming"
     );
+    assert_eq!(
+        spec["components"]["schemas"]["HealthResponse"]["properties"]["ok"]["type"],
+        json!("boolean"),
+        "HealthResponse should expose ok"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["HealthResponse"]["properties"].get("data_dir_available"),
+        None,
+        "HealthResponse should not advertise legacy /health-only detail fields for /v1/health"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["ReadyResponse"]["properties"]["ready"]["type"],
+        json!("boolean"),
+        "ReadyResponse should expose ready"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["DatabasesResponse"]["properties"]["databases"]["items"]
+            ["$ref"],
+        json!("#/components/schemas/DatabaseSummary"),
+        "DatabasesResponse.databases should reference DatabaseSummary"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["DatabaseSummary"]["properties"]["database_id"]["type"],
+        json!("string"),
+        "DatabaseSummary should expose database_id"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["BranchesResponse"]["properties"]["branches"]["items"]
+            ["$ref"],
+        json!("#/components/schemas/BranchSummary"),
+        "BranchesResponse.branches should reference BranchSummary"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["BranchSummary"]["properties"]["branch_id"]["type"],
+        json!("string"),
+        "BranchSummary should expose branch_id"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["MetricsResponse"]["properties"]["latest_epoch"]["type"],
+        json!("integer"),
+        "MetricsResponse should expose latest_epoch"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["JobsResponse"]["properties"]["jobs"]["items"]["$ref"],
+        json!("#/components/schemas/AdminJob"),
+        "JobsResponse.jobs should reference AdminJob"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["AdminJob"]["properties"]["queue"]["type"],
+        json!("string"),
+        "AdminJob should expose queue"
+    );
 
     let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
     assert!(
@@ -1063,6 +1124,15 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "Generated schema aliases keep OpenAPI's permissive additionalProperties boundary",
         "export interface TableSchema extends JsonObject",
         "export interface RecordInput extends JsonObject",
+        "export interface HealthResponse extends JsonObject",
+        "export interface ReadyResponse extends JsonObject",
+        "export interface DatabaseSummary extends JsonObject",
+        "export interface DatabasesResponse extends JsonObject",
+        "export interface BranchSummary extends JsonObject",
+        "export interface BranchesResponse extends JsonObject",
+        "export interface MetricsResponse extends JsonObject",
+        "export interface AdminJob extends JsonObject",
+        "export interface JobsResponse extends JsonObject",
         "export type RecordPutBody = RecordInput | RecordPutRequest;",
         "export interface RecordPutBatchRequest extends JsonObject",
         "export interface HybridScoreComponents extends JsonObject",
@@ -1086,6 +1156,9 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "score?: HybridScoreComponents;",
         "planner_candidates?: Candidate[];",
         "phase_timings?: QueryPhaseTiming[];",
+        "databases?: DatabaseSummary[];",
+        "branches?: BranchSummary[];",
+        "jobs?: AdminJob[];",
         "vector?: number[] | null;",
         "record_count?: number;",
         "source?: string;",
@@ -1134,7 +1207,11 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         );
     }
     for signature in [
+        "async health(options: TraceDbRequestOptions = {}): Promise<HealthResponse>",
         "async ready(options: TraceDbRequestOptions = {}): Promise<ReadyResponse>",
+        "async listDatabases(options: TraceDbRequestOptions = {}): Promise<DatabasesResponse>",
+        "async listBranches(options: TraceDbRequestOptions = {}): Promise<BranchesResponse>",
+        "async publicSafeMetrics(options: TraceDbRequestOptions = {}): Promise<MetricsResponse>",
         "async applySchema(body: TableSchema, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
         "async putRecord(body: RecordPutBody, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
         "async putBatch(body: RecordPutBatchRequest, options: TraceDbRequestOptions = {}): Promise<PutBatchResponse>",

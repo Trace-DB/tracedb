@@ -48,6 +48,9 @@ request fields win, checks `Idempotency-Key`, and checks `TraceDbHttpError`
 method/path/status/body context. It also verifies the client rejects empty or
 CR/LF-containing idempotency keys as `TraceDbRequestError` before `fetchImpl` is
 called, and verifies current scan/query/explain response aliases typecheck.
+It also typechecks the read-only product response aliases for health,
+readiness, database catalog, branch catalog, public-safe metrics, and admin
+jobs.
 This is runtime smoke coverage for the checked artifact, not a package
 publishing pipeline.
 
@@ -60,11 +63,11 @@ npm run http-smoke
 
 The HTTP smoke starts a local `tracedb-server` child process with an isolated
 temporary data directory, waits for readiness, then drives the generated client
-through schema apply, direct put, batch ingest, get, scan, query, explain,
-delete, compact, snapshot, restore, and admin jobs. It emits a JSON summary and
-`typescript client http smoke ok`. This is local loopback product evidence for
-the generated artifact, not a package publishing pipeline, managed-cloud health,
-or benchmark evidence.
+through health, catalog, metrics, schema apply, direct put, batch ingest, get,
+scan, query, explain, delete, compact, snapshot, restore, and admin jobs. It
+emits a JSON summary and `typescript client http smoke ok`. This is local
+loopback product evidence for the generated artifact, not a package publishing
+pipeline, managed-cloud health, or benchmark evidence.
 
 Install the local private package tooling and run the typecheck boundary:
 

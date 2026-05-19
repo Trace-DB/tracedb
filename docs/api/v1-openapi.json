@@ -36,9 +36,61 @@
         },
         "type": "object"
       },
+      "AdminJob": {
+        "additionalProperties": true,
+        "description": "Admin job queue entry.",
+        "properties": {
+          "queue": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BranchSummary": {
+        "additionalProperties": true,
+        "description": "Branch catalog entry.",
+        "properties": {
+          "branch_id": {
+            "type": "string"
+          },
+          "database_id": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "latest_epoch": {
+            "type": "integer"
+          },
+          "parent_branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BranchesResponse": {
         "additionalProperties": true,
         "description": "Branch catalog response.",
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/BranchSummary"
+            },
+            "type": "array"
+          },
+          "gateway": {
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "Candidate": {
@@ -82,9 +134,48 @@
         },
         "type": "object"
       },
+      "DatabaseSummary": {
+        "additionalProperties": true,
+        "description": "Database catalog entry.",
+        "properties": {
+          "database_id": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "DatabasesResponse": {
         "additionalProperties": true,
         "description": "Database catalog response.",
+        "properties": {
+          "databases": {
+            "items": {
+              "$ref": "#/components/schemas/DatabaseSummary"
+            },
+            "type": "array"
+          },
+          "gateway": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "DeleteResponse": {
@@ -145,6 +236,23 @@
       "HealthResponse": {
         "additionalProperties": true,
         "description": "Health response.",
+        "properties": {
+          "catalog_databases": {
+            "type": "integer"
+          },
+          "engine_url": {
+            "type": "string"
+          },
+          "metered_requests": {
+            "type": "integer"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "HybridExplain": {
@@ -414,11 +522,57 @@
       "JobsResponse": {
         "additionalProperties": true,
         "description": "Admin job queue response.",
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/AdminJob"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "MetricsResponse": {
         "additionalProperties": true,
         "description": "Public-safe metrics response.",
+        "properties": {
+          "durable_epoch": {
+            "type": "integer"
+          },
+          "gateway": {
+            "type": "boolean"
+          },
+          "index_count": {
+            "type": "integer"
+          },
+          "latest_epoch": {
+            "type": "integer"
+          },
+          "module_count": {
+            "type": "integer"
+          },
+          "rate_limit_enabled": {
+            "type": "boolean"
+          },
+          "rate_limit_requests": {
+            "type": "integer"
+          },
+          "recovery_state": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "integer"
+          },
+          "schema_count": {
+            "type": "integer"
+          },
+          "segment_count": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "PutBatchResponse": {
@@ -471,6 +625,44 @@
       "ReadyResponse": {
         "additionalProperties": true,
         "description": "Readiness response.",
+        "properties": {
+          "catalog_databases": {
+            "type": "integer"
+          },
+          "durable_epoch": {
+            "type": "integer"
+          },
+          "engine_health_checked": {
+            "type": "boolean"
+          },
+          "engine_status_code": {
+            "type": "integer"
+          },
+          "engine_url": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "latest_epoch": {
+            "type": "integer"
+          },
+          "metered_requests": {
+            "type": "integer"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "recovery_state": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "RecordDeleteRequest": {

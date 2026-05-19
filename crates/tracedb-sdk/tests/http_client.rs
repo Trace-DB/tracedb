@@ -12,8 +12,9 @@ use tracedb_query::{
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
-    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
-    TraceDbRequestOptions,
+    BranchesResponse, DatabasesResponse, HealthResponse, JobsResponse, MetricsResponse,
+    ReadyResponse, RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig,
+    TraceDbClientError, TraceDbRequestOptions,
 };
 
 fn schema() -> TableSchema {
@@ -788,6 +789,102 @@ fn typed_response_shape_errors_include_method_and_path() {
 }
 
 #[test]
+fn typed_readonly_responses_deserialize_gateway_shapes() {
+    let health: HealthResponse = serde_json::from_value(json!({
+        "ok": true,
+        "service": "tracedb-gateway",
+        "engine_url": "http://127.0.0.1:8090",
+        "catalog_databases": 2,
+        "metered_requests": 17,
+    }))
+    .expect("gateway health");
+    assert!(health.ok);
+    assert_eq!(health.service.as_deref(), Some("tracedb-gateway"));
+    assert_eq!(health.catalog_databases, Some(2));
+    assert_eq!(health.metered_requests, Some(17));
+
+    let ready: ReadyResponse = serde_json::from_value(json!({
+        "ok": true,
+        "ready": true,
+        "service": "tracedb-gateway",
+        "engine_url": "http://127.0.0.1:8090",
+        "engine_health_checked": true,
+        "engine_status_code": 200,
+        "catalog_databases": 2,
+        "metered_requests": 18,
+    }))
+    .expect("gateway ready");
+    assert!(ready.ready);
+    assert_eq!(ready.ok, Some(true));
+    assert_eq!(ready.engine_health_checked, Some(true));
+    assert_eq!(ready.engine_status_code, Some(200));
+
+    let not_ready: ReadyResponse = serde_json::from_value(json!({
+        "ok": false,
+        "ready": false,
+        "service": "tracedb-gateway",
+        "engine_url": "http://127.0.0.1:8090",
+        "engine_health_checked": true,
+        "error": "connection refused",
+    }))
+    .expect("gateway not ready");
+    assert!(!not_ready.ready);
+    assert_eq!(not_ready.error.as_deref(), Some("connection refused"));
+
+    let databases: DatabasesResponse = serde_json::from_value(json!({
+        "gateway": true,
+        "databases": [{
+            "org_id": "org-a",
+            "project_id": "project-a",
+            "database_id": "db-a",
+            "name": "primary",
+            "region": "us-west",
+            "endpoint": "https://db-a.example.test",
+        }],
+    }))
+    .expect("gateway databases");
+    assert_eq!(databases.gateway, Some(true));
+    assert_eq!(databases.databases[0].database_id, "db-a");
+    assert_eq!(databases.databases[0].org_id.as_deref(), Some("org-a"));
+
+    let branches: BranchesResponse = serde_json::from_value(json!({
+        "gateway": true,
+        "branches": [{
+            "database_id": "db-a",
+            "branch_id": "db-a:main",
+            "parent_branch_id": null,
+            "state": "Ready",
+            "endpoint": "https://db-a-main.example.test",
+        }],
+    }))
+    .expect("gateway branches");
+    assert_eq!(branches.gateway, Some(true));
+    assert_eq!(branches.branches[0].branch_id, "db-a:main");
+    assert_eq!(branches.branches[0].parent_branch_id, None);
+
+    let metrics: MetricsResponse = serde_json::from_value(json!({
+        "gateway": true,
+        "service": "tracedb-gateway",
+        "requests": 21,
+        "rate_limit_enabled": true,
+        "rate_limit_requests": 1000,
+    }))
+    .expect("gateway metrics");
+    assert_eq!(metrics.gateway, Some(true));
+    assert_eq!(metrics.requests, Some(21));
+    assert_eq!(metrics.rate_limit_enabled, Some(true));
+
+    let jobs: JobsResponse = serde_json::from_value(json!({
+        "jobs": [{
+            "queue": "tracedb.snapshot.create",
+            "state": "idle",
+        }],
+    }))
+    .expect("gateway admin jobs");
+    assert_eq!(jobs.jobs[0].queue, "tracedb.snapshot.create");
+}
+
+#[test]
 fn client_executes_real_http_product_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -874,6 +971,19 @@ fn client_executes_typed_http_product_path() {
     let ready = client.ready_typed().expect("ready");
     assert!(ready.ready);
     assert_eq!(ready.service.as_deref(), Some("tracedb-engine"));
+    let health = client.health_typed().expect("health");
+    assert!(health.ok);
+    assert_eq!(health.service.as_deref(), Some("tracedb-engine"));
+    let databases = client.list_databases_typed().expect("databases");
+    assert_eq!(databases.mode.as_deref(), Some("local"));
+    assert_eq!(databases.databases.len(), 1);
+    assert_eq!(databases.databases[0].database_id, "local");
+    let branches = client.list_branches_typed().expect("branches");
+    assert_eq!(branches.branches.len(), 1);
+    assert!(branches.branches[0].branch_id.contains("main"));
+    let metrics = client.public_safe_metrics_typed().expect("metrics");
+    assert_eq!(metrics.service.as_deref(), Some("tracedb-engine"));
+    assert!(metrics.latest_epoch.is_some());
     assert_eq!(
         client.apply_schema_typed(&schema()).expect("schema").epoch,
         1
@@ -925,6 +1035,11 @@ fn client_executes_typed_http_product_path() {
         .get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "ops"))
         .expect("get deleted");
     assert!(deleted.record.is_none());
+    let jobs = client.list_admin_jobs_typed().expect("admin jobs");
+    assert!(jobs
+        .jobs
+        .iter()
+        .any(|job| job.queue == "tracedb.snapshot.create" && job.state == "idle"));
 }
 
 #[test]

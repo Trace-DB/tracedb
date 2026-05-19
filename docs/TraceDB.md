@@ -91,9 +91,11 @@ the serialized `version_id` field. `HybridQuery` now explicitly includes
 `scalar_eq`, `graph_seed`, and `temporal_as_of` request fields. `RecordScanOutput`,
 `QueryResponse`, `HybridQueryRow`, `HybridScoreComponents`, and `HybridExplain`
 now expose the current server response shape for scan/query/explain, including
-access-path, candidate, counter, and timing explain fields. It is not a
-published npm package, not a hand-maintained managed SDK, not a strict runtime
-validator, and not a SQL compatibility claim.
+access-path, candidate, counter, and timing explain fields. Health, readiness,
+catalog, metrics, and admin-jobs responses now have concrete generated aliases
+as well; fields stay optional where local-engine and gateway shapes differ. It
+is not a published npm package, not a hand-maintained managed SDK, not a strict
+runtime validator, and not a SQL compatibility claim.
 `node --experimental-strip-types clients/typescript/smoke.ts` verifies the
 artifact imports and executes in the local Node runtime with fake-fetch coverage
 for representative generated aliases, GET no-body behavior, POST routing
@@ -105,8 +107,9 @@ tooling and typechecks the generated artifact plus smoke script. The package is
 private and does not declare publishing fields. `cd clients/typescript && npm
 run http-smoke` starts a local `tracedb-server` child process with an isolated
 temporary data directory and drives the generated TypeScript client over real
-HTTP routes for ready, schema apply, direct put, batch ingest, get, scan, query,
-explain, delete, compact, snapshot, restore, and admin jobs.
+HTTP routes for ready, health, catalog, metrics, schema apply, direct put, batch
+ingest, get, scan, query, explain, delete, compact, snapshot, restore, and admin
+jobs.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

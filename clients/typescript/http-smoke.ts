@@ -8,9 +8,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   TraceDbClient,
+  type BranchesResponse,
+  type DatabasesResponse,
   type GetRecordResponse,
+  type HealthResponse,
   type HybridQuery,
+  type JobsResponse,
+  type MetricsResponse,
   type QueryResponse,
+  type ReadyResponse,
   type RecordInput,
   type RecordPutBatchRequest,
   type RecordScanOutput,
@@ -137,6 +143,19 @@ try {
   await mkdir(adminDir, { recursive: true });
   const client = new TraceDbClient({ baseUrl, token: "dev-token" });
   await waitForReady(client, child, serverOutput);
+  const ready: ReadyResponse = await client.ready();
+  assert.equal(ready.ready, true);
+  const health: HealthResponse = await client.health();
+  assert.equal(health.ok, true);
+  assert.equal(health.service, "tracedb-engine");
+  const databases: DatabasesResponse = await client.listDatabases();
+  assert.equal(databases.mode, "local");
+  assert.equal(databases.databases?.[0]?.database_id, "local");
+  const branches: BranchesResponse = await client.listBranches();
+  assert.equal(branches.branches?.length, 1);
+  const metrics: MetricsResponse = await client.publicSafeMetrics();
+  assert.equal(metrics.service, "tracedb-engine");
+  assert.equal(typeof metrics.latest_epoch, "number");
 
   const schema: TableSchema = {
     name: "docs",
@@ -214,8 +233,8 @@ try {
   });
   assert.equal(restoreResponse.restored, true);
 
-  const jobs = await client.listAdminJobs();
-  assert.equal(typeof jobs, "object");
+  const jobs: JobsResponse = await client.listAdminJobs();
+  assert.equal(jobs.jobs?.some((job) => job.queue === "tracedb.snapshot.create"), true);
 
   console.log(JSON.stringify({
     ok: true,
@@ -223,6 +242,9 @@ try {
     server_url: baseUrl,
     steps: {
       ready: true,
+      health: true,
+      catalog: true,
+      metrics: true,
       schema_apply: true,
       direct_put: true,
       batch_ingest: true,
@@ -238,6 +260,7 @@ try {
     },
     records_inserted: 3,
     records_scanned: scanResponse.returned_count,
+    catalog_databases: databases.databases?.length,
     deleted_hidden: deleted.record === null,
     snapshot_target: snapshotResponse.target,
     restore_target: restoreResponse.target,

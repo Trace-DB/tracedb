@@ -221,6 +221,34 @@ impl TraceDbClient {
         self.get_json("/v1/health")
     }
 
+    pub fn health_typed(&self) -> TraceDbClientResult<HealthResponse> {
+        self.get_typed("/v1/health")
+    }
+
+    pub fn list_databases(&self) -> TraceDbClientResult<Value> {
+        self.get_json("/v1/databases")
+    }
+
+    pub fn list_databases_typed(&self) -> TraceDbClientResult<DatabasesResponse> {
+        self.get_typed("/v1/databases")
+    }
+
+    pub fn list_branches(&self) -> TraceDbClientResult<Value> {
+        self.get_json("/v1/branches")
+    }
+
+    pub fn list_branches_typed(&self) -> TraceDbClientResult<BranchesResponse> {
+        self.get_typed("/v1/branches")
+    }
+
+    pub fn public_safe_metrics(&self) -> TraceDbClientResult<Value> {
+        self.get_json("/v1/metrics/public-safe")
+    }
+
+    pub fn public_safe_metrics_typed(&self) -> TraceDbClientResult<MetricsResponse> {
+        self.get_typed("/v1/metrics/public-safe")
+    }
+
     pub fn apply_schema(&self, schema: &TableSchema) -> TraceDbClientResult<Value> {
         self.post_json("/v1/schema/apply", schema)
     }
@@ -402,6 +430,14 @@ impl TraceDbClient {
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<CompactResponse> {
         self.post_typed_with_options("/v1/admin/compact", &json!({}), options)
+    }
+
+    pub fn list_admin_jobs(&self) -> TraceDbClientResult<Value> {
+        self.get_json("/v1/admin/jobs")
+    }
+
+    pub fn list_admin_jobs_typed(&self) -> TraceDbClientResult<JobsResponse> {
+        self.get_typed("/v1/admin/jobs")
     }
 
     pub fn snapshot(&self, request: &SnapshotRequest) -> TraceDbClientResult<Value> {
@@ -633,6 +669,8 @@ impl TraceDbClient {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReadyResponse {
+    #[serde(default)]
+    pub ok: Option<bool>,
     pub ready: bool,
     #[serde(default)]
     pub service: Option<String>,
@@ -642,6 +680,105 @@ pub struct ReadyResponse {
     pub durable_epoch: Option<u64>,
     #[serde(default)]
     pub recovery_state: Option<String>,
+    #[serde(default)]
+    pub engine_url: Option<String>,
+    #[serde(default)]
+    pub engine_health_checked: Option<bool>,
+    #[serde(default)]
+    pub engine_status_code: Option<u16>,
+    #[serde(default)]
+    pub catalog_databases: Option<u64>,
+    #[serde(default)]
+    pub metered_requests: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub service: Option<String>,
+    #[serde(default)]
+    pub engine_url: Option<String>,
+    #[serde(default)]
+    pub catalog_databases: Option<u64>,
+    #[serde(default)]
+    pub metered_requests: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DatabaseSummary {
+    pub database_id: String,
+    #[serde(default)]
+    pub org_id: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DatabasesResponse {
+    pub databases: Vec<DatabaseSummary>,
+    #[serde(default)]
+    pub gateway: Option<bool>,
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BranchSummary {
+    pub branch_id: String,
+    #[serde(default)]
+    pub database_id: Option<String>,
+    #[serde(default)]
+    pub parent_branch_id: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub latest_epoch: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BranchesResponse {
+    pub branches: Vec<BranchSummary>,
+    #[serde(default)]
+    pub gateway: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MetricsResponse {
+    #[serde(default)]
+    pub gateway: Option<bool>,
+    #[serde(default)]
+    pub service: Option<String>,
+    #[serde(default)]
+    pub latest_epoch: Option<u64>,
+    #[serde(default)]
+    pub durable_epoch: Option<u64>,
+    #[serde(default)]
+    pub segment_count: Option<usize>,
+    #[serde(default)]
+    pub index_count: Option<usize>,
+    #[serde(default)]
+    pub module_count: Option<usize>,
+    #[serde(default)]
+    pub schema_count: Option<usize>,
+    #[serde(default)]
+    pub recovery_state: Option<String>,
+    #[serde(default)]
+    pub requests: Option<u64>,
+    #[serde(default)]
+    pub rate_limit_enabled: Option<bool>,
+    #[serde(default)]
+    pub rate_limit_requests: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -719,6 +856,17 @@ pub struct RestoreResponse {
     pub restored: bool,
     pub source: String,
     pub target: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AdminJob {
+    pub queue: String,
+    pub state: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JobsResponse {
+    pub jobs: Vec<AdminJob>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

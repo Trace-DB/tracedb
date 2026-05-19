@@ -4,16 +4,23 @@ import {
   TraceDbHttpError,
   TraceDbRequestError,
   type AccessPathExplain,
+  type AdminJob,
+  type BranchesResponse,
   type Candidate,
+  type DatabasesResponse,
+  type HealthResponse,
   type HybridExplain,
   type HybridQuery,
   type HybridQueryRow,
   type HybridScoreComponents,
+  type JobsResponse,
   type JsonObject,
+  type MetricsResponse,
   type RecordInput,
   type PutBatchResponse,
   type QueryResponse,
   type GetRecordResponse,
+  type ReadyResponse,
   type RecordPutBatchRequest,
   type RecordScanOutput,
   type SnapshotRequest,
@@ -189,6 +196,38 @@ const getResponse: GetRecordResponse = await client.getRecord({
   id: "direct",
 });
 assert.equal(getResponse.ok, true);
+
+const typedHealth: HealthResponse = { ok: true, service: "tracedb-engine" };
+const typedReady: ReadyResponse = { ready: true, service: "tracedb-engine" };
+const typedDatabases: DatabasesResponse = {
+  mode: "local",
+  databases: [{ database_id: "local", endpoint: "local-daemon" }],
+};
+const typedBranches: BranchesResponse = {
+  branches: [{ branch_id: "db_local:main", state: "ACTIVE", latest_epoch: 1 }],
+};
+const typedMetrics: MetricsResponse = {
+  service: "tracedb-engine",
+  latest_epoch: 1,
+  schema_count: 1,
+};
+const typedJob: AdminJob = { queue: "tracedb.snapshot.create", state: "idle" };
+const typedJobs: JobsResponse = { jobs: [typedJob] };
+assert.equal(typedHealth.ok, true);
+assert.equal(typedReady.ready, true);
+assert.equal(typedDatabases.databases?.[0]?.database_id, "local");
+assert.equal(typedBranches.branches?.[0]?.state, "ACTIVE");
+assert.equal(typedMetrics.schema_count, 1);
+assert.equal(typedJobs.jobs?.[0]?.queue, "tracedb.snapshot.create");
+
+await client.listDatabases();
+assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/databases");
+await client.listBranches();
+assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/branches");
+await client.publicSafeMetrics();
+assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/metrics/public-safe");
+await client.listAdminJobs();
+assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/admin/jobs");
 
 const failingClient = new TraceDbClient({
   baseUrl: "http://127.0.0.1:8090",

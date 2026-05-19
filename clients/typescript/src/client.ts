@@ -88,7 +88,23 @@ export interface AccessPathTiming extends JsonObject {
   open_ms?: number;
 }
 
+export interface AdminJob extends JsonObject {
+  queue?: string;
+  state?: string;
+}
+
+export interface BranchSummary extends JsonObject {
+  branch_id?: string;
+  database_id?: string;
+  endpoint?: string;
+  latest_epoch?: number;
+  parent_branch_id?: string | null;
+  state?: string;
+}
+
 export interface BranchesResponse extends JsonObject {
+  branches?: BranchSummary[];
+  gateway?: boolean;
 }
 
 export interface Candidate extends JsonObject {
@@ -105,7 +121,19 @@ export interface CompactResponse extends JsonObject {
   compacted?: boolean;
 }
 
+export interface DatabaseSummary extends JsonObject {
+  database_id?: string;
+  endpoint?: string;
+  name?: string;
+  org_id?: string;
+  project_id?: string;
+  region?: string;
+}
+
 export interface DatabasesResponse extends JsonObject {
+  databases?: DatabaseSummary[];
+  gateway?: boolean;
+  mode?: string;
 }
 
 export interface DeleteResponse extends JsonObject {
@@ -129,6 +157,11 @@ export interface GetRecordResponse extends JsonObject {
 }
 
 export interface HealthResponse extends JsonObject {
+  catalog_databases?: number;
+  engine_url?: string;
+  metered_requests?: number;
+  ok?: boolean;
+  service?: string;
 }
 
 export interface HybridExplain extends JsonObject {
@@ -202,9 +235,22 @@ export interface HybridScoreComponents extends JsonObject {
 }
 
 export interface JobsResponse extends JsonObject {
+  jobs?: AdminJob[];
 }
 
 export interface MetricsResponse extends JsonObject {
+  durable_epoch?: number;
+  gateway?: boolean;
+  index_count?: number;
+  latest_epoch?: number;
+  module_count?: number;
+  rate_limit_enabled?: boolean;
+  rate_limit_requests?: number;
+  recovery_state?: string;
+  requests?: number;
+  schema_count?: number;
+  segment_count?: number;
+  service?: string;
 }
 
 export interface PutBatchResponse extends JsonObject {
@@ -224,6 +270,18 @@ export interface QueryResponse extends JsonObject {
 }
 
 export interface ReadyResponse extends JsonObject {
+  catalog_databases?: number;
+  durable_epoch?: number;
+  engine_health_checked?: boolean;
+  engine_status_code?: number;
+  engine_url?: string;
+  error?: string;
+  latest_epoch?: number;
+  metered_requests?: number;
+  ok?: boolean;
+  ready?: boolean;
+  recovery_state?: string;
+  service?: string;
 }
 
 export interface RecordDeleteRequest extends JsonObject {

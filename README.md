@@ -132,22 +132,25 @@ server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
   current engine API plus the original request-builder helpers. It can attach
   managed `database_id` and `branch_id` routing metadata to JSON POST bodies,
   includes typed convenience response methods and typed query rows for the
-  current product path, includes typed local admin helpers for compact,
-  snapshot, and restore, supports a configurable blocking socket request
-  timeout, supports bounded safe retries for health/read routes, supports
-  opt-in idempotency-key-gated transient retries for mutation/admin routes, and
-  non-2xx SDK errors include request method, request path, HTTP status, and
-  response body. It is not yet a full managed/cloud SDK.
+  current product path, includes typed health/catalog/metrics/admin-jobs
+  helpers, includes typed local admin helpers for compact, snapshot, and
+  restore, supports a configurable blocking socket request timeout, supports
+  bounded safe retries for health/read routes, supports opt-in
+  idempotency-key-gated transient retries for mutation/admin routes, and non-2xx
+  SDK errors include request method, request path, HTTP status, and response
+  body. It is not yet a full managed/cloud SDK.
 - `clients/typescript/src/client.ts` is a generated dependency-free transport
   artifact for the current HTTP API. It now includes OpenAPI-derived schema
-  aliases and typed method signatures while preserving the API's permissive
-  additional-properties boundary. It is not a published npm package, not a
-  hand-maintained managed SDK, not a strict runtime validator, and not a broader
-  SDK compatibility claim. Its current runtime smoke uses Node's experimental
-  TypeScript strip support. The private package under `clients/typescript`
-  exists only for local typechecking plus fake-fetch and real local HTTP smoke
-  validation; it does not declare package publishing fields. It rejects empty or
-  CR/LF-containing `idempotencyKey` request options before `fetchImpl` is called.
+  aliases and typed method signatures, including concrete health, readiness,
+  catalog, metrics, and admin-jobs response aliases, while preserving the API's
+  permissive additional-properties boundary. It is not a published npm package,
+  not a hand-maintained managed SDK, not a strict runtime validator, and not a
+  broader SDK compatibility claim. Its current runtime smoke uses Node's
+  experimental TypeScript strip support. The private package under
+  `clients/typescript` exists only for local typechecking plus fake-fetch and
+  real local HTTP smoke validation; it does not declare package publishing
+  fields. It rejects empty or CR/LF-containing `idempotencyKey` request options
+  before `fetchImpl` is called.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   data-dir-backed replay on the engine, and the gateway forwards that header.
   After a successful local cache write, replay survives a clean engine reopen

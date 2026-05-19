@@ -118,6 +118,11 @@ includes the existing JSON request knobs for `scalar_eq`, `graph_seed`, and
 | `GET /v1/branches` | No body. | Local mode returns the active branch; gateway mode returns catalog branches. |
 | `GET /v1/metrics/public-safe` | No body. | Public-safe service, epoch, segment/index/module/schema, recovery, request, or rate-limit counters. |
 
+The generated OpenAPI and TypeScript artifacts expose concrete but permissive
+aliases for these read-only responses: `HealthResponse`, `ReadyResponse`,
+`DatabasesResponse`, `BranchesResponse`, `MetricsResponse`, and `JobsResponse`.
+Fields remain optional where local-engine and gateway shapes differ.
+
 Local compatibility aliases also exist for development: `GET /health`,
 `GET /ready`, and `GET /metrics`.
 
@@ -220,6 +225,6 @@ npm run http-smoke
 ```
 
 That smoke starts `tracedb-server` with an isolated temporary data directory and
-uses the generated client against real HTTP routes for ready, schema apply,
-direct put, batch ingest, get, scan, query, explain, delete, compact, snapshot,
-restore, and admin jobs.
+uses the generated client against real HTTP routes for ready, health, catalog,
+metrics, schema apply, direct put, batch ingest, get, scan, query, explain,
+delete, compact, snapshot, restore, and admin jobs.
