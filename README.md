@@ -63,12 +63,14 @@ cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --t
 For a read-only endpoint diagnostic against that running server:
 
 ```bash
-cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --database-id db_local --branch-id db_local:main
 ```
 
 The HTTP doctor checks the current health, readiness, catalog, public-safe
 metrics, and admin-jobs routes, returns a JSON summary with per-route responses
-or parsed error envelopes, and reports `sql_module: not_implemented`. It is a
+or parsed error envelopes, and reports `sql_module: not_implemented`. Optional
+`--database-id` and `--branch-id` add managed-routing metadata for gateway
+diagnostics, including the bodyless admin-jobs route. It is a
 local/managed-style endpoint diagnostic, not a SQL probe or benchmark.
 
 The SDK example applies schema, batch-ingests records, scans, queries, explains,

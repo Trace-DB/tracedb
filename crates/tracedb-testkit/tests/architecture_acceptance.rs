@@ -408,6 +408,28 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     assert!(batch_response.contains("\"idempotency_key\":\"gateway-batch-1\""));
     assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 2);
 
+    let admin_jobs_request = format!(
+        "GET /v1/admin/jobs?database_id={}&branch_id={} HTTP/1.1\r\nauthorization: Bearer secret-token\r\ncontent-length: 0\r\n\r\n",
+        database.database_id, branch.branch_id
+    );
+    let admin_jobs_config = GatewayServerConfig {
+        bind: "127.0.0.1:0".to_string(),
+        engine_url: engine_url.clone(),
+        required_token: Some("secret-token".to_string()),
+        catalog: catalog.clone(),
+        meter: Arc::clone(&runtime_meter),
+        rate_limit_enabled: true,
+        rate_limit_requests: 10,
+    };
+    let admin_jobs_response =
+        tracedb_gateway::handle_gateway_request_text(&admin_jobs_request, admin_jobs_config);
+    assert!(
+        admin_jobs_response.starts_with("HTTP/1.1 200 OK"),
+        "gateway should route admin jobs with query metadata: {admin_jobs_response}"
+    );
+    assert!(admin_jobs_response.contains("\"path\":\"/v1/admin/jobs\""));
+    assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 3);
+
     let mut jobs = JobCatalog::default();
     jobs.enqueue(JobKind::VerifyDatabase, "branch/main", "verify-main")
         .expect("enqueue");
@@ -551,7 +573,7 @@ fn spawn_engine_stub() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind engine stub");
     let addr = listener.local_addr().expect("engine stub address");
     thread::spawn(move || {
-        for _ in 0..4 {
+        for _ in 0..5 {
             let (mut stream, _) = listener.accept().expect("accept engine request");
             let mut buffer = [0u8; 4096];
             let read = stream.read(&mut buffer).expect("read engine request");

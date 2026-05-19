@@ -186,6 +186,13 @@ fn handle(
     stream.flush()
 }
 
+fn route_path(target: &str) -> &str {
+    target
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(target)
+}
+
 fn handle_inner(
     stream: &mut TcpStream,
     db: Arc<Mutex<TraceDb>>,
@@ -198,7 +205,8 @@ fn handle_inner(
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
-    let path = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    let path = route_path(target);
     let request_id = header_value(&request, "x-request-id")
         .map(str::to_string)
         .unwrap_or_else(next_request_id);

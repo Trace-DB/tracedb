@@ -61,13 +61,14 @@ cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --t
 Endpoint diagnostics are available without mutating data:
 
 ```bash
-cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --database-id db_local --branch-id db_local:main
 ```
 
 The HTTP doctor checks health, readiness, catalog, public-safe metrics, and
-admin-jobs routes and reports `sql_module: not_implemented`. It is a
-local/managed-style endpoint diagnostic, not a SQL probe, benchmark, or managed
-deployment proof.
+admin-jobs routes and reports `sql_module: not_implemented`. Optional
+`--database-id` and `--branch-id` add managed-routing metadata for gateway
+diagnostics, including the bodyless admin-jobs route. It is a local/managed-style
+endpoint diagnostic, not a SQL probe, benchmark, or managed deployment proof.
 
 The SDK quickstart uses typed convenience response methods, including typed
 query rows, over the current HTTP JSON shapes. It accepts `--timeout-ms` for the

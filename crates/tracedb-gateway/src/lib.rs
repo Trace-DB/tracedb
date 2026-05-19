@@ -192,7 +192,8 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
-    let path = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    let (path, query) = split_request_target(target);
     let content_type = header_value(request, "content-type").unwrap_or("application/json");
     let request_id = header_value(request, "x-request-id")
         .map(str::to_string)
@@ -283,7 +284,7 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
         | ("POST", "/v1/admin/snapshot")
         | ("POST", "/v1/admin/restore")
         | ("GET", "/v1/admin/jobs") => {
-            match authorize_route_and_meter(&config, path, &body, bearer_token) {
+            match authorize_route_and_meter(&config, path, &body, bearer_token, query) {
                 Ok(target) => proxy_or_gateway_error(
                     &target.url,
                     method,
@@ -307,8 +308,9 @@ fn authorize_route_and_meter(
     path: &str,
     body: &[u8],
     bearer_token: Option<String>,
+    query: Option<&str>,
 ) -> Result<EngineTarget, GatewayRuntimeError> {
-    let (database_id, branch_id) = gateway_ids_from_body(body)?;
+    let (database_id, branch_id) = gateway_ids_from_request(body, query)?;
     let gateway = match &config.required_token {
         Some(token) => Gateway::new(config.catalog.clone(), token.clone()),
         None => Gateway::open(config.catalog.clone()),
@@ -338,9 +340,16 @@ fn authorize_route_and_meter(
     Ok(response.engine_target)
 }
 
-fn gateway_ids_from_body(body: &[u8]) -> Result<(String, String), GatewayRuntimeError> {
+fn gateway_ids_from_request(
+    body: &[u8],
+    query: Option<&str>,
+) -> Result<(String, String), GatewayRuntimeError> {
     if body.is_empty() {
-        return Ok(("db_local".to_string(), "db_local:main".to_string()));
+        let database_id =
+            query_value(query, "database_id").unwrap_or_else(|| "db_local".to_string());
+        let branch_id =
+            query_value(query, "branch_id").unwrap_or_else(|| format!("{database_id}:main"));
+        return Ok((database_id, branch_id));
     }
     let value = serde_json::from_slice::<Value>(body)
         .map_err(|error| GatewayRuntimeError::BadRequest(error.to_string()))?;
@@ -355,6 +364,20 @@ fn gateway_ids_from_body(body: &[u8]) -> Result<(String, String), GatewayRuntime
         .map(str::to_string)
         .unwrap_or_else(|| format!("{database_id}:main"));
     Ok((database_id, branch_id))
+}
+
+fn split_request_target(target: &str) -> (&str, Option<&str>) {
+    target
+        .split_once('?')
+        .map(|(path, query)| (path, Some(query)))
+        .unwrap_or((target, None))
+}
+
+fn query_value(query: Option<&str>, name: &str) -> Option<String> {
+    query?.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then(|| value.to_string())
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

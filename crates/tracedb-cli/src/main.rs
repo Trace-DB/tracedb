@@ -458,6 +458,8 @@ fn run_doctor(data_dir: &std::path::Path) -> Value {
 struct HttpDoctorConfig {
     url: String,
     token: String,
+    database_id: Option<String>,
+    branch_id: Option<String>,
     timeout_ms: u64,
     safe_retries: u8,
 }
@@ -467,6 +469,8 @@ fn parse_http_doctor_config(
 ) -> Result<HttpDoctorConfig, Box<dyn std::error::Error>> {
     let mut url = env::var("TRACEDB_URL").ok();
     let mut token = env::var("TRACEDB_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
+    let mut database_id = env::var("TRACEDB_DATABASE_ID").ok();
+    let mut branch_id = env::var("TRACEDB_BRANCH_ID").ok();
     let mut timeout_ms = env::var("TRACEDB_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -492,6 +496,22 @@ fn parse_http_doctor_config(
             "--token" => {
                 idx += 1;
                 token = args.get(idx).ok_or("missing value for --token")?.clone();
+            }
+            "--database-id" => {
+                idx += 1;
+                database_id = Some(
+                    args.get(idx)
+                        .ok_or("missing value for --database-id")?
+                        .clone(),
+                );
+            }
+            "--branch-id" => {
+                idx += 1;
+                branch_id = Some(
+                    args.get(idx)
+                        .ok_or("missing value for --branch-id")?
+                        .clone(),
+                );
             }
             "--timeout-ms" => {
                 idx += 1;
@@ -522,24 +542,37 @@ fn parse_http_doctor_config(
     Ok(HttpDoctorConfig {
         url,
         token,
+        database_id,
+        branch_id,
         timeout_ms,
         safe_retries,
     })
 }
 
 fn run_http_doctor(config: HttpDoctorConfig) -> Value {
-    let client = TraceDbClient::new(
-        TraceDbClientConfig::managed(config.url.clone(), config.token)
-            .with_timeout(Duration::from_millis(config.timeout_ms))
-            .with_safe_retries(config.safe_retries),
-    );
+    let mut client_config = TraceDbClientConfig::managed(config.url.clone(), config.token)
+        .with_timeout(Duration::from_millis(config.timeout_ms))
+        .with_safe_retries(config.safe_retries);
+    if let Some(database_id) = &config.database_id {
+        client_config = client_config.with_database(database_id.clone());
+    }
+    if let Some(branch_id) = &config.branch_id {
+        client_config = client_config.with_branch(branch_id.clone());
+    }
+    let client = TraceDbClient::new(client_config);
 
     let health = http_doctor_check(|| client.health());
     let ready = http_doctor_check(|| client.ready());
     let databases = http_doctor_check(|| client.list_databases());
     let branches = http_doctor_check(|| client.list_branches());
     let metrics = http_doctor_check(|| client.public_safe_metrics());
-    let admin_jobs = http_doctor_check(|| client.list_admin_jobs());
+    let admin_jobs = http_doctor_check(|| {
+        client.request_json(
+            "GET",
+            &routed_admin_jobs_path(config.database_id.as_deref(), config.branch_id.as_deref()),
+            None,
+        )
+    });
     let ok = http_doctor_check_ok(&health)
         && http_doctor_ready_ok(&ready)
         && http_doctor_check_ok(&databases)
@@ -551,6 +584,8 @@ fn run_http_doctor(config: HttpDoctorConfig) -> Value {
         "ok": ok,
         "mode": "http-endpoint-diagnostics",
         "server_url": config.url,
+        "database_id": config.database_id,
+        "branch_id": config.branch_id,
         "request_timeout_ms": config.timeout_ms,
         "safe_retries": config.safe_retries,
         "checks": {
@@ -563,6 +598,33 @@ fn run_http_doctor(config: HttpDoctorConfig) -> Value {
         },
         "sql_module": "not_implemented",
     })
+}
+
+fn routed_admin_jobs_path(database_id: Option<&str>, branch_id: Option<&str>) -> String {
+    let mut params = Vec::new();
+    if let Some(database_id) = database_id {
+        params.push(format!("database_id={}", query_component(database_id)));
+    }
+    if let Some(branch_id) = branch_id {
+        params.push(format!("branch_id={}", query_component(branch_id)));
+    }
+    if params.is_empty() {
+        "/v1/admin/jobs".to_string()
+    } else {
+        format!("/v1/admin/jobs?{}", params.join("&"))
+    }
+}
+
+fn query_component(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b':' => {
+                vec![byte as char]
+            }
+            other => format!("%{other:02X}").chars().collect(),
+        })
+        .collect()
 }
 
 fn http_doctor_check(probe: impl FnOnce() -> Result<Value, TraceDbClientError>) -> Value {
@@ -1032,6 +1094,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH]|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }

@@ -119,6 +119,8 @@ fn doctor_http_reports_endpoint_diagnostics() {
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "http-endpoint-diagnostics");
     assert_eq!(summary["server_url"], url);
+    assert_eq!(summary["database_id"], "db_local");
+    assert_eq!(summary["branch_id"], "db_local:main");
     assert_eq!(summary["checks"]["health"]["ok"], true);
     assert_eq!(
         summary["checks"]["health"]["response"]["service"],
@@ -166,6 +168,10 @@ fn wait_for_http_doctor(url: &str, server: &mut Child) -> Value {
             .arg(url)
             .arg("--token")
             .arg("dev-token")
+            .arg("--database-id")
+            .arg("db_local")
+            .arg("--branch-id")
+            .arg("db_local:main")
             .arg("--timeout-ms")
             .arg("500")
             .output()
