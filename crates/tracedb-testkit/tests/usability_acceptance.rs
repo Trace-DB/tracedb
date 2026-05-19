@@ -838,6 +838,19 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "export class TraceDbClient",
         "export type TraceDbRequestOptions",
         "export class TraceDbHttpError",
+        "Generated schema aliases keep OpenAPI's permissive additionalProperties boundary",
+        "export interface TableSchema extends JsonObject",
+        "export interface RecordInput extends JsonObject",
+        "export interface RecordPutBatchRequest extends JsonObject",
+        "export interface HybridQuery extends JsonObject",
+        "export interface QueryResponse extends JsonObject",
+        "export interface SnapshotRequest extends JsonObject",
+        "export interface RestoreResponse extends JsonObject",
+        "name?: string;",
+        "records?: RecordInput[];",
+        "vector?: number[] | null;",
+        "record_count?: number;",
+        "source?: string;",
         "Idempotency-Key",
         "SQL compatibility is not implemented.",
         "database_id",
@@ -877,6 +890,20 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         assert!(
             source.contains(&format!("async {method_name}(")),
             "generated TypeScript client missing method {method_name}"
+        );
+    }
+    for signature in [
+        "async ready(options: TraceDbRequestOptions = {}): Promise<ReadyResponse>",
+        "async applySchema(body: TableSchema, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
+        "async putBatch(body: RecordPutBatchRequest, options: TraceDbRequestOptions = {}): Promise<PutBatchResponse>",
+        "async query(body: HybridQuery, options: TraceDbRequestOptions = {}): Promise<QueryResponse>",
+        "async snapshot(body: SnapshotRequest, options: TraceDbRequestOptions = {}): Promise<SnapshotResponse>",
+        "async listAdminJobs(options: TraceDbRequestOptions = {}): Promise<JobsResponse>",
+        "private async request<TResponse extends JsonValue>",
+    ] {
+        assert!(
+            source.contains(signature),
+            "generated TypeScript client missing typed signature {signature}"
         );
     }
 

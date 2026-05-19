@@ -1,5 +1,17 @@
 import assert from "node:assert/strict";
-import { TraceDbClient, TraceDbHttpError, type JsonObject, type TraceDbFetchInit } from "./src/client.ts";
+import {
+  TraceDbClient,
+  TraceDbHttpError,
+  type HybridQuery,
+  type JsonObject,
+  type PutBatchResponse,
+  type QueryResponse,
+  type RecordPutBatchRequest,
+  type SnapshotRequest,
+  type SnapshotResponse,
+  type TableSchema,
+  type TraceDbFetchInit,
+} from "./src/client.ts";
 
 type FetchCall = {
   input: string;
@@ -35,7 +47,7 @@ assert.equal(calls[0].init.body, undefined);
 assert.equal(calls[0].init.headers.Authorization, "Bearer dev-token");
 assert.equal(calls[0].init.headers["Content-Type"], undefined);
 
-const schemaBody: JsonObject = {
+const schemaBody: TableSchema = {
   name: "docs",
   primary_id_column: "id",
   tenant_id_column: "tenant",
@@ -52,6 +64,36 @@ assert.equal(schemaRequest.branch_id, "branch-default");
 assert.equal(calls[1].init.headers["Idempotency-Key"], "schema-1");
 assert.equal(calls[1].init.headers["Content-Type"], "application/json");
 
+const batchBody: RecordPutBatchRequest = {
+  records: [
+    {
+      table: "docs",
+      id: "a",
+      tenant_id: "tenant-a",
+      fields: { body: "hello" },
+    },
+  ],
+};
+const batchResponse: PutBatchResponse = await client.putBatch(batchBody);
+assert.equal(batchResponse.ok, true);
+assert.equal(JSON.parse(calls[2].init.body ?? "{}").database_id, "db-default");
+
+const queryBody: HybridQuery = {
+  table: "docs",
+  tenant_id: "tenant-a",
+  text: "hello",
+  vector: [1, 0, 0],
+  top_k: 5,
+};
+const queryResponse: QueryResponse = await client.query(queryBody);
+assert.equal(queryResponse.ok, true);
+assert.equal(JSON.parse(calls[3].init.body ?? "{}").vector.length, 3);
+
+const snapshotBody: SnapshotRequest = { target: "/tmp/tracedb-snapshot" };
+const snapshotResponse: SnapshotResponse = await client.snapshot(snapshotBody);
+assert.equal(snapshotResponse.ok, true);
+assert.equal(JSON.parse(calls[4].init.body ?? "{}").target, "/tmp/tracedb-snapshot");
+
 await client.putRecord({
   database_id: "explicit-db",
   branch_id: "explicit-branch",
@@ -62,7 +104,7 @@ await client.putRecord({
     fields: { body: "hello" },
   },
 });
-const explicitRoutingRequest = JSON.parse(calls[2].init.body ?? "{}");
+const explicitRoutingRequest = JSON.parse(calls[5].init.body ?? "{}");
 assert.equal(explicitRoutingRequest.database_id, "explicit-db");
 assert.equal(explicitRoutingRequest.branch_id, "explicit-branch");
 

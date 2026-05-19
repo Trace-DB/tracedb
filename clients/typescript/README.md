@@ -8,6 +8,13 @@ smokes and examples can import a stable artifact without waiting for a package
 publishing pipeline. It is not a managed-cloud SDK promise and not a published
 npm package contract.
 
+The generated artifact also emits TypeScript aliases from the OpenAPI component
+schemas and uses them in method signatures. These aliases intentionally preserve
+the API's permissive `additionalProperties` boundary: known fields are optional,
+unknown JSON fields remain allowed, and runtime validation stays server-side.
+They are compile-time ergonomics for the current HTTP API, not strict domain
+validators.
+
 Regenerate or check it from the repo root:
 
 ```bash
@@ -21,12 +28,13 @@ Run the local dependency-free Node smoke:
 node --experimental-strip-types clients/typescript/smoke.ts
 ```
 
-The smoke imports `src/client.ts`, uses a fake `fetchImpl`, verifies GET routes
-send no body, verifies POST routing metadata is added without mutating caller
-objects, verifies explicit `database_id` / `branch_id` request fields win,
-checks `Idempotency-Key`, and checks `TraceDbHttpError` method/path/status/body
-context. This is runtime smoke coverage for the checked artifact, not a package
-publishing pipeline.
+The smoke imports `src/client.ts`, uses a fake `fetchImpl`, verifies generated
+schema aliases typecheck in representative schema, batch, query, and admin
+calls, verifies GET routes send no body, verifies POST routing metadata is added
+without mutating caller objects, verifies explicit `database_id` / `branch_id`
+request fields win, checks `Idempotency-Key`, and checks `TraceDbHttpError`
+method/path/status/body context. This is runtime smoke coverage for the checked
+artifact, not a package publishing pipeline.
 
 Install the local private package tooling and run the typecheck boundary:
 
@@ -46,22 +54,24 @@ deliberately does not declare package publishing fields such as `exports`,
 ## Local Usage
 
 ```ts
-import { TraceDbClient } from "./src/client";
+import { TraceDbClient, type TableSchema } from "./src/client";
 
 const client = new TraceDbClient({
   baseUrl: "http://127.0.0.1:8090",
   token: "dev-token",
 });
 
-await client.ready();
-await client.applySchema({
+const schema: TableSchema = {
   name: "docs",
   primary_id_column: "id",
   tenant_id_column: "tenant",
   scalar_columns: ["status"],
   text_indexed_columns: ["body"],
   vector_columns: [{ name: "embedding", dimensions: 3, source_columns: ["body"] }],
-});
+};
+
+await client.ready();
+await client.applySchema(schema);
 ```
 
 ## Managed-Routing Metadata

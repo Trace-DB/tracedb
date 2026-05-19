@@ -97,6 +97,13 @@ npm ci
 npm run check
 ```
 
+The generated TypeScript artifact includes OpenAPI-derived schema aliases such
+as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and
+`SnapshotRequest`, and its route methods return OpenAPI response aliases such as
+`ReadyResponse`, `PutBatchResponse`, and `QueryResponse`. These are permissive
+compile-time helpers: known fields are optional, unknown JSON fields are still
+allowed, and server-side runtime validation remains authoritative.
+
 ## Current Boundaries
 
 - SQL compatibility is not implemented.
@@ -111,11 +118,14 @@ npm run check
   non-2xx SDK errors include request method, request path, HTTP status, and
   response body. It is not yet a full managed/cloud SDK.
 - `clients/typescript/src/client.ts` is a generated dependency-free transport
-  artifact for the current HTTP API. It is not a published npm package, not a
-  hand-maintained managed SDK, and not a broader SDK compatibility claim. Its
-  current runtime smoke uses Node's experimental TypeScript strip support. The
-  private package under `clients/typescript` exists only for local typechecking
-  and smoke validation; it does not declare package publishing fields.
+  artifact for the current HTTP API. It now includes OpenAPI-derived schema
+  aliases and typed method signatures while preserving the API's permissive
+  additional-properties boundary. It is not a published npm package, not a
+  hand-maintained managed SDK, not a strict runtime validator, and not a broader
+  SDK compatibility claim. Its current runtime smoke uses Node's experimental
+  TypeScript strip support. The private package under `clients/typescript`
+  exists only for local typechecking and smoke validation; it does not declare
+  package publishing fields.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash and not cross-replica. The Rust SDK can

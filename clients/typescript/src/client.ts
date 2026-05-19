@@ -9,7 +9,7 @@
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export interface JsonObject {
-  [key: string]: JsonValue;
+  [key: string]: JsonValue | undefined;
 }
 
 type TraceDbMethod = "GET" | "POST";
@@ -59,6 +59,162 @@ export class TraceDbHttpError extends Error {
   }
 }
 
+// Generated schema aliases keep OpenAPI's permissive additionalProperties boundary.
+// Known fields are optional; runtime validation remains server-side.
+
+export interface BranchesResponse extends JsonObject {
+}
+
+export interface CompactResponse extends JsonObject {
+  compacted?: boolean;
+}
+
+export interface DatabasesResponse extends JsonObject {
+}
+
+export interface DeleteResponse extends JsonObject {
+  deleted?: boolean;
+  epoch?: number;
+}
+
+export interface EmptyObject extends JsonObject {
+}
+
+export interface EpochResponse extends JsonObject {
+  epoch?: number;
+}
+
+export interface ErrorResponse extends JsonObject {
+  error?: string;
+}
+
+export interface GetRecordResponse extends JsonObject {
+  record?: JsonObject | null;
+}
+
+export interface HealthResponse extends JsonObject {
+}
+
+export interface HybridExplain extends JsonObject {
+}
+
+export interface HybridQuery extends JsonObject {
+  explain?: boolean;
+  freshness?: string;
+  table?: string;
+  tenant_id?: string;
+  text?: string | null;
+  top_k?: number;
+  vector?: number[] | null;
+}
+
+export interface HybridQueryRow extends JsonObject {
+  fields?: JsonObject;
+  record_id?: string;
+  score?: number;
+  table?: string;
+  tenant_id?: string;
+}
+
+export interface JobsResponse extends JsonObject {
+}
+
+export interface MetricsResponse extends JsonObject {
+}
+
+export interface PutBatchResponse extends JsonObject {
+  epoch?: number;
+  record_count?: number;
+  write_timing?: JsonObject;
+}
+
+export interface QueryResponse extends JsonObject {
+}
+
+export interface ReadyResponse extends JsonObject {
+}
+
+export interface RecordDeleteRequest extends JsonObject {
+  id?: string;
+  table?: string;
+  tenant_id?: string;
+  tombstone?: string;
+}
+
+export interface RecordGetRequest extends JsonObject {
+  id?: string;
+  table?: string;
+  tenant_id?: string;
+}
+
+export interface RecordInput extends JsonObject {
+  fields?: JsonObject;
+  id?: string;
+  table?: string;
+  tenant_id?: string;
+}
+
+export interface RecordOutput extends JsonObject {
+  fields?: JsonObject;
+  id?: string;
+  table?: string;
+  tenant_id?: string;
+  version?: number;
+}
+
+export interface RecordPatchRequest extends JsonObject {
+  fields?: JsonObject;
+  id?: string;
+  table?: string;
+  tenant_id?: string;
+}
+
+export interface RecordPutBatchRequest extends JsonObject {
+  include_write_timing?: boolean;
+  records?: RecordInput[];
+}
+
+export interface RecordPutRequest extends JsonObject {
+  record?: RecordInput;
+}
+
+export interface RecordScanOutput extends JsonObject {
+}
+
+export interface RecordScanRequest extends JsonObject {
+  limit?: number;
+  table?: string;
+  tenant_id?: string;
+}
+
+export interface RestoreRequest extends JsonObject {
+  source?: string;
+  target?: string;
+}
+
+export interface RestoreResponse extends JsonObject {
+  restored?: boolean;
+  source?: string;
+  target?: string;
+}
+
+export interface SnapshotRequest extends JsonObject {
+  target?: string;
+}
+
+export interface SnapshotResponse extends JsonObject {
+  snapshot?: boolean;
+  target?: string;
+}
+
+export interface TableSchema extends JsonObject {
+  name?: string;
+  primary_id_column?: string;
+  scalar_columns?: string[];
+  tenant_id_column?: string;
+  text_indexed_columns?: string[];
+  vector_columns?: JsonObject[];
+}
 export class TraceDbClient {
   private readonly baseUrl: string;
   private readonly token?: string;
@@ -86,124 +242,124 @@ export class TraceDbClient {
 
   // getHealth: GET /v1/health
   /** Health check. */
-  async health(options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("GET", "/v1/health", undefined, options);
+  async health(options: TraceDbRequestOptions = {}): Promise<HealthResponse> {
+    return this.request<HealthResponse>("GET", "/v1/health", undefined, options);
   }
 
   // getReady: GET /v1/ready
   /** Readiness check. */
-  async ready(options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("GET", "/v1/ready", undefined, options);
+  async ready(options: TraceDbRequestOptions = {}): Promise<ReadyResponse> {
+    return this.request<ReadyResponse>("GET", "/v1/ready", undefined, options);
   }
 
   // getDatabases: GET /v1/databases
   /** List databases. */
-  async listDatabases(options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("GET", "/v1/databases", undefined, options);
+  async listDatabases(options: TraceDbRequestOptions = {}): Promise<DatabasesResponse> {
+    return this.request<DatabasesResponse>("GET", "/v1/databases", undefined, options);
   }
 
   // getBranches: GET /v1/branches
   /** List branches. */
-  async listBranches(options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("GET", "/v1/branches", undefined, options);
+  async listBranches(options: TraceDbRequestOptions = {}): Promise<BranchesResponse> {
+    return this.request<BranchesResponse>("GET", "/v1/branches", undefined, options);
   }
 
   // getMetricsPublicSafe: GET /v1/metrics/public-safe
   /** Read public-safe metrics. */
-  async publicSafeMetrics(options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("GET", "/v1/metrics/public-safe", undefined, options);
+  async publicSafeMetrics(options: TraceDbRequestOptions = {}): Promise<MetricsResponse> {
+    return this.request<MetricsResponse>("GET", "/v1/metrics/public-safe", undefined, options);
   }
 
   // postSchemaApply: POST /v1/schema/apply
   /** Apply table schema. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async applySchema(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/schema/apply", body, options);
+  async applySchema(body: TableSchema, options: TraceDbRequestOptions = {}): Promise<EpochResponse> {
+    return this.request<EpochResponse>("POST", "/v1/schema/apply", body, options);
   }
 
   // postInsert: POST /v1/insert
   /** Insert record compatibility route. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async insert(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/insert", body, options);
+  async insert(body: RecordInput, options: TraceDbRequestOptions = {}): Promise<EpochResponse> {
+    return this.request<EpochResponse>("POST", "/v1/insert", body, options);
   }
 
   // postRecordsPut: POST /v1/records/put
   /** Put record. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async putRecord(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/records/put", body, options);
+  async putRecord(body: RecordPutRequest, options: TraceDbRequestOptions = {}): Promise<EpochResponse> {
+    return this.request<EpochResponse>("POST", "/v1/records/put", body, options);
   }
 
   // postRecordsPutBatch: POST /v1/records/put-batch
   /** Put record batch. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async putBatch(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/records/put-batch", body, options);
+  async putBatch(body: RecordPutBatchRequest, options: TraceDbRequestOptions = {}): Promise<PutBatchResponse> {
+    return this.request<PutBatchResponse>("POST", "/v1/records/put-batch", body, options);
   }
 
   // postRecordsPatch: POST /v1/records/patch
   /** Patch record. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async patchRecord(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/records/patch", body, options);
+  async patchRecord(body: RecordPatchRequest, options: TraceDbRequestOptions = {}): Promise<EpochResponse> {
+    return this.request<EpochResponse>("POST", "/v1/records/patch", body, options);
   }
 
   // postRecordsDelete: POST /v1/records/delete
   /** Delete record. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async deleteRecord(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/records/delete", body, options);
+  async deleteRecord(body: RecordDeleteRequest, options: TraceDbRequestOptions = {}): Promise<DeleteResponse> {
+    return this.request<DeleteResponse>("POST", "/v1/records/delete", body, options);
   }
 
   // postRecordsGet: POST /v1/records/get
   /** Get record. */
-  async getRecord(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/records/get", body, options);
+  async getRecord(body: RecordGetRequest, options: TraceDbRequestOptions = {}): Promise<GetRecordResponse> {
+    return this.request<GetRecordResponse>("POST", "/v1/records/get", body, options);
   }
 
   // postRecordsScan: POST /v1/records/scan
   /** Scan records. */
-  async scanRecords(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/records/scan", body, options);
+  async scanRecords(body: RecordScanRequest, options: TraceDbRequestOptions = {}): Promise<RecordScanOutput> {
+    return this.request<RecordScanOutput>("POST", "/v1/records/scan", body, options);
   }
 
   // postQuery: POST /v1/query
   /** Run hybrid query. */
-  async query(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/query", body, options);
+  async query(body: HybridQuery, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+    return this.request<QueryResponse>("POST", "/v1/query", body, options);
   }
 
   // postExplain: POST /v1/explain
   /** Explain hybrid query. */
-  async explain(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/explain", body, options);
+  async explain(body: HybridQuery, options: TraceDbRequestOptions = {}): Promise<HybridExplain> {
+    return this.request<HybridExplain>("POST", "/v1/explain", body, options);
   }
 
   // postAdminCompact: POST /v1/admin/compact
   /** Compact local engine state. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async compact(body: JsonObject = {}, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/admin/compact", body, options);
+  async compact(body: EmptyObject = {}, options: TraceDbRequestOptions = {}): Promise<CompactResponse> {
+    return this.request<CompactResponse>("POST", "/v1/admin/compact", body, options);
   }
 
   // postAdminSnapshot: POST /v1/admin/snapshot
   /** Create snapshot. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async snapshot(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/admin/snapshot", body, options);
+  async snapshot(body: SnapshotRequest, options: TraceDbRequestOptions = {}): Promise<SnapshotResponse> {
+    return this.request<SnapshotResponse>("POST", "/v1/admin/snapshot", body, options);
   }
 
   // postAdminRestore: POST /v1/admin/restore
   /** Restore snapshot. Mutates TraceDB state. Caller may provide Idempotency-Key. */
-  async restore(body: JsonObject, options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("POST", "/v1/admin/restore", body, options);
+  async restore(body: RestoreRequest, options: TraceDbRequestOptions = {}): Promise<RestoreResponse> {
+    return this.request<RestoreResponse>("POST", "/v1/admin/restore", body, options);
   }
 
   // getAdminJobs: GET /v1/admin/jobs
   /** List admin jobs. */
-  async listAdminJobs(options: TraceDbRequestOptions = {}): Promise<JsonValue> {
-    return this.request("GET", "/v1/admin/jobs", undefined, options);
+  async listAdminJobs(options: TraceDbRequestOptions = {}): Promise<JobsResponse> {
+    return this.request<JobsResponse>("GET", "/v1/admin/jobs", undefined, options);
   }
 
-  private async request(
+  private async request<TResponse extends JsonValue>(
     method: TraceDbMethod,
     path: string,
     body: JsonObject | undefined,
     options: TraceDbRequestOptions,
-  ): Promise<JsonValue> {
+  ): Promise<TResponse> {
     const headers: Record<string, string> = {
       Accept: "application/json",
       ...options.headers,
@@ -235,9 +391,9 @@ export class TraceDbClient {
 
     const trimmed = responseBody.trim();
     if (trimmed.length === 0) {
-      return null;
+      return null as TResponse;
     }
-    return JSON.parse(trimmed) as JsonValue;
+    return JSON.parse(trimmed) as TResponse;
   }
 
   private withRoutingMetadata(body: JsonObject): JsonObject {

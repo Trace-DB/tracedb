@@ -44,10 +44,12 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - The TypeScript client under `clients/typescript/src/client.ts` is a generated
   dependency-free `fetch` client artifact for this API surface. It is not a
   published npm package, not a managed-cloud SDK promise, and not a SQL
-  compatibility claim. Its local runtime smoke uses Node's experimental
-  TypeScript strip support. The private package under `clients/typescript`
-  exists only for local typechecking and smoke validation; it does not declare
-  package publishing fields.
+  compatibility claim. It includes OpenAPI-derived schema aliases and typed
+  method signatures while keeping known fields optional and unknown JSON fields
+  allowed. Runtime validation remains server-side. Its local runtime smoke uses
+  Node's experimental TypeScript strip support. The private package under
+  `clients/typescript` exists only for local typechecking and smoke validation;
+  it does not declare package publishing fields.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
@@ -81,6 +83,12 @@ configured `databaseId` and `branchId` are added only to absent root
 `database_id` and `branch_id` fields on copied JSON POST bodies. Explicit
 request fields win, the caller's object is not mutated, and GET routes send no
 JSON body.
+
+Generated TypeScript aliases are sourced from the OpenAPI component schemas and
+are used in route method signatures. They are intentionally loose: the current
+HTTP API accepts additive JSON fields in several request and response shapes, so
+the generated aliases extend `JsonObject`, mark known fields optional, and leave
+domain enforcement to the server.
 
 ## Health And Catalog
 

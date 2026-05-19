@@ -80,12 +80,17 @@ The checked generated TypeScript `fetch` client artifact is
 `scripts/generate_typescript_client.py` from the OpenAPI artifact. It covers the
 current v1 HTTP routes, can add configured `database_id` and `branch_id` to
 copied JSON POST bodies when absent, and can send caller-supplied
-`Idempotency-Key` through `TraceDbRequestOptions`. It is not a published npm
-package, not a hand-maintained managed SDK, and not a SQL compatibility claim.
+`Idempotency-Key` through `TraceDbRequestOptions`. It now includes
+OpenAPI-derived schema aliases and typed method signatures for the current HTTP
+surface while preserving the permissive `additionalProperties` boundary: known
+fields are optional, unknown JSON fields remain allowed, and runtime validation
+stays server-side. It is not a published npm package, not a hand-maintained
+managed SDK, not a strict runtime validator, and not a SQL compatibility claim.
 `node --experimental-strip-types clients/typescript/smoke.ts` verifies the
 artifact imports and executes in the local Node runtime with fake-fetch coverage
-for GET no-body behavior, POST routing metadata injection, explicit routing
-field precedence, idempotency headers, and HTTP error shape.
+for representative generated aliases, GET no-body behavior, POST routing
+metadata injection, explicit routing field precedence, idempotency headers, and
+HTTP error shape.
 `cd clients/typescript && npm ci && npm run check` installs the locked private
 tooling and typechecks the generated artifact plus smoke script. The package is
 private and does not declare publishing fields.
