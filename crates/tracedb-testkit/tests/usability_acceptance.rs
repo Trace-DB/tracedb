@@ -1313,6 +1313,10 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         json!("node --experimental-strip-types http-smoke.ts")
     );
     assert_eq!(
+        package["scripts"]["quickstart"],
+        json!("node --experimental-strip-types quickstart.ts")
+    );
+    assert_eq!(
         package["scripts"]["check"],
         json!("npm run typecheck && npm run smoke")
     );
@@ -1360,7 +1364,12 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
     );
     assert_eq!(
         tsconfig["include"],
-        json!(["src/client.ts", "smoke.ts", "http-smoke.ts"])
+        json!([
+            "src/client.ts",
+            "smoke.ts",
+            "http-smoke.ts",
+            "quickstart.ts"
+        ])
     );
 
     let http_smoke = std::fs::read_to_string(root.join("clients/typescript/http-smoke.ts"))
@@ -1383,6 +1392,29 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         );
     }
 
+    let quickstart = std::fs::read_to_string(root.join("clients/typescript/quickstart.ts"))
+        .expect("read TypeScript endpoint quickstart");
+    for token in [
+        "typescript client endpoint quickstart ok",
+        "TRACEDB_URL",
+        "TRACEDB_TOKEN",
+        "TRACEDB_DATABASE_ID",
+        "TRACEDB_BRANCH_ID",
+        "TRACEDB_ADMIN_DIR",
+        "await client.ready()",
+        "await client.applySchema",
+        "await client.putBatch",
+        "await client.query",
+        "await client.explain",
+        "await client.deleteRecord",
+        "sql_module: \"not_implemented\"",
+    ] {
+        assert!(
+            quickstart.contains(token),
+            "TypeScript endpoint quickstart should include {token}"
+        );
+    }
+
     let readme = std::fs::read_to_string(root.join("clients/typescript/README.md"))
         .expect("read TypeScript client README");
     for command in [
@@ -1390,6 +1422,9 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "npm run typecheck",
         "npm run smoke",
         "npm run http-smoke",
+        "npm run quickstart",
+        "TRACEDB_URL",
+        "TRACEDB_ADMIN_DIR",
         "TraceDbRequestError",
         "CR/LF-containing idempotency keys",
         "RecordScanOutput.records",

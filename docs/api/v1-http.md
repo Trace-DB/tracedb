@@ -256,3 +256,20 @@ That smoke starts `tracedb-server` with an isolated temporary data directory and
 uses the generated client against real HTTP routes for ready, health, catalog,
 metrics, schema apply, direct put, batch ingest, get, scan, query, explain,
 delete, compact, snapshot, restore, and admin jobs.
+
+It also has an endpoint quickstart for an already-running local or
+managed-style HTTP endpoint:
+
+```bash
+cd clients/typescript
+TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run quickstart
+```
+
+`TRACEDB_DATABASE_ID` and `TRACEDB_BRANCH_ID` add managed-routing metadata to
+JSON POST bodies. `TRACEDB_ADMIN_DIR=/absolute/server/side/path` enables
+compact, snapshot, and restore against a server-side local scratch directory;
+without it, the quickstart avoids path-based admin writes while still covering
+readiness, health, catalog, metrics, schema apply, batch ingest, scan, query,
+explain, delete, and admin jobs. The quickstart emits `sql_module:
+not_implemented` and remains endpoint example evidence, not SQL compatibility,
+managed-cloud backup/DR, or benchmark evidence.

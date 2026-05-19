@@ -13,6 +13,7 @@
   "include": [
     "src/client.ts",
     "smoke.ts",
-    "http-smoke.ts"
+    "http-smoke.ts",
+    "quickstart.ts"
   ]
 }

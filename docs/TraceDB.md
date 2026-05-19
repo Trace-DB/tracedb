@@ -121,7 +121,14 @@ run http-smoke` starts a local `tracedb-server` child process with an isolated
 temporary data directory and drives the generated TypeScript client over real
 HTTP routes for ready, health, catalog, metrics, schema apply, direct put, batch
 ingest, get, scan, query, explain, delete, compact, snapshot, restore, and admin
-jobs.
+jobs. `TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run
+quickstart` runs the generated TypeScript client against an existing HTTP
+endpoint. Optional `TRACEDB_DATABASE_ID` / `TRACEDB_BRANCH_ID` add managed
+routing metadata, and optional absolute `TRACEDB_ADMIN_DIR` enables local
+compact/snapshot/restore against server-side scratch paths. The quickstart
+reports `sql_module: not_implemented` and is endpoint example evidence, not a
+package publishing claim, SQL compatibility, managed-cloud backup/DR, or
+benchmark evidence.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

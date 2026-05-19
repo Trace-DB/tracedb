@@ -70,6 +70,26 @@ emits a JSON summary and `typescript client http smoke ok`. This is local
 loopback product evidence for the generated artifact, not a package publishing
 pipeline, managed-cloud health, or benchmark evidence.
 
+Run the endpoint quickstart against an existing local or managed-style HTTP
+endpoint:
+
+```bash
+cd clients/typescript
+TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run quickstart
+```
+
+Optional routing metadata can be supplied with `TRACEDB_DATABASE_ID` and
+`TRACEDB_BRANCH_ID`. Optional local admin coverage can be enabled with
+`TRACEDB_ADMIN_DIR=/absolute/server/side/path`; that path is interpreted by the
+TraceDB server process and is intended for local scratch use. Without
+`TRACEDB_ADMIN_DIR`, the quickstart still checks readiness, health, catalog,
+metrics, schema apply, batch ingest, scan, query, explain, delete, and admin
+jobs. With `TRACEDB_ADMIN_DIR`, it also compacts, snapshots, and restores to a
+separate directory. The quickstart emits a JSON summary and
+`typescript client endpoint quickstart ok`. It is a managed-endpoint example
+for the generated artifact, not package publishing readiness, not SQL
+compatibility, and not benchmark evidence.
+
 Install the local private package tooling and run the typecheck boundary:
 
 ```bash
@@ -78,6 +98,7 @@ npm ci
 npm run typecheck
 npm run smoke
 npm run http-smoke
+npm run quickstart
 npm run check
 ```
 
