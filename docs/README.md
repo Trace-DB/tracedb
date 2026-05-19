@@ -23,6 +23,7 @@ Start with:
 - `README.md`
 - `docs/TraceDB.md`
 - `docs/api/v1-http.md`
+- `docs/api/v1-openapi.json`
 - `docs/Operations/Local Cloud.md`
 
 Local product smoke:

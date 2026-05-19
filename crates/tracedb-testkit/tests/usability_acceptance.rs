@@ -1,7 +1,9 @@
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
@@ -541,6 +543,139 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
     assert!(
         readme.contains("docs/api/v1-http.md"),
         "README should link to the versioned v1 API reference"
+    );
+}
+
+#[test]
+fn generated_openapi_v1_artifact_tracks_current_product_routes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let artifact = root.join("docs/api/v1-openapi.json");
+    let generator = root.join("scripts/generate_openapi_v1.py");
+
+    let check = Command::new("python3")
+        .arg(&generator)
+        .arg("--check")
+        .current_dir(root)
+        .output()
+        .unwrap_or_else(|error| panic!("run {} --check: {error}", generator.display()));
+    assert!(
+        check.status.success(),
+        "OpenAPI artifact should be reproducible from generator\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let spec: Value = serde_json::from_str(
+        &std::fs::read_to_string(&artifact)
+            .unwrap_or_else(|error| panic!("read {}: {error}", artifact.display())),
+    )
+    .expect("parse OpenAPI JSON");
+
+    assert_eq!(spec["openapi"], json!("3.1.0"));
+    assert_eq!(spec["info"]["title"], json!("TraceDB v1 HTTP API"));
+    assert_eq!(spec["info"]["version"], json!("0.1.0-development"));
+    let description = spec["info"]["description"]
+        .as_str()
+        .expect("OpenAPI info.description");
+    for boundary in [
+        "SQL compatibility is not implemented",
+        "Internal TraceDB-only runs are development evidence",
+        "Mutation and admin routes are not retried by the SDK without an explicit idempotency contract",
+    ] {
+        assert!(
+            description.contains(boundary),
+            "OpenAPI description missing boundary: {boundary}"
+        );
+    }
+
+    let mut operation_ids = BTreeSet::new();
+    for (method, path) in [
+        ("get", "/v1/health"),
+        ("get", "/v1/ready"),
+        ("get", "/v1/databases"),
+        ("get", "/v1/branches"),
+        ("get", "/v1/metrics/public-safe"),
+        ("post", "/v1/schema/apply"),
+        ("post", "/v1/insert"),
+        ("post", "/v1/records/put"),
+        ("post", "/v1/records/put-batch"),
+        ("post", "/v1/records/patch"),
+        ("post", "/v1/records/delete"),
+        ("post", "/v1/records/get"),
+        ("post", "/v1/records/scan"),
+        ("post", "/v1/query"),
+        ("post", "/v1/explain"),
+        ("post", "/v1/admin/compact"),
+        ("post", "/v1/admin/snapshot"),
+        ("post", "/v1/admin/restore"),
+        ("get", "/v1/admin/jobs"),
+    ] {
+        let operation = &spec["paths"][path][method];
+        let operation_id = operation["operationId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("OpenAPI artifact missing operationId for {method} {path}"));
+        assert!(
+            operation_ids.insert(operation_id.to_string()),
+            "OpenAPI artifact has duplicate operationId {operation_id}"
+        );
+        assert!(
+            operation["responses"]["200"]["content"]["application/json"]["schema"].is_object(),
+            "OpenAPI artifact missing JSON 200 response for {method} {path}"
+        );
+        for status in ["400", "401", "404", "429", "500", "502", "503"] {
+            assert!(
+                operation["responses"][status]["content"]["application/json"]["schema"].is_object(),
+                "OpenAPI artifact missing JSON {status} response for {method} {path}"
+            );
+        }
+        if method == "post" {
+            assert!(
+                operation["requestBody"]["content"]["application/json"]["schema"].is_object(),
+                "OpenAPI artifact missing JSON request body for {method} {path}"
+            );
+        } else {
+            assert!(
+                operation.get("requestBody").is_none(),
+                "OpenAPI artifact should not declare a request body for {method} {path}"
+            );
+        }
+        assert!(
+            operation["x-tracedb-mutates-state"].is_boolean(),
+            "OpenAPI artifact missing mutation marker for {method} {path}"
+        );
+        assert!(
+            operation["x-tracedb-sdk-safe-retry"].is_boolean(),
+            "OpenAPI artifact missing SDK retry marker for {method} {path}"
+        );
+    }
+
+    for schema_name in [
+        "TableSchema",
+        "RecordInput",
+        "RecordOutput",
+        "RecordGetRequest",
+        "RecordScanRequest",
+        "RecordScanOutput",
+        "RecordPatchRequest",
+        "RecordDeleteRequest",
+        "RecordPutBatchRequest",
+        "HybridQuery",
+        "HybridQueryRow",
+        "HybridExplain",
+    ] {
+        assert!(
+            spec["components"]["schemas"][schema_name].is_object(),
+            "OpenAPI artifact missing component schema {schema_name}"
+        );
+    }
+
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
+    assert!(
+        readme.contains("docs/api/v1-openapi.json"),
+        "README should link to the generated OpenAPI artifact"
     );
 }
 

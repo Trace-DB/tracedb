@@ -1,0 +1,2403 @@
+{
+  "components": {
+    "schemas": {
+      "BranchesResponse": {
+        "additionalProperties": true,
+        "description": "Branch catalog response.",
+        "type": "object"
+      },
+      "CompactResponse": {
+        "additionalProperties": true,
+        "description": "Compact response.",
+        "properties": {
+          "compacted": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "DatabasesResponse": {
+        "additionalProperties": true,
+        "description": "Database catalog response.",
+        "type": "object"
+      },
+      "DeleteResponse": {
+        "additionalProperties": true,
+        "description": "Delete response.",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "epoch": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "EmptyObject": {
+        "additionalProperties": true,
+        "description": "Empty JSON object.",
+        "type": "object"
+      },
+      "EpochResponse": {
+        "additionalProperties": true,
+        "description": "Epoch allocation response.",
+        "properties": {
+          "epoch": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": true,
+        "description": "Error response.",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetRecordResponse": {
+        "additionalProperties": true,
+        "description": "Get record response.",
+        "properties": {
+          "record": {
+            "oneOf": [
+              {
+                "additionalProperties": true,
+                "description": "Record output.",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "HealthResponse": {
+        "additionalProperties": true,
+        "description": "Health response.",
+        "type": "object"
+      },
+      "HybridExplain": {
+        "additionalProperties": true,
+        "description": "Explain response.",
+        "type": "object"
+      },
+      "HybridQuery": {
+        "additionalProperties": true,
+        "description": "Hybrid lexical/vector/scalar query.",
+        "properties": {
+          "explain": {
+            "type": "boolean"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "top_k": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vector": {
+            "items": {
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "HybridQueryRow": {
+        "additionalProperties": true,
+        "description": "Hybrid query result row.",
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Record field map.",
+            "type": "object"
+          },
+          "record_id": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "JobsResponse": {
+        "additionalProperties": true,
+        "description": "Admin job queue response.",
+        "type": "object"
+      },
+      "MetricsResponse": {
+        "additionalProperties": true,
+        "description": "Public-safe metrics response.",
+        "type": "object"
+      },
+      "PutBatchResponse": {
+        "additionalProperties": true,
+        "description": "Batch write response.",
+        "properties": {
+          "epoch": {
+            "type": "integer"
+          },
+          "record_count": {
+            "type": "integer"
+          },
+          "write_timing": {
+            "additionalProperties": true,
+            "description": "Optional write timing attribution.",
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "QueryResponse": {
+        "additionalProperties": true,
+        "description": "Query response.",
+        "type": "object"
+      },
+      "ReadyResponse": {
+        "additionalProperties": true,
+        "description": "Readiness response.",
+        "type": "object"
+      },
+      "RecordDeleteRequest": {
+        "additionalProperties": true,
+        "description": "Delete/tombstone record request.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "tombstone": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RecordGetRequest": {
+        "additionalProperties": true,
+        "description": "Get record request.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RecordInput": {
+        "additionalProperties": true,
+        "description": "TraceDB record input.",
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Record field map.",
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RecordOutput": {
+        "additionalProperties": true,
+        "description": "TraceDB visible record output.",
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Record field map.",
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "RecordPatchRequest": {
+        "additionalProperties": true,
+        "description": "Patch record request.",
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Patch field map.",
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RecordPutBatchRequest": {
+        "additionalProperties": true,
+        "description": "Batch record write.",
+        "properties": {
+          "include_write_timing": {
+            "type": "boolean"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/RecordInput"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RecordPutRequest": {
+        "additionalProperties": true,
+        "description": "Full replacement record write. The server also accepts RecordInput directly.",
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/RecordInput"
+          }
+        },
+        "type": "object"
+      },
+      "RecordScanOutput": {
+        "additionalProperties": true,
+        "description": "Scan output.",
+        "type": "object"
+      },
+      "RecordScanRequest": {
+        "additionalProperties": true,
+        "description": "Scan records request.",
+        "properties": {
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "table": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RestoreRequest": {
+        "additionalProperties": true,
+        "description": "Snapshot restore request.",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RestoreResponse": {
+        "additionalProperties": true,
+        "description": "Restore response.",
+        "properties": {
+          "restored": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SnapshotRequest": {
+        "additionalProperties": true,
+        "description": "Snapshot creation request.",
+        "properties": {
+          "target": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SnapshotResponse": {
+        "additionalProperties": true,
+        "description": "Snapshot response.",
+        "properties": {
+          "snapshot": {
+            "type": "boolean"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TableSchema": {
+        "additionalProperties": true,
+        "description": "TraceDB table schema.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "primary_id_column": {
+            "type": "string"
+          },
+          "scalar_columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tenant_id_column": {
+            "type": "string"
+          },
+          "text_indexed_columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vector_columns": {
+            "items": {
+              "additionalProperties": true,
+              "description": "Vector column schema.",
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "Required by gateway-managed routes; direct local engine development can use any token.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nMutation and admin routes are not retried by the SDK without an explicit idempotency contract.",
+    "title": "TraceDB v1 HTTP API",
+    "version": "0.1.0-development"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/admin/compact": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postAdminCompact",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyObject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Compact local engine state",
+        "tags": [
+          "admin"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/admin/jobs": {
+      "get": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "getAdminJobs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobsResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "List admin jobs",
+        "tags": [
+          "admin"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/admin/restore": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postAdminRestore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Restore snapshot",
+        "tags": [
+          "admin"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/admin/snapshot": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postAdminSnapshot",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Create snapshot",
+        "tags": [
+          "admin"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/branches": {
+      "get": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "getBranches",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BranchesResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "List branches",
+        "tags": [
+          "catalog"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/databases": {
+      "get": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "getDatabases",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabasesResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "List databases",
+        "tags": [
+          "catalog"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/explain": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postExplain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HybridQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HybridExplain"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Explain hybrid query",
+        "tags": [
+          "query"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": true
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Health check",
+        "tags": [
+          "health"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": true
+      }
+    },
+    "/v1/insert": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postInsert",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpochResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Insert record compatibility route",
+        "tags": [
+          "records"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/metrics/public-safe": {
+      "get": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "getMetricsPublicSafe",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Read public-safe metrics",
+        "tags": [
+          "metrics"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/query": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postQuery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HybridQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Run hybrid query",
+        "tags": [
+          "query"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": true
+      }
+    },
+    "/v1/ready": {
+      "get": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "getReady",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Readiness check",
+        "tags": [
+          "readiness"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": true
+      }
+    },
+    "/v1/records/delete": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postRecordsDelete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Delete record",
+        "tags": [
+          "records"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/records/get": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postRecordsGet",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordGetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetRecordResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Get record",
+        "tags": [
+          "records"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": true
+      }
+    },
+    "/v1/records/patch": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postRecordsPatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpochResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Patch record",
+        "tags": [
+          "records"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/records/put": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postRecordsPut",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordPutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpochResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Put record",
+        "tags": [
+          "records"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/records/put-batch": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postRecordsPutBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordPutBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PutBatchResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Put record batch",
+        "tags": [
+          "records"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/records/scan": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postRecordsScan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordScanOutput"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Scan records",
+        "tags": [
+          "records"
+        ],
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-safe-retry": true
+      }
+    },
+    "/v1/schema/apply": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postSchemaApply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TableSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpochResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Apply table schema",
+        "tags": [
+          "schema"
+        ],
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-sdk-safe-retry": false
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Local tracedb-server",
+      "url": "http://127.0.0.1:8090"
+    },
+    {
+      "description": "Current Railway alpha engine",
+      "url": "https://tracedb-engine-production.up.railway.app"
+    }
+  ],
+  "tags": [
+    {
+      "name": "health"
+    },
+    {
+      "name": "readiness"
+    },
+    {
+      "name": "catalog"
+    },
+    {
+      "name": "metrics"
+    },
+    {
+      "name": "schema"
+    },
+    {
+      "name": "records"
+    },
+    {
+      "name": "query"
+    },
+    {
+      "name": "admin"
+    }
+  ],
+  "x-tracedb-generated-by": "scripts/generate_openapi_v1.py"
+}

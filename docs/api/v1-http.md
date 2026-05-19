@@ -16,6 +16,14 @@ This document tracks the current TraceDB `v1` HTTP product surface exposed by
 API reference, not a managed-cloud SLA, not a benchmark claim, and not a SQL
 compatibility claim.
 
+The companion machine-readable artifact is `docs/api/v1-openapi.json`. Regenerate
+or check it from the repo root with:
+
+```bash
+python3 scripts/generate_openapi_v1.py
+python3 scripts/generate_openapi_v1.py --check
+```
+
 ## Boundaries
 
 - SQL compatibility is not implemented.
