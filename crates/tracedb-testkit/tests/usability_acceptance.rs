@@ -879,6 +879,7 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "export class TraceDbClient",
         "export type TraceDbRequestOptions",
         "export class TraceDbHttpError",
+        "export class TraceDbRequestError",
         "Generated schema aliases keep OpenAPI's permissive additionalProperties boundary",
         "export interface TableSchema extends JsonObject",
         "export interface RecordInput extends JsonObject",
@@ -897,6 +898,9 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "source?: string;",
         "Idempotency-Key",
         "SQL compatibility is not implemented.",
+        "idempotency key must be non-empty and must not contain CR or LF",
+        "key.includes(\"\\r\")",
+        "key.includes(\"\\n\")",
         "database_id",
         "branch_id",
         "if (method !== \"GET\")",
@@ -1113,6 +1117,8 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "npm run typecheck",
         "npm run smoke",
         "npm run http-smoke",
+        "TraceDbRequestError",
+        "CR/LF-containing idempotency keys",
         "not a package publishing pipeline",
     ] {
         assert!(

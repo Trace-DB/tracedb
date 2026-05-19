@@ -141,7 +141,8 @@ direct-or-wrapper body as `RecordPutBody`, and `getRecord` responses type
   SDK compatibility claim. Its current runtime smoke uses Node's experimental
   TypeScript strip support. The private package under `clients/typescript`
   exists only for local typechecking plus fake-fetch and real local HTTP smoke
-  validation; it does not declare package publishing fields.
+  validation; it does not declare package publishing fields. It rejects empty or
+  CR/LF-containing `idempotencyKey` request options before `fetchImpl` is called.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
   in-process replay on the engine, and the gateway forwards that header. This
   is not durable across restart/crash and not cross-replica. The Rust SDK can

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   TraceDbClient,
   TraceDbHttpError,
+  TraceDbRequestError,
   type HybridQuery,
   type JsonObject,
   type RecordInput,
@@ -148,5 +149,20 @@ await assert.rejects(
     return true;
   },
 );
+
+for (const invalidKey of ["", "bad\nkey", "bad\rkey"]) {
+  const callCount = calls.length;
+  await assert.rejects(
+    () => client.applySchema(schemaBody, { idempotencyKey: invalidKey }),
+    (error: unknown) => {
+      assert.ok(error instanceof TraceDbRequestError);
+      assert.equal(error.method, "POST");
+      assert.equal(error.path, "/v1/schema/apply");
+      assert.match(error.message, /idempotency key must be non-empty and must not contain CR or LF/);
+      return true;
+    },
+  );
+  assert.equal(calls.length, callCount, "invalid idempotency key should reject before fetch");
+}
 
 console.log("typescript client smoke ok");

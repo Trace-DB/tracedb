@@ -59,6 +59,18 @@ export class TraceDbHttpError extends Error {
   }
 }
 
+export class TraceDbRequestError extends Error {
+  readonly method: TraceDbMethod;
+  readonly path: string;
+
+  constructor(method: TraceDbMethod, path: string, message: string) {
+    super(`TraceDB ${method} ${path} request invalid: ${message}`);
+    this.name = "TraceDbRequestError";
+    this.method = method;
+    this.path = path;
+  }
+}
+
 // Generated schema aliases keep OpenAPI's permissive additionalProperties boundary.
 // Known fields are optional; runtime validation remains server-side.
 
@@ -373,8 +385,9 @@ export class TraceDbClient {
     if (method !== "GET") {
       headers["Content-Type"] = headers["Content-Type"] ?? "application/json";
     }
-    if (options.idempotencyKey) {
-      headers["Idempotency-Key"] = options.idempotencyKey;
+    const idempotencyKey = this.validatedIdempotencyKey(method, path, options);
+    if (idempotencyKey !== undefined) {
+      headers["Idempotency-Key"] = idempotencyKey;
     }
 
     const init: TraceDbFetchInit = { method, headers };
@@ -411,5 +424,24 @@ export class TraceDbClient {
       routed.branch_id = this.branchId;
     }
     return routed;
+  }
+
+  private validatedIdempotencyKey(
+    method: TraceDbMethod,
+    path: string,
+    options: TraceDbRequestOptions,
+  ): string | undefined {
+    const key = options.idempotencyKey;
+    if (key === undefined) {
+      return undefined;
+    }
+    if (key.length === 0 || key.includes("\r") || key.includes("\n")) {
+      throw new TraceDbRequestError(
+        method,
+        path,
+        "idempotency key must be non-empty and must not contain CR or LF",
+      );
+    }
+    return key;
   }
 }

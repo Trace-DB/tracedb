@@ -36,8 +36,11 @@ schema aliases typecheck in representative schema, batch, query, and admin
 calls, verifies GET routes send no body, verifies POST routing metadata is added
 without mutating caller objects, verifies explicit `database_id` / `branch_id`
 request fields win, checks `Idempotency-Key`, and checks `TraceDbHttpError`
-method/path/status/body context. This is runtime smoke coverage for the checked
-artifact, not a package publishing pipeline.
+method/path/status/body context. It also verifies the client rejects empty or
+CR/LF-containing idempotency keys as `TraceDbRequestError` before `fetchImpl` is
+called.
+This is runtime smoke coverage for the checked artifact, not a package
+publishing pipeline.
 
 Run the real local HTTP smoke from the TypeScript package directory:
 
@@ -130,7 +133,9 @@ await managedClient.putBatch({
 Mutation and admin methods accept `TraceDbRequestOptions.idempotencyKey`, which
 sends `Idempotency-Key`. Current TraceDB support is local in-process replay for
 mutation/admin routes. It is not durable across restart/crash, not cross-replica,
-and not exactly-once managed-cloud semantics.
+and not exactly-once managed-cloud semantics. The generated client rejects empty
+or CR/LF-containing idempotency keys before network I/O with
+`TraceDbRequestError`.
 
 ```ts
 await client.deleteRecord(

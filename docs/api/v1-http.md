@@ -51,7 +51,8 @@ node --experimental-strip-types clients/typescript/smoke.ts
   Node's experimental TypeScript strip support. The private package under
   `clients/typescript` exists only for local typechecking plus fake-fetch and
   real local HTTP smoke validation; it does not declare package publishing
-  fields.
+  fields. It rejects empty or CR/LF-containing `idempotencyKey` request options
+  before `fetchImpl` is called.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
@@ -61,6 +62,8 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - The idempotency cache is local-engine-only and in-process. It is not durable
   across restart/crash, not cross-replica, and not a managed-cloud exactly-once
   guarantee.
+- The generated TypeScript client rejects empty or CR/LF-containing
+  `idempotencyKey` options before network I/O as `TraceDbRequestError`.
 - The Rust SDK can manually send `Idempotency-Key` with
   `TraceDbRequestOptions` on individual requests. `safe_retries` still applies
   only to health/read routes. `idempotency_retries` is a separate opt-in policy
