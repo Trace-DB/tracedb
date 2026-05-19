@@ -141,5 +141,8 @@ The SDK quickstart exercises this path and reports `sql_module:
 not_implemented`. Passing `--admin-dir SERVER_SIDE_DIR` also exercises compact,
 snapshot, and restore with typed SDK admin helpers. The argument must be an
 absolute path interpreted by the server process and is intended as local scratch
-space. Restore creates a separate database directory; it does not replace the
-running server's data directory and is not managed-cloud backup/DR semantics.
+space. Passing `--idempotency-retries N` or `TRACEDB_IDEMPOTENCY_RETRIES=N`
+demonstrates the keyed write/admin retry path by generating per-run
+`Idempotency-Key` values for the quickstart's mutation/admin steps. Restore
+creates a separate database directory; it does not replace the running server's
+data directory and is not managed-cloud backup/DR semantics.

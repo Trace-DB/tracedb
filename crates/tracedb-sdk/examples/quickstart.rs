@@ -8,7 +8,9 @@ use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
-use tracedb_sdk::{RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig};
+use tracedb_sdk::{
+    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbRequestOptions,
+};
 
 fn main() {
     if let Err(error) = run() {
@@ -37,10 +39,24 @@ fn run() -> Result<(), Box<dyn Error>> {
     if let Some(safe_retries) = args.safe_retries {
         config = config.with_safe_retries(safe_retries);
     }
+    if let Some(idempotency_retries) = args.idempotency_retries {
+        config = config.with_idempotency_retries(idempotency_retries);
+    }
     let client = TraceDbClient::new(config);
+    let idempotency_keys_enabled = args.idempotency_retries.unwrap_or(0) > 0;
+    let idempotency_run_id = if idempotency_keys_enabled {
+        Some(quickstart_run_suffix()?)
+    } else {
+        None
+    };
 
     let ready = client.ready_typed()?;
-    let schema = client.apply_schema_typed(&schema())?;
+    let schema_request = schema();
+    let schema_options = idempotency_options(idempotency_run_id.as_deref(), "schema-apply");
+    let schema = match schema_options.as_ref() {
+        Some(options) => client.apply_schema_typed_with_options(&schema_request, options)?,
+        None => client.apply_schema_typed(&schema_request)?,
+    };
     let batch = RecordPutBatchRequest::new(vec![
         record(
             "intro",
@@ -50,16 +66,25 @@ fn run() -> Result<(), Box<dyn Error>> {
         ),
         record("ops", "tenant-a", "snapshot restore flow", [0.0, 1.0, 0.0]),
     ]);
-    let ingest = client.put_batch_typed(&batch)?;
+    let ingest_options = idempotency_options(idempotency_run_id.as_deref(), "put-batch");
+    let ingest = match ingest_options.as_ref() {
+        Some(options) => client.put_batch_typed_with_options(&batch, options)?,
+        None => client.put_batch_typed(&batch)?,
+    };
     let scan = client.scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10))?;
     let query_response = client.query_typed(&query(false))?;
     let explain = client.explain_typed(&query(false))?;
-    let delete = client.delete_typed(&RecordDeleteRequest::new("docs", "tenant-a", "ops"))?;
+    let delete_request = RecordDeleteRequest::new("docs", "tenant-a", "ops");
+    let delete_options = idempotency_options(idempotency_run_id.as_deref(), "delete-ops");
+    let delete = match delete_options.as_ref() {
+        Some(options) => client.delete_typed_with_options(&delete_request, options)?,
+        None => client.delete_typed(&delete_request)?,
+    };
     let deleted = client.get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "ops"))?;
     let admin = args
         .admin_dir
         .as_ref()
-        .map(|admin_dir| run_admin_smoke(&client, admin_dir))
+        .map(|admin_dir| run_admin_smoke(&client, admin_dir, idempotency_run_id.as_deref()))
         .transpose()?;
 
     let summary = json!({
@@ -74,6 +99,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         "deleted_hidden": deleted.record.is_none(),
         "snapshot_target": admin.as_ref().map(|admin| admin.snapshot_target.as_str()),
         "restore_target": admin.as_ref().map(|admin| admin.restore_target.as_str()),
+        "idempotency_retries": args.idempotency_retries.unwrap_or(0),
+        "idempotency_keys": idempotency_keys_enabled,
         "sql_module": "not_implemented",
         "steps": {
             "ready": true,
@@ -101,6 +128,7 @@ struct QuickstartArgs {
     branch_id: Option<String>,
     timeout_ms: Option<u64>,
     safe_retries: Option<u8>,
+    idempotency_retries: Option<u8>,
     admin_dir: Option<PathBuf>,
     help: bool,
 }
@@ -119,6 +147,10 @@ impl QuickstartArgs {
             safe_retries: env::var("TRACEDB_SAFE_RETRIES")
                 .ok()
                 .map(|value| parse_safe_retries(&value))
+                .transpose()?,
+            idempotency_retries: env::var("TRACEDB_IDEMPOTENCY_RETRIES")
+                .ok()
+                .map(|value| parse_idempotency_retries(&value))
                 .transpose()?,
             admin_dir: env::var("TRACEDB_ADMIN_DIR")
                 .ok()
@@ -143,6 +175,12 @@ impl QuickstartArgs {
                         "--safe-retries",
                     )?)?)
                 }
+                "--idempotency-retries" => {
+                    args.idempotency_retries = Some(parse_idempotency_retries(&next_value(
+                        &mut cli,
+                        "--idempotency-retries",
+                    )?)?)
+                }
                 "--admin-dir" => {
                     args.admin_dir = Some(parse_admin_dir(
                         &next_value(&mut cli, "--admin-dir")?,
@@ -157,7 +195,7 @@ impl QuickstartArgs {
     }
 
     fn usage() -> &'static str {
-        "Usage: cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8080 [--token TOKEN] [--database-id DB] [--branch-id BRANCH] [--timeout-ms MS] [--safe-retries N] [--admin-dir SERVER_SIDE_DIR]"
+        "Usage: cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8080 [--token TOKEN] [--database-id DB] [--branch-id BRANCH] [--timeout-ms MS] [--safe-retries N] [--idempotency-retries N] [--admin-dir SERVER_SIDE_DIR]"
     }
 }
 
@@ -172,6 +210,7 @@ struct AdminSmokeSummary {
 fn run_admin_smoke(
     client: &TraceDbClient,
     admin_dir: &Path,
+    idempotency_run_id: Option<&str>,
 ) -> Result<AdminSmokeSummary, Box<dyn Error>> {
     let suffix = quickstart_run_suffix()?;
     let snapshot_target = admin_dir.join(format!("quickstart-snapshot-{suffix}"));
@@ -179,12 +218,23 @@ fn run_admin_smoke(
     let snapshot_target = snapshot_target.to_string_lossy().to_string();
     let restore_target = restore_target.to_string_lossy().to_string();
 
-    let compact = client.compact_typed()?;
-    let snapshot = client.snapshot_typed(&SnapshotRequest::new(snapshot_target.clone()))?;
-    let restore = client.restore_typed(&RestoreRequest::new(
-        snapshot_target.clone(),
-        restore_target.clone(),
-    ))?;
+    let compact_options = idempotency_options(idempotency_run_id, "compact");
+    let compact = match compact_options.as_ref() {
+        Some(options) => client.compact_typed_with_options(options)?,
+        None => client.compact_typed()?,
+    };
+    let snapshot_request = SnapshotRequest::new(snapshot_target.clone());
+    let snapshot_options = idempotency_options(idempotency_run_id, "snapshot");
+    let snapshot = match snapshot_options.as_ref() {
+        Some(options) => client.snapshot_typed_with_options(&snapshot_request, options)?,
+        None => client.snapshot_typed(&snapshot_request)?,
+    };
+    let restore_request = RestoreRequest::new(snapshot_target.clone(), restore_target.clone());
+    let restore_options = idempotency_options(idempotency_run_id, "restore");
+    let restore = match restore_options.as_ref() {
+        Some(options) => client.restore_typed_with_options(&restore_request, options)?,
+        None => client.restore_typed(&restore_request)?,
+    };
 
     Ok(AdminSmokeSummary {
         compacted: compact.compacted,
@@ -192,6 +242,12 @@ fn run_admin_smoke(
         restored: restore.restored,
         snapshot_target: snapshot.target,
         restore_target: restore.target,
+    })
+}
+
+fn idempotency_options(run_id: Option<&str>, step: &str) -> Option<TraceDbRequestOptions> {
+    run_id.map(|run_id| {
+        TraceDbRequestOptions::new().with_idempotency_key(format!("quickstart-{run_id}-{step}"))
     })
 }
 
@@ -220,6 +276,12 @@ fn parse_safe_retries(value: &str) -> Result<u8, String> {
     value
         .parse::<u8>()
         .map_err(|_| format!("--safe-retries must fit in 0..=255, got {value}"))
+}
+
+fn parse_idempotency_retries(value: &str) -> Result<u8, String> {
+    value
+        .parse::<u8>()
+        .map_err(|_| format!("--idempotency-retries must fit in 0..=255, got {value}"))
 }
 
 fn parse_admin_dir(value: &str, name: &str) -> Result<PathBuf, String> {

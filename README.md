@@ -44,7 +44,7 @@ TRACEDB_DATA_DIR=/tmp/tracedb-sdk-demo/data TRACEDB_BIND=127.0.0.1:8090 cargo ru
 In a second terminal:
 
 ```bash
-cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000 --safe-retries 1 --admin-dir /tmp/tracedb-sdk-demo/admin
+cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --token dev-token --timeout-ms 5000 --safe-retries 1 --idempotency-retries 1 --admin-dir /tmp/tracedb-sdk-demo/admin
 ```
 
 The SDK example applies schema, batch-ingests records, scans, queries, explains,
@@ -59,7 +59,10 @@ Bounded safe retries are available for SDK health/read routes only. Callers can
 manually attach `Idempotency-Key` per write/admin request with
 `TraceDbRequestOptions`; `TraceDbClientConfig::with_idempotency_retries` can then
 opt into bounded transient retries for those keyed write/admin requests. The SDK
-also exposes typed local admin helpers for compact, snapshot, and restore.
+quickstart demonstrates that path with `--idempotency-retries` /
+`TRACEDB_IDEMPOTENCY_RETRIES`, generating per-run keys for its write/admin
+steps. The SDK also exposes typed local admin helpers for compact, snapshot, and
+restore.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
 machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.

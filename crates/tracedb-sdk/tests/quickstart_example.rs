@@ -24,6 +24,7 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
         .expect("workspace root");
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace_root)
+        .env_remove("TRACEDB_IDEMPOTENCY_RETRIES")
         .args([
             "run",
             "-q",
@@ -39,6 +40,8 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
             "--timeout-ms",
             "5000",
             "--safe-retries",
+            "1",
+            "--idempotency-retries",
             "1",
             "--admin-dir",
             admin_dir.to_str().expect("utf8 admin dir"),
@@ -64,6 +67,8 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["steps"]["compact"], true);
     assert_eq!(summary["steps"]["snapshot"], true);
     assert_eq!(summary["steps"]["restore"], true);
+    assert_eq!(summary["idempotency_retries"], 1);
+    assert_eq!(summary["idempotency_keys"], true);
     let snapshot_target = summary["snapshot_target"]
         .as_str()
         .expect("snapshot target path");
@@ -103,6 +108,8 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
         .expect("workspace root");
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace_root)
+        .env_remove("TRACEDB_ADMIN_DIR")
+        .env_remove("TRACEDB_IDEMPOTENCY_RETRIES")
         .args([
             "run",
             "-q",
@@ -137,8 +144,65 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["steps"]["snapshot"], false);
     assert_eq!(summary["steps"]["restore"], false);
+    assert_eq!(summary["idempotency_retries"], 0);
+    assert_eq!(summary["idempotency_keys"], false);
     assert!(summary["snapshot_target"].is_null());
     assert!(summary["restore_target"].is_null());
+    assert_eq!(summary["sql_module"], "not_implemented");
+}
+
+#[test]
+fn sdk_quickstart_accepts_idempotency_retries_from_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().join("engine");
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace_root)
+        .env_remove("TRACEDB_ADMIN_DIR")
+        .env("TRACEDB_IDEMPOTENCY_RETRIES", "1")
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "tracedb-sdk",
+            "--example",
+            "quickstart",
+            "--",
+            "--url",
+            &format!("http://{addr}"),
+            "--token",
+            "dev-token",
+        ])
+        .output()
+        .expect("run quickstart example");
+
+    assert!(
+        output.status.success(),
+        "quickstart failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("quickstart emits json summary");
+
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["idempotency_retries"], 1);
+    assert_eq!(summary["idempotency_keys"], true);
+    assert_eq!(summary["steps"]["schema_apply"], true);
+    assert_eq!(summary["steps"]["batch_ingest"], true);
+    assert_eq!(summary["steps"]["delete"], true);
+    assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["sql_module"], "not_implemented");
 }
 
@@ -150,6 +214,7 @@ fn sdk_quickstart_rejects_relative_admin_dir_before_http_request() {
         .expect("workspace root");
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace_root)
+        .env_remove("TRACEDB_IDEMPOTENCY_RETRIES")
         .args([
             "run",
             "-q",
@@ -170,6 +235,39 @@ fn sdk_quickstart_rejects_relative_admin_dir_before_http_request() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--admin-dir must be an absolute server-side path"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn sdk_quickstart_rejects_invalid_idempotency_retries_before_http_request() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace_root)
+        .env_remove("TRACEDB_IDEMPOTENCY_RETRIES")
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "tracedb-sdk",
+            "--example",
+            "quickstart",
+            "--",
+            "--url",
+            "http://127.0.0.1:1",
+            "--idempotency-retries",
+            "nope",
+        ])
+        .output()
+        .expect("run quickstart example");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--idempotency-retries must fit in 0..=255"),
         "unexpected stderr: {stderr}"
     );
 }
