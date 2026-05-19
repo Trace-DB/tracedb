@@ -386,7 +386,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     })
     .to_string();
     let batch_request = format!(
-        "POST /v1/records/put-batch HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer secret-token\r\ncontent-length: {}\r\n\r\n{}",
+        "POST /v1/records/put-batch HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer secret-token\r\nidempotency-key: gateway-batch-1\r\ncontent-length: {}\r\n\r\n{}",
         batch_body.len(),
         batch_body
     );
@@ -405,6 +405,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
         "gateway should forward batch ingest route: {batch_response}"
     );
     assert!(batch_response.contains("\"path\":\"/v1/records/put-batch\""));
+    assert!(batch_response.contains("\"idempotency_key\":\"gateway-batch-1\""));
     assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 2);
 
     let mut jobs = JobCatalog::default();
@@ -560,10 +561,21 @@ fn spawn_engine_stub() -> String {
                 .next()
                 .and_then(|line| line.split_whitespace().nth(1))
                 .unwrap_or("/");
+            let idempotency_key = request.lines().skip(1).find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("idempotency-key")
+                    .then(|| value.trim())
+            });
             let body = if path == "/internal/health" {
                 json!({ "ok": true, "service": "tracedb-engine" }).to_string()
             } else {
-                json!({ "ok": true, "engine": true, "path": path }).to_string()
+                json!({
+                    "ok": true,
+                    "engine": true,
+                    "path": path,
+                    "idempotency_key": idempotency_key
+                })
+                .to_string()
             };
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",

@@ -68,5 +68,9 @@ machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`.
   supports bounded safe retries for health/read routes, and non-2xx SDK errors
   include request method, request path, HTTP status, and response body. It is
   not yet a full managed/cloud SDK.
+- HTTP mutation and admin routes accept optional `Idempotency-Key` for local
+  in-process replay on the engine, and the gateway forwards that header. This
+  is not durable across restart/crash, not cross-replica, and does not enable
+  automatic SDK write/admin retries yet.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require external controls and a number to beat.

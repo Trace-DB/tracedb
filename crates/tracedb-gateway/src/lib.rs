@@ -197,6 +197,7 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
     let request_id = header_value(request, "x-request-id")
         .map(str::to_string)
         .unwrap_or_else(next_request_id);
+    let idempotency_key = header_value(request, "idempotency-key").map(str::to_string);
     log_request("tracedb-gateway", &request_id, method, path);
     let body = request
         .split("\r\n\r\n")
@@ -290,6 +291,7 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
                     &body,
                     content_type,
                     Some(&request_id),
+                    idempotency_key.as_deref(),
                 ),
                 Err(GatewayRuntimeError::Unauthorized) => unauthorized(),
                 Err(GatewayRuntimeError::RateLimited) => too_many_requests(),
@@ -389,7 +391,7 @@ pub fn proxy_engine_request(
     body: &[u8],
     content_type: &str,
 ) -> std::io::Result<EngineHttpResponse> {
-    proxy_engine_request_with_id(engine_url, method, path, body, content_type, None)
+    proxy_engine_request_with_id(engine_url, method, path, body, content_type, None, None)
 }
 
 fn proxy_engine_request_with_id(
@@ -399,6 +401,7 @@ fn proxy_engine_request_with_id(
     body: &[u8],
     content_type: &str,
     request_id: Option<&str>,
+    idempotency_key: Option<&str>,
 ) -> std::io::Result<EngineHttpResponse> {
     let target = HttpTarget::parse(engine_url)?;
     let route = target.join(path);
@@ -406,8 +409,11 @@ fn proxy_engine_request_with_id(
     let request_id_header = request_id
         .map(|request_id| format!("x-request-id: {request_id}\r\n"))
         .unwrap_or_default();
+    let idempotency_key_header = idempotency_key
+        .map(|idempotency_key| format!("idempotency-key: {idempotency_key}\r\n"))
+        .unwrap_or_default();
     let request = format!(
-        "{method} {route} HTTP/1.1\r\nhost: {}\r\ncontent-type: {content_type}\r\n{request_id_header}content-length: {}\r\nconnection: close\r\n\r\n{}",
+        "{method} {route} HTTP/1.1\r\nhost: {}\r\ncontent-type: {content_type}\r\n{request_id_header}{idempotency_key_header}content-length: {}\r\nconnection: close\r\n\r\n{}",
         target.host,
         body.len(),
         String::from_utf8_lossy(body)
@@ -426,8 +432,17 @@ fn proxy_or_gateway_error(
     body: &[u8],
     content_type: &str,
     request_id: Option<&str>,
+    idempotency_key: Option<&str>,
 ) -> String {
-    match proxy_engine_request_with_id(engine_url, method, path, body, content_type, request_id) {
+    match proxy_engine_request_with_id(
+        engine_url,
+        method,
+        path,
+        body,
+        content_type,
+        request_id,
+        idempotency_key,
+    ) {
         Ok(response) => response.to_http_response(),
         Err(error) => bad_gateway(format!("engine proxy failed: {error}")),
     }

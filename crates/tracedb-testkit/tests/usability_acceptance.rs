@@ -300,6 +300,95 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
 }
 
 #[test]
+fn http_idempotency_key_replays_write_response_and_rejects_mismatched_body() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let data_dir = temp.path().to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/schema/apply",
+        &serde_json::to_string(&schema()).unwrap(),
+        "\"epoch\":1",
+    );
+
+    let first_body = serde_json::to_string(&record(
+        "a",
+        "tenant-a",
+        "rust database kernel",
+        "draft",
+        [1.0, 0.0, 0.0],
+    ))
+    .unwrap();
+    let first_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/records/put",
+        &[("Idempotency-Key", "put-a-1")],
+        &first_body,
+    );
+    assert!(
+        first_response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected first response: {first_response}"
+    );
+    assert_eq!(http_json_body(&first_response)["epoch"], json!(2));
+
+    let replay_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/records/put",
+        &[("Idempotency-Key", "put-a-1")],
+        &first_body,
+    );
+    assert!(
+        replay_response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected replay response: {replay_response}"
+    );
+    assert_eq!(http_json_body(&replay_response)["epoch"], json!(2));
+
+    let mismatched_body = serde_json::to_string(&record(
+        "b",
+        "tenant-a",
+        "different record under reused key",
+        "draft",
+        [0.0, 1.0, 0.0],
+    ))
+    .unwrap();
+    let mismatch_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/records/put",
+        &[("Idempotency-Key", "put-a-1")],
+        &mismatched_body,
+    );
+    assert!(
+        mismatch_response.starts_with("HTTP/1.1 409 Conflict"),
+        "idempotency key reuse with different body should conflict: {mismatch_response}"
+    );
+    assert!(
+        mismatch_response.contains("idempotency key reused with different request body"),
+        "conflict should explain the idempotency-key violation: {mismatch_response}"
+    );
+
+    let scan_response = http_response(
+        addr,
+        "POST",
+        "/v1/records/scan",
+        r#"{"table":"docs","tenant_id":"tenant-a","limit":10}"#,
+    );
+    let scan = http_json_body(&scan_response);
+    assert_eq!(scan["returned_count"], json!(1));
+    assert_eq!(scan["records"][0]["id"], json!("a"));
+}
+
+#[test]
 fn http_query_explain_false_is_lean_while_explain_surfaces_remain_full() {
     let temp = tempfile::tempdir().expect("tempdir");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -530,7 +619,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
 
     for boundary in [
         "SQL compatibility is not implemented",
-        "Mutation and admin routes are not retried by the SDK without an explicit idempotency contract",
+        "Idempotency-Key supports local in-process replay for mutation and admin routes",
         "Internal TraceDB-only runs are development evidence",
     ] {
         assert!(
@@ -583,7 +672,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     for boundary in [
         "SQL compatibility is not implemented",
         "Internal TraceDB-only runs are development evidence",
-        "Mutation and admin routes are not retried by the SDK without an explicit idempotency contract",
+        "Idempotency-Key supports local in-process replay for mutation and admin routes",
     ] {
         assert!(
             description.contains(boundary),
@@ -650,6 +739,33 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
             operation["x-tracedb-sdk-safe-retry"].is_boolean(),
             "OpenAPI artifact missing SDK retry marker for {method} {path}"
         );
+        if operation["x-tracedb-mutates-state"] == json!(true) {
+            assert!(
+                operation["responses"]["409"]["content"]["application/json"]["schema"].is_object(),
+                "OpenAPI artifact missing JSON 409 idempotency conflict for {method} {path}"
+            );
+            let parameters = operation["parameters"].as_array().unwrap_or_else(|| {
+                panic!("OpenAPI artifact missing parameters for {method} {path}")
+            });
+            assert!(
+                parameters.iter().any(|parameter| {
+                    parameter["name"] == json!("Idempotency-Key")
+                        && parameter["in"] == json!("header")
+                        && parameter["required"] == json!(false)
+                }),
+                "OpenAPI artifact missing Idempotency-Key header for {method} {path}"
+            );
+            assert_eq!(
+                operation["x-tracedb-idempotency-key-supported"],
+                json!(true),
+                "OpenAPI artifact missing idempotency marker for {method} {path}"
+            );
+            assert_eq!(
+                operation["x-tracedb-idempotency-durability"],
+                json!("in-process-local-only"),
+                "OpenAPI artifact should state local-only idempotency durability for {method} {path}"
+            );
+        }
     }
 
     for schema_name in [
@@ -715,9 +831,23 @@ fn assert_http_contains(
 }
 
 fn http_response(addr: std::net::SocketAddr, method: &str, path: &str, body: &str) -> String {
-    let mut stream = TcpStream::connect(addr).unwrap();
+    http_response_with_headers(addr, method, path, &[], body)
+}
+
+fn http_response_with_headers(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> String {
+    let mut stream = connect_with_retry(addr);
+    let extra_headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\n\r\n{}",
         body.len(),
         body
     );
@@ -725,6 +855,25 @@ fn http_response(addr: std::net::SocketAddr, method: &str, path: &str, body: &st
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+fn connect_with_retry(addr: std::net::SocketAddr) -> TcpStream {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match TcpStream::connect(addr) {
+            Ok(stream) => return stream,
+            Err(error) => {
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    panic!(
+        "connect to {addr} after retries: {}",
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "no connection attempt made".to_string())
+    );
 }
 
 fn http_json_body(response: &str) -> Value {

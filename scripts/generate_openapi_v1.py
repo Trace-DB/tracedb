@@ -15,7 +15,7 @@ ARTIFACT = ROOT / "docs" / "api" / "v1-openapi.json"
 BOUNDARIES = [
     "SQL compatibility is not implemented.",
     "Internal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.",
-    "Mutation and admin routes are not retried by the SDK without an explicit idempotency contract.",
+    "Idempotency-Key supports local in-process replay for mutation and admin routes; durable cross-restart idempotency and automatic SDK write retries remain future work.",
 ]
 
 SAFE_RETRY_ROUTES = {
@@ -242,7 +242,27 @@ def route_operation(
         },
         "x-tracedb-mutates-state": mutates_state,
         "x-tracedb-sdk-safe-retry": (method, path) in SAFE_RETRY_ROUTES,
+        "x-tracedb-idempotency-key-supported": mutates_state,
     }
+    if mutates_state:
+        operation["parameters"] = [
+            {
+                "name": "Idempotency-Key",
+                "in": "header",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": (
+                    "Optional local in-process replay key scoped by method and path. "
+                    "Same key plus same raw request body replays the first successful response; "
+                    "same key with a different body returns 409 Conflict."
+                ),
+            }
+        ]
+        operation["x-tracedb-idempotency-durability"] = "in-process-local-only"
+        operation["responses"]["409"] = {
+            "description": "Idempotency key was reused with a different request body.",
+            "content": {"application/json": {"schema": schema_ref("ErrorResponse")}},
+        }
     if request_schema:
         operation["requestBody"] = {
             "required": True,

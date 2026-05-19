@@ -33,7 +33,12 @@ python3 scripts/generate_openapi_v1.py --check
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
-- Mutation and admin routes are not retried by the SDK without an explicit idempotency contract.
+- Idempotency-Key supports local in-process replay for mutation and admin routes.
+  Same key plus same method/path/raw body replays the first successful
+  response; same key with a different body returns `409 Conflict`.
+- The idempotency cache is local-engine-only and in-process. It is not durable
+  across restart/crash, not cross-replica, and not a managed-cloud exactly-once
+  guarantee. Automatic SDK write/admin retries remain future work.
 - Gateway metering, request logging, and rate limiting may still observe each
   HTTP attempt.
 
@@ -72,8 +77,9 @@ Local compatibility aliases also exist for development: `GET /health`,
 | `POST /v1/records/patch` | `RecordPatchRequest`: `table`, `tenant_id`, `id`, and patch `fields`. | `{ "epoch": number }`. |
 | `POST /v1/records/delete` | `RecordDeleteRequest`: `table`, `tenant_id`, `id`, and optional `tombstone`. | `{ "deleted": true, "epoch": number }`. |
 
-Write routes allocate epochs and mutate TraceDB state. They are not retry-safe
-without a future idempotency contract.
+Write routes allocate epochs and mutate TraceDB state. They accept optional
+`Idempotency-Key` for local in-process replay, but the SDK still does not
+automatically retry writes.
 
 ## Reads And Retrieval
 
@@ -99,7 +105,9 @@ claims.
 | `GET /v1/admin/jobs` | No body. | Idle job queue state for segment compaction, snapshot creation, and feature indexing. |
 
 Admin routes can mutate durable files or create out-of-band filesystem state.
-They are not retried by the SDK without a future idempotency contract.
+They accept optional `Idempotency-Key` for local in-process replay, but the
+contract is not durable across restart/crash and the SDK still does not
+automatically retry admin requests.
 
 ## Minimal Product Path
 

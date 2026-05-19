@@ -435,7 +435,7 @@
     }
   },
   "info": {
-    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nMutation and admin routes are not retried by the SDK without an explicit idempotency contract.",
+    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nIdempotency-Key supports local in-process replay for mutation and admin routes; durable cross-restart idempotency and automatic SDK write retries remain future work.",
     "title": "TraceDB v1 HTTP API",
     "version": "0.1.0-development"
   },
@@ -445,6 +445,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postAdminCompact",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -496,6 +507,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -541,6 +562,8 @@
         "tags": [
           "admin"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -635,6 +658,7 @@
         "tags": [
           "admin"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -643,6 +667,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postAdminRestore",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -694,6 +729,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -739,6 +784,8 @@
         "tags": [
           "admin"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -747,6 +794,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postAdminSnapshot",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -798,6 +856,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -843,6 +911,8 @@
         "tags": [
           "admin"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -937,6 +1007,7 @@
         "tags": [
           "catalog"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -1031,6 +1102,7 @@
         "tags": [
           "catalog"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -1135,6 +1207,7 @@
         "tags": [
           "query"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": true
       }
@@ -1229,6 +1302,7 @@
         "tags": [
           "health"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": true
       }
@@ -1237,6 +1311,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postInsert",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1288,6 +1373,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -1333,6 +1428,8 @@
         "tags": [
           "records"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -1427,6 +1524,7 @@
         "tags": [
           "metrics"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -1531,6 +1629,7 @@
         "tags": [
           "query"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": true
       }
@@ -1625,6 +1724,7 @@
         "tags": [
           "readiness"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": true
       }
@@ -1633,6 +1733,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postRecordsDelete",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1684,6 +1795,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -1729,6 +1850,8 @@
         "tags": [
           "records"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -1833,6 +1956,7 @@
         "tags": [
           "records"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": true
       }
@@ -1841,6 +1965,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postRecordsPatch",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1892,6 +2027,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -1937,6 +2082,8 @@
         "tags": [
           "records"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -1945,6 +2092,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postRecordsPut",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1996,6 +2154,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -2041,6 +2209,8 @@
         "tags": [
           "records"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -2049,6 +2219,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postRecordsPutBatch",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2100,6 +2281,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -2145,6 +2336,8 @@
         "tags": [
           "records"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }
@@ -2249,6 +2442,7 @@
         "tags": [
           "records"
         ],
+        "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
         "x-tracedb-sdk-safe-retry": true
       }
@@ -2257,6 +2451,17 @@
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postSchemaApply",
+        "parameters": [
+          {
+            "description": "Optional local in-process replay key scoped by method and path. Same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2308,6 +2513,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -2353,6 +2568,8 @@
         "tags": [
           "schema"
         ],
+        "x-tracedb-idempotency-durability": "in-process-local-only",
+        "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-safe-retry": false
       }

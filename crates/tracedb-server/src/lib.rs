@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
@@ -15,22 +16,53 @@ use tracedb_query::{
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+type IdempotencyCache = Arc<Mutex<HashMap<IdempotencyCacheKey, IdempotencyEntry>>>;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct IdempotencyCacheKey {
+    method: String,
+    path: String,
+    key: String,
+}
+
+impl IdempotencyCacheKey {
+    fn new(method: &str, path: &str, key: &str) -> Self {
+        Self {
+            method: method.to_string(),
+            path: path.to_string(),
+            key: key.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct IdempotencyEntry {
+    body: String,
+    response: String,
+}
+
 pub fn serve(db_path: impl AsRef<Path>, bind: &str) -> std::io::Result<()> {
     let db = TraceDb::open(db_path).map_err(to_io_error)?;
     let db = Arc::new(Mutex::new(db));
+    let idempotency_cache = Arc::new(Mutex::new(HashMap::new()));
     let listener = TcpListener::bind(bind)?;
     for stream in listener.incoming() {
         let stream = stream?;
         let db = Arc::clone(&db);
+        let idempotency_cache = Arc::clone(&idempotency_cache);
         thread::spawn(move || {
-            let _ = handle(stream, db);
+            let _ = handle(stream, db, idempotency_cache);
         });
     }
     Ok(())
 }
 
-fn handle(mut stream: TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Result<()> {
-    let response = match handle_inner(&mut stream, db) {
+fn handle(
+    mut stream: TcpStream,
+    db: Arc<Mutex<TraceDb>>,
+    idempotency_cache: IdempotencyCache,
+) -> std::io::Result<()> {
+    let response = match handle_inner(&mut stream, db, idempotency_cache) {
         Ok(response) => response,
         Err(error) => bad_request(error.to_string()),
     };
@@ -38,7 +70,11 @@ fn handle(mut stream: TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Result<()>
     stream.flush()
 }
 
-fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Result<String> {
+fn handle_inner(
+    stream: &mut TcpStream,
+    db: Arc<Mutex<TraceDb>>,
+    idempotency_cache: IdempotencyCache,
+) -> std::io::Result<String> {
     let request_start = Instant::now();
     let request = read_request(stream)?;
     let read_ms = elapsed_ms(request_start);
@@ -56,6 +92,26 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
         .nth(1)
         .or_else(|| request.split("\n\n").nth(1))
         .unwrap_or_default();
+    let idempotency_cache_key = header_value(&request, "idempotency-key")
+        .filter(|key| !key.is_empty())
+        .filter(|_| supports_http_idempotency(method, path))
+        .map(|key| IdempotencyCacheKey::new(method, path, key));
+    let mut idempotency_cache_guard = idempotency_cache_key
+        .as_ref()
+        .map(|_| idempotency_cache.lock().unwrap());
+    if let (Some(cache_key), Some(cache)) = (
+        idempotency_cache_key.as_ref(),
+        idempotency_cache_guard.as_ref(),
+    ) {
+        if let Some(entry) = cache.get(cache_key).cloned() {
+            if entry.body == body {
+                return Ok(entry.response);
+            }
+            return Ok(conflict(
+                "idempotency key reused with different request body",
+            ));
+        }
+    }
 
     let response = match (method, path) {
         ("GET", "/health") | ("GET", "/internal/health") => {
@@ -290,7 +346,35 @@ fn handle_inner(stream: &mut TcpStream, db: Arc<Mutex<TraceDb>>) -> std::io::Res
         })),
         _ => not_found(),
     };
+    if let (Some(cache_key), Some(cache)) =
+        (idempotency_cache_key, idempotency_cache_guard.as_mut())
+    {
+        if response.starts_with("HTTP/1.1 200 OK") {
+            cache.insert(
+                cache_key,
+                IdempotencyEntry {
+                    body: body.to_string(),
+                    response: response.clone(),
+                },
+            );
+        }
+    }
     Ok(response)
+}
+
+fn supports_http_idempotency(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/v1/schema/apply")
+            | ("POST", "/v1/insert")
+            | ("POST", "/v1/records/put")
+            | ("POST", "/v1/records/put-batch")
+            | ("POST", "/v1/records/patch")
+            | ("POST", "/v1/records/delete")
+            | ("POST", "/v1/admin/compact")
+            | ("POST", "/v1/admin/snapshot")
+            | ("POST", "/v1/admin/restore")
+    )
 }
 
 fn parse_record_put_body(body: &str) -> std::io::Result<RecordInput> {
@@ -469,6 +553,15 @@ fn bad_request(message: String) -> String {
     let body = json!({ "error": message }).to_string();
     format!(
         "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
+fn conflict(message: impl Into<String>) -> String {
+    let body = json!({ "error": message.into() }).to_string();
+    format!(
+        "HTTP/1.1 409 Conflict\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
         body
     )
