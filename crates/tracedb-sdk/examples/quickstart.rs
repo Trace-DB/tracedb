@@ -51,6 +51,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
 
     let ready = client.ready_typed()?;
+    let health = client.health_typed()?;
+    let databases = client.list_databases_typed()?;
+    let branches = client.list_branches_typed()?;
+    let metrics = client.public_safe_metrics_typed()?;
+    let jobs = client.list_admin_jobs_typed()?;
     let schema_request = schema();
     let schema_options = idempotency_options(idempotency_run_id.as_deref(), "schema-apply");
     let schema = match schema_options.as_ref() {
@@ -97,6 +102,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     let summary = json!({
         "ok": true,
         "server_ready": ready.ready,
+        "health_ok": health.ok,
+        "database_count": databases.databases.len(),
+        "branch_count": branches.branches.len(),
+        "metrics_latest_epoch": metrics.latest_epoch,
+        "admin_job_count": jobs.jobs.len(),
         "schema_epoch": schema.epoch,
         "records_inserted": ingest.record_count,
         "patched": patch.epoch > schema.epoch,
@@ -117,6 +127,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         "sql_module": "not_implemented",
         "steps": {
             "ready": true,
+            "health": health.ok,
+            "catalog": true,
+            "metrics": metrics.latest_epoch.is_some(),
             "schema_apply": true,
             "batch_ingest": true,
             "patch": true,
@@ -124,6 +137,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             "query": true,
             "explain": true,
             "delete": true,
+            "jobs": true,
             "compact": admin.as_ref().map(|admin| admin.compacted).unwrap_or(false),
             "snapshot": admin.as_ref().map(|admin| admin.snapshot).unwrap_or(false),
             "restore": admin.as_ref().map(|admin| admin.restored).unwrap_or(false),

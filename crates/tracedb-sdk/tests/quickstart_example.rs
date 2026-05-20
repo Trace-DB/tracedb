@@ -54,6 +54,9 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
         serde_json::from_slice(&output.stdout).expect("quickstart emits json summary");
 
     assert_eq!(summary["ok"], true);
+    assert_eq!(summary["steps"]["health"], true);
+    assert_eq!(summary["steps"]["catalog"], true);
+    assert_eq!(summary["steps"]["metrics"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
@@ -63,6 +66,12 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["steps"]["compact"], true);
     assert_eq!(summary["steps"]["snapshot"], true);
     assert_eq!(summary["steps"]["restore"], true);
+    assert_eq!(summary["steps"]["jobs"], true);
+    assert_eq!(summary["health_ok"], true);
+    assert!(summary["database_count"].as_u64().is_some());
+    assert!(summary["branch_count"].as_u64().is_some());
+    assert!(summary["metrics_latest_epoch"].as_u64().is_some());
+    assert!(summary["admin_job_count"].as_u64().is_some());
     assert_eq!(summary["idempotency_retries"], 1);
     assert_eq!(summary["idempotency_keys"], true);
     assert_eq!(summary["patched"], true);
@@ -128,6 +137,9 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
         serde_json::from_slice(&output.stdout).expect("quickstart emits json summary");
 
     assert_eq!(summary["ok"], true);
+    assert_eq!(summary["steps"]["health"], true);
+    assert_eq!(summary["steps"]["catalog"], true);
+    assert_eq!(summary["steps"]["metrics"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
@@ -137,6 +149,12 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["steps"]["snapshot"], false);
     assert_eq!(summary["steps"]["restore"], false);
+    assert_eq!(summary["steps"]["jobs"], true);
+    assert_eq!(summary["health_ok"], true);
+    assert!(summary["database_count"].as_u64().is_some());
+    assert!(summary["branch_count"].as_u64().is_some());
+    assert!(summary["metrics_latest_epoch"].as_u64().is_some());
+    assert!(summary["admin_job_count"].as_u64().is_some());
     assert_eq!(summary["idempotency_retries"], 0);
     assert_eq!(summary["idempotency_keys"], false);
     assert_eq!(summary["patched"], true);
@@ -188,11 +206,16 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["idempotency_retries"], 1);
     assert_eq!(summary["idempotency_keys"], true);
+    assert_eq!(summary["steps"]["health"], true);
+    assert_eq!(summary["steps"]["catalog"], true);
+    assert_eq!(summary["steps"]["metrics"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["delete"], true);
     assert_eq!(summary["steps"]["compact"], false);
+    assert_eq!(summary["steps"]["jobs"], true);
+    assert_eq!(summary["health_ok"], true);
     assert_eq!(summary["sql_module"], "not_implemented");
 }
 

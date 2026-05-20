@@ -554,6 +554,9 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["server_ready"], true);
     assert_eq!(sdk_summary["idempotency_retries"], 1);
     assert_eq!(sdk_summary["idempotency_keys"], true);
+    assert_eq!(sdk_summary["steps"]["health"], true);
+    assert_eq!(sdk_summary["steps"]["catalog"], true);
+    assert_eq!(sdk_summary["steps"]["metrics"], true);
     assert_eq!(sdk_summary["steps"]["schema_apply"], true);
     assert_eq!(sdk_summary["steps"]["batch_ingest"], true);
     assert_eq!(sdk_summary["steps"]["patch"], true);
@@ -562,6 +565,12 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["steps"]["compact"], true);
     assert_eq!(sdk_summary["steps"]["snapshot"], true);
     assert_eq!(sdk_summary["steps"]["restore"], true);
+    assert_eq!(sdk_summary["steps"]["jobs"], true);
+    assert_eq!(sdk_summary["health_ok"], true);
+    assert!(sdk_summary["database_count"].as_u64().is_some());
+    assert!(sdk_summary["branch_count"].as_u64().is_some());
+    assert!(sdk_summary["metrics_latest_epoch"].as_u64().is_some());
+    assert!(sdk_summary["admin_job_count"].as_u64().is_some());
     assert_eq!(sdk_summary["patched"], true);
     assert_eq!(sdk_summary["patched_status"], "reviewed");
     assert_eq!(sdk_summary["sql_module"], "not_implemented");

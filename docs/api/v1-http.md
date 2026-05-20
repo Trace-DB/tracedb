@@ -352,12 +352,13 @@ secret-bearing deployed checks avoid command line token arguments and lets
 freshly started local endpoints settle before the full diagnostic run.
 
 The SDK quickstart exercises this path and reports `sql_module:
-not_implemented`. It uses typed SDK calls for schema apply, batch ingest, patch,
-scan, query, explain, delete, and deleted-record hiding; the patch step verifies
-patched visibility before later reads and delete. Passing `--admin-dir
-SERVER_SIDE_DIR` also exercises compact, snapshot, and restore with typed SDK
-admin helpers. The argument must be an absolute path interpreted by the server
-process and is intended as local scratch space. Passing `--idempotency-retries N`
+not_implemented`. It uses typed SDK calls for readiness, health, catalog,
+public-safe metrics, admin jobs, schema apply, batch ingest, patch, scan, query,
+explain, delete, and deleted-record hiding; the patch step verifies patched
+visibility before later reads and delete. Passing `--admin-dir SERVER_SIDE_DIR`
+also exercises compact, snapshot, and restore with typed SDK admin helpers. The
+argument must be an absolute path interpreted by the server process and is
+intended as local scratch space. Passing `--idempotency-retries N`
 or `TRACEDB_IDEMPOTENCY_RETRIES=N` demonstrates the keyed write/admin retry path
 by generating per-run `Idempotency-Key` values for the quickstart's
 mutation/admin steps. Restore creates a separate database directory; it does not
