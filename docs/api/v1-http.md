@@ -236,6 +236,18 @@ string paths.
 
 ## Minimal Product Path
 
+Run the consolidated local product regression gate with one command:
+
+```bash
+cargo run -p tracedb-cli -- product-regression
+```
+
+The gate emits one `local-product-regression` JSON summary for the embedded
+demo/verify path, local HTTP SDK demo, endpoint doctor, Rust SDK quickstart,
+and generated TypeScript check/http/gateway smoke paths. It is local product
+regression evidence only: SQL remains not implemented, managed-cloud is not
+checked, and benchmarks are not checked.
+
 Run the complete local HTTP plus Rust SDK smoke with one command:
 
 ```bash

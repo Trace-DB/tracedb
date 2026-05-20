@@ -48,6 +48,20 @@ uses keyed SDK write/admin retries for its mutation/admin steps and still
 reports `sql_module: not_implemented`. This is local product-path evidence, not
 managed-cloud deployment or backup/DR evidence.
 
+Run the consolidated local product regression gate:
+
+```bash
+cargo run -p tracedb-cli -- product-regression
+```
+
+The gate emits one JSON summary with `mode: "local-product-regression"`,
+`scope: "local_only"`, and explicit `not_checked` markers for managed-cloud and
+benchmark claims. It orchestrates the embedded demo/verify path, `http-demo`,
+local `doctor http`, the Rust SDK quickstart, and generated TypeScript
+check/http/gateway smoke paths. It is local product regression evidence, not
+SQL compatibility, managed-cloud proof, or benchmark evidence. Use
+`--skip-typescript` when the local Node tooling is not installed.
+
 Run the SDK quickstart against a local HTTP server:
 
 ```bash

@@ -286,6 +286,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "http-demo" => {
             run_http_demo(&data_dir)?;
         }
+        "product-regression" => {
+            let config = parse_product_regression_config(&args[1..])?;
+            run_product_regression(config)?;
+        }
         "compose" => {
             let action = args.get(1).map(String::as_str).unwrap_or("status");
             run_compose(action, &args[2..])?;
@@ -1005,6 +1009,336 @@ fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+struct ProductRegressionConfig {
+    data_root: PathBuf,
+    cleanup_data: bool,
+    keep_data: bool,
+    skip_typescript: bool,
+}
+
+fn parse_product_regression_config(
+    args: &[String],
+) -> Result<ProductRegressionConfig, Box<dyn std::error::Error>> {
+    let mut data_root = None;
+    let mut keep_data = false;
+    let mut skip_typescript = false;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--data-root" => {
+                idx += 1;
+                data_root = Some(PathBuf::from(
+                    args.get(idx).ok_or("missing value for --data-root")?,
+                ));
+            }
+            "--keep-data" => keep_data = true,
+            "--skip-typescript" => skip_typescript = true,
+            other => return Err(format!("unknown product-regression option {other}").into()),
+        }
+        idx += 1;
+    }
+    let cleanup_data = data_root.is_none() && !keep_data;
+    let data_root = data_root.unwrap_or_else(default_product_regression_root);
+    Ok(ProductRegressionConfig {
+        data_root,
+        cleanup_data,
+        keep_data,
+        skip_typescript,
+    })
+}
+
+fn default_product_regression_root() -> PathBuf {
+    let suffix = product_regression_run_id().unwrap_or_else(|_| std::process::id().to_string());
+    env::temp_dir().join(format!("tracedb-product-regression-{suffix}"))
+}
+
+fn run_product_regression(
+    config: ProductRegressionConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if config.data_root.exists() && config.cleanup_data {
+        fs::remove_dir_all(&config.data_root)?;
+    }
+    fs::create_dir_all(&config.data_root)?;
+
+    let mut steps = serde_json::Map::new();
+    let mut local_server_url = None;
+    let cli = env::current_exe()?;
+    let workspace = product_regression_workspace_root()?;
+    let embedded_dir = config
+        .data_root
+        .join("embedded")
+        .to_string_lossy()
+        .to_string();
+    let http_demo_dir = config
+        .data_root
+        .join("http-demo")
+        .to_string_lossy()
+        .to_string();
+
+    for (name, command) in [
+        (
+            "embedded_demo",
+            product_regression_cli_command(
+                &cli,
+                vec!["--data".into(), embedded_dir.clone(), "demo".into()],
+            ),
+        ),
+        (
+            "embedded_verify",
+            product_regression_cli_command(
+                &cli,
+                vec!["--data".into(), embedded_dir.clone(), "verify".into()],
+            ),
+        ),
+        (
+            "http_demo",
+            product_regression_cli_command(
+                &cli,
+                vec!["--data".into(), http_demo_dir.clone(), "http-demo".into()],
+            ),
+        ),
+    ] {
+        let step = run_product_regression_step(name, command);
+        let ok = product_regression_step_ok(&step);
+        steps.insert(name.to_string(), step);
+        if !ok {
+            return finish_product_regression(config, local_server_url, steps);
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let bind = listener.local_addr()?;
+    drop(listener);
+    let url = format!("http://{bind}");
+    local_server_url = Some(url.clone());
+    let mut server_step_failed = false;
+    {
+        let _server =
+            LocalServerChild::start(&config.data_root.join("server-data"), &bind.to_string())?;
+
+        let doctor = product_regression_cli_command(
+            &cli,
+            vec![
+                "doctor".into(),
+                "http".into(),
+                "--url".into(),
+                url.clone(),
+                "--token".into(),
+                "dev-token".into(),
+                "--timeout-ms".into(),
+                "1000".into(),
+                "--safe-retries".into(),
+                "1".into(),
+                "--wait-ready-ms".into(),
+                "5000".into(),
+                "--database-id".into(),
+                "db_local".into(),
+                "--branch-id".into(),
+                "db_local:main".into(),
+            ],
+        );
+        let step = run_product_regression_step("local_doctor", doctor);
+        let ok = product_regression_step_ok(&step);
+        steps.insert("local_doctor".to_string(), step);
+        if !ok {
+            server_step_failed = true;
+        }
+
+        if !server_step_failed {
+            let admin_dir = config.data_root.join("sdk-admin");
+            fs::create_dir_all(&admin_dir)?;
+            let admin_dir_string = admin_dir.to_string_lossy().to_string();
+            let mut sdk = Command::new("cargo");
+            sdk.current_dir(&workspace).args([
+                "run",
+                "-q",
+                "-p",
+                "tracedb-sdk",
+                "--example",
+                "quickstart",
+                "--",
+                "--url",
+                &url,
+                "--token",
+                "dev-token",
+                "--timeout-ms",
+                "5000",
+                "--safe-retries",
+                "1",
+                "--idempotency-retries",
+                "1",
+                "--admin-dir",
+                &admin_dir_string,
+            ]);
+            let step = run_product_regression_step("rust_sdk_quickstart", sdk);
+            let ok = product_regression_step_ok(&step);
+            steps.insert("rust_sdk_quickstart".to_string(), step);
+            if !ok {
+                server_step_failed = true;
+            }
+        }
+    }
+    if server_step_failed {
+        return finish_product_regression(config, local_server_url, steps);
+    }
+
+    if !config.skip_typescript {
+        let typescript_dir = workspace.join("clients/typescript");
+        for (name, args) in [
+            ("typescript_check", ["run", "check"]),
+            ("typescript_http_smoke", ["run", "http-smoke"]),
+            ("typescript_gateway_smoke", ["run", "gateway-smoke"]),
+        ] {
+            let mut command = Command::new("npm");
+            command.current_dir(&typescript_dir).args(args);
+            let step = run_product_regression_step(name, command);
+            let ok = product_regression_step_ok(&step);
+            steps.insert(name.to_string(), step);
+            if !ok {
+                return finish_product_regression(config, local_server_url, steps);
+            }
+        }
+    }
+
+    finish_product_regression(config, local_server_url, steps)
+}
+
+fn finish_product_regression(
+    config: ProductRegressionConfig,
+    local_server_url: Option<String>,
+    steps: serde_json::Map<String, Value>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ok = steps.values().all(product_regression_step_ok);
+    let data_root = config.data_root.display().to_string();
+    let summary = json!({
+        "ok": ok,
+        "mode": "local-product-regression",
+        "scope": "local_only",
+        "data_root": data_root,
+        "data_cleanup": config.cleanup_data,
+        "keep_data": config.keep_data,
+        "local_server_url": local_server_url,
+        "typescript_enabled": !config.skip_typescript,
+        "claims": {
+            "sql_module": "not_implemented",
+            "managed_cloud": "not_checked",
+            "benchmark": "not_checked",
+        },
+        "steps": steps,
+    });
+    if config.cleanup_data {
+        let _ = fs::remove_dir_all(&config.data_root);
+    }
+    print_json(summary);
+    if ok {
+        Ok(())
+    } else {
+        Err("product-regression local product gate failed".into())
+    }
+}
+
+fn product_regression_cli_command(cli: &std::path::Path, args: Vec<String>) -> Command {
+    let mut command = Command::new(cli);
+    command.args(args);
+    command
+}
+
+fn run_product_regression_step(name: &str, mut command: Command) -> Value {
+    let command_display = product_regression_command_display(&command);
+    let cwd = command
+        .get_current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| {
+            env::current_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| ".".to_string())
+        });
+    let start = Instant::now();
+    match command.output() {
+        Ok(output) => {
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let mut value = json!({
+                "name": name,
+                "ok": output.status.success(),
+                "command": command_display,
+                "cwd": cwd,
+                "exit_code": output.status.code(),
+                "duration_ms": duration_ms,
+            });
+            if let Some(summary) = parse_product_regression_json(&stdout) {
+                value["summary"] = summary;
+            }
+            if !output.status.success() {
+                value["stdout_tail"] = json!(tail(&stdout, 4_000));
+                value["stderr_tail"] = json!(tail(&stderr, 4_000));
+            }
+            value
+        }
+        Err(error) => json!({
+            "name": name,
+            "ok": false,
+            "command": command_display,
+            "cwd": cwd,
+            "spawn_error": error.to_string(),
+        }),
+    }
+}
+
+fn product_regression_command_display(command: &Command) -> String {
+    let mut parts = vec![command.get_program().to_string_lossy().to_string()];
+    parts.extend(
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string()),
+    );
+    parts.join(" ")
+}
+
+fn parse_product_regression_json(stdout: &str) -> Option<Value> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Some(value);
+    }
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    if end < start {
+        return None;
+    }
+    serde_json::from_str(&trimmed[start..=end]).ok()
+}
+
+fn product_regression_step_ok(step: &Value) -> bool {
+    step.get("ok").and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn product_regression_workspace_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    Ok(manifest
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or("could not find TraceDB workspace root")?
+        .to_path_buf())
+}
+
+fn product_regression_run_id() -> Result<String, std::time::SystemTimeError> {
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    Ok(format!("{}-{}", std::process::id(), elapsed.as_millis()))
+}
+
+fn tail(text: &str, limit: usize) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.len() <= limit {
+        text.to_string()
+    } else {
+        chars[chars.len() - limit..].iter().collect()
+    }
+}
+
 fn wait_for_ready(client: &TraceDbClient) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_error = None;
     for _ in 0..50 {
@@ -1171,6 +1505,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }

@@ -100,6 +100,57 @@ fn http_demo_command_exercises_local_http_sdk_product_path() {
 }
 
 #[test]
+fn product_regression_runs_local_product_gate() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(temp.path())
+        .output()
+        .expect("run tracedb product-regression");
+    assert!(
+        output.status.success(),
+        "product-regression failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("product-regression json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    for step in [
+        "embedded_demo",
+        "embedded_verify",
+        "http_demo",
+        "local_doctor",
+        "rust_sdk_quickstart",
+        "typescript_check",
+        "typescript_http_smoke",
+        "typescript_gateway_smoke",
+    ] {
+        assert_eq!(
+            summary["steps"][step]["ok"], true,
+            "product-regression step {step} should pass: {summary}"
+        );
+    }
+    assert_eq!(
+        summary["steps"]["embedded_demo"]["summary"]["sql_module"],
+        "not_implemented"
+    );
+    assert_eq!(
+        summary["steps"]["http_demo"]["summary"]["sql_module"],
+        "not_implemented"
+    );
+    assert_eq!(
+        summary["steps"]["local_doctor"]["summary"]["ready_wait"]["ok"],
+        true
+    );
+}
+
+#[test]
 fn doctor_http_reports_endpoint_diagnostics() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bind = free_loopback_bind();

@@ -109,6 +109,18 @@ quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local`,
 managed-routing metadata on the generated client against the local gateway
 path; it is still not managed-cloud proof or benchmark evidence.
 
+The repo-level local product regression gate also runs this generated client
+surface:
+
+```bash
+cargo run -p tracedb-cli -- product-regression
+```
+
+That gate runs `npm run check`, `npm run http-smoke`, and
+`npm run gateway-smoke` as local product regression evidence only. It does not
+claim package publishing readiness, SQL compatibility, managed-cloud proof, or
+benchmark results.
+
 Install the local private package tooling and run the typecheck boundary:
 
 ```bash

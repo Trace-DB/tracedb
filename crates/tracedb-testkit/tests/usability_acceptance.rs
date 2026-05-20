@@ -738,6 +738,58 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
 }
 
 #[test]
+fn local_product_regression_runner_declares_current_product_gate() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let source_path = root.join("crates/tracedb-cli/src/main.rs");
+    let source = std::fs::read_to_string(&source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+
+    for token in [
+        "product-regression",
+        "local-product-regression",
+        "embedded_demo",
+        "embedded_verify",
+        "http_demo",
+        "local_doctor",
+        "rust_sdk_quickstart",
+        "typescript_check",
+        "typescript_http_smoke",
+        "typescript_gateway_smoke",
+        "TRACEDB_WAIT_READY_MS",
+        "local_only",
+        "not_implemented",
+        "not_checked",
+    ] {
+        assert!(
+            source.contains(token),
+            "product smoke runner should include {token}"
+        );
+    }
+
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
+    let docs_readme =
+        std::fs::read_to_string(root.join("docs/README.md")).expect("read docs README");
+    let api_doc = std::fs::read_to_string(root.join("docs/api/v1-http.md")).expect("read API doc");
+    for (name, markdown) in [
+        ("README", readme),
+        ("docs README", docs_readme),
+        ("API doc", api_doc),
+    ] {
+        assert!(
+            markdown.contains("cargo run -p tracedb-cli -- product-regression"),
+            "{name} should document the local product smoke runner"
+        );
+        assert!(
+            markdown.contains("local product regression"),
+            "{name} should keep the runner scoped as local product regression"
+        );
+    }
+}
+
+#[test]
 fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

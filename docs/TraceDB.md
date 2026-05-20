@@ -33,6 +33,18 @@ The demo exercises schema apply, batch ingest, query/explain, scan, delete,
 compact, snapshot, and restore through the embedded engine. SQL compatibility is
 not implemented.
 
+The consolidated local product regression gate is:
+
+```bash
+cargo run -p tracedb-cli -- product-regression
+```
+
+It emits one machine-readable `local-product-regression` summary for the
+embedded demo/verify path, `http-demo`, local `doctor http`, Rust SDK
+quickstart, and generated TypeScript check/http/gateway smoke paths. It is
+local product regression evidence only: SQL remains not implemented,
+managed-cloud is not checked, and benchmarks are not checked.
+
 The local HTTP plus SDK smoke is also available as one command:
 
 ```bash

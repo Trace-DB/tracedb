@@ -32,3 +32,12 @@ Local product smoke:
 cargo run -p tracedb-cli -- --data /tmp/tracedb-demo demo
 cargo run -p tracedb-cli -- --data /tmp/tracedb-demo verify
 ```
+
+Consolidated local product regression:
+
+```bash
+cargo run -p tracedb-cli -- product-regression
+```
+
+This is local product regression evidence only; it does not claim SQL
+compatibility, managed-cloud proof, or benchmark results.
