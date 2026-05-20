@@ -423,6 +423,49 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
 }
 
 #[test]
+fn product_regression_only_typescript_check_runs_single_gate_step() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("only-typescript-check");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("typescript_check")
+        .output()
+        .expect("run tracedb product-regression TypeScript check step");
+    assert!(
+        output.status.success(),
+        "product-regression --only typescript_check failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression TypeScript check json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "typescript_check");
+    assert_eq!(summary["local_server_url"], Value::Null);
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["typescript_check"]["ok"], true);
+    assert_eq!(
+        summary["steps"]["typescript_check"]["command"],
+        "npm run check"
+    );
+    assert!(
+        summary["steps"]["typescript_check"]["cwd"]
+            .as_str()
+            .is_some_and(|cwd| cwd.ends_with("clients/typescript")),
+        "typescript_check should run inside clients/typescript: {summary}"
+    );
+}
+
+#[test]
 fn product_regression_only_embedded_verify_reuses_existing_embedded_demo_data() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("embedded-verify-target");

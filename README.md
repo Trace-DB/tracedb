@@ -88,6 +88,14 @@ one-step `local-product-regression` JSON summary with `only_step:
 "rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence only; it
 does not run `http_demo`, local `doctor http`, generated TypeScript smoke
 steps, managed-cloud checks, benchmark controls, or SQL compatibility checks.
+`--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
+which currently performs the private package typecheck plus dependency-free
+generated-client smoke. It emits the normal one-step
+`local-product-regression` JSON summary with `only_step: "typescript_check"`.
+This is generated TypeScript check evidence only; it does not run `http_demo`,
+local `doctor http`, the Rust SDK quickstart, TypeScript HTTP smoke,
+TypeScript gateway smoke, managed-cloud checks, benchmark controls, or SQL
+compatibility checks.
 
 Run the SDK quickstart against a local HTTP server:
 

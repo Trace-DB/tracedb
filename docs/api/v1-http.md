@@ -251,13 +251,13 @@ consolidated local gate are covered by test-only `--inject-failure STEP`, which
 preserves the JSON summary on stdout and exits nonzero. Operators can run
 `product-regression --list-steps` to discover valid gate steps for failure
 injection and CI orchestration; it emits JSON and does not run demo, HTTP, SDK,
-or TypeScript smoke steps. `product-regression --only embedded_demo` is the
-first supported single-step execution mode. `product-regression --only http_demo`
-runs the self-contained local HTTP demo step and emits the normal one-step
-`local-product-regression` JSON summary. It does not run local `doctor http`,
-the Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud
-checks, benchmark controls, or SQL compatibility checks. Other HTTP-adjacent,
-SDK, and TypeScript steps still run through the full gate.
+or TypeScript smoke steps. `product-regression --only embedded_demo` runs only
+the embedded demo step and emits one-step `local-product-regression` JSON.
+`product-regression --only http_demo` runs the self-contained local HTTP demo
+step and emits the normal one-step `local-product-regression` JSON summary. It
+does not run local `doctor http`, the Rust SDK quickstart, generated
+TypeScript smoke steps, managed-cloud checks, benchmark controls, or SQL
+compatibility checks.
 `product-regression --only local_doctor` starts a managed-style local loopback
 `tracedb-server` child process and runs only the existing local `doctor http`
 product-regression step with readiness wait, `database_id`, and `branch_id`
@@ -272,8 +272,16 @@ emits one-step `local-product-regression` JSON with `only_step:
 "rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence only, not
 full product gate coverage, not `http_demo`, not local `doctor http`
 diagnostics, not generated TypeScript smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility. Remaining TypeScript steps still
-run through the full gate.
+benchmark evidence, and not SQL compatibility.
+`product-regression --only typescript_check` runs only `npm run check` in
+`clients/typescript`, which currently performs the private package typecheck
+plus dependency-free generated-client smoke, and emits one-step
+`local-product-regression` JSON with `only_step: "typescript_check"`. This is
+generated TypeScript check evidence only, not full product gate coverage, not
+`http_demo`, not local `doctor http`, not Rust SDK quickstart, not TypeScript
+HTTP smoke, not TypeScript gateway smoke, not managed-cloud proof, not
+benchmark evidence, and not SQL compatibility. Remaining TypeScript HTTP and
+gateway smoke steps still run through the full gate.
 `product-regression --only embedded_verify`
 verifies an existing embedded demo data root and should be run with the same
 `--data-root` used for `--only embedded_demo`.

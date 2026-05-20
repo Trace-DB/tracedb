@@ -131,6 +131,11 @@ diagnostics against a managed local server.
 `--only rust_sdk_quickstart` also does not run the TypeScript smoke steps; it
 is limited to local Rust SDK quickstart verification against a managed local
 server.
+`--only typescript_check` runs only `npm run check`, which currently performs
+the private package typecheck plus dependency-free generated-client smoke. It
+does not run `http-smoke`, `gateway-smoke`, `http_demo`, local `doctor http`,
+the Rust SDK quickstart, managed-cloud checks, benchmark controls, or SQL
+compatibility checks.
 
 Install the local private package tooling and run the typecheck boundary:
 

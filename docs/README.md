@@ -60,3 +60,9 @@ endpoint diagnostics evidence only, not full product-regression gate coverage.
 quickstart admin dir, runs only the Rust SDK quickstart step, and emits
 one-step `local-product-regression` JSON. It is local Rust SDK quickstart
 evidence only, not full product-regression gate coverage.
+`--only typescript_check` runs only `(cd clients/typescript && npm run check)`
+and emits one-step `local-product-regression` JSON. It is generated TypeScript
+check evidence only, not full product-regression gate coverage, not local HTTP
+demo, not endpoint diagnostics, not Rust SDK quickstart, not TypeScript HTTP or
+gateway smoke coverage, not managed-cloud proof, not benchmark evidence, and
+not SQL compatibility.

@@ -72,6 +72,14 @@ is local Rust SDK quickstart evidence only, not full product gate coverage, not
 `http_demo`, not local `doctor http` diagnostics, not generated TypeScript
 smoke, not managed-cloud proof, not benchmark evidence, and not SQL
 compatibility.
+`--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
+which currently performs the private package typecheck plus dependency-free
+generated-client smoke, and emits one-step `local-product-regression` JSON with
+`only_step: "typescript_check"`. This is generated TypeScript check evidence
+only, not full product gate coverage, not `http_demo`, not local
+`doctor http` diagnostics, not Rust SDK quickstart evidence, not TypeScript
+HTTP smoke, not TypeScript gateway smoke, not managed-cloud proof, not
+benchmark evidence, and not SQL compatibility.
 
 The local HTTP plus SDK smoke is also available as one command:
 
