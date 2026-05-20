@@ -758,6 +758,9 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "typescript_check",
         "typescript_http_smoke",
         "typescript_gateway_smoke",
+        "--inject-failure",
+        "failure_injection",
+        "injected_failure",
         "TRACEDB_WAIT_READY_MS",
         "local_only",
         "not_implemented",
@@ -785,6 +788,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("local product regression"),
             "{name} should keep the runner scoped as local product regression"
+        );
+        assert!(
+            markdown.contains("--inject-failure STEP"),
+            "{name} should document the local product regression failure contract"
         );
     }
 }

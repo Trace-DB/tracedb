@@ -246,7 +246,9 @@ The gate emits one `local-product-regression` JSON summary for the embedded
 demo/verify path, local HTTP SDK demo, endpoint doctor, Rust SDK quickstart,
 and generated TypeScript check/http/gateway smoke paths. It is local product
 regression evidence only: SQL remains not implemented, managed-cloud is not
-checked, and benchmarks are not checked.
+checked, and benchmarks are not checked. Failure ergonomics for the
+consolidated local gate are covered by test-only `--inject-failure STEP`, which
+preserves the JSON summary on stdout and exits nonzero.
 
 Run the complete local HTTP plus Rust SDK smoke with one command:
 

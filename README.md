@@ -60,7 +60,9 @@ benchmark claims. It orchestrates the embedded demo/verify path, `http-demo`,
 local `doctor http`, the Rust SDK quickstart, and generated TypeScript
 check/http/gateway smoke paths. It is local product regression evidence, not
 SQL compatibility, managed-cloud proof, or benchmark evidence. Use
-`--skip-typescript` when the local Node tooling is not installed.
+`--skip-typescript` when the local Node tooling is not installed. For CI
+failure-path coverage, use test-only `--inject-failure STEP` to verify that the
+gate exits nonzero while still emitting the failed-step JSON summary.
 
 Run the SDK quickstart against a local HTTP server:
 

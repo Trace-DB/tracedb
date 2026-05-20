@@ -151,6 +151,41 @@ fn product_regression_runs_local_product_gate() {
 }
 
 #[test]
+fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(temp.path())
+        .arg("--skip-typescript")
+        .arg("--inject-failure")
+        .arg("embedded_demo")
+        .output()
+        .expect("run tracedb product-regression with injected failure");
+    assert!(
+        !output.status.success(),
+        "injected product-regression failure should exit nonzero\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression failure json");
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["failure_injection"], "embedded_demo");
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(summary["steps"]["embedded_demo"]["ok"], false);
+    assert_eq!(summary["steps"]["embedded_demo"]["injected_failure"], true);
+    assert_eq!(
+        summary["steps"]["embedded_demo"]["error"],
+        "injected product-regression failure"
+    );
+}
+
+#[test]
 fn doctor_http_reports_endpoint_diagnostics() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bind = free_loopback_bind();

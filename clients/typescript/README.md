@@ -119,7 +119,8 @@ cargo run -p tracedb-cli -- product-regression
 That gate runs `npm run check`, `npm run http-smoke`, and
 `npm run gateway-smoke` as local product regression evidence only. It does not
 claim package publishing readiness, SQL compatibility, managed-cloud proof, or
-benchmark results.
+benchmark results. Test-only `--inject-failure STEP` can validate failed-step
+JSON and nonzero gate behavior without weakening this TypeScript smoke path.
 
 Install the local private package tooling and run the typecheck boundary:
 

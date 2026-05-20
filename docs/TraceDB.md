@@ -43,7 +43,9 @@ It emits one machine-readable `local-product-regression` summary for the
 embedded demo/verify path, `http-demo`, local `doctor http`, Rust SDK
 quickstart, and generated TypeScript check/http/gateway smoke paths. It is
 local product regression evidence only: SQL remains not implemented,
-managed-cloud is not checked, and benchmarks are not checked.
+managed-cloud is not checked, and benchmarks are not checked. The local product
+regression gate also has test-only `--inject-failure STEP` coverage for
+nonzero process status and machine-readable failed-step JSON.
 
 The local HTTP plus SDK smoke is also available as one command:
 

@@ -1014,7 +1014,19 @@ struct ProductRegressionConfig {
     cleanup_data: bool,
     keep_data: bool,
     skip_typescript: bool,
+    inject_failure: Option<String>,
 }
+
+const PRODUCT_REGRESSION_STEPS: &[&str] = &[
+    "embedded_demo",
+    "embedded_verify",
+    "http_demo",
+    "local_doctor",
+    "rust_sdk_quickstart",
+    "typescript_check",
+    "typescript_http_smoke",
+    "typescript_gateway_smoke",
+];
 
 fn parse_product_regression_config(
     args: &[String],
@@ -1022,6 +1034,7 @@ fn parse_product_regression_config(
     let mut data_root = None;
     let mut keep_data = false;
     let mut skip_typescript = false;
+    let mut inject_failure = None;
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
@@ -1033,6 +1046,21 @@ fn parse_product_regression_config(
             }
             "--keep-data" => keep_data = true,
             "--skip-typescript" => skip_typescript = true,
+            "--inject-failure" => {
+                idx += 1;
+                let step = args
+                    .get(idx)
+                    .ok_or("missing value for --inject-failure")?
+                    .to_string();
+                if !PRODUCT_REGRESSION_STEPS.contains(&step.as_str()) {
+                    return Err(format!(
+                        "unknown product-regression failure injection step {step}; expected one of {}",
+                        PRODUCT_REGRESSION_STEPS.join(", ")
+                    )
+                    .into());
+                }
+                inject_failure = Some(step);
+            }
             other => return Err(format!("unknown product-regression option {other}").into()),
         }
         idx += 1;
@@ -1044,6 +1072,7 @@ fn parse_product_regression_config(
         cleanup_data,
         keep_data,
         skip_typescript,
+        inject_failure,
     })
 }
 
@@ -1098,7 +1127,7 @@ fn run_product_regression(
             ),
         ),
     ] {
-        let step = run_product_regression_step(name, command);
+        let step = run_product_regression_step_or_injected(&config, name, command);
         let ok = product_regression_step_ok(&step);
         steps.insert(name.to_string(), step);
         if !ok {
@@ -1137,7 +1166,7 @@ fn run_product_regression(
                 "db_local:main".into(),
             ],
         );
-        let step = run_product_regression_step("local_doctor", doctor);
+        let step = run_product_regression_step_or_injected(&config, "local_doctor", doctor);
         let ok = product_regression_step_ok(&step);
         steps.insert("local_doctor".to_string(), step);
         if !ok {
@@ -1170,7 +1199,7 @@ fn run_product_regression(
                 "--admin-dir",
                 &admin_dir_string,
             ]);
-            let step = run_product_regression_step("rust_sdk_quickstart", sdk);
+            let step = run_product_regression_step_or_injected(&config, "rust_sdk_quickstart", sdk);
             let ok = product_regression_step_ok(&step);
             steps.insert("rust_sdk_quickstart".to_string(), step);
             if !ok {
@@ -1191,7 +1220,7 @@ fn run_product_regression(
         ] {
             let mut command = Command::new("npm");
             command.current_dir(&typescript_dir).args(args);
-            let step = run_product_regression_step(name, command);
+            let step = run_product_regression_step_or_injected(&config, name, command);
             let ok = product_regression_step_ok(&step);
             steps.insert(name.to_string(), step);
             if !ok {
@@ -1210,6 +1239,7 @@ fn finish_product_regression(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ok = steps.values().all(product_regression_step_ok);
     let data_root = config.data_root.display().to_string();
+    let failure_injection = config.inject_failure.clone();
     let summary = json!({
         "ok": ok,
         "mode": "local-product-regression",
@@ -1217,6 +1247,7 @@ fn finish_product_regression(
         "data_root": data_root,
         "data_cleanup": config.cleanup_data,
         "keep_data": config.keep_data,
+        "failure_injection": failure_injection,
         "local_server_url": local_server_url,
         "typescript_enabled": !config.skip_typescript,
         "claims": {
@@ -1243,16 +1274,27 @@ fn product_regression_cli_command(cli: &std::path::Path, args: Vec<String>) -> C
     command
 }
 
+fn run_product_regression_step_or_injected(
+    config: &ProductRegressionConfig,
+    name: &str,
+    command: Command,
+) -> Value {
+    if config.inject_failure.as_deref() == Some(name) {
+        return json!({
+            "name": name,
+            "ok": false,
+            "injected_failure": true,
+            "error": "injected product-regression failure",
+            "command": product_regression_command_display(&command),
+            "cwd": product_regression_command_cwd(&command),
+        });
+    }
+    run_product_regression_step(name, command)
+}
+
 fn run_product_regression_step(name: &str, mut command: Command) -> Value {
     let command_display = product_regression_command_display(&command);
-    let cwd = command
-        .get_current_dir()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| {
-            env::current_dir()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|_| ".".to_string())
-        });
+    let cwd = product_regression_command_cwd(&command);
     let start = Instant::now();
     match command.output() {
         Ok(output) => {
@@ -1294,6 +1336,17 @@ fn product_regression_command_display(command: &Command) -> String {
             .map(|arg| arg.to_string_lossy().to_string()),
     );
     parts.join(" ")
+}
+
+fn product_regression_command_cwd(command: &Command) -> String {
+    command
+        .get_current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| {
+            env::current_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| ".".to_string())
+        })
 }
 
 fn parse_product_regression_json(stdout: &str) -> Option<Value> {
@@ -1505,6 +1558,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
