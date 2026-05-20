@@ -1149,7 +1149,7 @@ fn run_product_regression(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if config.list_steps {
         emit_json(
-            product_regression_step_list_summary(),
+            product_regression_step_list_summary(config.report_file.as_deref()),
             config.report_file.as_deref(),
         )?;
         return Ok(());
@@ -1348,12 +1348,14 @@ fn finish_product_regression(
     let data_root = config.data_root.display().to_string();
     let failure_injection = config.inject_failure.clone();
     let only_step = config.only_step.clone();
+    let report_file = product_regression_report_file_json(config.report_file.as_deref());
     let human_summary = product_regression_human_summary(&steps, only_step.as_deref());
     let summary = json!({
         "ok": ok,
         "mode": "local-product-regression",
         "scope": "local_only",
         "data_root": data_root,
+        "report_file": report_file,
         "data_cleanup": config.cleanup_data,
         "keep_data": config.keep_data,
         "failure_injection": failure_injection,
@@ -1495,12 +1497,13 @@ fn product_regression_typescript_command(workspace: &std::path::Path, args: &[&s
     command
 }
 
-fn product_regression_step_list_summary() -> Value {
+fn product_regression_step_list_summary(report_file: Option<&std::path::Path>) -> Value {
     let steps_total = PRODUCT_REGRESSION_STEPS.len();
     let only_supported = PRODUCT_REGRESSION_STEPS
         .iter()
         .filter(|name| PRODUCT_REGRESSION_ONLY_STEPS.contains(name))
         .count();
+    let report_file = product_regression_report_file_json(report_file);
     let steps = PRODUCT_REGRESSION_STEPS
         .iter()
         .map(|name| {
@@ -1514,6 +1517,7 @@ fn product_regression_step_list_summary() -> Value {
         "ok": true,
         "mode": "local-product-regression-step-list",
         "scope": "local_only",
+        "report_file": report_file,
         "human_summary": {
             "status": "listed",
             "message": format!(
@@ -1529,6 +1533,12 @@ fn product_regression_step_list_summary() -> Value {
         },
         "steps": steps,
     })
+}
+
+fn product_regression_report_file_json(report_file: Option<&std::path::Path>) -> Value {
+    report_file
+        .map(|path| json!(path.display().to_string()))
+        .unwrap_or(Value::Null)
 }
 
 fn run_product_regression_step_or_injected(

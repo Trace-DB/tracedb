@@ -55,7 +55,12 @@ The first single-step execution mode is `--only embedded_demo`, which runs only 
 embedded demo step and emits the normal local product-regression JSON summary.
 `product-quickstart` runs the same local product gate with a default report file
 at `target/tracedb/product-quickstart.json`; it accepts the same
-product-regression options and still writes JSON to stdout. The
+product-regression options, still writes JSON to stdout, and includes a
+top-level `report_file` field when a report artifact is configured. Treat
+`target/tracedb/product-quickstart.json` as the local quickstart receipt: it
+should report `ok: true`, `mode: "local-product-regression"`,
+`scope: "local_only"`, `human_summary.status: "passed"`, SQL as
+`not_implemented`, and managed-cloud/benchmark claims as `not_checked`. The
 dependency-aware `--only embedded_verify` mode verifies an existing embedded
 demo data root, typically after `--only embedded_demo` with the same
 `--data-root`. `--only http_demo` runs the self-contained local HTTP demo step

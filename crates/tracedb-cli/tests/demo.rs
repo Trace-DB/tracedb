@@ -138,6 +138,7 @@ fn product_regression_runs_local_product_gate() {
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
     assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
     assert_eq!(summary["claims"]["benchmark"], "not_checked");
@@ -206,6 +207,7 @@ fn product_quickstart_runs_product_gate_with_default_report_file() {
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
     assert_eq!(summary["only_step"], "embedded_demo");
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
     assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
@@ -336,6 +338,7 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "local-product-regression-step-list");
     assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
     assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
     assert_eq!(summary["claims"]["benchmark"], "not_checked");
@@ -627,6 +630,7 @@ fn product_regression_rust_sdk_quickstart_failure_preserves_child_summary() {
     assert_eq!(summary["ok"], false);
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
     assert_eq!(summary["only_step"], "rust_sdk_quickstart");
     assert_eq!(summary["failure_injection"], Value::Null);
     assert_eq!(summary["human_summary"]["status"], "failed");

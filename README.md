@@ -76,7 +76,36 @@ for steps such as `typescript_check`, `typescript_http_smoke`, or
 `typescript_gateway_smoke`. `product-quickstart` is the same local product gate
 with a default report file at `target/tracedb/product-quickstart.json`; it
 accepts the same product-regression options, including `--only` and
-`--skip-typescript`, and still writes JSON to stdout. For narrow local iteration,
+`--skip-typescript`, still writes JSON to stdout, and includes a top-level
+`report_file` field when a report artifact is configured. A copy-paste local
+receipt check is:
+
+```bash
+cargo run -q -p tracedb-cli -- product-quickstart
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+receipt = Path("target/tracedb/product-quickstart.json")
+summary = json.loads(receipt.read_text())
+assert summary["ok"] is True
+assert summary["mode"] == "local-product-regression"
+assert summary["scope"] == "local_only"
+assert summary["report_file"] == str(receipt.resolve())
+assert summary["human_summary"]["status"] == "passed"
+assert summary["claims"] == {
+    "sql_module": "not_implemented",
+    "managed_cloud": "not_checked",
+    "benchmark": "not_checked",
+}
+print(summary["human_summary"]["message"])
+print(summary["report_file"])
+PY
+```
+
+Use `--skip-typescript` only when local Node tooling is unavailable; that is a
+reduced local evidence path because the TypeScript check/http/gateway smoke
+steps are skipped. For narrow local iteration,
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step `local-product-regression` JSON summary. After that, use the
 same `--data-root` with `--only embedded_verify` to verify the existing

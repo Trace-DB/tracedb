@@ -59,7 +59,12 @@ product gate and non-TypeScript selectors; a TypeScript `--only` selector
 conflicts with --skip-typescript. `product-quickstart` runs the same local
 product gate with a default report file at
 `target/tracedb/product-quickstart.json`; it accepts the same
-product-regression options and still writes JSON to stdout.
+product-regression options, still writes JSON to stdout, and includes the
+resolved artifact path in the top-level `report_file` field. Treat that artifact
+as the local quickstart receipt: it should report `ok: true`, `mode:
+"local-product-regression"`, `scope: "local_only"`, `human_summary.status:
+"passed"`, `claims.sql_module: "not_implemented"`,
+`claims.managed_cloud: "not_checked"`, and `claims.benchmark: "not_checked"`.
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step product-regression JSON summary. `--only embedded_verify`
 verifies an existing embedded demo data root, usually with the same

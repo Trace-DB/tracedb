@@ -258,7 +258,12 @@ injection and CI orchestration; it emits JSON step metadata including
 `human_summary` and `only_supported` and does not run demo, HTTP, SDK, or
 TypeScript smoke steps.
 `product-quickstart` runs the same local product gate with a default report file
-at `target/tracedb/product-quickstart.json` and preserves JSON stdout.
+at `target/tracedb/product-quickstart.json`, preserves JSON stdout, and includes
+the resolved artifact path in the top-level `report_file` field. Operators can
+validate the local quickstart receipt by checking that artifact for `ok: true`,
+`mode: "local-product-regression"`, `scope: "local_only"`,
+`human_summary.status: "passed"`, `claims.sql_module: "not_implemented"`,
+`claims.managed_cloud: "not_checked"`, and `claims.benchmark: "not_checked"`.
 `--skip-typescript` is for the full product gate and non-TypeScript selectors; a
 TypeScript `--only` selector conflicts with --skip-typescript.
 `product-regression --only embedded_demo` runs only
