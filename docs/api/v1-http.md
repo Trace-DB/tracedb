@@ -166,13 +166,15 @@ configuration supplied by environment variables:
 TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 cargo run -p tracedb-cli -- doctor http
 ```
 
-Error responses use the current JSON envelope `{ "error": string }` for server
-and gateway failures such as validation errors, not found routes, idempotency
-conflicts, unauthorized gateway calls, gateway rate limits, and upstream
-unavailability. The Rust SDK and generated TypeScript transport preserve the raw
-response body and now expose parsed error-envelope helpers. This is client
-ergonomics for the current envelope, not a broader RFC 7807/problem-details
-contract.
+Error responses use the current JSON envelope
+`{ "error": string, "code"?: string }` for server and gateway failures such as
+validation errors, not found routes, idempotency conflicts, unauthorized gateway
+calls, gateway rate limits, and upstream unavailability. The `error` string
+remains the compatibility field; `code` is a stable machine-readable value when
+the server or gateway can classify the failure. The Rust SDK and generated
+TypeScript transport preserve the raw response body and expose parsed
+error-envelope helpers. This is current-envelope ergonomics, not a broader RFC
+7807/problem-details contract.
 
 ## Schema And Writes
 

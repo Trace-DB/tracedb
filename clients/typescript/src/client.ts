@@ -64,7 +64,8 @@ function errorResponseFromJson(value: JsonValue | undefined): ErrorResponse | un
   if (typeof error !== "string") {
     return undefined;
   }
-  return { error };
+  const code = (value as JsonObject).code;
+  return typeof code === "string" ? { error, code } : { error };
 }
 
 export class TraceDbHttpError extends Error {
@@ -75,6 +76,7 @@ export class TraceDbHttpError extends Error {
   readonly responseJson?: JsonValue;
   readonly errorResponse?: ErrorResponse;
   readonly responseError?: string;
+  readonly responseCode?: string;
 
   constructor(method: TraceDbMethod, path: string, status: number, body: string) {
     super(`TraceDB ${method} ${path} failed with HTTP ${status}: ${body}`);
@@ -86,6 +88,7 @@ export class TraceDbHttpError extends Error {
     this.responseJson = parseTraceDbJsonBody(body);
     this.errorResponse = errorResponseFromJson(this.responseJson);
     this.responseError = this.errorResponse?.error;
+    this.responseCode = this.errorResponse?.code;
   }
 }
 
@@ -178,6 +181,7 @@ export interface EpochResponse extends JsonObject {
 }
 
 export interface ErrorResponse extends JsonObject {
+  code?: string;
   error?: string;
 }
 

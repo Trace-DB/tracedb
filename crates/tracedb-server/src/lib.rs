@@ -667,7 +667,7 @@ fn elapsed_ms(started: Instant) -> f64 {
 }
 
 fn not_found() -> String {
-    let body = json!({ "error": "not found" }).to_string();
+    let body = json!({ "error": "not found", "code": "not_found" }).to_string();
     format!(
         "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
@@ -676,7 +676,7 @@ fn not_found() -> String {
 }
 
 fn bad_request(message: String) -> String {
-    let body = json!({ "error": message }).to_string();
+    let body = json!({ "error": message, "code": "bad_request" }).to_string();
     format!(
         "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
@@ -685,7 +685,7 @@ fn bad_request(message: String) -> String {
 }
 
 fn conflict(message: impl Into<String>) -> String {
-    let body = json!({ "error": message.into() }).to_string();
+    let body = json!({ "error": message.into(), "code": "idempotency_conflict" }).to_string();
     format!(
         "HTTP/1.1 409 Conflict\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),

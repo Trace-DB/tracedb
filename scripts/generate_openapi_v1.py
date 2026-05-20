@@ -323,7 +323,13 @@ def components() -> dict[str, Any]:
             "JobsResponse": object_schema("Admin job queue response.", {
                 "jobs": array_schema(schema_ref("AdminJob")),
             }),
-            "ErrorResponse": object_schema("Error response.", {"error": {"type": "string"}}),
+            "ErrorResponse": object_schema("Error response.", {
+                "error": {"type": "string"},
+                "code": {
+                    "type": "string",
+                    "description": "Stable machine-readable error code when available; existing clients can continue to read error.",
+                },
+            }),
         },
         "securitySchemes": {
             "bearerAuth": {

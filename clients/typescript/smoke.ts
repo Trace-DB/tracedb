@@ -235,7 +235,7 @@ const failingClient = new TraceDbClient({
     ok: false,
     status: 503,
     async text(): Promise<string> {
-      return "{\"error\":\"down\"}";
+      return "{\"error\":\"down\",\"code\":\"engine_unavailable\"}";
     },
   }),
 });
@@ -247,10 +247,11 @@ await assert.rejects(
     assert.equal(error.method, "GET");
     assert.equal(error.path, "/v1/health");
     assert.equal(error.status, 503);
-    assert.equal(error.body, "{\"error\":\"down\"}");
-    assert.deepEqual(error.responseJson, { error: "down" });
-    assert.deepEqual(error.errorResponse, { error: "down" });
+    assert.equal(error.body, "{\"error\":\"down\",\"code\":\"engine_unavailable\"}");
+    assert.deepEqual(error.responseJson, { error: "down", code: "engine_unavailable" });
+    assert.deepEqual(error.errorResponse, { error: "down", code: "engine_unavailable" });
     assert.equal(error.responseError, "down");
+    assert.equal(error.responseCode, "engine_unavailable");
     return true;
   },
 );

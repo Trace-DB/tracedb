@@ -10,7 +10,7 @@ use std::sync::{
     Arc,
 };
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPatchRequest, RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
@@ -165,14 +165,7 @@ fn embedded_crud_tombstone_compaction_snapshot_and_recovery_are_usable() {
 #[test]
 fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let addr = start_http_test_server(temp.path().to_path_buf());
 
     assert_http_contains(addr, "GET", "/ready", "", "\"ready\":true");
     assert_http_contains(
@@ -303,19 +296,20 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         "\"compacted\":true",
     );
     assert_http_contains(addr, "GET", "/v1/admin/jobs", "", "tracedb.segment.compact");
+    let missing_response = http_response(addr, "GET", "/v1/missing", "");
+    assert!(
+        missing_response.starts_with("HTTP/1.1 404 Not Found"),
+        "unexpected missing-route response: {missing_response}"
+    );
+    let missing_json = http_json_body(&missing_response);
+    assert_eq!(missing_json["error"], json!("not found"));
+    assert_eq!(missing_json["code"], json!("not_found"));
 }
 
 #[test]
 fn http_idempotency_key_replays_write_response_and_rejects_mismatched_body() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let addr = start_http_test_server(temp.path().to_path_buf());
 
     assert_http_contains(
         addr,
@@ -496,14 +490,7 @@ fn http_idempotency_key_replays_after_engine_reopen_from_same_data_dir() {
 #[test]
 fn http_query_explain_false_is_lean_while_explain_surfaces_remain_full() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let addr = start_http_test_server(temp.path().to_path_buf());
 
     assert_http_contains(
         addr,
@@ -605,14 +592,7 @@ fn http_query_explain_false_is_lean_while_explain_surfaces_remain_full() {
 #[test]
 fn http_server_rejects_oversized_content_length_before_body_read() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let addr = start_http_test_server(temp.path().to_path_buf());
 
     let mut stream = TcpStream::connect(addr).expect("connect");
     stream
@@ -729,6 +709,8 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "TraceDbAsyncClient",
         "background thread per request",
         "async typed write/admin helpers",
+        "`{ \"error\": string, \"code\"?: string }`",
+        "stable machine-readable value",
         "TRACEDB_URL",
         "TRACEDB_TOKEN",
         "TRACEDB_TIMEOUT_MS",
@@ -783,6 +765,11 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     assert_eq!(spec["openapi"], json!("3.1.0"));
     assert_eq!(spec["info"]["title"], json!("TraceDB v1 HTTP API"));
     assert_eq!(spec["info"]["version"], json!("0.1.0-development"));
+    assert_eq!(
+        spec["components"]["schemas"]["ErrorResponse"]["properties"]["code"]["type"],
+        json!("string"),
+        "OpenAPI ErrorResponse should expose optional machine-readable code"
+    );
     let description = spec["info"]["description"]
         .as_str()
         .expect("OpenAPI info.description");
@@ -1134,6 +1121,9 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "readonly responseJson?: JsonValue;",
         "readonly errorResponse?: ErrorResponse;",
         "readonly responseError?: string;",
+        "readonly responseCode?: string;",
+        "code?: string;",
+        "return typeof code === \"string\" ? { error, code } : { error };",
         "export class TraceDbRequestError",
         "Generated schema aliases keep OpenAPI's permissive additionalProperties boundary",
         "export interface TableSchema extends JsonObject",
@@ -1562,6 +1552,43 @@ fn connect_with_retry(addr: std::net::SocketAddr) -> TcpStream {
     );
 }
 
+fn start_http_test_server(data_dir: PathBuf) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+    });
+    wait_for_http_ready(addr);
+    addr
+}
+
+fn wait_for_http_ready(addr: SocketAddr) {
+    let url = format!("http://{addr}");
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url.clone(), "dev-token")
+            .with_timeout(Duration::from_millis(100)),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match client.ready_typed() {
+            Ok(response) if response.ready => return,
+            Ok(response) => {
+                last_error = Some(format!("ready endpoint returned not-ready: {response:?}"));
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "TraceDB HTTP acceptance test server did not become ready at {url}; last error: {}",
+        last_error.unwrap_or_else(|| "no readiness attempt completed".to_string())
+    );
+}
+
 fn start_stoppable_server(
     data_dir: PathBuf,
 ) -> (SocketAddr, Arc<AtomicBool>, JoinHandle<std::io::Result<()>>) {
@@ -1575,7 +1602,7 @@ fn start_stoppable_server(
             server_shutdown.load(Ordering::SeqCst)
         })
     });
-    std::thread::sleep(Duration::from_millis(100));
+    wait_for_http_ready(addr);
     (addr, shutdown, handle)
 }
 

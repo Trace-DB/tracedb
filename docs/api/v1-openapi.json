@@ -210,6 +210,10 @@
         "additionalProperties": true,
         "description": "Error response.",
         "properties": {
+          "code": {
+            "description": "Stable machine-readable error code when available; existing clients can continue to read error.",
+            "type": "string"
+          },
           "error": {
             "type": "string"
           }

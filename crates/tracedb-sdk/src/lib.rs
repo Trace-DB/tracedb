@@ -139,6 +139,15 @@ impl TraceDbClientError {
             .ok()
             .map(|response| response.error)
     }
+
+    pub fn server_error_code(&self) -> Option<String> {
+        let Self::HttpStatus { body, .. } = self else {
+            return None;
+        };
+        serde_json::from_str::<ErrorResponse>(body)
+            .ok()
+            .and_then(|response| response.code)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1127,6 +1136,8 @@ pub struct MetricsResponse {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

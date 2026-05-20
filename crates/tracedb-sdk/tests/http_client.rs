@@ -813,7 +813,7 @@ fn request_timeout_errors_include_method_path_and_timeout() {
 #[test]
 fn http_status_errors_include_method_path_status_and_body() {
     let url = http_response_server(
-        b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 23\r\nConnection: close\r\n\r\n{\"error\":\"not found\"}",
+        b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 40\r\nConnection: close\r\n\r\n{\"error\":\"not found\",\"code\":\"not_found\"}",
     );
     let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
@@ -825,10 +825,12 @@ fn http_status_errors_include_method_path_status_and_body() {
     assert_eq!(
         error.error_response(),
         Some(ErrorResponse {
-            error: "not found".to_string()
+            error: "not found".to_string(),
+            code: Some("not_found".to_string()),
         })
     );
     assert_eq!(error.server_error().as_deref(), Some("not found"));
+    assert_eq!(error.server_error_code().as_deref(), Some("not_found"));
     match error {
         TraceDbClientError::HttpStatus {
             method,
@@ -840,13 +842,16 @@ fn http_status_errors_include_method_path_status_and_body() {
             assert_eq!(method, "POST");
             assert_eq!(path, "/v1/missing");
             assert_eq!(status, 404);
-            assert_eq!(body, "{\"error\":\"not found\"}");
+            assert_eq!(body, "{\"error\":\"not found\",\"code\":\"not_found\"}");
         }
         other => panic!("unexpected error: {other:?}"),
     }
     assert!(message.contains("POST /v1/missing"), "{message}");
     assert!(message.contains("status 404"), "{message}");
-    assert!(message.contains("{\"error\":\"not found\"}"), "{message}");
+    assert!(
+        message.contains("{\"error\":\"not found\",\"code\":\"not_found\"}"),
+        "{message}"
+    );
 }
 
 #[test]

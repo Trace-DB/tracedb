@@ -686,7 +686,7 @@ fn service_unavailable(value: serde_json::Value) -> String {
 }
 
 fn unauthorized() -> String {
-    let body = json!({ "error": "invalid api token" }).to_string();
+    let body = json!({ "error": "invalid api token", "code": "unauthorized" }).to_string();
     format!(
         "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
@@ -695,7 +695,7 @@ fn unauthorized() -> String {
 }
 
 fn not_found() -> String {
-    let body = json!({ "error": "not found" }).to_string();
+    let body = json!({ "error": "not found", "code": "not_found" }).to_string();
     format!(
         "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
@@ -704,7 +704,7 @@ fn not_found() -> String {
 }
 
 fn bad_gateway(message: String) -> String {
-    let body = json!({ "error": message }).to_string();
+    let body = json!({ "error": message, "code": "bad_gateway" }).to_string();
     format!(
         "HTTP/1.1 502 Bad Gateway\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
@@ -713,7 +713,7 @@ fn bad_gateway(message: String) -> String {
 }
 
 fn bad_request(message: String) -> String {
-    let body = json!({ "error": message }).to_string();
+    let body = json!({ "error": message, "code": "bad_request" }).to_string();
     format!(
         "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
@@ -722,7 +722,7 @@ fn bad_request(message: String) -> String {
 }
 
 fn too_many_requests() -> String {
-    let body = json!({ "error": "rate limit exceeded" }).to_string();
+    let body = json!({ "error": "rate limit exceeded", "code": "rate_limited" }).to_string();
     format!(
         "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
