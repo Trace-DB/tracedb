@@ -124,7 +124,8 @@ JSON and nonzero gate behavior without weakening this TypeScript smoke path.
 Use `product-regression --list-steps` to discover the TypeScript smoke step
 names without invoking Node tooling. The current `--only embedded_demo` mode
 and dependency-aware `--only embedded_verify` mode do not run the TypeScript
-smoke steps.
+smoke steps. `--only http_demo` also does not run the TypeScript smoke steps;
+it is limited to the self-contained local HTTP demo step.
 
 Install the local private package tooling and run the typecheck boundary:
 

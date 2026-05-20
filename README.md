@@ -69,6 +69,10 @@ running demo, HTTP, SDK, or TypeScript smoke steps. For narrow local iteration,
 normal one-step `local-product-regression` JSON summary. After that, use the
 same `--data-root` with `--only embedded_verify` to verify the existing
 embedded demo data without running HTTP, SDK, or TypeScript steps.
+`--only http_demo` runs the self-contained local HTTP demo step and emits the
+normal one-step `local-product-regression` JSON summary. It does not run local
+`doctor http`, the Rust SDK quickstart, generated TypeScript smoke steps,
+managed-cloud checks, benchmark controls, or SQL compatibility checks.
 
 Run the SDK quickstart against a local HTTP server:
 

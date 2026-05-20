@@ -252,8 +252,13 @@ preserves the JSON summary on stdout and exits nonzero. Operators can run
 `product-regression --list-steps` to discover valid gate steps for failure
 injection and CI orchestration; it emits JSON and does not run demo, HTTP, SDK,
 or TypeScript smoke steps. `product-regression --only embedded_demo` is the
-first supported single-step execution mode; HTTP, SDK, and TypeScript steps
-still run through the full gate. `product-regression --only embedded_verify`
+first supported single-step execution mode. `product-regression --only http_demo`
+runs the self-contained local HTTP demo step and emits the normal one-step
+`local-product-regression` JSON summary. It does not run local `doctor http`,
+the Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud
+checks, benchmark controls, or SQL compatibility checks. Other HTTP-adjacent,
+SDK, and TypeScript steps still run through the full gate.
+`product-regression --only embedded_verify`
 verifies an existing embedded demo data root and should be run with the same
 `--data-root` used for `--only embedded_demo`.
 

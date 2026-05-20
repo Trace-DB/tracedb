@@ -51,7 +51,11 @@ names for operators and CI wiring without executing any product checks.
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step product-regression JSON summary. `--only embedded_verify`
 verifies an existing embedded demo data root, usually with the same
-`--data-root` used by `--only embedded_demo`.
+`--data-root` used by `--only embedded_demo`. `--only http_demo` runs the
+self-contained local HTTP demo step and emits the normal one-step
+`local-product-regression` JSON summary. It does not run local `doctor http`,
+the Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud
+checks, benchmark controls, or SQL compatibility checks.
 
 The local HTTP plus SDK smoke is also available as one command:
 

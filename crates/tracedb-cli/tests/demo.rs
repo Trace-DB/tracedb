@@ -272,6 +272,43 @@ fn product_regression_only_embedded_demo_runs_single_gate_step() {
 }
 
 #[test]
+fn product_regression_only_http_demo_runs_single_gate_step() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("only-http-demo");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("http_demo")
+        .output()
+        .expect("run tracedb product-regression http demo step");
+    assert!(
+        output.status.success(),
+        "product-regression --only http_demo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression http demo json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "http_demo");
+    assert_eq!(summary["local_server_url"], Value::Null);
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["http_demo"]["ok"], true);
+    assert_eq!(
+        summary["steps"]["http_demo"]["summary"]["sql_module"],
+        "not_implemented"
+    );
+}
+
+#[test]
 fn product_regression_only_embedded_verify_reuses_existing_embedded_demo_data() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("embedded-verify-target");
@@ -555,6 +592,9 @@ fn start_readiness_gate_server(readiness_failures: usize) -> (String, thread::Jo
                 Err(error) => panic!("accept readiness gate request: {error}"),
             };
             handled_requests += 1;
+            stream
+                .set_nonblocking(false)
+                .expect("set readiness gate stream blocking");
             let request_line = read_request_headers(&mut stream);
             let path = request_line
                 .split_whitespace()

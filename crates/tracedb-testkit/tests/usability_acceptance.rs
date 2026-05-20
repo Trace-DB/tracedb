@@ -811,6 +811,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
             markdown.contains("--only embedded_verify"),
             "{name} should document dependency-aware embedded verify targeted execution"
         );
+        assert!(
+            markdown.contains("--only http_demo"),
+            "{name} should document targeted local HTTP demo execution"
+        );
     }
 }
 
