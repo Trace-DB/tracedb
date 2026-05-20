@@ -220,6 +220,57 @@ fn product_quickstart_runs_product_gate_with_default_report_file() {
 }
 
 #[test]
+fn product_quickstart_injected_failure_uses_default_report_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("quickstart-failure-data");
+    let report_file = workspace_root().join("target/tracedb/product-quickstart.json");
+    let _ = std::fs::remove_file(&report_file);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-quickstart")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--inject-failure")
+        .arg("embedded_demo")
+        .output()
+        .expect("run tracedb product-quickstart with injected failure");
+
+    assert!(
+        !output.status.success(),
+        "injected product-quickstart failure should exit nonzero\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-quickstart failure json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
+    assert_eq!(summary["failure_injection"], "embedded_demo");
+    assert_eq!(summary["only_step"], Value::Null);
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(summary["human_summary"]["status"], "failed");
+    assert_eq!(
+        summary["human_summary"]["message"],
+        "local product regression failed: 0/1 steps passed; failed_step=embedded_demo"
+    );
+    assert_eq!(summary["human_summary"]["steps_passed"], 0);
+    assert_eq!(summary["human_summary"]["steps_total"], 1);
+    assert_eq!(summary["human_summary"]["failed_step"], "embedded_demo");
+    assert_eq!(summary["steps"]["embedded_demo"]["ok"], false);
+    assert_eq!(summary["steps"]["embedded_demo"]["injected_failure"], true);
+    assert_eq!(
+        summary["steps"]["embedded_demo"]["error"],
+        "injected product-regression failure"
+    );
+}
+
+#[test]
 fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let report_file = temp.path().join("reports/failure.json");

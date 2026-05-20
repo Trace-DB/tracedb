@@ -835,6 +835,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
             "{name} should document the machine-readable report file field"
         );
         assert!(
+            markdown.contains("product-quickstart --inject-failure embedded_demo"),
+            "{name} should document the product quickstart failure receipt check"
+        );
+        assert!(
             markdown.contains("conflicts with --skip-typescript"),
             "{name} should document TypeScript-only selector skip conflicts"
         );

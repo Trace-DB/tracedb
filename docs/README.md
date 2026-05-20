@@ -60,7 +60,11 @@ top-level `report_file` field when a report artifact is configured. Treat
 `target/tracedb/product-quickstart.json` as the local quickstart receipt: it
 should report `ok: true`, `mode: "local-product-regression"`,
 `scope: "local_only"`, `human_summary.status: "passed"`, SQL as
-`not_implemented`, and managed-cloud/benchmark claims as `not_checked`. The
+`not_implemented`, and managed-cloud/benchmark claims as `not_checked`.
+`product-quickstart --inject-failure embedded_demo` is the quick failure receipt
+check: it exits nonzero, writes the same default report artifact, keeps
+`report_file`, reports `human_summary.status: "failed"`, and marks the injected
+`embedded_demo` step as failed. The
 dependency-aware `--only embedded_verify` mode verifies an existing embedded
 demo data root, typically after `--only embedded_demo` with the same
 `--data-root`. `--only http_demo` runs the self-contained local HTTP demo step

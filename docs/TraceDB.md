@@ -65,6 +65,11 @@ as the local quickstart receipt: it should report `ok: true`, `mode:
 "local-product-regression"`, `scope: "local_only"`, `human_summary.status:
 "passed"`, `claims.sql_module: "not_implemented"`,
 `claims.managed_cloud: "not_checked"`, and `claims.benchmark: "not_checked"`.
+`product-quickstart --inject-failure embedded_demo` is the quick failure receipt
+check: it exits nonzero, writes the same default report artifact, keeps
+`report_file`, reports `human_summary.status: "failed"`, and records
+`failure_injection: "embedded_demo"` with an injected failed `embedded_demo`
+step.
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step product-regression JSON summary. `--only embedded_verify`
 verifies an existing embedded demo data root, usually with the same

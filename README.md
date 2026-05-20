@@ -105,7 +105,18 @@ PY
 
 Use `--skip-typescript` only when local Node tooling is unavailable; that is a
 reduced local evidence path because the TypeScript check/http/gateway smoke
-steps are skipped. For narrow local iteration,
+steps are skipped. To validate the failure receipt path without waiting for the
+full gate, use:
+
+```bash
+cargo run -q -p tracedb-cli -- product-quickstart --inject-failure embedded_demo
+```
+
+The command exits nonzero, still writes
+`target/tracedb/product-quickstart.json`, preserves the top-level `report_file`
+field, reports `human_summary.status: "failed"`, and records
+`failure_injection: "embedded_demo"` with an injected failed `embedded_demo`
+step. For narrow local iteration,
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step `local-product-regression` JSON summary. After that, use the
 same `--data-root` with `--only embedded_verify` to verify the existing

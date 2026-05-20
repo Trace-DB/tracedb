@@ -264,6 +264,11 @@ validate the local quickstart receipt by checking that artifact for `ok: true`,
 `mode: "local-product-regression"`, `scope: "local_only"`,
 `human_summary.status: "passed"`, `claims.sql_module: "not_implemented"`,
 `claims.managed_cloud: "not_checked"`, and `claims.benchmark: "not_checked"`.
+`product-quickstart --inject-failure embedded_demo` validates the failure
+receipt path without running later product steps: the command exits nonzero,
+writes the same default report artifact, keeps `report_file`, reports
+`human_summary.status: "failed"`, and records the injected `embedded_demo`
+failure.
 `--skip-typescript` is for the full product gate and non-TypeScript selectors; a
 TypeScript `--only` selector conflicts with --skip-typescript.
 `product-regression --only embedded_demo` runs only
