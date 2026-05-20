@@ -1015,6 +1015,7 @@ struct ProductRegressionConfig {
     keep_data: bool,
     skip_typescript: bool,
     inject_failure: Option<String>,
+    report_file: Option<PathBuf>,
     list_steps: bool,
     only_step: Option<String>,
 }
@@ -1039,6 +1040,7 @@ fn parse_product_regression_config(
     let mut keep_data = false;
     let mut skip_typescript = false;
     let mut inject_failure = None;
+    let mut report_file = None;
     let mut list_steps = false;
     let mut only_step = None;
     let mut idx = 0;
@@ -1053,6 +1055,12 @@ fn parse_product_regression_config(
             "--keep-data" => keep_data = true,
             "--skip-typescript" => skip_typescript = true,
             "--list-steps" => list_steps = true,
+            "--report-file" => {
+                idx += 1;
+                report_file = Some(PathBuf::from(
+                    args.get(idx).ok_or("missing value for --report-file")?,
+                ));
+            }
             "--only" => {
                 idx += 1;
                 let step = args.get(idx).ok_or("missing value for --only")?.to_string();
@@ -1102,6 +1110,7 @@ fn parse_product_regression_config(
         keep_data,
         skip_typescript,
         inject_failure,
+        report_file,
         list_steps,
         only_step,
     })
@@ -1120,7 +1129,10 @@ fn run_product_regression(
     config: ProductRegressionConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if config.list_steps {
-        print_json(product_regression_step_list_summary());
+        emit_json(
+            product_regression_step_list_summary(),
+            config.report_file.as_deref(),
+        )?;
         return Ok(());
     }
 
@@ -1340,7 +1352,7 @@ fn finish_product_regression(
     if config.cleanup_data {
         let _ = fs::remove_dir_all(&config.data_root);
     }
-    print_json(summary);
+    emit_json(summary, config.report_file.as_deref())?;
     if ok {
         Ok(())
     } else {
@@ -1775,6 +1787,32 @@ fn print_json(value: Value) {
     println!("{}", serde_json::to_string_pretty(&value).unwrap());
 }
 
+fn emit_json(
+    value: Value,
+    report_file: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(report_file) = report_file {
+        write_json_report(report_file, &value)?;
+    }
+    print_json(value);
+    Ok(())
+}
+
+fn write_json_report(
+    path: &std::path::Path,
+    value: &Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut body = serde_json::to_vec_pretty(value)?;
+    body.push(b'\n');
+    fs::write(path, body)?;
+    Ok(())
+}
+
 fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Result<()> {
     let catalog_dir = data_dir.join("catalog");
     fs::create_dir_all(&catalog_dir)?;
@@ -1784,7 +1822,7 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only {}]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
         PRODUCT_REGRESSION_ONLY_STEPS.join("|")
     );
 }

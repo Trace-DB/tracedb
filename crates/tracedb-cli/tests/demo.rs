@@ -6,6 +6,13 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+fn read_json_file(path: &Path) -> Value {
+    let body =
+        std::fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    serde_json::from_slice(&body)
+        .unwrap_or_else(|error| panic!("parse {} as json: {error}", path.display()))
+}
+
 #[test]
 fn demo_command_exercises_local_product_path() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -103,10 +110,13 @@ fn http_demo_command_exercises_local_http_sdk_product_path() {
 #[test]
 fn product_regression_runs_local_product_gate() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let report_file = temp.path().join("reports/product-regression.json");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
         .arg("product-regression")
         .arg("--data-root")
         .arg(temp.path())
+        .arg("--report-file")
+        .arg(&report_file)
         .output()
         .expect("run tracedb product-regression");
     assert!(
@@ -116,6 +126,8 @@ fn product_regression_runs_local_product_gate() {
         String::from_utf8_lossy(&output.stderr)
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("product-regression json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");
@@ -162,10 +174,13 @@ fn product_regression_runs_local_product_gate() {
 #[test]
 fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let report_file = temp.path().join("reports/failure.json");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
         .arg("product-regression")
         .arg("--data-root")
         .arg(temp.path())
+        .arg("--report-file")
+        .arg(&report_file)
         .arg("--skip-typescript")
         .arg("--only")
         .arg("embedded_demo")
@@ -181,6 +196,8 @@ fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary(
     );
     let summary: Value =
         serde_json::from_slice(&output.stdout).expect("product-regression failure json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
     assert_eq!(summary["ok"], false);
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");
@@ -246,11 +263,14 @@ fn product_regression_only_typescript_conflicts_with_skip_typescript() {
 fn product_regression_list_steps_reports_gate_steps_without_running_them() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("unused-product-data");
+    let report_file = temp.path().join("reports/steps.json");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
         .arg("product-regression")
         .arg("--data-root")
         .arg(&data_root)
         .arg("--list-steps")
+        .arg("--report-file")
+        .arg(&report_file)
         .output()
         .expect("run tracedb product-regression step list");
     assert!(
@@ -265,6 +285,8 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
     );
     let summary: Value =
         serde_json::from_slice(&output.stdout).expect("product-regression step list json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "local-product-regression-step-list");
     assert_eq!(summary["scope"], "local_only");
@@ -309,12 +331,15 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
 fn product_regression_only_embedded_demo_runs_single_gate_step() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("only-embedded-demo");
+    let report_file = temp.path().join("reports/embedded-demo.json");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
         .arg("product-regression")
         .arg("--data-root")
         .arg(&data_root)
         .arg("--only")
         .arg("embedded_demo")
+        .arg("--report-file")
+        .arg(&report_file)
         .output()
         .expect("run tracedb product-regression single step");
     assert!(
@@ -325,6 +350,8 @@ fn product_regression_only_embedded_demo_runs_single_gate_step() {
     );
     let summary: Value =
         serde_json::from_slice(&output.stdout).expect("product-regression only-step json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");

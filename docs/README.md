@@ -43,12 +43,14 @@ This is local product regression evidence only; it does not claim SQL
 compatibility, managed-cloud proof, or benchmark results. The command emits a
 compact top-level `human_summary` in its JSON output and also has test-only
 `--inject-failure STEP` coverage for JSON failure output and nonzero exit
-behavior. For product-regression step discovery, `--list-steps` emits JSON step
-metadata including `human_summary` and `only_supported` and exits without
+behavior. Use `--report-file PATH` to write the same JSON summary to a
+predictable file while preserving JSON stdout; this applies to full runs,
+`--only`, `--inject-failure`, and `--list-steps`, and creates parent
+directories. For product-regression step discovery, `--list-steps` emits JSON
+step metadata including `human_summary` and `only_supported` and exits without
 running product steps. `--skip-typescript` is for the full product gate and
-non-TypeScript
-selectors; a TypeScript `--only` selector conflicts with --skip-typescript. The
-first single-step execution mode is `--only embedded_demo`, which runs only the
+non-TypeScript selectors; a TypeScript `--only` selector conflicts with --skip-typescript.
+The first single-step execution mode is `--only embedded_demo`, which runs only the
 embedded demo step and emits the normal local product-regression JSON summary.
 The
 dependency-aware `--only embedded_verify` mode verifies an existing embedded

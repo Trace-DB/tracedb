@@ -761,6 +761,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "--inject-failure",
         "--list-steps",
         "--only",
+        "--report-file",
         "embedded_demo",
         "embedded_verify",
         "only_step",
@@ -813,6 +814,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("human_summary"),
             "{name} should document product regression human-readable JSON summary metadata"
+        );
+        assert!(
+            markdown.contains("--report-file PATH"),
+            "{name} should document product regression report-file output"
         );
         assert!(
             markdown.contains("conflicts with --skip-typescript"),

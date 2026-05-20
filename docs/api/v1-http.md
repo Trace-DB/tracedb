@@ -249,7 +249,9 @@ top-level `human_summary` for quick operator scanning. It is local product
 regression evidence only: SQL remains not implemented, managed-cloud is not
 checked, and benchmarks are not checked. Failure ergonomics for the consolidated
 local gate are covered by test-only `--inject-failure STEP`, which preserves the
-JSON summary on stdout and exits nonzero. Operators can run
+JSON summary on stdout and exits nonzero. Operators can pass
+`--report-file PATH` to write that same JSON summary to a predictable file while
+preserving JSON stdout; parent directories are created. Operators can run
 `product-regression --list-steps` to discover valid gate steps for failure
 injection and CI orchestration; it emits JSON step metadata including
 `human_summary` and `only_supported` and does not run demo, HTTP, SDK, or

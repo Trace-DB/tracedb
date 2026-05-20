@@ -64,12 +64,14 @@ or benchmark evidence. Use
 `--skip-typescript` when the local Node tooling is not installed. For CI
 failure-path coverage, use test-only `--inject-failure STEP` to verify that the
 gate exits nonzero while still emitting the failed-step JSON summary. Use
+`--report-file PATH` to write the same JSON summary to a predictable file while
+preserving JSON stdout for automation; this applies to full runs, `--only`,
+`--inject-failure`, and `--list-steps`, and creates parent directories. Use
 `--list-steps` to print JSON step metadata, including `human_summary` and
 `only_supported`, for operator and CI wiring without running demo, HTTP, SDK,
 or TypeScript smoke steps. `--skip-typescript` is for the full product gate and
-non-TypeScript
-selectors; a TypeScript `--only` selector conflicts with --skip-typescript for
-steps such as `typescript_check`, `typescript_http_smoke`, or
+non-TypeScript selectors; a TypeScript `--only` selector conflicts with --skip-typescript
+for steps such as `typescript_check`, `typescript_http_smoke`, or
 `typescript_gateway_smoke`. For narrow local iteration,
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step `local-product-regression` JSON summary. After that, use the

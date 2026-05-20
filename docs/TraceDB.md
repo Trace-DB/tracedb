@@ -47,6 +47,10 @@ product regression evidence only: SQL remains not implemented, managed-cloud is
 not checked, and benchmarks are not checked. The local product regression gate
 also has test-only `--inject-failure STEP` coverage for nonzero process status
 and machine-readable failed-step JSON. Use
+`--report-file PATH` to write the same product-regression JSON summary to a
+predictable file while preserving JSON stdout; this applies to full runs,
+`--only`, `--inject-failure`, and `--list-steps`, and creates parent
+directories. Use
 `--list-steps` to print the machine-readable list of product-regression step
 names with `human_summary` and `only_supported` metadata for operators and CI
 wiring without executing any product checks. `--skip-typescript` is for the full
