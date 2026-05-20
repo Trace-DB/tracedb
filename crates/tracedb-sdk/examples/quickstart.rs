@@ -14,18 +14,27 @@ use tracedb_sdk::{
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("tracedb-sdk quickstart: {error}");
+        println!("{}", error.to_pretty_json());
+        eprintln!("tracedb-sdk quickstart: {}", error.message);
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
-    let args = QuickstartArgs::from_env()?;
+fn run() -> Result<(), QuickstartFailure> {
+    let args = QuickstartArgs::from_env().map_err(|message| {
+        QuickstartFailure::configuration(message, QuickstartFailureContext::from_env_and_cli())
+    })?;
     if args.help {
         println!("{}", QuickstartArgs::usage());
         return Ok(());
     }
+    validate_quickstart_url(&args.url)
+        .map_err(|message| QuickstartFailure::configuration(message, (&args).into()))?;
+    run_quickstart(&args)
+        .map_err(|error| QuickstartFailure::execution(error.to_string(), (&args).into()))
+}
 
+fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
     let mut config = TraceDbClientConfig::managed(args.url.clone(), args.token.clone());
     if let Some(database_id) = args.database_id.as_ref() {
         config = config.with_database(database_id.clone());
@@ -170,6 +179,155 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+struct QuickstartFailure {
+    kind: &'static str,
+    phase: &'static str,
+    message: String,
+    context: QuickstartFailureContext,
+}
+
+impl QuickstartFailure {
+    fn configuration(message: String, context: QuickstartFailureContext) -> Self {
+        Self {
+            kind: "configuration",
+            phase: "config",
+            message,
+            context,
+        }
+    }
+
+    fn execution(message: String, context: QuickstartFailureContext) -> Self {
+        Self {
+            kind: "execution",
+            phase: "execution",
+            message,
+            context,
+        }
+    }
+
+    fn summary(&self) -> serde_json::Value {
+        let admin_state = if self.context.admin_requested {
+            "not_started"
+        } else {
+            "skipped"
+        };
+        let admin = json!({
+            "requested": self.context.admin_requested,
+            "compact": admin_state,
+            "snapshot": admin_state,
+            "restore": admin_state,
+        });
+        let steps = json!({
+            "ready": false,
+            "health": false,
+            "catalog": false,
+            "metrics": false,
+            "schema_apply": false,
+            "batch_ingest": false,
+            "patch": false,
+            "scan": false,
+            "query": false,
+            "explain": false,
+            "delete": false,
+            "jobs": false,
+            "compact": false,
+            "snapshot": false,
+            "restore": false,
+        });
+        json!({
+            "ok": false,
+            "mode": "rust-sdk-quickstart",
+            "server_url": self.context.url.as_str(),
+            "database_id": self.context.database_id.as_deref(),
+            "branch_id": self.context.branch_id.as_deref(),
+            "table": "docs",
+            "tenant_id": "tenant-a",
+            "admin": admin,
+            "idempotency_retries": self.context.idempotency_retries.unwrap_or(0),
+            "idempotency_keys": false,
+            "phase": self.phase,
+            "error": {
+                "kind": self.kind,
+                "message": self.message.as_str(),
+            },
+            "sql_module": "not_implemented",
+            "steps": steps,
+        })
+    }
+
+    fn to_pretty_json(&self) -> String {
+        serde_json::to_string_pretty(&self.summary()).unwrap_or_else(|_| {
+            format!(
+                "{{\"ok\":false,\"mode\":\"rust-sdk-quickstart\",\"error\":{{\"kind\":\"{}\",\"message\":\"{}\"}},\"sql_module\":\"not_implemented\"}}",
+                self.kind,
+                self.message.replace('"', "\\\"")
+            )
+        })
+    }
+}
+
+struct QuickstartFailureContext {
+    url: String,
+    database_id: Option<String>,
+    branch_id: Option<String>,
+    admin_requested: bool,
+    idempotency_retries: Option<u8>,
+}
+
+impl QuickstartFailureContext {
+    fn from_env_and_cli() -> Self {
+        let mut context = Self {
+            url: env::var("TRACEDB_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
+            database_id: env::var("TRACEDB_DATABASE_ID").ok(),
+            branch_id: env::var("TRACEDB_BRANCH_ID").ok(),
+            admin_requested: env::var("TRACEDB_ADMIN_DIR")
+                .ok()
+                .is_some_and(|value| !value.is_empty()),
+            idempotency_retries: env::var("TRACEDB_IDEMPOTENCY_RETRIES")
+                .ok()
+                .and_then(|value| value.parse::<u8>().ok()),
+        };
+        let mut cli = env::args().skip(1);
+        while let Some(arg) = cli.next() {
+            match arg.as_str() {
+                "--url" => {
+                    if let Some(value) = cli.next() {
+                        context.url = value;
+                    }
+                }
+                "--database-id" => context.database_id = cli.next(),
+                "--branch-id" => context.branch_id = cli.next(),
+                "--admin-dir" => {
+                    if let Some(value) = cli.next() {
+                        context.admin_requested = !value.is_empty();
+                    }
+                }
+                "--idempotency-retries" => {
+                    context.idempotency_retries =
+                        cli.next().and_then(|value| value.parse::<u8>().ok());
+                }
+                "--token" | "--timeout-ms" | "--safe-retries" => {
+                    let _ = cli.next();
+                }
+                _ => {}
+            }
+        }
+        context
+    }
+}
+
+impl From<&QuickstartArgs> for QuickstartFailureContext {
+    fn from(args: &QuickstartArgs) -> Self {
+        Self {
+            url: args.url.clone(),
+            database_id: args.database_id.clone(),
+            branch_id: args.branch_id.clone(),
+            admin_requested: args.admin_dir.is_some(),
+            idempotency_retries: args.idempotency_retries,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct QuickstartArgs {
     url: String,
@@ -310,6 +468,35 @@ fn next_value(cli: &mut impl Iterator<Item = String>, name: &str) -> Result<Stri
     cli.next()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("{name} requires a value"))
+}
+
+fn validate_quickstart_url(url: &str) -> Result<(), String> {
+    let without_scheme = url
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("invalid TraceDB URL {url}; expected http://host[:port][/path]"))?;
+    let authority = without_scheme
+        .split_once('/')
+        .map(|(authority, _)| authority)
+        .unwrap_or(without_scheme);
+    if authority.is_empty() {
+        return Err(format!(
+            "invalid TraceDB URL {url}; expected http://host[:port][/path]"
+        ));
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .map(|(host, port)| (host, Some(port)))
+        .unwrap_or((authority, None));
+    if host.is_empty() {
+        return Err(format!(
+            "invalid TraceDB URL {url}; expected http://host[:port][/path]"
+        ));
+    }
+    if let Some(port) = port {
+        port.parse::<u16>()
+            .map_err(|_| format!("invalid TraceDB URL {url}; port must fit in 0..=65535"))?;
+    }
+    Ok(())
 }
 
 fn parse_timeout_ms(value: &str) -> Result<u64, String> {

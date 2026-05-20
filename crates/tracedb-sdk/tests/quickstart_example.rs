@@ -2,12 +2,22 @@ use serde_json::Value;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tracedb_query::{RecordScanRequest, TraceDb};
 use tracedb_sdk::{TraceDbClient, TraceDbClientConfig};
 
+static QUICKSTART_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
+
+fn quickstart_example_lock() -> MutexGuard<'static, ()> {
+    QUICKSTART_EXAMPLE_LOCK
+        .lock()
+        .expect("quickstart example lock poisoned")
+}
+
 #[test]
 fn sdk_quickstart_example_runs_against_real_http_server() {
+    let _guard = quickstart_example_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("engine");
     let admin_dir = temp.path().join("sdk-admin");
@@ -109,6 +119,7 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
 
 #[test]
 fn sdk_quickstart_example_skips_admin_without_admin_dir() {
+    let _guard = quickstart_example_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("engine");
     let url = start_quickstart_test_server(data_dir);
@@ -186,6 +197,7 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
 
 #[test]
 fn sdk_quickstart_accepts_idempotency_retries_from_env() {
+    let _guard = quickstart_example_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("engine");
     let url = start_quickstart_test_server(data_dir);
@@ -287,8 +299,19 @@ fn wait_for_quickstart_ready(url: &str) {
     );
 }
 
+fn quickstart_failure_summary(output: &std::process::Output) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "quickstart failure should emit parseable json summary: {error}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
 #[test]
 fn sdk_quickstart_rejects_relative_admin_dir_before_http_request() {
+    let _guard = quickstart_example_lock();
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -313,6 +336,17 @@ fn sdk_quickstart_rejects_relative_admin_dir_before_http_request() {
         .expect("run quickstart example");
 
     assert!(!output.status.success());
+    let summary = quickstart_failure_summary(&output);
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["mode"], "rust-sdk-quickstart");
+    assert_eq!(summary["error"]["kind"], "configuration");
+    assert!(
+        summary["error"]["message"].as_str().is_some_and(
+            |message| message.contains("--admin-dir must be an absolute server-side path")
+        ),
+        "unexpected failure summary: {summary}"
+    );
+    assert_eq!(summary["sql_module"], "not_implemented");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--admin-dir must be an absolute server-side path"),
@@ -321,7 +355,50 @@ fn sdk_quickstart_rejects_relative_admin_dir_before_http_request() {
 }
 
 #[test]
+fn sdk_quickstart_rejects_invalid_url_with_parseable_summary() {
+    let _guard = quickstart_example_lock();
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace_root)
+        .env_remove("TRACEDB_IDEMPOTENCY_RETRIES")
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "tracedb-sdk",
+            "--example",
+            "quickstart",
+            "--",
+            "--url",
+            "not-http",
+            "--token",
+            "dev-token",
+        ])
+        .output()
+        .expect("run quickstart example");
+
+    assert!(!output.status.success());
+    let summary = quickstart_failure_summary(&output);
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["mode"], "rust-sdk-quickstart");
+    assert_eq!(summary["server_url"], "not-http");
+    assert_eq!(summary["error"]["kind"], "configuration");
+    assert!(
+        summary["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("invalid TraceDB URL not-http")),
+        "unexpected failure summary: {summary}"
+    );
+    assert_eq!(summary["steps"]["ready"], false);
+    assert_eq!(summary["sql_module"], "not_implemented");
+}
+
+#[test]
 fn sdk_quickstart_rejects_invalid_idempotency_retries_before_http_request() {
+    let _guard = quickstart_example_lock();
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -346,6 +423,17 @@ fn sdk_quickstart_rejects_invalid_idempotency_retries_before_http_request() {
         .expect("run quickstart example");
 
     assert!(!output.status.success());
+    let summary = quickstart_failure_summary(&output);
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["mode"], "rust-sdk-quickstart");
+    assert_eq!(summary["error"]["kind"], "configuration");
+    assert!(
+        summary["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("--idempotency-retries must fit in 0..=255")),
+        "unexpected failure summary: {summary}"
+    );
+    assert_eq!(summary["sql_module"], "not_implemented");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--idempotency-retries must fit in 0..=255"),

@@ -367,7 +367,10 @@ semantics. The JSON summary reports the active envelope fields operators need to
 compare quickstarts across clients: `mode: "rust-sdk-quickstart"`,
 `server_url`, optional `database_id` / `branch_id`, `table`, `tenant_id`, and a
 structured `admin` object where skipped admin work is explicit instead of
-collapsed into a failure-shaped boolean.
+collapsed into a failure-shaped boolean. Invalid quickstart configuration exits
+nonzero but preserves stdout as JSON, reporting `ok: false`, `phase: "config"`,
+`error.kind`, `error.message`, false step statuses, and `sql_module:
+not_implemented` for automation that parses product-regression child summaries.
 
 The generated TypeScript client has its own local HTTP smoke:
 

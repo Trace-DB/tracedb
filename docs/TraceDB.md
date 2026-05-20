@@ -182,6 +182,10 @@ compact, snapshot, and restore. The quickstart JSON summary now uses the same
 operator-facing envelope shape as the TypeScript endpoint quickstart: `mode`,
 `server_url`, optional `database_id` / `branch_id`, `table`, `tenant_id`, and a
 structured `admin` object for requested/skipped compact, snapshot, and restore.
+Invalid quickstart configuration, including malformed URLs, invalid retry counts,
+and non-absolute admin scratch paths, exits nonzero but still emits a parseable
+`ok: false` JSON summary on stdout with `error.kind`, `error.message`, false
+step statuses, and `sql_module: not_implemented`.
 SQL compatibility remains unimplemented.
 
 The current versioned HTTP API route reference is `docs/api/v1-http.md`. The
