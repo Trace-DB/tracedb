@@ -3,6 +3,7 @@ use std::fs;
 use std::future::Future;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -322,6 +323,44 @@ fn block_on<F: Future>(future: F) -> F::Output {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn start_real_http_server(data_dir: PathBuf) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let bind = addr.to_string();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &bind);
+    });
+    let url = format!("http://{addr}");
+    wait_for_ready_endpoint(&url);
+    url
+}
+
+fn wait_for_ready_endpoint(url: &str) {
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url.to_string(), "dev-token")
+            .with_timeout(Duration::from_millis(100)),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match client.ready_typed() {
+            Ok(response) if response.ready => return,
+            Ok(response) => {
+                last_error = Some(format!("ready endpoint returned not-ready: {response:?}"));
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "real TraceDB HTTP test server did not become ready at {url}; last error: {}",
+        last_error.unwrap_or_else(|| "no readiness attempt completed".to_string())
+    );
 }
 
 #[test]
@@ -997,19 +1036,9 @@ fn typed_readonly_responses_deserialize_gateway_shapes() {
 #[test]
 fn client_executes_real_http_product_path() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_real_http_server(temp.path().to_path_buf());
 
-    let client = TraceDbClient::new(TraceDbClientConfig::managed(
-        format!("http://{addr}"),
-        "dev-token",
-    ));
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
     assert_eq!(client.ready().expect("ready")["ready"], true);
     assert_eq!(client.apply_schema(&schema()).expect("schema")["epoch"], 1);
@@ -1064,19 +1093,9 @@ fn client_executes_real_http_product_path() {
 #[test]
 fn async_client_executes_real_typed_http_read_path() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_real_http_server(temp.path().to_path_buf());
 
-    let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(
-        format!("http://{addr}"),
-        "dev-token",
-    ));
+    let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
     assert!(block_on(client.ready_typed()).expect("async ready").ready);
     block_on(client.apply_schema_typed(&schema())).expect("async schema apply");
@@ -1103,19 +1122,11 @@ fn async_client_executes_real_typed_http_read_path() {
 #[test]
 fn async_client_executes_real_typed_write_admin_path() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
     let data_dir = temp.path().join("engine");
-    let server_data_dir = data_dir.clone();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(server_data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_real_http_server(data_dir);
 
     let client = TraceDbAsyncClient::new(
-        TraceDbClientConfig::managed(format!("http://{addr}"), "dev-token")
-            .with_idempotency_retries(1),
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
     );
 
     assert!(block_on(client.ready_typed()).expect("async ready").ready);
@@ -1186,19 +1197,9 @@ fn async_client_executes_real_typed_write_admin_path() {
 #[test]
 fn client_executes_typed_http_product_path() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_real_http_server(temp.path().to_path_buf());
 
-    let client = TraceDbClient::new(TraceDbClientConfig::managed(
-        format!("http://{addr}"),
-        "dev-token",
-    ));
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
     let ready = client.ready_typed().expect("ready");
     assert!(ready.ready);
@@ -1277,18 +1278,10 @@ fn client_executes_typed_http_product_path() {
 #[test]
 fn client_idempotency_options_replay_write_response_against_real_server() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let data_dir = temp.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_real_http_server(temp.path().to_path_buf());
 
-    let client = TraceDbClient::new(
-        TraceDbClientConfig::managed(format!("http://{addr}"), "dev-token").with_safe_retries(2),
-    );
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(2));
     client.apply_schema_typed(&schema()).expect("schema");
     let batch = RecordPutBatchRequest::new(vec![record(
         "intro",
@@ -1343,20 +1336,10 @@ fn client_idempotency_options_replay_write_response_against_real_server() {
 #[test]
 fn client_executes_typed_snapshot_restore_with_idempotency_options() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
     let data_dir = temp.path().join("engine");
-    let server_data_dir = data_dir.clone();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(server_data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_real_http_server(data_dir);
 
-    let client = TraceDbClient::new(TraceDbClientConfig::managed(
-        format!("http://{addr}"),
-        "dev-token",
-    ));
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
     client.apply_schema_typed(&schema()).expect("schema");
     let batch = RecordPutBatchRequest::new(vec![record(
         "intro",
