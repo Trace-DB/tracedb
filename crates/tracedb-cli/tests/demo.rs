@@ -136,6 +136,34 @@ fn doctor_http_reports_endpoint_diagnostics() {
 }
 
 #[test]
+fn doctor_http_reads_endpoint_config_from_environment() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bind = free_loopback_bind();
+    let mut server = ServerChild {
+        child: Command::new(env!("CARGO_BIN_EXE_tracedb"))
+            .arg("--data")
+            .arg(temp.path())
+            .arg("serve")
+            .arg(&bind)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start tracedb server"),
+    };
+
+    let url = format!("http://{bind}");
+    let summary = wait_for_http_doctor_env(&url, &mut server.child);
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["server_url"], url);
+    assert_eq!(summary["database_id"], "db_local");
+    assert_eq!(summary["branch_id"], "db_local:main");
+    assert_eq!(summary["request_timeout_ms"], 500);
+    assert_eq!(summary["safe_retries"], 0);
+    assert_eq!(summary["checks"]["admin_jobs"]["ok"], true);
+    assert_eq!(summary["sql_module"], "not_implemented");
+}
+
+#[test]
 fn doctor_http_exits_nonzero_for_unhealthy_endpoint_and_preserves_json_summary() {
     let url = format!("http://{}", free_loopback_bind());
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
@@ -218,4 +246,36 @@ fn wait_for_http_doctor(url: &str, server: &mut Child) -> Value {
         thread::sleep(Duration::from_millis(50));
     }
     panic!("doctor http did not report ok\nstdout:\n{last_stdout}\nstderr:\n{last_stderr}");
+}
+
+fn wait_for_http_doctor_env(url: &str, server: &mut Child) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_stdout = String::new();
+    let mut last_stderr = String::new();
+    while Instant::now() < deadline {
+        if let Some(status) = server.try_wait().expect("poll tracedb server") {
+            panic!("tracedb server exited before doctor check: {status}");
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+            .arg("doctor")
+            .arg("http")
+            .env("TRACEDB_URL", url)
+            .env("TRACEDB_TOKEN", "dev-token")
+            .env("TRACEDB_DATABASE_ID", "db_local")
+            .env("TRACEDB_BRANCH_ID", "db_local:main")
+            .env("TRACEDB_TIMEOUT_MS", "500")
+            .env("TRACEDB_SAFE_RETRIES", "0")
+            .output()
+            .expect("run tracedb doctor http from environment");
+        last_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        last_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if output.status.success() {
+            let summary: Value = serde_json::from_slice(&output.stdout).expect("doctor json");
+            if summary["ok"] == true {
+                return summary;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("doctor http env did not report ok\nstdout:\n{last_stdout}\nstderr:\n{last_stderr}");
 }

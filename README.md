@@ -74,6 +74,13 @@ diagnostics, including the bodyless admin-jobs route. The command exits
 non-zero when any check fails while keeping the JSON summary on stdout. It is a
 local/managed-style endpoint diagnostic, not a SQL probe or benchmark.
 
+For CI or deployed endpoint checks, the same command can read endpoint config
+from environment variables instead of flags:
+
+```bash
+TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 cargo run -p tracedb-cli -- doctor http
+```
+
 The SDK example applies schema, batch-ingests records, scans, queries, explains,
 deletes, verifies deleted-record hiding, optionally compacts/snapshots/restores
 when `--admin-dir` points at an absolute server-side local scratch directory,

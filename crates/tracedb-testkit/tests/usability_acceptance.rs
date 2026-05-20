@@ -729,6 +729,13 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "TraceDbAsyncClient",
         "background thread per request",
         "async typed write/admin helpers",
+        "TRACEDB_URL",
+        "TRACEDB_TOKEN",
+        "TRACEDB_TIMEOUT_MS",
+        "TRACEDB_SAFE_RETRIES",
+        "TRACEDB_DATABASE_ID",
+        "TRACEDB_BRANCH_ID",
+        "cargo run -p tracedb-cli -- doctor http",
         "Internal TraceDB-only runs are development evidence",
         "No cursor metadata is emitted today",
     ] {

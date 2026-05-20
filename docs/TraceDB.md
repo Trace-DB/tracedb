@@ -72,6 +72,14 @@ non-zero when any check fails while keeping the JSON summary on stdout. It is a
 local/managed-style endpoint diagnostic, not a SQL probe, benchmark, or managed
 deployment proof.
 
+For CI or deployed endpoint checks, the doctor can read the same endpoint
+configuration from `TRACEDB_URL`, `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
+`TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and `TRACEDB_SAFE_RETRIES`:
+
+```bash
+TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 cargo run -p tracedb-cli -- doctor http
+```
+
 The SDK quickstart uses typed convenience response methods, including typed
 query rows, over the current HTTP JSON shapes. It accepts `--timeout-ms` for the
 blocking SDK request timeout, `--safe-retries` for bounded health/read route

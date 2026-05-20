@@ -159,6 +159,13 @@ exits non-zero when any check fails while preserving the JSON summary on
 stdout. It does not mutate data, does not probe SQL compatibility, and is not
 benchmark evidence.
 
+The same diagnostic can be run from CI or deployment scripts with endpoint
+configuration supplied by environment variables:
+
+```bash
+TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 cargo run -p tracedb-cli -- doctor http
+```
+
 Error responses use the current JSON envelope `{ "error": string }` for server
 and gateway failures such as validation errors, not found routes, idempotency
 conflicts, unauthorized gateway calls, gateway rate limits, and upstream
@@ -253,6 +260,11 @@ For endpoint diagnostics before or after the product path, run:
 ```bash
 cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --database-id db_local --branch-id db_local:main
 ```
+
+The doctor can also read `TRACEDB_URL`, `TRACEDB_TOKEN`,
+`TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and
+`TRACEDB_SAFE_RETRIES`, which lets secret-bearing deployed checks avoid command
+line token arguments.
 
 The SDK quickstart exercises this path and reports `sql_module:
 not_implemented`. Passing `--admin-dir SERVER_SIDE_DIR` also exercises compact,
