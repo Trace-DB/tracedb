@@ -96,6 +96,16 @@ This is generated TypeScript check evidence only; it does not run `http_demo`,
 local `doctor http`, the Rust SDK quickstart, TypeScript HTTP smoke,
 TypeScript gateway smoke, managed-cloud checks, benchmark controls, or SQL
 compatibility checks.
+`--only typescript_http_smoke` runs only
+`(cd clients/typescript && npm run http-smoke)`, which starts its own local
+`tracedb-server` child process and exercises the generated TypeScript client
+HTTP product path through ready, catalog, schema apply, batch ingest, get,
+scan, query, explain, delete, compact, snapshot, restore, and jobs. It emits
+the normal one-step `local-product-regression` JSON summary with `only_step:
+"typescript_http_smoke"`. This is local generated TypeScript HTTP smoke
+evidence only; it does not run embedded demo/verify, `http_demo`, local
+`doctor http`, the Rust SDK quickstart, `typescript_check`, TypeScript gateway
+smoke, managed-cloud checks, benchmark controls, or SQL compatibility checks.
 
 Run the SDK quickstart against a local HTTP server:
 

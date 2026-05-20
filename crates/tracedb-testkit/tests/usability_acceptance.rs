@@ -827,6 +827,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
             markdown.contains("--only typescript_check"),
             "{name} should document targeted generated TypeScript typecheck execution"
         );
+        assert!(
+            markdown.contains("--only typescript_http_smoke"),
+            "{name} should document targeted generated TypeScript HTTP smoke execution"
+        );
     }
 }
 

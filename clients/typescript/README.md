@@ -136,6 +136,12 @@ the private package typecheck plus dependency-free generated-client smoke. It
 does not run `http-smoke`, `gateway-smoke`, `http_demo`, local `doctor http`,
 the Rust SDK quickstart, managed-cloud checks, benchmark controls, or SQL
 compatibility checks.
+`--only typescript_http_smoke` runs only `npm run http-smoke`, which starts its
+own local `tracedb-server` child process and exercises the generated
+TypeScript client HTTP product path. It does not run embedded demo/verify,
+`http_demo`, local `doctor http`, the Rust SDK quickstart, `typescript_check`,
+`gateway-smoke`, managed-cloud checks, benchmark controls, or SQL
+compatibility checks.
 
 Install the local private package tooling and run the typecheck boundary:
 

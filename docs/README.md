@@ -66,3 +66,10 @@ check evidence only, not full product-regression gate coverage, not local HTTP
 demo, not endpoint diagnostics, not Rust SDK quickstart, not TypeScript HTTP or
 gateway smoke coverage, not managed-cloud proof, not benchmark evidence, and
 not SQL compatibility.
+`--only typescript_http_smoke` runs only `(cd clients/typescript && npm run
+http-smoke)` and emits one-step `local-product-regression` JSON. It is local
+generated TypeScript HTTP smoke evidence only, not full product-regression gate
+coverage, not embedded demo/verify, not local HTTP demo, not endpoint
+diagnostics, not Rust SDK quickstart, not `typescript_check`, not TypeScript
+gateway smoke coverage, not managed-cloud proof, not benchmark evidence, and
+not SQL compatibility.

@@ -1037,6 +1037,7 @@ const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = &[
     "local_doctor",
     "rust_sdk_quickstart",
     "typescript_check",
+    "typescript_http_smoke",
 ];
 
 fn parse_product_regression_config(
@@ -1202,6 +1203,13 @@ fn run_product_regression(
         let command = product_regression_typescript_command(&workspace, &["run", "check"]);
         let step = run_product_regression_step_or_injected(&config, "typescript_check", command);
         steps.insert("typescript_check".to_string(), step);
+        return finish_product_regression(config, local_server_url, steps);
+    }
+    if config.only_step.as_deref() == Some("typescript_http_smoke") {
+        let command = product_regression_typescript_command(&workspace, &["run", "http-smoke"]);
+        let step =
+            run_product_regression_step_or_injected(&config, "typescript_http_smoke", command);
+        steps.insert("typescript_http_smoke".to_string(), step);
         return finish_product_regression(config, local_server_url, steps);
     }
 
@@ -1709,6 +1717,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo|embedded_verify|http_demo|local_doctor|rust_sdk_quickstart|typescript_check]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo|embedded_verify|http_demo|local_doctor|rust_sdk_quickstart|typescript_check|typescript_http_smoke]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
