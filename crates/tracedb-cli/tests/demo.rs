@@ -122,6 +122,14 @@ fn product_regression_runs_local_product_gate() {
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
     assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
     assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(summary["human_summary"]["status"], "passed");
+    assert_eq!(
+        summary["human_summary"]["message"],
+        "local product regression passed: 8/8 steps"
+    );
+    assert_eq!(summary["human_summary"]["steps_passed"], 8);
+    assert_eq!(summary["human_summary"]["steps_total"], 8);
+    assert_eq!(summary["human_summary"]["failed_step"], Value::Null);
     for step in [
         "embedded_demo",
         "embedded_verify",
@@ -159,6 +167,8 @@ fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary(
         .arg("--data-root")
         .arg(temp.path())
         .arg("--skip-typescript")
+        .arg("--only")
+        .arg("embedded_demo")
         .arg("--inject-failure")
         .arg("embedded_demo")
         .output()
@@ -175,9 +185,18 @@ fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary(
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");
     assert_eq!(summary["failure_injection"], "embedded_demo");
+    assert_eq!(summary["only_step"], "embedded_demo");
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
     assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
     assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(summary["human_summary"]["status"], "failed");
+    assert_eq!(
+        summary["human_summary"]["message"],
+        "local product regression failed: 0/1 steps passed; failed_step=embedded_demo; only_step=embedded_demo"
+    );
+    assert_eq!(summary["human_summary"]["steps_passed"], 0);
+    assert_eq!(summary["human_summary"]["steps_total"], 1);
+    assert_eq!(summary["human_summary"]["failed_step"], "embedded_demo");
     assert_eq!(summary["steps"]["embedded_demo"]["ok"], false);
     assert_eq!(summary["steps"]["embedded_demo"]["injected_failure"], true);
     assert_eq!(
@@ -252,6 +271,13 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
     assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
     assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(summary["human_summary"]["status"], "listed");
+    assert_eq!(
+        summary["human_summary"]["message"],
+        "local product regression steps listed: 8 steps; only_supported=8"
+    );
+    assert_eq!(summary["human_summary"]["steps_total"], 8);
+    assert_eq!(summary["human_summary"]["only_supported"], 8);
     let steps = summary["steps"].as_array().expect("steps array");
     assert_eq!(steps.len(), 8);
     let step_names = steps
@@ -306,6 +332,14 @@ fn product_regression_only_embedded_demo_runs_single_gate_step() {
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
     assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
     assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(summary["human_summary"]["status"], "passed");
+    assert_eq!(
+        summary["human_summary"]["message"],
+        "local product regression passed: 1/1 steps; only_step=embedded_demo"
+    );
+    assert_eq!(summary["human_summary"]["steps_passed"], 1);
+    assert_eq!(summary["human_summary"]["steps_total"], 1);
+    assert_eq!(summary["human_summary"]["failed_step"], Value::Null);
     let steps = summary["steps"].as_object().expect("steps object");
     assert_eq!(steps.len(), 1);
     assert_eq!(summary["steps"]["embedded_demo"]["ok"], true);

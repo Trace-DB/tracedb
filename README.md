@@ -55,17 +55,19 @@ cargo run -p tracedb-cli -- product-regression
 ```
 
 The gate emits one JSON summary with `mode: "local-product-regression"`,
-`scope: "local_only"`, and explicit `not_checked` markers for managed-cloud and
-benchmark claims. It orchestrates the embedded demo/verify path, `http-demo`,
-local `doctor http`, the Rust SDK quickstart, and generated TypeScript
-check/http/gateway smoke paths. It is local product regression evidence, not
-SQL compatibility, managed-cloud proof, or benchmark evidence. Use
+`scope: "local_only"`, a compact top-level `human_summary`, and explicit
+`not_checked` markers for managed-cloud and benchmark claims. It orchestrates
+the embedded demo/verify path, `http-demo`, local `doctor http`, the Rust SDK
+quickstart, and generated TypeScript check/http/gateway smoke paths. It is
+local product regression evidence, not SQL compatibility, managed-cloud proof,
+or benchmark evidence. Use
 `--skip-typescript` when the local Node tooling is not installed. For CI
 failure-path coverage, use test-only `--inject-failure STEP` to verify that the
 gate exits nonzero while still emitting the failed-step JSON summary. Use
-`--list-steps` to print JSON step metadata, including `only_supported`, for
-operator and CI wiring without running demo, HTTP, SDK, or TypeScript smoke
-steps. `--skip-typescript` is for the full product gate and non-TypeScript
+`--list-steps` to print JSON step metadata, including `human_summary` and
+`only_supported`, for operator and CI wiring without running demo, HTTP, SDK,
+or TypeScript smoke steps. `--skip-typescript` is for the full product gate and
+non-TypeScript
 selectors; a TypeScript `--only` selector conflicts with --skip-typescript for
 steps such as `typescript_check`, `typescript_http_smoke`, or
 `typescript_gateway_smoke`. For narrow local iteration,

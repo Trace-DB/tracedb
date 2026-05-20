@@ -1317,6 +1317,7 @@ fn finish_product_regression(
     let data_root = config.data_root.display().to_string();
     let failure_injection = config.inject_failure.clone();
     let only_step = config.only_step.clone();
+    let human_summary = product_regression_human_summary(&steps, only_step.as_deref());
     let summary = json!({
         "ok": ok,
         "mode": "local-product-regression",
@@ -1326,6 +1327,7 @@ fn finish_product_regression(
         "keep_data": config.keep_data,
         "failure_injection": failure_injection,
         "only_step": only_step,
+        "human_summary": human_summary,
         "local_server_url": local_server_url,
         "typescript_enabled": !config.skip_typescript,
         "claims": {
@@ -1344,6 +1346,44 @@ fn finish_product_regression(
     } else {
         Err("product-regression local product gate failed".into())
     }
+}
+
+fn product_regression_human_summary(
+    steps: &serde_json::Map<String, Value>,
+    only_step: Option<&str>,
+) -> Value {
+    let steps_total = steps.len();
+    let steps_passed = steps
+        .values()
+        .filter(|step| product_regression_step_ok(step))
+        .count();
+    let failed_step = steps
+        .iter()
+        .find_map(|(name, step)| (!product_regression_step_ok(step)).then(|| name.clone()));
+    let (status, mut message) = if let Some(failed_step) = failed_step.as_deref() {
+        (
+            "failed",
+            format!(
+                "local product regression failed: {steps_passed}/{steps_total} steps passed; failed_step={failed_step}"
+            ),
+        )
+    } else {
+        (
+            "passed",
+            format!("local product regression passed: {steps_passed}/{steps_total} steps"),
+        )
+    };
+    if let Some(only_step) = only_step {
+        message.push_str("; only_step=");
+        message.push_str(only_step);
+    }
+    json!({
+        "status": status,
+        "message": message,
+        "steps_passed": steps_passed,
+        "steps_total": steps_total,
+        "failed_step": failed_step,
+    })
 }
 
 fn product_regression_cli_command(cli: &std::path::Path, args: Vec<String>) -> Command {
@@ -1425,6 +1465,11 @@ fn product_regression_typescript_command(workspace: &std::path::Path, args: &[&s
 }
 
 fn product_regression_step_list_summary() -> Value {
+    let steps_total = PRODUCT_REGRESSION_STEPS.len();
+    let only_supported = PRODUCT_REGRESSION_STEPS
+        .iter()
+        .filter(|name| PRODUCT_REGRESSION_ONLY_STEPS.contains(name))
+        .count();
     let steps = PRODUCT_REGRESSION_STEPS
         .iter()
         .map(|name| {
@@ -1438,6 +1483,14 @@ fn product_regression_step_list_summary() -> Value {
         "ok": true,
         "mode": "local-product-regression-step-list",
         "scope": "local_only",
+        "human_summary": {
+            "status": "listed",
+            "message": format!(
+                "local product regression steps listed: {steps_total} steps; only_supported={only_supported}"
+            ),
+            "steps_total": steps_total,
+            "only_supported": only_supported,
+        },
         "claims": {
             "sql_module": "not_implemented",
             "managed_cloud": "not_checked",

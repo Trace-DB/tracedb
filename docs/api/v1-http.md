@@ -244,14 +244,16 @@ cargo run -p tracedb-cli -- product-regression
 
 The gate emits one `local-product-regression` JSON summary for the embedded
 demo/verify path, local HTTP SDK demo, endpoint doctor, Rust SDK quickstart,
-and generated TypeScript check/http/gateway smoke paths. It is local product
+and generated TypeScript check/http/gateway smoke paths, with a compact
+top-level `human_summary` for quick operator scanning. It is local product
 regression evidence only: SQL remains not implemented, managed-cloud is not
-checked, and benchmarks are not checked. Failure ergonomics for the
-consolidated local gate are covered by test-only `--inject-failure STEP`, which
-preserves the JSON summary on stdout and exits nonzero. Operators can run
+checked, and benchmarks are not checked. Failure ergonomics for the consolidated
+local gate are covered by test-only `--inject-failure STEP`, which preserves the
+JSON summary on stdout and exits nonzero. Operators can run
 `product-regression --list-steps` to discover valid gate steps for failure
 injection and CI orchestration; it emits JSON step metadata including
-`only_supported` and does not run demo, HTTP, SDK, or TypeScript smoke steps.
+`human_summary` and `only_supported` and does not run demo, HTTP, SDK, or
+TypeScript smoke steps.
 `--skip-typescript` is for the full product gate and non-TypeScript selectors; a
 TypeScript `--only` selector conflicts with --skip-typescript.
 `product-regression --only embedded_demo` runs only

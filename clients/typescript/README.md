@@ -120,12 +120,13 @@ That gate runs `npm run check`, `npm run http-smoke`, and
 `npm run gateway-smoke` as local product regression evidence only. It does not
 claim package publishing readiness, SQL compatibility, managed-cloud proof, or
 benchmark results. Test-only `--inject-failure STEP` can validate failed-step
-JSON and nonzero gate behavior without weakening this TypeScript smoke path.
+JSON, top-level `human_summary`, and nonzero gate behavior without weakening
+this TypeScript smoke path.
 Use `product-regression --list-steps` to discover the TypeScript smoke step
-names and `only_supported` metadata without invoking Node tooling. The current
-`--only embedded_demo` mode and dependency-aware `--only embedded_verify` mode
-do not run the TypeScript smoke steps. `--only http_demo` also does not run the
-TypeScript smoke steps;
+names plus `human_summary` and `only_supported` metadata without invoking Node
+tooling. The current `--only embedded_demo` mode and dependency-aware
+`--only embedded_verify` mode do not run the TypeScript smoke steps.
+`--only http_demo` also does not run the TypeScript smoke steps;
 it is limited to the self-contained local HTTP demo step. `--only local_doctor`
 also does not run the TypeScript smoke steps; it is limited to local endpoint
 diagnostics against a managed local server.
