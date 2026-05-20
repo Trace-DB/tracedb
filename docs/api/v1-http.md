@@ -282,7 +282,10 @@ emits one-step `local-product-regression` JSON with `only_step:
 "rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence only, not
 full product gate coverage, not `http_demo`, not local `doctor http`
 diagnostics, not generated TypeScript smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility.
+benchmark evidence, and not SQL compatibility. If the Rust SDK child exits
+nonzero after writing quickstart JSON, product-regression preserves that nested
+object under `steps.rust_sdk_quickstart.summary` and keeps stdout/stderr tails
+on the failed step for debugging.
 `product-regression --only typescript_check` runs only `npm run check` in
 `clients/typescript`, which currently performs the private package typecheck
 plus dependency-free generated-client smoke, and emits one-step

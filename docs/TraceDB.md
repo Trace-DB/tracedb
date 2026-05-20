@@ -84,6 +84,9 @@ is local Rust SDK quickstart evidence only, not full product gate coverage, not
 `http_demo`, not local `doctor http` diagnostics, not generated TypeScript
 smoke, not managed-cloud proof, not benchmark evidence, and not SQL
 compatibility.
+Failed Rust SDK child runs that still emit quickstart JSON are preserved under
+`steps.rust_sdk_quickstart.summary`, with stdout/stderr tails retained on the
+failed step.
 `--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
 which currently performs the private package typecheck plus dependency-free
 generated-client smoke, and emits one-step `local-product-regression` JSON with

@@ -600,6 +600,68 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
 }
 
 #[test]
+fn product_regression_rust_sdk_quickstart_failure_preserves_child_summary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let report_file = temp.path().join("failing-rust-sdk-quickstart.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .current_dir(temp.path())
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg("relative-product-regression-root")
+        .arg("--report-file")
+        .arg(&report_file)
+        .arg("--only")
+        .arg("rust_sdk_quickstart")
+        .output()
+        .expect("run tracedb product-regression failing Rust SDK quickstart step");
+    assert!(
+        !output.status.success(),
+        "product-regression --only rust_sdk_quickstart with child config failure should exit nonzero\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout)
+        .expect("product-regression failing Rust SDK quickstart json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "rust_sdk_quickstart");
+    assert_eq!(summary["failure_injection"], Value::Null);
+    assert_eq!(summary["human_summary"]["status"], "failed");
+    assert_eq!(
+        summary["human_summary"]["failed_step"],
+        "rust_sdk_quickstart"
+    );
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    let step = &summary["steps"]["rust_sdk_quickstart"];
+    assert_eq!(step["ok"], false);
+    assert_eq!(step["exit_code"], 1);
+    assert!(
+        step["stderr_tail"].as_str().is_some_and(
+            |stderr| stderr.contains("--admin-dir must be an absolute server-side path")
+        ),
+        "failing Rust SDK child should retain stderr tail: {summary}"
+    );
+    let sdk_summary = &step["summary"];
+    assert_eq!(sdk_summary["ok"], false);
+    assert_eq!(sdk_summary["mode"], "rust-sdk-quickstart");
+    assert_eq!(sdk_summary["phase"], "config");
+    assert_eq!(sdk_summary["error"]["kind"], "configuration");
+    assert!(
+        sdk_summary["error"]["message"].as_str().is_some_and(
+            |message| message.contains("--admin-dir must be an absolute server-side path")
+        ),
+        "failing Rust SDK child summary should preserve the quickstart error: {summary}"
+    );
+    assert_eq!(sdk_summary["admin"]["requested"], true);
+    assert_eq!(sdk_summary["steps"]["ready"], false);
+    assert_eq!(sdk_summary["sql_module"], "not_implemented");
+}
+
+#[test]
 fn product_regression_only_typescript_check_runs_single_gate_step() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("only-typescript-check");
