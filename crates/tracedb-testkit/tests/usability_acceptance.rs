@@ -819,6 +819,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
             markdown.contains("--only local_doctor"),
             "{name} should document targeted local endpoint diagnostics"
         );
+        assert!(
+            markdown.contains("--only rust_sdk_quickstart"),
+            "{name} should document targeted Rust SDK quickstart execution"
+        );
     }
 }
 

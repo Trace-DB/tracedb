@@ -80,6 +80,14 @@ normal one-step `local-product-regression` JSON summary with `only_step:
 "local_doctor"`. This is local endpoint diagnostics evidence only; it does not
 run `http_demo`, the Rust SDK quickstart, generated TypeScript smoke steps,
 managed-cloud checks, benchmark controls, or SQL compatibility checks.
+`--only rust_sdk_quickstart` starts a managed-style local loopback
+`tracedb-server` child process, creates the SDK admin directory, and runs only
+the existing Rust SDK quickstart product-regression step with idempotency
+retries plus compact/snapshot/restore admin coverage. It emits the normal
+one-step `local-product-regression` JSON summary with `only_step:
+"rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence only; it
+does not run `http_demo`, local `doctor http`, generated TypeScript smoke
+steps, managed-cloud checks, benchmark controls, or SQL compatibility checks.
 
 Run the SDK quickstart against a local HTTP server:
 

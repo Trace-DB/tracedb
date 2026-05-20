@@ -265,7 +265,15 @@ metadata. It emits the normal one-step `local-product-regression` JSON summary
 with `only_step: "local_doctor"`. This is local endpoint diagnostics evidence
 only; it does not run `http_demo`, the Rust SDK quickstart, generated
 TypeScript smoke steps, managed-cloud checks, benchmark controls, or SQL
-compatibility checks.
+compatibility checks. `product-regression --only rust_sdk_quickstart` starts a
+managed-style local loopback `tracedb-server`, creates/uses the quickstart admin
+dir, runs only the existing Rust SDK quickstart product-regression step, and
+emits one-step `local-product-regression` JSON with `only_step:
+"rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence only, not
+full product gate coverage, not `http_demo`, not local `doctor http`
+diagnostics, not generated TypeScript smoke, not managed-cloud proof, not
+benchmark evidence, and not SQL compatibility. Remaining TypeScript steps still
+run through the full gate.
 `product-regression --only embedded_verify`
 verifies an existing embedded demo data root and should be run with the same
 `--data-root` used for `--only embedded_demo`.

@@ -56,3 +56,7 @@ checks.
 `--only local_doctor` runs only the local HTTP doctor diagnostic against a
 managed local server and emits one-step `local-product-regression` JSON. It is
 endpoint diagnostics evidence only, not full product-regression gate coverage.
+`--only rust_sdk_quickstart` starts a managed local server, creates/uses the
+quickstart admin dir, runs only the Rust SDK quickstart step, and emits
+one-step `local-product-regression` JSON. It is local Rust SDK quickstart
+evidence only, not full product-regression gate coverage.

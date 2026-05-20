@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -360,6 +361,65 @@ fn product_regression_only_local_doctor_runs_single_gate_step() {
         summary["steps"]["local_doctor"]["summary"]["sql_module"],
         "not_implemented"
     );
+}
+
+#[test]
+fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("only-rust-sdk-quickstart");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("rust_sdk_quickstart")
+        .output()
+        .expect("run tracedb product-regression Rust SDK quickstart step");
+    assert!(
+        output.status.success(),
+        "product-regression --only rust_sdk_quickstart failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout)
+        .expect("product-regression Rust SDK quickstart json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "rust_sdk_quickstart");
+    assert!(
+        summary["local_server_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("http://127.0.0.1:")),
+        "rust_sdk_quickstart should report managed local server url: {summary}"
+    );
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["rust_sdk_quickstart"]["ok"], true);
+    let sdk_summary = &summary["steps"]["rust_sdk_quickstart"]["summary"];
+    assert_eq!(sdk_summary["ok"], true);
+    assert_eq!(sdk_summary["server_ready"], true);
+    assert_eq!(sdk_summary["idempotency_retries"], 1);
+    assert_eq!(sdk_summary["idempotency_keys"], true);
+    assert_eq!(sdk_summary["steps"]["schema_apply"], true);
+    assert_eq!(sdk_summary["steps"]["batch_ingest"], true);
+    assert_eq!(sdk_summary["steps"]["query"], true);
+    assert_eq!(sdk_summary["steps"]["delete"], true);
+    assert_eq!(sdk_summary["steps"]["compact"], true);
+    assert_eq!(sdk_summary["steps"]["snapshot"], true);
+    assert_eq!(sdk_summary["steps"]["restore"], true);
+    assert_eq!(sdk_summary["sql_module"], "not_implemented");
+    let snapshot_target = sdk_summary["snapshot_target"]
+        .as_str()
+        .expect("snapshot target path");
+    let restore_target = sdk_summary["restore_target"]
+        .as_str()
+        .expect("restore target path");
+    assert!(Path::new(snapshot_target).starts_with(data_root.join("sdk-admin")));
+    assert!(Path::new(restore_target).starts_with(data_root.join("sdk-admin")));
 }
 
 #[test]

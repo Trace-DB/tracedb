@@ -128,6 +128,9 @@ smoke steps. `--only http_demo` also does not run the TypeScript smoke steps;
 it is limited to the self-contained local HTTP demo step. `--only local_doctor`
 also does not run the TypeScript smoke steps; it is limited to local endpoint
 diagnostics against a managed local server.
+`--only rust_sdk_quickstart` also does not run the TypeScript smoke steps; it
+is limited to local Rust SDK quickstart verification against a managed local
+server.
 
 Install the local private package tooling and run the typecheck boundary:
 

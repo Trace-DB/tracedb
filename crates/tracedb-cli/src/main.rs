@@ -1035,6 +1035,7 @@ const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = &[
     "embedded_verify",
     "http_demo",
     "local_doctor",
+    "rust_sdk_quickstart",
 ];
 
 fn parse_product_regression_config(
@@ -1181,6 +1182,21 @@ fn run_product_regression(
         }
         return finish_product_regression(config, local_server_url, steps);
     }
+    if config.only_step.as_deref() == Some("rust_sdk_quickstart") {
+        let (bind, url) = product_regression_server_bind_and_url()?;
+        local_server_url = Some(url.clone());
+        {
+            let _server = LocalServerChild::start(&config.data_root.join("server-data"), &bind)?;
+            let sdk = product_regression_rust_sdk_quickstart_command(
+                &workspace,
+                &url,
+                &config.data_root.join("sdk-admin"),
+            )?;
+            let step = run_product_regression_step_or_injected(&config, "rust_sdk_quickstart", sdk);
+            steps.insert("rust_sdk_quickstart".to_string(), step);
+        }
+        return finish_product_regression(config, local_server_url, steps);
+    }
 
     for (name, command) in [
         (
@@ -1228,31 +1244,11 @@ fn run_product_regression(
         }
 
         if !server_step_failed {
-            let admin_dir = config.data_root.join("sdk-admin");
-            fs::create_dir_all(&admin_dir)?;
-            let admin_dir_string = admin_dir.to_string_lossy().to_string();
-            let mut sdk = Command::new("cargo");
-            sdk.current_dir(&workspace).args([
-                "run",
-                "-q",
-                "-p",
-                "tracedb-sdk",
-                "--example",
-                "quickstart",
-                "--",
-                "--url",
+            let sdk = product_regression_rust_sdk_quickstart_command(
+                &workspace,
                 &url,
-                "--token",
-                "dev-token",
-                "--timeout-ms",
-                "5000",
-                "--safe-retries",
-                "1",
-                "--idempotency-retries",
-                "1",
-                "--admin-dir",
-                &admin_dir_string,
-            ]);
+                &config.data_root.join("sdk-admin"),
+            )?;
             let step = run_product_regression_step_or_injected(&config, "rust_sdk_quickstart", sdk);
             let ok = product_regression_step_ok(&step);
             steps.insert("rust_sdk_quickstart".to_string(), step);
@@ -1360,6 +1356,38 @@ fn product_regression_local_doctor_command(cli: &std::path::Path, url: &str) -> 
             "db_local:main".into(),
         ],
     )
+}
+
+fn product_regression_rust_sdk_quickstart_command(
+    workspace: &std::path::Path,
+    url: &str,
+    admin_dir: &std::path::Path,
+) -> std::io::Result<Command> {
+    fs::create_dir_all(admin_dir)?;
+    let admin_dir_string = admin_dir.to_string_lossy().to_string();
+    let mut command = Command::new("cargo");
+    command.current_dir(workspace).args([
+        "run",
+        "-q",
+        "-p",
+        "tracedb-sdk",
+        "--example",
+        "quickstart",
+        "--",
+        "--url",
+        url,
+        "--token",
+        "dev-token",
+        "--timeout-ms",
+        "5000",
+        "--safe-retries",
+        "1",
+        "--idempotency-retries",
+        "1",
+        "--admin-dir",
+        &admin_dir_string,
+    ]);
+    Ok(command)
 }
 
 fn product_regression_step_list_summary() -> Value {
@@ -1668,6 +1696,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo|embedded_verify|http_demo|local_doctor]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo|embedded_verify|http_demo|local_doctor|rust_sdk_quickstart]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
