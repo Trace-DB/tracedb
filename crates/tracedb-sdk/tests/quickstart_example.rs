@@ -1,22 +1,17 @@
 use serde_json::Value;
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracedb_query::{RecordScanRequest, TraceDb};
+use tracedb_sdk::{TraceDbClient, TraceDbClientConfig};
 
 #[test]
 fn sdk_quickstart_example_runs_against_real_http_server() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
     let data_dir = temp.path().join("engine");
     let admin_dir = temp.path().join("sdk-admin");
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_quickstart_test_server(data_dir);
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -34,7 +29,7 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
             "quickstart",
             "--",
             "--url",
-            &format!("http://{addr}"),
+            &url,
             "--token",
             "dev-token",
             "--timeout-ms",
@@ -93,14 +88,8 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
 #[test]
 fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
     let data_dir = temp.path().join("engine");
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_quickstart_test_server(data_dir);
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -119,7 +108,7 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
             "quickstart",
             "--",
             "--url",
-            &format!("http://{addr}"),
+            &url,
             "--token",
             "dev-token",
         ])
@@ -154,14 +143,8 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
 #[test]
 fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
     let data_dir = temp.path().join("engine");
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let url = start_quickstart_test_server(data_dir);
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -180,7 +163,7 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
             "quickstart",
             "--",
             "--url",
-            &format!("http://{addr}"),
+            &url,
             "--token",
             "dev-token",
         ])
@@ -204,6 +187,44 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["steps"]["delete"], true);
     assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["sql_module"], "not_implemented");
+}
+
+fn start_quickstart_test_server(data_dir: PathBuf) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let bind = addr.to_string();
+    std::thread::spawn(move || {
+        let _ = tracedb_server::serve(data_dir, &bind);
+    });
+    let url = format!("http://{addr}");
+    wait_for_quickstart_ready(&url);
+    url
+}
+
+fn wait_for_quickstart_ready(url: &str) {
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url.to_string(), "dev-token")
+            .with_timeout(Duration::from_millis(100)),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match client.ready_typed() {
+            Ok(response) if response.ready => return,
+            Ok(response) => {
+                last_error = Some(format!("ready endpoint returned not-ready: {response:?}"));
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "quickstart TraceDB HTTP test server did not become ready at {url}; last error: {}",
+        last_error.unwrap_or_else(|| "no readiness attempt completed".to_string())
+    );
 }
 
 #[test]
