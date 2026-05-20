@@ -234,6 +234,12 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
             "typescript_gateway_smoke",
         ]
     );
+    for step in steps {
+        assert_eq!(
+            step["only_supported"], true,
+            "product-regression --list-steps should mark every listed step as --only supported: {summary}"
+        );
+    }
 }
 
 #[test]

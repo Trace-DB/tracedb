@@ -250,8 +250,9 @@ checked, and benchmarks are not checked. Failure ergonomics for the
 consolidated local gate are covered by test-only `--inject-failure STEP`, which
 preserves the JSON summary on stdout and exits nonzero. Operators can run
 `product-regression --list-steps` to discover valid gate steps for failure
-injection and CI orchestration; it emits JSON and does not run demo, HTTP, SDK,
-or TypeScript smoke steps. `product-regression --only embedded_demo` runs only
+injection and CI orchestration; it emits JSON step metadata including
+`only_supported` and does not run demo, HTTP, SDK, or TypeScript smoke steps.
+`product-regression --only embedded_demo` runs only
 the embedded demo step and emits one-step `local-product-regression` JSON.
 `product-regression --only http_demo` runs the self-contained local HTTP demo
 step and emits the normal one-step `local-product-regression` JSON summary. It

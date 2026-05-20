@@ -765,6 +765,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "embedded_verify",
         "only_step",
         "local-product-regression-step-list",
+        "only_supported",
         "failure_injection",
         "injected_failure",
         "TRACEDB_WAIT_READY_MS",
@@ -802,6 +803,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("--list-steps"),
             "{name} should document product regression step discovery"
+        );
+        assert!(
+            markdown.contains("only_supported"),
+            "{name} should document product regression selector support metadata"
         );
         assert!(
             markdown.contains("--only embedded_demo"),

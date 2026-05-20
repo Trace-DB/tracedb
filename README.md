@@ -63,8 +63,9 @@ SQL compatibility, managed-cloud proof, or benchmark evidence. Use
 `--skip-typescript` when the local Node tooling is not installed. For CI
 failure-path coverage, use test-only `--inject-failure STEP` to verify that the
 gate exits nonzero while still emitting the failed-step JSON summary. Use
-`--list-steps` to print JSON step metadata for operator and CI wiring without
-running demo, HTTP, SDK, or TypeScript smoke steps. For narrow local iteration,
+`--list-steps` to print JSON step metadata, including `only_supported`, for
+operator and CI wiring without running demo, HTTP, SDK, or TypeScript smoke
+steps. For narrow local iteration,
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step `local-product-regression` JSON summary. After that, use the
 same `--data-root` with `--only embedded_verify` to verify the existing
