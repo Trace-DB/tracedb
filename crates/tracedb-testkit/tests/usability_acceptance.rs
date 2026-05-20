@@ -749,6 +749,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
 
     for token in [
         "product-regression",
+        "product-quickstart",
         "local-product-regression",
         "embedded_demo",
         "embedded_verify",
@@ -762,6 +763,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "--list-steps",
         "--only",
         "--report-file",
+        "target/tracedb/product-quickstart.json",
         "embedded_demo",
         "embedded_verify",
         "only_step",
@@ -818,6 +820,14 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("--report-file PATH"),
             "{name} should document product regression report-file output"
+        );
+        assert!(
+            markdown.contains("product-quickstart"),
+            "{name} should document the local product quickstart wrapper"
+        );
+        assert!(
+            markdown.contains("target/tracedb/product-quickstart.json"),
+            "{name} should document the default product quickstart report path"
         );
         assert!(
             markdown.contains("conflicts with --skip-typescript"),

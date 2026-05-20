@@ -114,6 +114,7 @@ surface:
 
 ```bash
 cargo run -p tracedb-cli -- product-regression
+cargo run -p tracedb-cli -- product-quickstart
 ```
 
 That gate runs `npm run check`, `npm run http-smoke`, and
@@ -124,7 +125,9 @@ JSON, top-level `human_summary`, and nonzero gate behavior without weakening
 this TypeScript smoke path. `--report-file PATH` writes the same
 product-regression JSON summary to a predictable file while preserving stdout.
 That option belongs to the repo-level product-regression gate, not the
-TypeScript package scripts themselves.
+TypeScript package scripts themselves. `product-quickstart` is the same
+repo-level gate with a default report file at
+`target/tracedb/product-quickstart.json`.
 Use `product-regression --list-steps` to discover the TypeScript smoke step
 names plus `human_summary` and `only_supported` metadata without invoking Node
 tooling. The current `--only embedded_demo` mode and dependency-aware

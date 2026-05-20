@@ -13,6 +13,13 @@ fn read_json_file(path: &Path) -> Value {
         .unwrap_or_else(|error| panic!("parse {} as json: {error}", path.display()))
 }
 
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+}
+
 #[test]
 fn demo_command_exercises_local_product_path() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -169,6 +176,45 @@ fn product_regression_runs_local_product_gate() {
         summary["steps"]["local_doctor"]["summary"]["ready_wait"]["ok"],
         true
     );
+}
+
+#[test]
+fn product_quickstart_runs_product_gate_with_default_report_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("quickstart-data");
+    let report_file = workspace_root().join("target/tracedb/product-quickstart.json");
+    let _ = std::fs::remove_file(&report_file);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-quickstart")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("embedded_demo")
+        .output()
+        .expect("run tracedb product-quickstart");
+
+    assert!(
+        output.status.success(),
+        "product-quickstart failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("product-quickstart json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "embedded_demo");
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(
+        summary["human_summary"]["message"],
+        "local product regression passed: 1/1 steps; only_step=embedded_demo"
+    );
+    assert_eq!(summary["steps"]["embedded_demo"]["ok"], true);
 }
 
 #[test]

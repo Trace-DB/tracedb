@@ -37,6 +37,7 @@ The consolidated local product regression gate is:
 
 ```bash
 cargo run -p tracedb-cli -- product-regression
+cargo run -p tracedb-cli -- product-quickstart
 ```
 
 It emits one machine-readable `local-product-regression` summary for the
@@ -55,7 +56,10 @@ directories. Use
 names with `human_summary` and `only_supported` metadata for operators and CI
 wiring without executing any product checks. `--skip-typescript` is for the full
 product gate and non-TypeScript selectors; a TypeScript `--only` selector
-conflicts with --skip-typescript.
+conflicts with --skip-typescript. `product-quickstart` runs the same local
+product gate with a default report file at
+`target/tracedb/product-quickstart.json`; it accepts the same
+product-regression options and still writes JSON to stdout.
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step product-regression JSON summary. `--only embedded_verify`
 verifies an existing embedded demo data root, usually with the same

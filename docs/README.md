@@ -37,6 +37,7 @@ Consolidated local product regression:
 
 ```bash
 cargo run -p tracedb-cli -- product-regression
+cargo run -p tracedb-cli -- product-quickstart
 ```
 
 This is local product regression evidence only; it does not claim SQL
@@ -52,7 +53,9 @@ running product steps. `--skip-typescript` is for the full product gate and
 non-TypeScript selectors; a TypeScript `--only` selector conflicts with --skip-typescript.
 The first single-step execution mode is `--only embedded_demo`, which runs only the
 embedded demo step and emits the normal local product-regression JSON summary.
-The
+`product-quickstart` runs the same local product gate with a default report file
+at `target/tracedb/product-quickstart.json`; it accepts the same
+product-regression options and still writes JSON to stdout. The
 dependency-aware `--only embedded_verify` mode verifies an existing embedded
 demo data root, typically after `--only embedded_demo` with the same
 `--data-root`. `--only http_demo` runs the self-contained local HTTP demo step

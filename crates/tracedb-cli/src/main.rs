@@ -290,6 +290,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let config = parse_product_regression_config(&args[1..])?;
             run_product_regression(config)?;
         }
+        "product-quickstart" => {
+            let config = parse_product_quickstart_config(&args[1..])?;
+            run_product_regression(config)?;
+        }
         "compose" => {
             let action = args.get(1).map(String::as_str).unwrap_or("status");
             run_compose(action, &args[2..])?;
@@ -1032,6 +1036,7 @@ const PRODUCT_REGRESSION_STEPS: &[&str] = &[
 ];
 
 const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = PRODUCT_REGRESSION_STEPS;
+const PRODUCT_QUICKSTART_REPORT_FILE: &str = "target/tracedb/product-quickstart.json";
 
 fn parse_product_regression_config(
     args: &[String],
@@ -1116,8 +1121,22 @@ fn parse_product_regression_config(
     })
 }
 
+fn parse_product_quickstart_config(
+    args: &[String],
+) -> Result<ProductRegressionConfig, Box<dyn std::error::Error>> {
+    let mut config = parse_product_regression_config(args)?;
+    if config.report_file.is_none() {
+        config.report_file = Some(default_product_quickstart_report_file()?);
+    }
+    Ok(config)
+}
+
 fn product_regression_step_is_typescript(step: &str) -> bool {
     step.starts_with("typescript_")
+}
+
+fn default_product_quickstart_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(product_regression_workspace_root()?.join(PRODUCT_QUICKSTART_REPORT_FILE))
 }
 
 fn default_product_regression_root() -> PathBuf {
@@ -1822,7 +1841,8 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
+        PRODUCT_REGRESSION_ONLY_STEPS.join("|"),
         PRODUCT_REGRESSION_ONLY_STEPS.join("|")
     );
 }

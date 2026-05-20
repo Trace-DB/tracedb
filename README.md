@@ -52,6 +52,7 @@ Run the consolidated local product regression gate:
 
 ```bash
 cargo run -p tracedb-cli -- product-regression
+cargo run -p tracedb-cli -- product-quickstart
 ```
 
 The gate emits one JSON summary with `mode: "local-product-regression"`,
@@ -72,7 +73,10 @@ preserving JSON stdout for automation; this applies to full runs, `--only`,
 or TypeScript smoke steps. `--skip-typescript` is for the full product gate and
 non-TypeScript selectors; a TypeScript `--only` selector conflicts with --skip-typescript
 for steps such as `typescript_check`, `typescript_http_smoke`, or
-`typescript_gateway_smoke`. For narrow local iteration,
+`typescript_gateway_smoke`. `product-quickstart` is the same local product gate
+with a default report file at `target/tracedb/product-quickstart.json`; it
+accepts the same product-regression options, including `--only` and
+`--skip-typescript`, and still writes JSON to stdout. For narrow local iteration,
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step `local-product-regression` JSON summary. After that, use the
 same `--data-root` with `--only embedded_verify` to verify the existing
