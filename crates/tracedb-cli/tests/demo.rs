@@ -186,6 +186,56 @@ fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary(
 }
 
 #[test]
+fn product_regression_list_steps_reports_gate_steps_without_running_them() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("unused-product-data");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--list-steps")
+        .output()
+        .expect("run tracedb product-regression step list");
+    assert!(
+        output.status.success(),
+        "product-regression --list-steps failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !data_root.exists(),
+        "--list-steps should not create product regression data"
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression step list json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression-step-list");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_array().expect("steps array");
+    assert_eq!(steps.len(), 8);
+    let step_names = steps
+        .iter()
+        .map(|step| step["name"].as_str().expect("step name"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        step_names,
+        [
+            "embedded_demo",
+            "embedded_verify",
+            "http_demo",
+            "local_doctor",
+            "rust_sdk_quickstart",
+            "typescript_check",
+            "typescript_http_smoke",
+            "typescript_gateway_smoke",
+        ]
+    );
+}
+
+#[test]
 fn doctor_http_reports_endpoint_diagnostics() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bind = free_loopback_bind();

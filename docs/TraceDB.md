@@ -45,7 +45,9 @@ quickstart, and generated TypeScript check/http/gateway smoke paths. It is
 local product regression evidence only: SQL remains not implemented,
 managed-cloud is not checked, and benchmarks are not checked. The local product
 regression gate also has test-only `--inject-failure STEP` coverage for
-nonzero process status and machine-readable failed-step JSON.
+nonzero process status and machine-readable failed-step JSON. Use
+`--list-steps` to print the machine-readable list of product-regression step
+names for operators and CI wiring without executing any product checks.
 
 The local HTTP plus SDK smoke is also available as one command:
 

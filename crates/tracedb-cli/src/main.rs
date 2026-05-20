@@ -1015,6 +1015,7 @@ struct ProductRegressionConfig {
     keep_data: bool,
     skip_typescript: bool,
     inject_failure: Option<String>,
+    list_steps: bool,
 }
 
 const PRODUCT_REGRESSION_STEPS: &[&str] = &[
@@ -1035,6 +1036,7 @@ fn parse_product_regression_config(
     let mut keep_data = false;
     let mut skip_typescript = false;
     let mut inject_failure = None;
+    let mut list_steps = false;
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
@@ -1046,6 +1048,7 @@ fn parse_product_regression_config(
             }
             "--keep-data" => keep_data = true,
             "--skip-typescript" => skip_typescript = true,
+            "--list-steps" => list_steps = true,
             "--inject-failure" => {
                 idx += 1;
                 let step = args
@@ -1073,6 +1076,7 @@ fn parse_product_regression_config(
         keep_data,
         skip_typescript,
         inject_failure,
+        list_steps,
     })
 }
 
@@ -1084,6 +1088,11 @@ fn default_product_regression_root() -> PathBuf {
 fn run_product_regression(
     config: ProductRegressionConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if config.list_steps {
+        print_json(product_regression_step_list_summary());
+        return Ok(());
+    }
+
     if config.data_root.exists() && config.cleanup_data {
         fs::remove_dir_all(&config.data_root)?;
     }
@@ -1272,6 +1281,28 @@ fn product_regression_cli_command(cli: &std::path::Path, args: Vec<String>) -> C
     let mut command = Command::new(cli);
     command.args(args);
     command
+}
+
+fn product_regression_step_list_summary() -> Value {
+    let steps = PRODUCT_REGRESSION_STEPS
+        .iter()
+        .map(|name| {
+            json!({
+                "name": name,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "ok": true,
+        "mode": "local-product-regression-step-list",
+        "scope": "local_only",
+        "claims": {
+            "sql_module": "not_implemented",
+            "managed_cloud": "not_checked",
+            "benchmark": "not_checked",
+        },
+        "steps": steps,
+    })
 }
 
 fn run_product_regression_step_or_injected(
@@ -1558,6 +1589,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }

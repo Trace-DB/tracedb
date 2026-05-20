@@ -759,6 +759,8 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "typescript_http_smoke",
         "typescript_gateway_smoke",
         "--inject-failure",
+        "--list-steps",
+        "local-product-regression-step-list",
         "failure_injection",
         "injected_failure",
         "TRACEDB_WAIT_READY_MS",
@@ -792,6 +794,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("--inject-failure STEP"),
             "{name} should document the local product regression failure contract"
+        );
+        assert!(
+            markdown.contains("--list-steps"),
+            "{name} should document product regression step discovery"
         );
     }
 }

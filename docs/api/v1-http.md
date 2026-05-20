@@ -248,7 +248,10 @@ and generated TypeScript check/http/gateway smoke paths. It is local product
 regression evidence only: SQL remains not implemented, managed-cloud is not
 checked, and benchmarks are not checked. Failure ergonomics for the
 consolidated local gate are covered by test-only `--inject-failure STEP`, which
-preserves the JSON summary on stdout and exits nonzero.
+preserves the JSON summary on stdout and exits nonzero. Operators can run
+`product-regression --list-steps` to discover valid gate steps for failure
+injection and CI orchestration; it emits JSON and does not run demo, HTTP, SDK,
+or TypeScript smoke steps.
 
 Run the complete local HTTP plus Rust SDK smoke with one command:
 

@@ -42,4 +42,5 @@ cargo run -p tracedb-cli -- product-regression
 This is local product regression evidence only; it does not claim SQL
 compatibility, managed-cloud proof, or benchmark results. The command also has
 test-only `--inject-failure STEP` coverage for JSON failure output and nonzero
-exit behavior.
+exit behavior. For product-regression step discovery, `--list-steps` emits JSON
+step metadata and exits without running product steps.

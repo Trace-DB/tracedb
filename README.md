@@ -62,7 +62,9 @@ check/http/gateway smoke paths. It is local product regression evidence, not
 SQL compatibility, managed-cloud proof, or benchmark evidence. Use
 `--skip-typescript` when the local Node tooling is not installed. For CI
 failure-path coverage, use test-only `--inject-failure STEP` to verify that the
-gate exits nonzero while still emitting the failed-step JSON summary.
+gate exits nonzero while still emitting the failed-step JSON summary. Use
+`--list-steps` to print JSON step metadata for operator and CI wiring without
+running demo, HTTP, SDK, or TypeScript smoke steps.
 
 Run the SDK quickstart against a local HTTP server:
 
