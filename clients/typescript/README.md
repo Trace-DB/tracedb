@@ -122,7 +122,8 @@ claim package publishing readiness, SQL compatibility, managed-cloud proof, or
 benchmark results. Test-only `--inject-failure STEP` can validate failed-step
 JSON and nonzero gate behavior without weakening this TypeScript smoke path.
 Use `product-regression --list-steps` to discover the TypeScript smoke step
-names without invoking Node tooling.
+names without invoking Node tooling. The current `--only embedded_demo` mode
+does not run the TypeScript smoke steps.
 
 Install the local private package tooling and run the typecheck boundary:
 

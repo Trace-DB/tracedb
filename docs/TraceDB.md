@@ -48,6 +48,8 @@ regression gate also has test-only `--inject-failure STEP` coverage for
 nonzero process status and machine-readable failed-step JSON. Use
 `--list-steps` to print the machine-readable list of product-regression step
 names for operators and CI wiring without executing any product checks.
+`--only embedded_demo` currently runs just the embedded demo step and emits the
+normal one-step product-regression JSON summary.
 
 The local HTTP plus SDK smoke is also available as one command:
 

@@ -251,7 +251,9 @@ consolidated local gate are covered by test-only `--inject-failure STEP`, which
 preserves the JSON summary on stdout and exits nonzero. Operators can run
 `product-regression --list-steps` to discover valid gate steps for failure
 injection and CI orchestration; it emits JSON and does not run demo, HTTP, SDK,
-or TypeScript smoke steps.
+or TypeScript smoke steps. `product-regression --only embedded_demo` is the
+first supported single-step execution mode; HTTP, SDK, and TypeScript steps
+still run through the full gate.
 
 Run the complete local HTTP plus Rust SDK smoke with one command:
 

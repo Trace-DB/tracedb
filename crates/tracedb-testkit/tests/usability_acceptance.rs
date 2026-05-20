@@ -760,6 +760,9 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "typescript_gateway_smoke",
         "--inject-failure",
         "--list-steps",
+        "--only",
+        "embedded_demo",
+        "only_step",
         "local-product-regression-step-list",
         "failure_injection",
         "injected_failure",
@@ -798,6 +801,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("--list-steps"),
             "{name} should document product regression step discovery"
+        );
+        assert!(
+            markdown.contains("--only embedded_demo"),
+            "{name} should document the first supported product regression single-step mode"
         );
     }
 }

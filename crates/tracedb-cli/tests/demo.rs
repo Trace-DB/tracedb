@@ -236,6 +236,42 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
 }
 
 #[test]
+fn product_regression_only_embedded_demo_runs_single_gate_step() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("only-embedded-demo");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("embedded_demo")
+        .output()
+        .expect("run tracedb product-regression single step");
+    assert!(
+        output.status.success(),
+        "product-regression --only embedded_demo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression only-step json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "embedded_demo");
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["embedded_demo"]["ok"], true);
+    assert_eq!(
+        summary["steps"]["embedded_demo"]["summary"]["sql_module"],
+        "not_implemented"
+    );
+}
+
+#[test]
 fn doctor_http_reports_endpoint_diagnostics() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bind = free_loopback_bind();

@@ -64,7 +64,9 @@ SQL compatibility, managed-cloud proof, or benchmark evidence. Use
 failure-path coverage, use test-only `--inject-failure STEP` to verify that the
 gate exits nonzero while still emitting the failed-step JSON summary. Use
 `--list-steps` to print JSON step metadata for operator and CI wiring without
-running demo, HTTP, SDK, or TypeScript smoke steps.
+running demo, HTTP, SDK, or TypeScript smoke steps. For narrow local iteration,
+`--only embedded_demo` currently runs just the embedded demo step and emits the
+normal one-step `local-product-regression` JSON summary.
 
 Run the SDK quickstart against a local HTTP server:
 

@@ -1016,6 +1016,7 @@ struct ProductRegressionConfig {
     skip_typescript: bool,
     inject_failure: Option<String>,
     list_steps: bool,
+    only_step: Option<String>,
 }
 
 const PRODUCT_REGRESSION_STEPS: &[&str] = &[
@@ -1037,6 +1038,7 @@ fn parse_product_regression_config(
     let mut skip_typescript = false;
     let mut inject_failure = None;
     let mut list_steps = false;
+    let mut only_step = None;
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
@@ -1049,6 +1051,17 @@ fn parse_product_regression_config(
             "--keep-data" => keep_data = true,
             "--skip-typescript" => skip_typescript = true,
             "--list-steps" => list_steps = true,
+            "--only" => {
+                idx += 1;
+                let step = args.get(idx).ok_or("missing value for --only")?.to_string();
+                if step != "embedded_demo" {
+                    return Err(format!(
+                        "product-regression --only currently supports embedded_demo; got {step}"
+                    )
+                    .into());
+                }
+                only_step = Some(step);
+            }
             "--inject-failure" => {
                 idx += 1;
                 let step = args
@@ -1077,6 +1090,7 @@ fn parse_product_regression_config(
         skip_typescript,
         inject_failure,
         list_steps,
+        only_step,
     })
 }
 
@@ -1112,6 +1126,18 @@ fn run_product_regression(
         .join("http-demo")
         .to_string_lossy()
         .to_string();
+    if config.only_step.as_deref() == Some("embedded_demo") {
+        let step = run_product_regression_step_or_injected(
+            &config,
+            "embedded_demo",
+            product_regression_cli_command(
+                &cli,
+                vec!["--data".into(), embedded_dir.clone(), "demo".into()],
+            ),
+        );
+        steps.insert("embedded_demo".to_string(), step);
+        return finish_product_regression(config, local_server_url, steps);
+    }
 
     for (name, command) in [
         (
@@ -1249,6 +1275,7 @@ fn finish_product_regression(
     let ok = steps.values().all(product_regression_step_ok);
     let data_root = config.data_root.display().to_string();
     let failure_injection = config.inject_failure.clone();
+    let only_step = config.only_step.clone();
     let summary = json!({
         "ok": ok,
         "mode": "local-product-regression",
@@ -1257,6 +1284,7 @@ fn finish_product_regression(
         "data_cleanup": config.cleanup_data,
         "keep_data": config.keep_data,
         "failure_injection": failure_injection,
+        "only_step": only_step,
         "local_server_url": local_server_url,
         "typescript_enabled": !config.skip_typescript,
         "claims": {
@@ -1589,6 +1617,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
