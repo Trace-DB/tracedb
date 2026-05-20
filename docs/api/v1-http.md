@@ -145,7 +145,7 @@ The CLI can run a read-only diagnostic against a running local engine or
 managed-style endpoint:
 
 ```bash
-cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --database-id db_local --branch-id db_local:main
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --wait-ready-ms 5000 --database-id db_local --branch-id db_local:main
 ```
 
 The diagnostic checks `GET /v1/health`, `GET /v1/ready`, `GET /v1/databases`,
@@ -155,14 +155,18 @@ including parsed `server_error` and `server_error_code` fields when an endpoint
 returns the current coded JSON error shape. Optional `--database-id` and
 `--branch-id` add managed-routing metadata to gateway diagnostics; for the
 bodyless admin-jobs route, the gateway receives those IDs as query metadata
-before proxying `/v1/admin/jobs` to the engine. The command exits non-zero when any check fails while preserving the JSON summary on stdout. It does not mutate
-data, does not probe SQL compatibility, and is not benchmark evidence.
+before proxying `/v1/admin/jobs` to the engine. Optional `--wait-ready-ms`
+polls `GET /v1/ready` before the normal checks and reports
+`ready_wait_timeout_ms` plus a `ready_wait` object in the summary. The command
+exits non-zero when any check fails while preserving the JSON summary on
+stdout. It does not mutate data, does not probe SQL compatibility, and is not
+benchmark evidence.
 
 The same diagnostic can be run from CI or deployment scripts with endpoint
 configuration supplied by environment variables:
 
 ```bash
-TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 cargo run -p tracedb-cli -- doctor http
+TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 TRACEDB_WAIT_READY_MS=5000 cargo run -p tracedb-cli -- doctor http
 ```
 
 Error responses use the current JSON envelope
@@ -264,8 +268,9 @@ cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-
 
 The doctor can also read `TRACEDB_URL`, `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and
-`TRACEDB_SAFE_RETRIES`, which lets secret-bearing deployed checks avoid command
-line token arguments.
+`TRACEDB_SAFE_RETRIES`, plus `TRACEDB_WAIT_READY_MS`, which lets
+secret-bearing deployed checks avoid command line token arguments and lets
+freshly started local endpoints settle before the full diagnostic run.
 
 The SDK quickstart exercises this path and reports `sql_module:
 not_implemented`. Passing `--admin-dir SERVER_SIDE_DIR` also exercises compact,

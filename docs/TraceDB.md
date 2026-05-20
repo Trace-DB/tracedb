@@ -61,7 +61,7 @@ cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --t
 Endpoint diagnostics are available without mutating data:
 
 ```bash
-cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --database-id db_local --branch-id db_local:main
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --wait-ready-ms 5000 --database-id db_local --branch-id db_local:main
 ```
 
 The HTTP doctor checks health, readiness, catalog, public-safe metrics, and
@@ -69,16 +69,19 @@ admin-jobs routes and reports `sql_module: not_implemented`. Failed checks
 include parsed `server_error` and `server_error_code` fields when an endpoint
 returns the current coded JSON error shape. Optional `--database-id` and
 `--branch-id` add managed-routing metadata for gateway diagnostics, including
-the bodyless admin-jobs route. The command exits non-zero when any check fails
-while keeping the JSON summary on stdout. It is a local/managed-style endpoint
-diagnostic, not a SQL probe, benchmark, or managed deployment proof.
+the bodyless admin-jobs route. Optional `--wait-ready-ms` polls readiness before
+the normal checks and reports the readiness wait in the JSON summary. The
+command exits non-zero when any check fails while keeping the JSON summary on
+stdout. It is a local/managed-style endpoint diagnostic, not a SQL probe,
+benchmark, or managed deployment proof.
 
 For CI or deployed endpoint checks, the doctor can read the same endpoint
 configuration from `TRACEDB_URL`, `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
-`TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and `TRACEDB_SAFE_RETRIES`:
+`TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
+`TRACEDB_WAIT_READY_MS`:
 
 ```bash
-TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 cargo run -p tracedb-cli -- doctor http
+TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 TRACEDB_WAIT_READY_MS=5000 cargo run -p tracedb-cli -- doctor http
 ```
 
 The SDK quickstart uses typed convenience response methods, including typed

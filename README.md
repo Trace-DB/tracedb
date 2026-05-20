@@ -63,7 +63,7 @@ cargo run -p tracedb-sdk --example quickstart -- --url http://127.0.0.1:8090 --t
 For a read-only endpoint diagnostic against that running server:
 
 ```bash
-cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --database-id db_local --branch-id db_local:main
+cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-token --timeout-ms 1000 --safe-retries 1 --wait-ready-ms 5000 --database-id db_local --branch-id db_local:main
 ```
 
 The HTTP doctor checks the current health, readiness, catalog, public-safe
@@ -72,15 +72,17 @@ or parsed error envelopes, including `server_error` and `server_error_code`
 when an endpoint returns the current coded JSON error shape, and reports
 `sql_module: not_implemented`. Optional `--database-id` and `--branch-id` add
 managed-routing metadata for gateway diagnostics, including the bodyless
-admin-jobs route. The command exits non-zero when any check fails while keeping
-the JSON summary on stdout. It is a local/managed-style endpoint diagnostic,
-not a SQL probe or benchmark.
+admin-jobs route. Optional `--wait-ready-ms` polls readiness before the normal
+checks, reports `ready_wait_timeout_ms` and `ready_wait`, and keeps immediate
+post-start local checks scriptable. The command exits non-zero when any check
+fails while keeping the JSON summary on stdout. It is a local/managed-style
+endpoint diagnostic, not a SQL probe or benchmark.
 
 For CI or deployed endpoint checks, the same command can read endpoint config
 from environment variables instead of flags:
 
 ```bash
-TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 cargo run -p tracedb-cli -- doctor http
+TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 TRACEDB_WAIT_READY_MS=5000 cargo run -p tracedb-cli -- doctor http
 ```
 
 The SDK example applies schema, batch-ingests records, scans, queries, explains,

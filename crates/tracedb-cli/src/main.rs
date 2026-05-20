@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::Catalog;
 use tracedb_query::{
@@ -462,6 +462,7 @@ struct HttpDoctorConfig {
     branch_id: Option<String>,
     timeout_ms: u64,
     safe_retries: u8,
+    wait_ready_ms: u64,
 }
 
 fn parse_http_doctor_config(
@@ -480,6 +481,10 @@ fn parse_http_doctor_config(
         .ok()
         .and_then(|value| value.parse::<u8>().ok())
         .unwrap_or(1);
+    let mut wait_ready_ms = env::var("TRACEDB_WAIT_READY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
 
     let mut idx = 0;
     while idx < args.len() {
@@ -530,6 +535,14 @@ fn parse_http_doctor_config(
                     .parse::<u8>()
                     .map_err(|_| "--safe-retries must fit in u8")?;
             }
+            "--wait-ready-ms" => {
+                idx += 1;
+                wait_ready_ms = args
+                    .get(idx)
+                    .ok_or("missing value for --wait-ready-ms")?
+                    .parse::<u64>()
+                    .map_err(|_| "--wait-ready-ms must be an unsigned integer")?;
+            }
             other => return Err(format!("unknown doctor http option {other}").into()),
         }
         idx += 1;
@@ -546,6 +559,7 @@ fn parse_http_doctor_config(
         branch_id,
         timeout_ms,
         safe_retries,
+        wait_ready_ms,
     })
 }
 
@@ -561,6 +575,7 @@ fn run_http_doctor(config: HttpDoctorConfig) -> Value {
     }
     let client = TraceDbClient::new(client_config);
 
+    let ready_wait = http_doctor_wait_for_ready(&client, config.wait_ready_ms);
     let health = http_doctor_check(|| client.health());
     let ready = http_doctor_check(|| client.ready());
     let databases = http_doctor_check(|| client.list_databases());
@@ -573,7 +588,8 @@ fn run_http_doctor(config: HttpDoctorConfig) -> Value {
             None,
         )
     });
-    let ok = http_doctor_check_ok(&health)
+    let ok = http_doctor_ready_wait_ok(&ready_wait)
+        && http_doctor_check_ok(&health)
         && http_doctor_ready_ok(&ready)
         && http_doctor_check_ok(&databases)
         && http_doctor_check_ok(&branches)
@@ -588,6 +604,8 @@ fn run_http_doctor(config: HttpDoctorConfig) -> Value {
         "branch_id": config.branch_id,
         "request_timeout_ms": config.timeout_ms,
         "safe_retries": config.safe_retries,
+        "ready_wait_timeout_ms": config.wait_ready_ms,
+        "ready_wait": ready_wait,
         "checks": {
             "health": health,
             "ready": ready,
@@ -645,6 +663,46 @@ fn http_doctor_check(probe: impl FnOnce() -> Result<Value, TraceDbClientError>) 
     }
 }
 
+fn http_doctor_wait_for_ready(client: &TraceDbClient, timeout_ms: u64) -> Value {
+    if timeout_ms == 0 {
+        return json!({
+            "enabled": false,
+            "ok": true,
+            "attempts": 0,
+        });
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut attempts = 0_u64;
+    let mut last_check = json!({ "ok": false, "error": "ready wait did not run" });
+    loop {
+        attempts += 1;
+        let check = http_doctor_check(|| client.ready());
+        if http_doctor_ready_ok(&check) {
+            return json!({
+                "enabled": true,
+                "ok": true,
+                "attempts": attempts,
+                "check": check,
+            });
+        }
+        last_check = check;
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        thread::sleep(remaining.min(Duration::from_millis(20)));
+    }
+
+    json!({
+        "enabled": true,
+        "ok": false,
+        "attempts": attempts,
+        "last_check": last_check,
+    })
+}
+
 fn http_doctor_error(error: TraceDbClientError) -> Value {
     let server_error = error.server_error();
     let server_error_code = error.server_error_code();
@@ -672,6 +730,10 @@ fn http_doctor_error(error: TraceDbClientError) -> Value {
         }
     }
     value
+}
+
+fn http_doctor_ready_wait_ok(wait: &Value) -> bool {
+    wait.get("ok").and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn http_doctor_check_ok(check: &Value) -> bool {
@@ -1109,6 +1171,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect segments|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
