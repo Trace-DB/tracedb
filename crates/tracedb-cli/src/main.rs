@@ -647,6 +647,7 @@ fn http_doctor_check(probe: impl FnOnce() -> Result<Value, TraceDbClientError>) 
 
 fn http_doctor_error(error: TraceDbClientError) -> Value {
     let server_error = error.server_error();
+    let server_error_code = error.server_error_code();
     let mut value = json!({
         "ok": false,
         "error": error.to_string(),
@@ -654,6 +655,9 @@ fn http_doctor_error(error: TraceDbClientError) -> Value {
     if let Some(object) = value.as_object_mut() {
         if let Some(server_error) = server_error {
             object.insert("server_error".to_string(), json!(server_error));
+        }
+        if let Some(server_error_code) = server_error_code {
+            object.insert("server_error_code".to_string(), json!(server_error_code));
         }
         if let TraceDbClientError::HttpStatus {
             method,

@@ -151,13 +151,12 @@ cargo run -p tracedb-cli -- doctor http --url http://127.0.0.1:8090 --token dev-
 The diagnostic checks `GET /v1/health`, `GET /v1/ready`, `GET /v1/databases`,
 `GET /v1/branches`, `GET /v1/metrics/public-safe`, and `GET /v1/admin/jobs`.
 It emits a single JSON summary with per-route responses or SDK error details,
-including parsed server error-envelope text when available. Optional
-`--database-id` and `--branch-id` add managed-routing metadata to gateway
-diagnostics; for the bodyless admin-jobs route, the gateway receives those IDs
-as query metadata before proxying `/v1/admin/jobs` to the engine. The command
-exits non-zero when any check fails while preserving the JSON summary on
-stdout. It does not mutate data, does not probe SQL compatibility, and is not
-benchmark evidence.
+including parsed `server_error` and `server_error_code` fields when an endpoint
+returns the current coded JSON error shape. Optional `--database-id` and
+`--branch-id` add managed-routing metadata to gateway diagnostics; for the
+bodyless admin-jobs route, the gateway receives those IDs as query metadata
+before proxying `/v1/admin/jobs` to the engine. The command exits non-zero when any check fails while preserving the JSON summary on stdout. It does not mutate
+data, does not probe SQL compatibility, and is not benchmark evidence.
 
 The same diagnostic can be run from CI or deployment scripts with endpoint
 configuration supplied by environment variables:

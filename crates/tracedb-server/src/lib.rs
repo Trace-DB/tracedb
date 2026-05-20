@@ -125,8 +125,12 @@ impl IdempotencyCacheState {
 }
 
 pub fn serve(db_path: impl AsRef<Path>, bind: &str) -> std::io::Result<()> {
-    let (db, idempotency_cache) = open_server_state(db_path)?;
     let listener = TcpListener::bind(bind)?;
+    serve_listener(db_path, listener)
+}
+
+pub fn serve_listener(db_path: impl AsRef<Path>, listener: TcpListener) -> std::io::Result<()> {
+    let (db, idempotency_cache) = open_server_state(db_path)?;
     for stream in listener.incoming() {
         spawn_handler(stream?, Arc::clone(&db), Arc::clone(&idempotency_cache));
     }
@@ -138,8 +142,16 @@ pub fn serve_with_shutdown(
     bind: &str,
     should_shutdown: impl Fn() -> bool,
 ) -> std::io::Result<()> {
-    let (db, idempotency_cache) = open_server_state(db_path)?;
     let listener = TcpListener::bind(bind)?;
+    serve_listener_with_shutdown(db_path, listener, should_shutdown)
+}
+
+pub fn serve_listener_with_shutdown(
+    db_path: impl AsRef<Path>,
+    listener: TcpListener,
+    should_shutdown: impl Fn() -> bool,
+) -> std::io::Result<()> {
+    let (db, idempotency_cache) = open_server_state(db_path)?;
     listener.set_nonblocking(true)?;
     while !should_shutdown() {
         match listener.accept() {

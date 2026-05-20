@@ -706,6 +706,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "SQL compatibility is not implemented",
         "Idempotency-Key supports local data-dir-backed replay",
         "exits non-zero when any check fails while preserving the JSON summary",
+        "server_error_code",
         "TraceDbAsyncClient",
         "background thread per request",
         "async typed write/admin helpers",
@@ -1555,9 +1556,8 @@ fn connect_with_retry(addr: std::net::SocketAddr) -> TcpStream {
 fn start_http_test_server(data_dir: PathBuf) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    drop(listener);
     std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
+        let _ = tracedb_server::serve_listener(data_dir, listener);
     });
     wait_for_http_ready(addr);
     addr
@@ -1594,11 +1594,10 @@ fn start_stoppable_server(
 ) -> (SocketAddr, Arc<AtomicBool>, JoinHandle<std::io::Result<()>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    drop(listener);
     let shutdown = Arc::new(AtomicBool::new(false));
     let server_shutdown = Arc::clone(&shutdown);
     let handle = std::thread::spawn(move || {
-        tracedb_server::serve_with_shutdown(data_dir, &addr.to_string(), || {
+        tracedb_server::serve_listener_with_shutdown(data_dir, listener, || {
             server_shutdown.load(Ordering::SeqCst)
         })
     });

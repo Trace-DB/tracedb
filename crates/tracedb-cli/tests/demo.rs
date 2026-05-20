@@ -1,5 +1,6 @@
 use serde_json::Value;
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -194,6 +195,45 @@ fn doctor_http_exits_nonzero_for_unhealthy_endpoint_and_preserves_json_summary()
     assert_eq!(summary["sql_module"], "not_implemented");
 }
 
+#[test]
+fn doctor_http_reports_server_error_code_from_endpoint() {
+    let (url, server) = start_static_error_server(
+        6,
+        r#"{"error":"engine unavailable","code":"engine_unavailable"}"#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("doctor")
+        .arg("http")
+        .arg("--url")
+        .arg(&url)
+        .arg("--token")
+        .arg("dev-token")
+        .arg("--timeout-ms")
+        .arg("500")
+        .arg("--safe-retries")
+        .arg("0")
+        .output()
+        .expect("run tracedb doctor http against coded error endpoint");
+    server.join().expect("static error server thread");
+
+    assert!(
+        !output.status.success(),
+        "doctor http should fail when endpoint returns coded errors\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("doctor json");
+    assert_eq!(summary["ok"], false);
+    assert_eq!(
+        summary["checks"]["health"]["server_error"],
+        "engine unavailable"
+    );
+    assert_eq!(
+        summary["checks"]["health"]["server_error_code"],
+        "engine_unavailable"
+    );
+}
+
 struct ServerChild {
     child: Child,
 }
@@ -210,6 +250,47 @@ fn free_loopback_bind() -> String {
     let bind = listener.local_addr().expect("local addr").to_string();
     drop(listener);
     bind
+}
+
+fn start_static_error_server(
+    request_count: usize,
+    body: &'static str,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind static error server");
+    let url = format!(
+        "http://{}",
+        listener.local_addr().expect("static server addr")
+    );
+    let handle = thread::spawn(move || {
+        for stream in listener.incoming().take(request_count) {
+            let mut stream = stream.expect("accept static error request");
+            read_request_headers(&mut stream);
+            let response = format!(
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write static error response");
+        }
+    });
+    (url, handle)
+}
+
+fn read_request_headers(stream: &mut TcpStream) {
+    let mut buffer = [0u8; 256];
+    let mut request = Vec::new();
+    loop {
+        let read = stream.read(&mut buffer).expect("read static error request");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
 }
 
 fn wait_for_http_doctor(url: &str, server: &mut Child) -> Value {
