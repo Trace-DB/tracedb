@@ -524,6 +524,63 @@ fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
 }
 
 #[test]
+fn product_regression_only_typescript_gateway_smoke_runs_single_gate_step() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("only-typescript-gateway-smoke");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("typescript_gateway_smoke")
+        .output()
+        .expect("run tracedb product-regression TypeScript gateway smoke step");
+    assert!(
+        output.status.success(),
+        "product-regression --only typescript_gateway_smoke failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout)
+        .expect("product-regression TypeScript gateway smoke json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "typescript_gateway_smoke");
+    assert_eq!(summary["local_server_url"], Value::Null);
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["typescript_gateway_smoke"]["ok"], true);
+    assert_eq!(
+        summary["steps"]["typescript_gateway_smoke"]["command"],
+        "npm run gateway-smoke"
+    );
+    assert!(
+        summary["steps"]["typescript_gateway_smoke"]["cwd"]
+            .as_str()
+            .is_some_and(|cwd| cwd.ends_with("clients/typescript")),
+        "typescript_gateway_smoke should run inside clients/typescript: {summary}"
+    );
+    let smoke_summary = &summary["steps"]["typescript_gateway_smoke"]["summary"];
+    assert_eq!(smoke_summary["ok"], true);
+    assert_eq!(smoke_summary["mode"], "local-gateway-typescript-smoke");
+    assert_eq!(smoke_summary["token_required"], true);
+    assert_eq!(smoke_summary["token_enforcement"], true);
+    assert_eq!(smoke_summary["routing_enforcement"], true);
+    assert_eq!(smoke_summary["database_id"], "db_local");
+    assert_eq!(smoke_summary["branch_id"], "db_local:main");
+    assert_eq!(
+        smoke_summary["quickstart_mode"],
+        "typescript-endpoint-quickstart"
+    );
+    assert_eq!(smoke_summary["deleted_hidden"], true);
+    assert_eq!(smoke_summary["sql_module"], "not_implemented");
+}
+
+#[test]
 fn product_regression_only_embedded_verify_reuses_existing_embedded_demo_data() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("embedded-verify-target");

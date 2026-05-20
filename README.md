@@ -106,6 +106,18 @@ the normal one-step `local-product-regression` JSON summary with `only_step:
 evidence only; it does not run embedded demo/verify, `http_demo`, local
 `doctor http`, the Rust SDK quickstart, `typescript_check`, TypeScript gateway
 smoke, managed-cloud checks, benchmark controls, or SQL compatibility checks.
+`--only typescript_gateway_smoke` runs only
+`(cd clients/typescript && npm run gateway-smoke)`, which starts a local engine
+plus gateway-mode `tracedb-server`, requires bearer auth, verifies bad-token and
+bad-branch rejection, and runs the endpoint quickstart through the gateway with
+`TRACEDB_DATABASE_ID=db_local`, `TRACEDB_BRANCH_ID=db_local:main`, and a local
+admin scratch directory. It emits the normal one-step
+`local-product-regression` JSON summary with `only_step:
+"typescript_gateway_smoke"`. This is local generated TypeScript gateway
+auth/routing evidence only; it does not run embedded demo/verify, `http_demo`,
+local `doctor http`, the Rust SDK quickstart, `typescript_check`, TypeScript
+HTTP smoke, managed-cloud checks, benchmark controls, or SQL compatibility
+checks.
 
 Run the SDK quickstart against a local HTTP server:
 

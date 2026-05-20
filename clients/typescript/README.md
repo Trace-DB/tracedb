@@ -142,6 +142,14 @@ TypeScript client HTTP product path. It does not run embedded demo/verify,
 `http_demo`, local `doctor http`, the Rust SDK quickstart, `typescript_check`,
 `gateway-smoke`, managed-cloud checks, benchmark controls, or SQL
 compatibility checks.
+`--only typescript_gateway_smoke` runs only `npm run gateway-smoke`, which
+starts a local engine plus gateway-mode server, requires bearer auth, checks
+missing-token and bad-branch rejection, and runs the generated TypeScript
+endpoint quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local`,
+`TRACEDB_BRANCH_ID=db_local:main`, and a local `TRACEDB_ADMIN_DIR`. It does not
+run embedded demo/verify, `http_demo`, local `doctor http`, the Rust SDK
+quickstart, `typescript_check`, `http-smoke`, managed-cloud checks, benchmark
+controls, or SQL compatibility checks.
 
 Install the local private package tooling and run the typecheck boundary:
 

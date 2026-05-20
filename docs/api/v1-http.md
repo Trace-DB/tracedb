@@ -289,8 +289,18 @@ HTTP product path, and emits one-step `local-product-regression` JSON with
 smoke evidence only, not full product gate coverage, not embedded demo/verify,
 not `http_demo`, not local `doctor http`, not Rust SDK quickstart, not
 `typescript_check`, not TypeScript gateway smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility. The TypeScript gateway smoke
-step still runs through the full gate.
+benchmark evidence, and not SQL compatibility.
+`product-regression --only typescript_gateway_smoke` runs only `npm run
+gateway-smoke` in `clients/typescript`, which starts a local engine plus
+gateway-mode `tracedb-server`, requires bearer auth, checks missing-token and
+bad-branch rejection, and runs the generated TypeScript endpoint quickstart
+through the gateway with managed routing metadata plus a local admin scratch
+dir. It emits one-step `local-product-regression` JSON with `only_step:
+"typescript_gateway_smoke"`. This is local generated TypeScript gateway
+auth/routing evidence only, not full product gate coverage, not embedded
+demo/verify, not `http_demo`, not local `doctor http`, not Rust SDK quickstart,
+not `typescript_check`, not TypeScript HTTP smoke, not managed-cloud proof, not
+benchmark evidence, and not SQL compatibility.
 `product-regression --only embedded_verify`
 verifies an existing embedded demo data root and should be run with the same
 `--data-root` used for `--only embedded_demo`.
