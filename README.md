@@ -185,7 +185,10 @@ opt into bounded transient retries for those keyed write/admin requests. The SDK
 quickstart demonstrates that path with `--idempotency-retries` /
 `TRACEDB_IDEMPOTENCY_RETRIES`, generating per-run keys for its write/admin
 steps. The SDK also exposes typed local admin helpers for compact, snapshot, and
-restore.
+restore. Its JSON summary uses a stable operator envelope with
+`mode: "rust-sdk-quickstart"`, `server_url`, optional `database_id` /
+`branch_id`, `table`, `tenant_id`, and a structured `admin` object that reports
+whether compact, snapshot, and restore were requested or skipped.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
 machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`. A checked

@@ -363,7 +363,11 @@ or `TRACEDB_IDEMPOTENCY_RETRIES=N` demonstrates the keyed write/admin retry path
 by generating per-run `Idempotency-Key` values for the quickstart's
 mutation/admin steps. Restore creates a separate database directory; it does not
 replace the running server's data directory and is not managed-cloud backup/DR
-semantics.
+semantics. The JSON summary reports the active envelope fields operators need to
+compare quickstarts across clients: `mode: "rust-sdk-quickstart"`,
+`server_url`, optional `database_id` / `branch_id`, `table`, `tenant_id`, and a
+structured `admin` object where skipped admin work is explicit instead of
+collapsed into a failure-shaped boolean.
 
 The generated TypeScript client has its own local HTTP smoke:
 

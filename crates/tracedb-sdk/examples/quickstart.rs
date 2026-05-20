@@ -26,12 +26,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let mut config = TraceDbClientConfig::managed(args.url, args.token);
-    if let Some(database_id) = args.database_id {
-        config = config.with_database(database_id);
+    let mut config = TraceDbClientConfig::managed(args.url.clone(), args.token.clone());
+    if let Some(database_id) = args.database_id.as_ref() {
+        config = config.with_database(database_id.clone());
     }
-    if let Some(branch_id) = args.branch_id {
-        config = config.with_branch(branch_id);
+    if let Some(branch_id) = args.branch_id.as_ref() {
+        config = config.with_branch(branch_id.clone());
     }
     if let Some(timeout_ms) = args.timeout_ms {
         config = config.with_timeout(Duration::from_millis(timeout_ms));
@@ -98,9 +98,47 @@ fn run() -> Result<(), Box<dyn Error>> {
         .as_ref()
         .map(|admin_dir| run_admin_smoke(&client, admin_dir, idempotency_run_id.as_deref()))
         .transpose()?;
+    let admin_summary = match admin.as_ref() {
+        Some(admin) => json!({
+            "requested": true,
+            "compact": admin.compacted,
+            "snapshot": admin.snapshot,
+            "restore": admin.restored,
+        }),
+        None => json!({
+            "requested": false,
+            "compact": "skipped",
+            "snapshot": "skipped",
+            "restore": "skipped",
+        }),
+    };
+    let steps = json!({
+        "ready": true,
+        "health": health.ok,
+        "catalog": true,
+        "metrics": metrics.latest_epoch.is_some(),
+        "schema_apply": true,
+        "batch_ingest": true,
+        "patch": true,
+        "scan": true,
+        "query": true,
+        "explain": true,
+        "delete": true,
+        "jobs": true,
+        "compact": admin.as_ref().map(|admin| admin.compacted).unwrap_or(false),
+        "snapshot": admin.as_ref().map(|admin| admin.snapshot).unwrap_or(false),
+        "restore": admin.as_ref().map(|admin| admin.restored).unwrap_or(false),
+    });
 
     let summary = json!({
         "ok": true,
+        "mode": "rust-sdk-quickstart",
+        "server_url": args.url.as_str(),
+        "database_id": args.database_id.as_deref(),
+        "branch_id": args.branch_id.as_deref(),
+        "table": "docs",
+        "tenant_id": "tenant-a",
+        "admin": admin_summary,
         "server_ready": ready.ready,
         "health_ok": health.ok,
         "database_count": databases.databases.len(),
@@ -125,23 +163,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         "idempotency_retries": args.idempotency_retries.unwrap_or(0),
         "idempotency_keys": idempotency_keys_enabled,
         "sql_module": "not_implemented",
-        "steps": {
-            "ready": true,
-            "health": health.ok,
-            "catalog": true,
-            "metrics": metrics.latest_epoch.is_some(),
-            "schema_apply": true,
-            "batch_ingest": true,
-            "patch": true,
-            "scan": true,
-            "query": true,
-            "explain": true,
-            "delete": true,
-            "jobs": true,
-            "compact": admin.as_ref().map(|admin| admin.compacted).unwrap_or(false),
-            "snapshot": admin.as_ref().map(|admin| admin.snapshot).unwrap_or(false),
-            "restore": admin.as_ref().map(|admin| admin.restored).unwrap_or(false),
-        },
+        "steps": steps,
     });
     println!("{}", serde_json::to_string_pretty(&summary)?);
 

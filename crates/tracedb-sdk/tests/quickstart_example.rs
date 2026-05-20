@@ -54,6 +54,12 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
         serde_json::from_slice(&output.stdout).expect("quickstart emits json summary");
 
     assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "rust-sdk-quickstart");
+    assert_eq!(summary["server_url"], url);
+    assert_eq!(summary["database_id"], Value::Null);
+    assert_eq!(summary["branch_id"], Value::Null);
+    assert_eq!(summary["table"], "docs");
+    assert_eq!(summary["tenant_id"], "tenant-a");
     assert_eq!(summary["steps"]["health"], true);
     assert_eq!(summary["steps"]["catalog"], true);
     assert_eq!(summary["steps"]["metrics"], true);
@@ -72,6 +78,10 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert!(summary["branch_count"].as_u64().is_some());
     assert!(summary["metrics_latest_epoch"].as_u64().is_some());
     assert!(summary["admin_job_count"].as_u64().is_some());
+    assert_eq!(summary["admin"]["requested"], true);
+    assert_eq!(summary["admin"]["compact"], true);
+    assert_eq!(summary["admin"]["snapshot"], true);
+    assert_eq!(summary["admin"]["restore"], true);
     assert_eq!(summary["idempotency_retries"], 1);
     assert_eq!(summary["idempotency_keys"], true);
     assert_eq!(summary["patched"], true);
@@ -137,6 +147,12 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
         serde_json::from_slice(&output.stdout).expect("quickstart emits json summary");
 
     assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "rust-sdk-quickstart");
+    assert_eq!(summary["server_url"], url);
+    assert_eq!(summary["database_id"], Value::Null);
+    assert_eq!(summary["branch_id"], Value::Null);
+    assert_eq!(summary["table"], "docs");
+    assert_eq!(summary["tenant_id"], "tenant-a");
     assert_eq!(summary["steps"]["health"], true);
     assert_eq!(summary["steps"]["catalog"], true);
     assert_eq!(summary["steps"]["metrics"], true);
@@ -155,6 +171,10 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert!(summary["branch_count"].as_u64().is_some());
     assert!(summary["metrics_latest_epoch"].as_u64().is_some());
     assert!(summary["admin_job_count"].as_u64().is_some());
+    assert_eq!(summary["admin"]["requested"], false);
+    assert_eq!(summary["admin"]["compact"], "skipped");
+    assert_eq!(summary["admin"]["snapshot"], "skipped");
+    assert_eq!(summary["admin"]["restore"], "skipped");
     assert_eq!(summary["idempotency_retries"], 0);
     assert_eq!(summary["idempotency_keys"], false);
     assert_eq!(summary["patched"], true);
@@ -204,6 +224,12 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
         serde_json::from_slice(&output.stdout).expect("quickstart emits json summary");
 
     assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "rust-sdk-quickstart");
+    assert_eq!(summary["server_url"], url);
+    assert_eq!(summary["database_id"], Value::Null);
+    assert_eq!(summary["branch_id"], Value::Null);
+    assert_eq!(summary["table"], "docs");
+    assert_eq!(summary["tenant_id"], "tenant-a");
     assert_eq!(summary["idempotency_retries"], 1);
     assert_eq!(summary["idempotency_keys"], true);
     assert_eq!(summary["steps"]["health"], true);
@@ -215,6 +241,10 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["steps"]["delete"], true);
     assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["steps"]["jobs"], true);
+    assert_eq!(summary["admin"]["requested"], false);
+    assert_eq!(summary["admin"]["compact"], "skipped");
+    assert_eq!(summary["admin"]["snapshot"], "skipped");
+    assert_eq!(summary["admin"]["restore"], "skipped");
     assert_eq!(summary["health_ok"], true);
     assert_eq!(summary["sql_module"], "not_implemented");
 }

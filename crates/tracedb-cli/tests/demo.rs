@@ -551,6 +551,17 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(summary["steps"]["rust_sdk_quickstart"]["ok"], true);
     let sdk_summary = &summary["steps"]["rust_sdk_quickstart"]["summary"];
     assert_eq!(sdk_summary["ok"], true);
+    assert_eq!(sdk_summary["mode"], "rust-sdk-quickstart");
+    assert!(
+        sdk_summary["server_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("http://127.0.0.1:")),
+        "Rust SDK quickstart should report loopback server url: {sdk_summary}"
+    );
+    assert_eq!(sdk_summary["database_id"], Value::Null);
+    assert_eq!(sdk_summary["branch_id"], Value::Null);
+    assert_eq!(sdk_summary["table"], "docs");
+    assert_eq!(sdk_summary["tenant_id"], "tenant-a");
     assert_eq!(sdk_summary["server_ready"], true);
     assert_eq!(sdk_summary["idempotency_retries"], 1);
     assert_eq!(sdk_summary["idempotency_keys"], true);
@@ -571,6 +582,10 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert!(sdk_summary["branch_count"].as_u64().is_some());
     assert!(sdk_summary["metrics_latest_epoch"].as_u64().is_some());
     assert!(sdk_summary["admin_job_count"].as_u64().is_some());
+    assert_eq!(sdk_summary["admin"]["requested"], true);
+    assert_eq!(sdk_summary["admin"]["compact"], true);
+    assert_eq!(sdk_summary["admin"]["snapshot"], true);
+    assert_eq!(sdk_summary["admin"]["restore"], true);
     assert_eq!(sdk_summary["patched"], true);
     assert_eq!(sdk_summary["patched_status"], "reviewed");
     assert_eq!(sdk_summary["sql_module"], "not_implemented");
