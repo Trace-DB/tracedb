@@ -729,6 +729,9 @@ fn product_regression_only_typescript_gateway_smoke_runs_single_gate_step() {
         smoke_summary["quickstart_mode"],
         "typescript-endpoint-quickstart"
     );
+    assert_eq!(smoke_summary["quickstart_steps"]["patch"], true);
+    assert_eq!(smoke_summary["patched"], true);
+    assert_eq!(smoke_summary["patched_status"], "reviewed");
     assert_eq!(smoke_summary["deleted_hidden"], true);
     assert_eq!(smoke_summary["sql_module"], "not_implemented");
 }

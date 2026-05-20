@@ -227,8 +227,10 @@ HTTP routes for ready, health, catalog, metrics, schema apply, direct put, batch
 ingest, get, scan, query, explain, delete, compact, snapshot, restore, and admin
 jobs. `TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run
 quickstart` runs the generated TypeScript client against an existing HTTP
-endpoint. Optional `TRACEDB_DATABASE_ID` / `TRACEDB_BRANCH_ID` add managed
-routing metadata, and optional absolute `TRACEDB_ADMIN_DIR` enables local
+endpoint through readiness, health, catalog, metrics, schema apply, batch ingest,
+patch, patched visibility, scan, query, explain, delete, and admin jobs.
+Optional `TRACEDB_DATABASE_ID` / `TRACEDB_BRANCH_ID` add managed routing
+metadata, and optional absolute `TRACEDB_ADMIN_DIR` enables local
 compact/snapshot/restore against server-side scratch paths. The quickstart
 reports `sql_module: not_implemented` and is endpoint example evidence, not a
 package publishing claim, SQL compatibility, managed-cloud backup/DR, or

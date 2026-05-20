@@ -388,10 +388,10 @@ TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run quickstart
 JSON POST bodies. `TRACEDB_ADMIN_DIR=/absolute/server/side/path` enables
 compact, snapshot, and restore against a server-side local scratch directory;
 without it, the quickstart avoids path-based admin writes while still covering
-readiness, health, catalog, metrics, schema apply, batch ingest, scan, query,
-explain, delete, and admin jobs. The quickstart emits `sql_module:
-not_implemented` and remains endpoint example evidence, not SQL compatibility,
-managed-cloud backup/DR, or benchmark evidence.
+readiness, health, catalog, metrics, schema apply, batch ingest, patch, patched
+visibility, scan, query, explain, delete, and admin jobs. The quickstart emits
+`sql_module: not_implemented` and remains endpoint example evidence, not SQL
+compatibility, managed-cloud backup/DR, or benchmark evidence.
 
 The generated TypeScript client also has a local gateway smoke:
 

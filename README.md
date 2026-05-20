@@ -238,8 +238,9 @@ TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run quickstart
 Set `TRACEDB_DATABASE_ID` and `TRACEDB_BRANCH_ID` to exercise managed-routing
 metadata. Set `TRACEDB_ADMIN_DIR` to an absolute server-side local scratch path
 to include compact, snapshot, and restore; without it, the quickstart stays on
-readiness, health, catalog, metrics, schema apply, batch ingest, scan, query,
-explain, delete, and admin jobs. It emits `sql_module: not_implemented` and is
+readiness, health, catalog, metrics, schema apply, batch ingest, patch, patched
+visibility, scan, query, explain, delete, and admin jobs. It emits
+`sql_module: not_implemented` and is
 an endpoint example for the generated artifact, not package publishing or
 benchmark evidence.
 

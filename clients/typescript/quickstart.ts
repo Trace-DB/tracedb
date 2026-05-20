@@ -3,6 +3,7 @@ import {
   TraceDbClient,
   type HybridQuery,
   type RecordInput,
+  type RecordPatchRequest,
   type RecordPutBatchRequest,
   type RestoreRequest,
   type SnapshotRequest,
@@ -98,13 +99,25 @@ const batchResponse = await client.putBatch(batch, {
   idempotencyKey: idempotencyKey(runId, "put-batch"),
 });
 
+const patch: RecordPatchRequest = {
+  table,
+  tenant_id: tenantId,
+  id: "intro",
+  fields: { status: "reviewed" },
+};
+const patchResponse = await client.patchRecord(patch, {
+  idempotencyKey: idempotencyKey(runId, "patch-intro"),
+});
+const patched = await client.getRecord({ table, tenant_id: tenantId, id: "intro" });
+const patchedStatus = patched.record?.fields?.status;
+
 const scanResponse = await client.scanRecords({ table, tenant_id: tenantId, limit: 10 });
 const query: HybridQuery = {
   table,
   tenant_id: tenantId,
   text: "TypeScript endpoint",
   vector: [1, 0, 0],
-  scalar_eq: { status: "published" },
+  scalar_eq: { status: "reviewed" },
   graph_seed: "intro",
   temporal_as_of: Number.MAX_SAFE_INTEGER,
   top_k: 3,
@@ -150,6 +163,7 @@ const steps = {
   metrics: true,
   schema_apply: typeof schemaResponse.epoch === "number",
   batch_ingest: batchResponse.record_count === 3,
+  patch: typeof patchResponse.epoch === "number" && patchedStatus === "reviewed",
   scan: scanResponse.returned_count === 3,
   query: Array.isArray(queryResponse.results),
   explain: typeof explainResponse.returned_count === "number",
@@ -176,6 +190,9 @@ const summary = {
   steps,
   admin,
   records_inserted: batchResponse.record_count,
+  patch_epoch: patchResponse.epoch,
+  patched: patchedStatus === "reviewed",
+  patched_status: patchedStatus,
   records_scanned: scanResponse.returned_count,
   query_result_ids: queryResponse.results?.map((row) => row.record_id),
   explain_returned_count: explainResponse.returned_count,

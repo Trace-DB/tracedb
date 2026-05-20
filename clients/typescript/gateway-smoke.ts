@@ -228,6 +228,10 @@ try {
   assert.equal(summary.database_id, databaseId);
   assert.equal(summary.branch_id, branchId);
   assert.equal(summary.deleted_hidden, true);
+  const quickstartSteps = summary.steps as Record<string, unknown>;
+  assert.equal(quickstartSteps.patch, true);
+  assert.equal(summary.patched, true);
+  assert.equal(summary.patched_status, "reviewed");
   assert.equal(summary.sql_module, "not_implemented");
 
   console.log(JSON.stringify({
@@ -243,6 +247,8 @@ try {
     quickstart_mode: summary.mode,
     quickstart_steps: summary.steps,
     quickstart_admin: summary.admin,
+    patched: summary.patched,
+    patched_status: summary.patched_status,
     deleted_hidden: summary.deleted_hidden,
     sql_module: "not_implemented",
   }, null, 2));

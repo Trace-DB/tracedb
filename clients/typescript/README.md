@@ -85,12 +85,12 @@ Optional routing metadata can be supplied with `TRACEDB_DATABASE_ID` and
 `TRACEDB_ADMIN_DIR=/absolute/server/side/path`; that path is interpreted by the
 TraceDB server process and is intended for local scratch use. Without
 `TRACEDB_ADMIN_DIR`, the quickstart still checks readiness, health, catalog,
-metrics, schema apply, batch ingest, scan, query, explain, delete, and admin
-jobs. With `TRACEDB_ADMIN_DIR`, it also compacts, snapshots, and restores to a
-separate directory. The quickstart emits a JSON summary and
-`typescript client endpoint quickstart ok`. It is a managed-endpoint example
-for the generated artifact, not package publishing readiness, not SQL
-compatibility, and not benchmark evidence.
+metrics, schema apply, batch ingest, patch, patched visibility, scan, query,
+explain, delete, and admin jobs. With `TRACEDB_ADMIN_DIR`, it also compacts,
+snapshots, and restores to a separate directory. The quickstart emits a JSON
+summary and `typescript client endpoint quickstart ok`. It is a
+managed-endpoint example for the generated artifact, not package publishing
+readiness, not SQL compatibility, and not benchmark evidence.
 
 Run the generated TypeScript client through a local gateway that requires a
 bearer token and routes by managed metadata:
