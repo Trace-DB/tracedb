@@ -187,6 +187,43 @@ fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary(
 }
 
 #[test]
+fn product_regression_only_typescript_conflicts_with_skip_typescript() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("conflicting-typescript-only");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--skip-typescript")
+        .arg("--only")
+        .arg("typescript_check")
+        .output()
+        .expect("run tracedb product-regression with conflicting TypeScript flags");
+    assert!(
+        !output.status.success(),
+        "product-regression --only typescript_check --skip-typescript should fail before running Node tooling\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "conflicting TypeScript flags should not emit product-regression JSON: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !data_root.exists(),
+        "conflicting TypeScript flags should fail during option parsing before creating data roots"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "product-regression --only typescript_check conflicts with --skip-typescript"
+        ),
+        "stderr should explain conflicting TypeScript flags: {stderr}"
+    );
+}
+
+#[test]
 fn product_regression_list_steps_reports_gate_steps_without_running_them() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("unused-product-data");

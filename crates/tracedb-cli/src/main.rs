@@ -1084,6 +1084,16 @@ fn parse_product_regression_config(
         }
         idx += 1;
     }
+    if skip_typescript {
+        if let Some(step) = only_step.as_deref() {
+            if product_regression_step_is_typescript(step) {
+                return Err(format!(
+                    "product-regression --only {step} conflicts with --skip-typescript; remove --skip-typescript or choose a non-TypeScript step"
+                )
+                .into());
+            }
+        }
+    }
     let cleanup_data = data_root.is_none() && !keep_data;
     let data_root = data_root.unwrap_or_else(default_product_regression_root);
     Ok(ProductRegressionConfig {
@@ -1095,6 +1105,10 @@ fn parse_product_regression_config(
         list_steps,
         only_step,
     })
+}
+
+fn product_regression_step_is_typescript(step: &str) -> bool {
+    step.starts_with("typescript_")
 }
 
 fn default_product_regression_root() -> PathBuf {

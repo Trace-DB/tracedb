@@ -132,6 +132,8 @@ diagnostics against a managed local server.
 `--only rust_sdk_quickstart` also does not run the TypeScript smoke steps; it
 is limited to local Rust SDK quickstart verification against a managed local
 server.
+`--skip-typescript` is for the full product gate and non-TypeScript selectors;
+a TypeScript `--only` selector conflicts with --skip-typescript.
 `--only typescript_check` runs only `npm run check`, which currently performs
 the private package typecheck plus dependency-free generated-client smoke. It
 does not run `http-smoke`, `gateway-smoke`, `http_demo`, local `doctor http`,

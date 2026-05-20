@@ -65,7 +65,10 @@ failure-path coverage, use test-only `--inject-failure STEP` to verify that the
 gate exits nonzero while still emitting the failed-step JSON summary. Use
 `--list-steps` to print JSON step metadata, including `only_supported`, for
 operator and CI wiring without running demo, HTTP, SDK, or TypeScript smoke
-steps. For narrow local iteration,
+steps. `--skip-typescript` is for the full product gate and non-TypeScript
+selectors; a TypeScript `--only` selector conflicts with --skip-typescript for
+steps such as `typescript_check`, `typescript_http_smoke`, or
+`typescript_gateway_smoke`. For narrow local iteration,
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step `local-product-regression` JSON summary. After that, use the
 same `--data-root` with `--only embedded_verify` to verify the existing

@@ -48,7 +48,9 @@ regression gate also has test-only `--inject-failure STEP` coverage for
 nonzero process status and machine-readable failed-step JSON. Use
 `--list-steps` to print the machine-readable list of product-regression step
 names with `only_supported` metadata for operators and CI wiring without
-executing any product checks.
+executing any product checks. `--skip-typescript` is for the full product gate
+and non-TypeScript selectors; a TypeScript `--only` selector conflicts with
+--skip-typescript.
 `--only embedded_demo` currently runs just the embedded demo step and emits the
 normal one-step product-regression JSON summary. `--only embedded_verify`
 verifies an existing embedded demo data root, usually with the same

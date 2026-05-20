@@ -766,6 +766,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "only_step",
         "local-product-regression-step-list",
         "only_supported",
+        "conflicts with --skip-typescript",
         "failure_injection",
         "injected_failure",
         "TRACEDB_WAIT_READY_MS",
@@ -807,6 +808,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("only_supported"),
             "{name} should document product regression selector support metadata"
+        );
+        assert!(
+            markdown.contains("conflicts with --skip-typescript"),
+            "{name} should document TypeScript-only selector skip conflicts"
         );
         assert!(
             markdown.contains("--only embedded_demo"),
