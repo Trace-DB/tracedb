@@ -56,6 +56,14 @@ self-contained local HTTP demo step and emits the normal one-step
 `local-product-regression` JSON summary. It does not run local `doctor http`,
 the Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud
 checks, benchmark controls, or SQL compatibility checks.
+`--only local_doctor` starts a managed-style local loopback `tracedb-server`
+child process and runs only the existing local `doctor http` product-regression
+step with readiness wait, `database_id`, and `branch_id` metadata. It emits the
+normal one-step `local-product-regression` JSON summary with `only_step:
+"local_doctor"`. This is read-only local endpoint diagnostics against a managed
+local server, not a mutating product smoke, not full local product gate
+evidence, not managed-cloud proof, not benchmark evidence, and not SQL
+compatibility.
 
 The local HTTP plus SDK smoke is also available as one command:
 

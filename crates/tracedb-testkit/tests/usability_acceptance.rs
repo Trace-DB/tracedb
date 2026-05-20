@@ -815,6 +815,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
             markdown.contains("--only http_demo"),
             "{name} should document targeted local HTTP demo execution"
         );
+        assert!(
+            markdown.contains("--only local_doctor"),
+            "{name} should document targeted local endpoint diagnostics"
+        );
     }
 }
 

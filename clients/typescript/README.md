@@ -125,7 +125,9 @@ Use `product-regression --list-steps` to discover the TypeScript smoke step
 names without invoking Node tooling. The current `--only embedded_demo` mode
 and dependency-aware `--only embedded_verify` mode do not run the TypeScript
 smoke steps. `--only http_demo` also does not run the TypeScript smoke steps;
-it is limited to the self-contained local HTTP demo step.
+it is limited to the self-contained local HTTP demo step. `--only local_doctor`
+also does not run the TypeScript smoke steps; it is limited to local endpoint
+diagnostics against a managed local server.
 
 Install the local private package tooling and run the typecheck boundary:
 

@@ -1030,7 +1030,12 @@ const PRODUCT_REGRESSION_STEPS: &[&str] = &[
     "typescript_gateway_smoke",
 ];
 
-const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = &["embedded_demo", "embedded_verify", "http_demo"];
+const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = &[
+    "embedded_demo",
+    "embedded_verify",
+    "http_demo",
+    "local_doctor",
+];
 
 fn parse_product_regression_config(
     args: &[String],
@@ -1165,6 +1170,17 @@ fn run_product_regression(
         steps.insert("http_demo".to_string(), step);
         return finish_product_regression(config, local_server_url, steps);
     }
+    if config.only_step.as_deref() == Some("local_doctor") {
+        let (bind, url) = product_regression_server_bind_and_url()?;
+        local_server_url = Some(url.clone());
+        {
+            let _server = LocalServerChild::start(&config.data_root.join("server-data"), &bind)?;
+            let doctor = product_regression_local_doctor_command(&cli, &url);
+            let step = run_product_regression_step_or_injected(&config, "local_doctor", doctor);
+            steps.insert("local_doctor".to_string(), step);
+        }
+        return finish_product_regression(config, local_server_url, steps);
+    }
 
     for (name, command) in [
         (
@@ -1197,37 +1213,13 @@ fn run_product_regression(
         }
     }
 
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let bind = listener.local_addr()?;
-    drop(listener);
-    let url = format!("http://{bind}");
+    let (bind, url) = product_regression_server_bind_and_url()?;
     local_server_url = Some(url.clone());
     let mut server_step_failed = false;
     {
-        let _server =
-            LocalServerChild::start(&config.data_root.join("server-data"), &bind.to_string())?;
+        let _server = LocalServerChild::start(&config.data_root.join("server-data"), &bind)?;
 
-        let doctor = product_regression_cli_command(
-            &cli,
-            vec![
-                "doctor".into(),
-                "http".into(),
-                "--url".into(),
-                url.clone(),
-                "--token".into(),
-                "dev-token".into(),
-                "--timeout-ms".into(),
-                "1000".into(),
-                "--safe-retries".into(),
-                "1".into(),
-                "--wait-ready-ms".into(),
-                "5000".into(),
-                "--database-id".into(),
-                "db_local".into(),
-                "--branch-id".into(),
-                "db_local:main".into(),
-            ],
-        );
+        let doctor = product_regression_local_doctor_command(&cli, &url);
         let step = run_product_regression_step_or_injected(&config, "local_doctor", doctor);
         let ok = product_regression_step_ok(&step);
         steps.insert("local_doctor".to_string(), step);
@@ -1336,6 +1328,38 @@ fn product_regression_cli_command(cli: &std::path::Path, args: Vec<String>) -> C
     let mut command = Command::new(cli);
     command.args(args);
     command
+}
+
+fn product_regression_server_bind_and_url() -> std::io::Result<(String, String)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let bind = listener.local_addr()?.to_string();
+    drop(listener);
+    let url = format!("http://{bind}");
+    Ok((bind, url))
+}
+
+fn product_regression_local_doctor_command(cli: &std::path::Path, url: &str) -> Command {
+    product_regression_cli_command(
+        cli,
+        vec![
+            "doctor".into(),
+            "http".into(),
+            "--url".into(),
+            url.to_string(),
+            "--token".into(),
+            "dev-token".into(),
+            "--timeout-ms".into(),
+            "1000".into(),
+            "--safe-retries".into(),
+            "1".into(),
+            "--wait-ready-ms".into(),
+            "5000".into(),
+            "--database-id".into(),
+            "db_local".into(),
+            "--branch-id".into(),
+            "db_local:main".into(),
+        ],
+    )
 }
 
 fn product_regression_step_list_summary() -> Value {
@@ -1644,6 +1668,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo|embedded_verify|http_demo]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo|embedded_verify|http_demo|local_doctor]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }

@@ -53,3 +53,6 @@ and emits the normal one-step `local-product-regression` JSON summary. It does
 not run local `doctor http`, the Rust SDK quickstart, generated TypeScript
 smoke steps, managed-cloud checks, benchmark controls, or SQL compatibility
 checks.
+`--only local_doctor` runs only the local HTTP doctor diagnostic against a
+managed local server and emits one-step `local-product-regression` JSON. It is
+endpoint diagnostics evidence only, not full product-regression gate coverage.

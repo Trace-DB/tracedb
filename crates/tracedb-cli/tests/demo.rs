@@ -309,6 +309,60 @@ fn product_regression_only_http_demo_runs_single_gate_step() {
 }
 
 #[test]
+fn product_regression_only_local_doctor_runs_single_gate_step() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("only-local-doctor");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("local_doctor")
+        .output()
+        .expect("run tracedb product-regression local doctor step");
+    assert!(
+        output.status.success(),
+        "product-regression --only local_doctor failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression local doctor json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "local_doctor");
+    assert!(
+        summary["local_server_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("http://127.0.0.1:")),
+        "local_doctor should report managed local server url: {summary}"
+    );
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["local_doctor"]["ok"], true);
+    assert_eq!(
+        summary["steps"]["local_doctor"]["summary"]["mode"],
+        "http-endpoint-diagnostics"
+    );
+    assert_eq!(
+        summary["steps"]["local_doctor"]["summary"]["ready_wait"]["ok"],
+        true
+    );
+    assert_eq!(
+        summary["steps"]["local_doctor"]["summary"]["checks"]["ready"]["response"]["ready"],
+        true
+    );
+    assert_eq!(
+        summary["steps"]["local_doctor"]["summary"]["sql_module"],
+        "not_implemented"
+    );
+}
+
+#[test]
 fn product_regression_only_embedded_verify_reuses_existing_embedded_demo_data() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("embedded-verify-target");

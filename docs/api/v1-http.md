@@ -258,6 +258,14 @@ runs the self-contained local HTTP demo step and emits the normal one-step
 the Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud
 checks, benchmark controls, or SQL compatibility checks. Other HTTP-adjacent,
 SDK, and TypeScript steps still run through the full gate.
+`product-regression --only local_doctor` starts a managed-style local loopback
+`tracedb-server` child process and runs only the existing local `doctor http`
+product-regression step with readiness wait, `database_id`, and `branch_id`
+metadata. It emits the normal one-step `local-product-regression` JSON summary
+with `only_step: "local_doctor"`. This is local endpoint diagnostics evidence
+only; it does not run `http_demo`, the Rust SDK quickstart, generated
+TypeScript smoke steps, managed-cloud checks, benchmark controls, or SQL
+compatibility checks.
 `product-regression --only embedded_verify`
 verifies an existing embedded demo data root and should be run with the same
 `--data-root` used for `--only embedded_demo`.
