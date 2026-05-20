@@ -762,6 +762,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "--list-steps",
         "--only",
         "embedded_demo",
+        "embedded_verify",
         "only_step",
         "local-product-regression-step-list",
         "failure_injection",
@@ -805,6 +806,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("--only embedded_demo"),
             "{name} should document the first supported product regression single-step mode"
+        );
+        assert!(
+            markdown.contains("--only embedded_verify"),
+            "{name} should document dependency-aware embedded verify targeted execution"
         );
     }
 }

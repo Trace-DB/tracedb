@@ -253,7 +253,9 @@ preserves the JSON summary on stdout and exits nonzero. Operators can run
 injection and CI orchestration; it emits JSON and does not run demo, HTTP, SDK,
 or TypeScript smoke steps. `product-regression --only embedded_demo` is the
 first supported single-step execution mode; HTTP, SDK, and TypeScript steps
-still run through the full gate.
+still run through the full gate. `product-regression --only embedded_verify`
+verifies an existing embedded demo data root and should be run with the same
+`--data-root` used for `--only embedded_demo`.
 
 Run the complete local HTTP plus Rust SDK smoke with one command:
 

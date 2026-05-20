@@ -49,7 +49,9 @@ nonzero process status and machine-readable failed-step JSON. Use
 `--list-steps` to print the machine-readable list of product-regression step
 names for operators and CI wiring without executing any product checks.
 `--only embedded_demo` currently runs just the embedded demo step and emits the
-normal one-step product-regression JSON summary.
+normal one-step product-regression JSON summary. `--only embedded_verify`
+verifies an existing embedded demo data root, usually with the same
+`--data-root` used by `--only embedded_demo`.
 
 The local HTTP plus SDK smoke is also available as one command:
 

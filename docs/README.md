@@ -45,4 +45,7 @@ test-only `--inject-failure STEP` coverage for JSON failure output and nonzero
 exit behavior. For product-regression step discovery, `--list-steps` emits JSON
 step metadata and exits without running product steps. The first single-step
 execution mode is `--only embedded_demo`, which runs only the embedded demo
-step and emits the normal local product-regression JSON summary.
+step and emits the normal local product-regression JSON summary. The
+dependency-aware `--only embedded_verify` mode verifies an existing embedded
+demo data root, typically after `--only embedded_demo` with the same
+`--data-root`.

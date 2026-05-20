@@ -272,6 +272,53 @@ fn product_regression_only_embedded_demo_runs_single_gate_step() {
 }
 
 #[test]
+fn product_regression_only_embedded_verify_reuses_existing_embedded_demo_data() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("embedded-verify-target");
+    let demo = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("embedded_demo")
+        .output()
+        .expect("seed embedded demo data");
+    assert!(
+        demo.status.success(),
+        "product-regression --only embedded_demo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&demo.stdout),
+        String::from_utf8_lossy(&demo.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("embedded_verify")
+        .output()
+        .expect("run tracedb product-regression embedded verify step");
+    assert!(
+        output.status.success(),
+        "product-regression --only embedded_verify failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression embedded verify json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "embedded_verify");
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["embedded_verify"]["ok"], true);
+}
+
+#[test]
 fn doctor_http_reports_endpoint_diagnostics() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bind = free_loopback_bind();

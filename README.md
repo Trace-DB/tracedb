@@ -66,7 +66,9 @@ gate exits nonzero while still emitting the failed-step JSON summary. Use
 `--list-steps` to print JSON step metadata for operator and CI wiring without
 running demo, HTTP, SDK, or TypeScript smoke steps. For narrow local iteration,
 `--only embedded_demo` currently runs just the embedded demo step and emits the
-normal one-step `local-product-regression` JSON summary.
+normal one-step `local-product-regression` JSON summary. After that, use the
+same `--data-root` with `--only embedded_verify` to verify the existing
+embedded demo data without running HTTP, SDK, or TypeScript steps.
 
 Run the SDK quickstart against a local HTTP server:
 

@@ -1054,9 +1054,9 @@ fn parse_product_regression_config(
             "--only" => {
                 idx += 1;
                 let step = args.get(idx).ok_or("missing value for --only")?.to_string();
-                if step != "embedded_demo" {
+                if !["embedded_demo", "embedded_verify"].contains(&step.as_str()) {
                     return Err(format!(
-                        "product-regression --only currently supports embedded_demo; got {step}"
+                        "product-regression --only currently supports embedded_demo, embedded_verify; got {step}"
                     )
                     .into());
                 }
@@ -1136,6 +1136,18 @@ fn run_product_regression(
             ),
         );
         steps.insert("embedded_demo".to_string(), step);
+        return finish_product_regression(config, local_server_url, steps);
+    }
+    if config.only_step.as_deref() == Some("embedded_verify") {
+        let step = run_product_regression_step_or_injected(
+            &config,
+            "embedded_verify",
+            product_regression_cli_command(
+                &cli,
+                vec!["--data".into(), embedded_dir.clone(), "verify".into()],
+            ),
+        );
+        steps.insert("embedded_verify".to_string(), step);
         return finish_product_regression(config, local_server_url, steps);
     }
 
@@ -1617,6 +1629,6 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--list-steps] [--only embedded_demo|embedded_verify]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>"
     );
 }
