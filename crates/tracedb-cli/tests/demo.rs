@@ -556,11 +556,14 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["idempotency_keys"], true);
     assert_eq!(sdk_summary["steps"]["schema_apply"], true);
     assert_eq!(sdk_summary["steps"]["batch_ingest"], true);
+    assert_eq!(sdk_summary["steps"]["patch"], true);
     assert_eq!(sdk_summary["steps"]["query"], true);
     assert_eq!(sdk_summary["steps"]["delete"], true);
     assert_eq!(sdk_summary["steps"]["compact"], true);
     assert_eq!(sdk_summary["steps"]["snapshot"], true);
     assert_eq!(sdk_summary["steps"]["restore"], true);
+    assert_eq!(sdk_summary["patched"], true);
+    assert_eq!(sdk_summary["patched_status"], "reviewed");
     assert_eq!(sdk_summary["sql_module"], "not_implemented");
     let snapshot_target = sdk_summary["snapshot_target"]
         .as_str()

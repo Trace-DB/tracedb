@@ -56,6 +56,7 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
+    assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["query"], true);
     assert_eq!(summary["steps"]["scan"], true);
     assert_eq!(summary["steps"]["delete"], true);
@@ -64,6 +65,8 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["steps"]["restore"], true);
     assert_eq!(summary["idempotency_retries"], 1);
     assert_eq!(summary["idempotency_keys"], true);
+    assert_eq!(summary["patched"], true);
+    assert_eq!(summary["patched_status"], "reviewed");
     let snapshot_target = summary["snapshot_target"]
         .as_str()
         .expect("snapshot target path");
@@ -127,6 +130,7 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
+    assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["query"], true);
     assert_eq!(summary["steps"]["scan"], true);
     assert_eq!(summary["steps"]["delete"], true);
@@ -135,6 +139,8 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["steps"]["restore"], false);
     assert_eq!(summary["idempotency_retries"], 0);
     assert_eq!(summary["idempotency_keys"], false);
+    assert_eq!(summary["patched"], true);
+    assert_eq!(summary["patched_status"], "reviewed");
     assert!(summary["snapshot_target"].is_null());
     assert!(summary["restore_target"].is_null());
     assert_eq!(summary["sql_module"], "not_implemented");
@@ -184,6 +190,7 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["idempotency_keys"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
+    assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["delete"], true);
     assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["sql_module"], "not_implemented");

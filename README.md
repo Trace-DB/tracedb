@@ -168,14 +168,15 @@ from environment variables instead of flags:
 TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=db_local TRACEDB_BRANCH_ID=db_local:main TRACEDB_TIMEOUT_MS=1000 TRACEDB_SAFE_RETRIES=1 TRACEDB_WAIT_READY_MS=5000 cargo run -p tracedb-cli -- doctor http
 ```
 
-The SDK example applies schema, batch-ingests records, scans, queries, explains,
-deletes, verifies deleted-record hiding, optionally compacts/snapshots/restores
-when `--admin-dir` points at an absolute server-side local scratch directory,
-and reports `sql_module: not_implemented`. The admin path is interpreted by the
-`tracedb-server` process, and restore creates a separate database directory
-instead of replacing the running server. The example uses typed SDK convenience
-methods over the current HTTP response shapes and accepts a configurable SDK
-request timeout; the original raw `serde_json::Value` methods remain available.
+The SDK example applies schema, batch-ingests records, patches a record, verifies
+patched visibility, scans, queries, explains, deletes, verifies deleted-record
+hiding, optionally compacts/snapshots/restores when `--admin-dir` points at an
+absolute server-side local scratch directory, and reports `sql_module:
+not_implemented`. The admin path is interpreted by the `tracedb-server` process,
+and restore creates a separate database directory instead of replacing the
+running server. The example uses typed SDK convenience methods over the current
+HTTP response shapes and accepts a configurable SDK request timeout; the original
+raw `serde_json::Value` methods remain available.
 Bounded safe retries are available for SDK health/read routes only. Callers can
 manually attach `Idempotency-Key` per write/admin request with
 `TraceDbRequestOptions`; `TraceDbClientConfig::with_idempotency_retries` can then

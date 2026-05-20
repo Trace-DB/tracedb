@@ -13,7 +13,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 use tracedb_query::{
     FreshnessMode, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
+    RecordPatchRequest, RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
     BranchesResponse, DatabasesResponse, ErrorResponse, HealthResponse, JobsResponse,
@@ -1244,6 +1244,23 @@ fn client_executes_typed_http_product_path() {
         .expect("get");
     assert_eq!(got.record.expect("record").id, "intro");
 
+    let patch = client
+        .patch_typed(&RecordPatchRequest::new(
+            "docs",
+            "tenant-a",
+            "intro",
+            json!({ "status": "reviewed" }).as_object().unwrap().clone(),
+        ))
+        .expect("patch");
+    assert_eq!(patch.epoch, 3);
+    let patched = client
+        .get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "intro"))
+        .expect("get patched");
+    assert_eq!(
+        patched.record.expect("patched record").fields["status"],
+        "reviewed"
+    );
+
     let scan = client
         .scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10))
         .expect("scan");
@@ -1268,7 +1285,7 @@ fn client_executes_typed_http_product_path() {
         .delete_typed(&RecordDeleteRequest::new("docs", "tenant-a", "ops"))
         .expect("delete");
     assert!(delete.deleted);
-    assert_eq!(delete.epoch, 3);
+    assert_eq!(delete.epoch, 4);
     let deleted = client
         .get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "ops"))
         .expect("get deleted");

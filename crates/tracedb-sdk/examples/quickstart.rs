@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
+    RecordPatchRequest, RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
     RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbRequestOptions,
@@ -71,6 +71,13 @@ fn run() -> Result<(), Box<dyn Error>> {
         Some(options) => client.put_batch_typed_with_options(&batch, options)?,
         None => client.put_batch_typed(&batch)?,
     };
+    let patch_request = patch_request();
+    let patch_options = idempotency_options(idempotency_run_id.as_deref(), "patch-intro");
+    let patch = match patch_options.as_ref() {
+        Some(options) => client.patch_typed_with_options(&patch_request, options)?,
+        None => client.patch_typed(&patch_request)?,
+    };
+    let patched = client.get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "intro"))?;
     let scan = client.scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10))?;
     let query_response = client.query_typed(&query(false))?;
     let explain = client.explain_typed(&query(false))?;
@@ -92,6 +99,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         "server_ready": ready.ready,
         "schema_epoch": schema.epoch,
         "records_inserted": ingest.record_count,
+        "patched": patch.epoch > schema.epoch,
+        "patched_status": patched
+            .record
+            .as_ref()
+            .and_then(|record| record.fields.get("status"))
+            .and_then(serde_json::Value::as_str),
         "records_scanned": scan.returned_count,
         "query_result_count": query_response.results.len(),
         "explain_returned_count": explain.returned_count,
@@ -106,6 +119,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             "ready": true,
             "schema_apply": true,
             "batch_ingest": true,
+            "patch": true,
             "scan": true,
             "query": true,
             "explain": true,
@@ -323,6 +337,18 @@ fn record(id: &str, tenant: &str, body: &str, embedding: [f32; 3]) -> RecordInpu
         .expect("object fields")
         .clone(),
     }
+}
+
+fn patch_request() -> RecordPatchRequest {
+    RecordPatchRequest::new(
+        "docs",
+        "tenant-a",
+        "intro",
+        json!({ "status": "reviewed" })
+            .as_object()
+            .expect("object fields")
+            .clone(),
+    )
 }
 
 fn query(explain: bool) -> HybridQuery {
