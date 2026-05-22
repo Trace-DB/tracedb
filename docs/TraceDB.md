@@ -374,6 +374,13 @@ scripts/platform_conformance.py --surface python_sdk --summary-json
 /tmp/tracedb-python-sdk-conformance.json` maps that smoke into all required v0
 contract scenarios. This is sync SDK contract evidence, not PyPI readiness,
 async support, managed-cloud proof, SQL compatibility, or GraphQL support.
+
+TraceQL has a first native parser primitive in `tracedb-query`:
+`traceql_query_from_str` compiles line-oriented `FROM`, `TENANT`, `WHERE`,
+`MATCH`, `NEAR`, `FRESHNESS`, `LIMIT`, and `EXPLAIN` directives into the
+existing `HybridQuery` model. This is shared-model adapter groundwork only; SQL
+compatibility, PostgreSQL compatibility, HTTP TraceQL execution, and GraphQL
+remain unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

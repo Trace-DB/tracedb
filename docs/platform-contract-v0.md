@@ -59,7 +59,7 @@ Every product surface must map to these contract components:
 | `record_writes` | Single-record put/patch/delete must share record identity, tenant identity, and field semantics across surfaces. |
 | `batch_ingest` | Batch writes are first-class and should preserve `record_count`, epoch, and optional write timing where exposed. |
 | `query_builder` | SDK builders should compile into the same `HybridQuery`/TraceQuery model as direct JSON calls. |
-| `traceql_string_execution` | TraceQL/string execution is a future adapter over the same query model, not a separate engine. |
+| `traceql_string_execution` | Native TraceQL v0 parsing compiles line-oriented strings into `HybridQuery`; HTTP execution and SQL-ish syntax remain future adapters over the same query model, not a separate engine. |
 | `result_envelope` | Success responses are route-specific JSON; errors preserve the current `{ "error": string, "code"?: string }` envelope plus SDK context. |
 | `explain_provenance_freshness_jobs` | Query/explain surfaces share `HybridExplain` fields for access paths, planner candidates, counters, timings, and freshness/provenance evidence as they mature. |
 | `errors_retries_idempotency` | Safe retries stay read-only. Mutation/admin retries require caller-provided `Idempotency-Key`; same key/body replays, body mismatch returns `409`. |
@@ -74,7 +74,7 @@ Every product surface must map to these contract components:
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with safe and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
-| TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
+| TraceQL / SQL-ish | `traceql_sqlish` | Native parser primitive checked; SQL-ish and HTTP execution parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
 
 Maintenance mode means a platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics.
@@ -197,6 +197,13 @@ support. The smoke is also promoted into the local product gate as
 --skip-typescript` now retains Python SDK contract evidence while omitting only
 the TypeScript lanes.
 
+Native TraceQL v0 now has a parser primitive in `tracedb-query`:
+`traceql_query_from_str` accepts line-oriented directives such as `FROM`,
+`TENANT`, `WHERE`, `MATCH`, `NEAR`, `FRESHNESS`, `LIMIT`, and `EXPLAIN`, then
+compiles them into the existing `HybridQuery` model. This is parser and shared
+model evidence only. It is not SQL compatibility, PostgreSQL compatibility,
+HTTP TraceQL execution, GraphQL support, or a separate query engine.
+
 ## Surface Implementation Rules
 
 - HTTP direct remains the source of wire truth.
@@ -207,7 +214,8 @@ the TypeScript lanes.
 - Python starts sync-first for ingestion, AI workflows, notebooks, and platform
   conformance tests. Async can follow after sync parity.
 - TraceQL / SQL-ish must parse into the same query model. Do not claim SQL
-  compatibility or PostgreSQL compatibility.
+  compatibility or PostgreSQL compatibility. The current native TraceQL parser
+  primitive is not yet an HTTP execution surface.
 - GraphQL must be schema-generated from TraceDB schema and compile into the same
   query model. It should not own database semantics.
 

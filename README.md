@@ -496,6 +496,13 @@ This is sync SDK contract evidence, not PyPI
 readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
 support.
 
+TraceQL has a first native parser primitive in `tracedb-query`:
+`traceql_query_from_str` compiles line-oriented `FROM`, `TENANT`, `WHERE`,
+`MATCH`, `NEAR`, `FRESHNESS`, `LIMIT`, and `EXPLAIN` directives into the
+existing `HybridQuery` model. This is shared-model adapter groundwork only; SQL
+compatibility, PostgreSQL compatibility, HTTP TraceQL execution, and GraphQL
+remain unimplemented.
+
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and
 `SnapshotRequest`, and its route methods return OpenAPI response aliases such as

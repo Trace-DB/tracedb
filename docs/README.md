@@ -41,6 +41,9 @@ for `python_sdk` scenario results.
 The current HTTP direct, Rust SDK, TypeScript SDK, and Python SDK lanes cover
 all required v0 scenarios; unimplemented future lanes must keep explicit
 `not_checked` results until they reach parity.
+The `traceql_sqlish` lane now has parser-only evidence through
+`traceql_query_from_str`, which compiles native line-oriented TraceQL into
+`HybridQuery`; SQL-ish syntax and HTTP execution remain parked.
 
 Local product smoke:
 

@@ -3169,6 +3169,250 @@ pub fn query_from_json(value: Value) -> Result<HybridQuery> {
     Ok(serde_json::from_value(value)?)
 }
 
+/// Parses TraceDB's native line-oriented TraceQL v0 query form into the shared
+/// `HybridQuery` model. This is intentionally not SQL or PostgreSQL syntax.
+pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
+    let mut table = None;
+    let mut tenant_id = None;
+    let mut text = None;
+    let mut vector = None;
+    let mut scalar_eq = Map::new();
+    let mut top_k = 10;
+    let mut freshness = FreshnessMode::Strict;
+    let mut explain = false;
+
+    for (line_idx, raw_line) in input.lines().enumerate() {
+        let line_number = line_idx + 1;
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let (directive, body) = split_traceql_directive(line);
+        match directive.to_ascii_uppercase().as_str() {
+            "FROM" => {
+                set_traceql_once(
+                    &mut table,
+                    "FROM",
+                    parse_traceql_single_argument("FROM", body, line_number)?,
+                    line_number,
+                )?;
+            }
+            "TENANT" => {
+                set_traceql_once(
+                    &mut tenant_id,
+                    "TENANT",
+                    parse_traceql_single_argument("TENANT", body, line_number)?,
+                    line_number,
+                )?;
+            }
+            "WHERE" => {
+                let (field, value) = parse_traceql_where(body, line_number)?;
+                scalar_eq.insert(field, parse_traceql_value(value, line_number)?);
+            }
+            "MATCH" => {
+                let (_column, value) = parse_traceql_column_value("MATCH", body, line_number)?;
+                text = Some(parse_traceql_string_value(value, line_number)?);
+            }
+            "NEAR" => {
+                let (_column, value) = parse_traceql_column_value("NEAR", body, line_number)?;
+                let parsed_vector =
+                    serde_json::from_str::<Vec<f32>>(value.trim()).map_err(|err| {
+                        invalid_traceql(
+                            line_number,
+                            format!("NEAR vector must be a JSON number array: {err}"),
+                        )
+                    })?;
+                if parsed_vector.is_empty() {
+                    return Err(invalid_traceql(line_number, "NEAR vector cannot be empty"));
+                }
+                vector = Some(parsed_vector);
+            }
+            "FRESHNESS" => {
+                let value = parse_traceql_single_argument("FRESHNESS", body, line_number)?;
+                freshness = match value.to_ascii_uppercase().as_str() {
+                    "STRICT" => FreshnessMode::Strict,
+                    "LAZY" => FreshnessMode::Lazy,
+                    "ALLOW_DIRTY" | "ALLOWDIRTY" | "ALLOW-DIRTY" => FreshnessMode::AllowDirty,
+                    _ => {
+                        return Err(invalid_traceql(
+                            line_number,
+                            "FRESHNESS must be STRICT, LAZY, or ALLOW_DIRTY",
+                        ));
+                    }
+                };
+            }
+            "LIMIT" => {
+                let value = parse_traceql_single_argument("LIMIT", body, line_number)?;
+                top_k = value.parse::<usize>().map_err(|err| {
+                    invalid_traceql(
+                        line_number,
+                        format!("LIMIT must be a positive integer: {err}"),
+                    )
+                })?;
+                if top_k == 0 {
+                    return Err(invalid_traceql(
+                        line_number,
+                        "LIMIT must be greater than zero",
+                    ));
+                }
+            }
+            "EXPLAIN" => {
+                if !body.trim().is_empty() {
+                    return Err(invalid_traceql(
+                        line_number,
+                        "EXPLAIN does not accept arguments",
+                    ));
+                }
+                explain = true;
+            }
+            _ => {
+                return Err(invalid_traceql(
+                    line_number,
+                    format!("unknown directive {directive:?}"),
+                ));
+            }
+        }
+    }
+
+    Ok(HybridQuery {
+        table: table.ok_or_else(|| invalid_traceql(0, "FROM is required"))?,
+        tenant_id: tenant_id.ok_or_else(|| invalid_traceql(0, "TENANT is required"))?,
+        text,
+        vector,
+        scalar_eq,
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k,
+        freshness,
+        explain,
+    })
+}
+
+fn split_traceql_directive(line: &str) -> (&str, &str) {
+    if let Some(index) = line.find(char::is_whitespace) {
+        (&line[..index], line[index..].trim())
+    } else {
+        (line, "")
+    }
+}
+
+fn parse_traceql_single_argument(
+    directive: &str,
+    body: &str,
+    line_number: usize,
+) -> Result<String> {
+    let value = body.trim();
+    if value.is_empty() {
+        return Err(invalid_traceql(
+            line_number,
+            format!("{directive} requires one argument"),
+        ));
+    }
+    if value.split_whitespace().count() != 1 {
+        return Err(invalid_traceql(
+            line_number,
+            format!("{directive} accepts exactly one argument"),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn set_traceql_once(
+    target: &mut Option<String>,
+    directive: &str,
+    value: String,
+    line_number: usize,
+) -> Result<()> {
+    if target.replace(value).is_some() {
+        return Err(invalid_traceql(
+            line_number,
+            format!("{directive} cannot be specified more than once"),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_traceql_where(body: &str, line_number: usize) -> Result<(String, &str)> {
+    let (field, value) = body
+        .split_once('=')
+        .ok_or_else(|| invalid_traceql(line_number, "WHERE must use field = value"))?;
+    let field = field.trim();
+    if field.is_empty() || field.split_whitespace().count() != 1 {
+        return Err(invalid_traceql(
+            line_number,
+            "WHERE field must be one identifier",
+        ));
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(invalid_traceql(line_number, "WHERE value cannot be empty"));
+    }
+    Ok((field.to_string(), value))
+}
+
+fn parse_traceql_column_value<'a>(
+    directive: &str,
+    body: &'a str,
+    line_number: usize,
+) -> Result<(&'a str, &'a str)> {
+    let body = body.trim();
+    let Some(index) = body.find(char::is_whitespace) else {
+        return Err(invalid_traceql(
+            line_number,
+            format!("{directive} requires a column and value"),
+        ));
+    };
+    let column = body[..index].trim();
+    let value = body[index..].trim();
+    if column.is_empty() || value.is_empty() {
+        return Err(invalid_traceql(
+            line_number,
+            format!("{directive} requires a column and value"),
+        ));
+    }
+    Ok((column, value))
+}
+
+fn parse_traceql_string_value(raw: &str, line_number: usize) -> Result<String> {
+    match parse_traceql_value(raw, line_number)? {
+        Value::String(value) => Ok(value),
+        _ => Err(invalid_traceql(
+            line_number,
+            "MATCH value must be a string literal or bare string",
+        )),
+    }
+}
+
+fn parse_traceql_value(raw: &str, line_number: usize) -> Result<Value> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(invalid_traceql(line_number, "value cannot be empty"));
+    }
+    match serde_json::from_str::<Value>(value) {
+        Ok(parsed) => Ok(parsed),
+        Err(err) => {
+            if value.starts_with('"') || value.ends_with('"') {
+                Err(invalid_traceql(
+                    line_number,
+                    format!("quoted value must be valid JSON: {err}"),
+                ))
+            } else {
+                Ok(Value::String(value.to_string()))
+            }
+        }
+    }
+}
+
+fn invalid_traceql(line_number: usize, message: impl Into<String>) -> TraceDbError {
+    let message = message.into();
+    if line_number == 0 {
+        TraceDbError::InvalidCommand(format!("invalid TraceQL: {message}"))
+    } else {
+        TraceDbError::InvalidCommand(format!("invalid TraceQL at line {line_number}: {message}"))
+    }
+}
+
 pub fn value_object(fields: &[(&str, Value)]) -> Map<String, Value> {
     fields
         .iter()
@@ -3239,6 +3483,80 @@ mod tests {
             .clone(),
             features: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn traceql_query_string_compiles_to_hybrid_query() {
+        let query = traceql_query_from_str(
+            r#"
+            # Native TraceQL, not SQL.
+            FROM docs
+            TENANT tenant-a
+            WHERE category = "code"
+            MATCH body "agent memory"
+            NEAR embedding [1.0, 0.0, 0.0]
+            FRESHNESS lazy
+            LIMIT 20
+            EXPLAIN
+            "#,
+        )
+        .expect("traceql query");
+
+        assert_eq!(query.table, "docs");
+        assert_eq!(query.tenant_id, "tenant-a");
+        assert_eq!(query.scalar_eq.get("category"), Some(&json!("code")));
+        assert_eq!(query.text.as_deref(), Some("agent memory"));
+        assert_eq!(query.vector, Some(vec![1.0, 0.0, 0.0]));
+        assert_eq!(query.freshness, FreshnessMode::Lazy);
+        assert_eq!(query.top_k, 20);
+        assert!(query.explain);
+    }
+
+    #[test]
+    fn traceql_query_string_defaults_to_strict_limit_ten_without_explain() {
+        let query = traceql_query_from_str(
+            r#"
+            FROM docs
+            TENANT tenant-a
+            MATCH body "exact freshness defaults"
+            "#,
+        )
+        .expect("traceql query");
+
+        assert_eq!(query.freshness, FreshnessMode::Strict);
+        assert_eq!(query.top_k, 10);
+        assert!(!query.explain);
+    }
+
+    #[test]
+    fn traceql_query_string_rejects_unknown_directives() {
+        let error = traceql_query_from_str(
+            r#"
+            FROM docs
+            TENANT tenant-a
+            DROP TABLE docs
+            "#,
+        )
+        .expect_err("unknown directive");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("invalid TraceQL"))
+        );
+    }
+
+    #[test]
+    fn traceql_query_string_requires_table_and_tenant() {
+        let error = traceql_query_from_str(
+            r#"
+            FROM docs
+            MATCH body "missing tenant"
+            "#,
+        )
+        .expect_err("missing tenant");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("TENANT"))
+        );
     }
 
     #[test]

@@ -105,9 +105,13 @@
     {
       "id": "traceql_sqlish",
       "label": "TraceQL / SQL-ish",
-      "status": "parked",
+      "status": "native_traceql_parser_checked_sqlish_and_http_execution_parked",
       "role": "future adapter into the same TraceQuery model",
-      "evidence": []
+      "evidence": [
+        "crates/tracedb-query/src/lib.rs",
+        "traceql_query_from_str",
+        "cargo test -p tracedb-query traceql_query_string --no-run"
+      ]
     },
     {
       "id": "graphql",
