@@ -73,6 +73,27 @@ class PlatformConformanceTests(unittest.TestCase):
         ]:
             self.assertIn(token, client_source)
 
+        smoke_source = (package_root / "http_smoke.py").read_text()
+        self.assertIn("TRACEDB_PYTHON_IMPORT_MODE", smoke_source)
+        self.assertLess(
+            smoke_source.index("TRACEDB_PYTHON_IMPORT_MODE"),
+            smoke_source.index("from tracedb import"),
+        )
+
+    def test_python_sdk_conformance_installs_package_before_http_smoke(self) -> None:
+        script_source = SCRIPT.read_text()
+
+        for token in [
+            "install_python_sdk_package_for_conformance",
+            "shutil.copytree",
+            "--target",
+            "PYTHONPATH",
+            "TRACEDB_PYTHON_IMPORT_MODE",
+            "installed",
+            "sys.executable",
+        ]:
+            self.assertIn(token, script_source)
+
     def test_typescript_public_http_smoke_declares_contract_evidence_output(self) -> None:
         smoke_source = (ROOT / "clients" / "typescript" / "public-http-smoke.ts").read_text()
 
@@ -188,6 +209,7 @@ class PlatformConformanceTests(unittest.TestCase):
         scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
 
         self.assertEqual(surface["surface"], "python_sdk")
+        self.assertIn("installed package", " ".join(surface["evidence"]))
         self.assertEqual(scenarios["schema_apply"]["status"], "passed")
         self.assertEqual(scenarios["put"]["status"], "passed")
         self.assertEqual(scenarios["batch"]["status"], "passed")

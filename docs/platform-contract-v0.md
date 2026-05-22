@@ -73,7 +73,7 @@ Every product surface must map to these contract components:
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config | Hand-written `TraceDB` table/query wrapper over the generated transport. |
-| Python SDK | `python_sdk` | Sync HTTP smoked with package install lane | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
+| Python SDK | `python_sdk` | Sync HTTP smoked from installed package | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
 
@@ -119,8 +119,9 @@ error-envelope evidence. The `typescript_sdk` lane runs the public TypeScript
 SDK smoke through `npm run public-http-smoke -- --summary-json ...` and maps
 schema apply, put, batch, patch, get, scan, query, explain, delete,
 idempotency, errors, and snapshot/restore into the same scenario IDs. The
-`python_sdk` lane runs the sync SDK smoke in
-`clients/python/http_smoke.py` and maps schema apply, put, batch, patch, get,
+`python_sdk` lane first installs a copied `clients/python` package into an
+isolated temporary pip `--target`, then runs `clients/python/http_smoke.py` with
+source-path imports disabled. It maps schema apply, put, batch, patch, get,
 scan, query, explain, delete, idempotency, errors, and snapshot/restore into
 the same scenario IDs. Future surfaces must report unimplemented scenarios as
 `not_checked` rather than silently treating them as success.

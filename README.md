@@ -27,7 +27,8 @@ python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp
 It reads `docs/platform-contract-v0.json`, drives a raw HTTP `http_direct` lane
 against `tracedb-server`, reuses the Rust SDK quickstart product path for the
 `rust_sdk` lane, maps the public TypeScript SDK HTTP smoke for the
-`typescript_sdk` lane, runs the sync Python SDK smoke for the `python_sdk` lane,
+`typescript_sdk` lane, installs the Python SDK package before running the sync
+Python SDK smoke for the `python_sdk` lane,
 and emits one JSON report. The current HTTP direct, Rust SDK, TypeScript SDK,
 and Python SDK lanes cover all required v0 scenarios; future lanes must use
 explicit `not_checked` markers until they exercise the same contract IDs.
@@ -476,8 +477,10 @@ The install smoke prefers a temporary venv, installs `clients/python`, and runs
 a consumer from outside the repo so source-path imports cannot mask packaging
 drift; on images without working `ensurepip`, it falls back to an isolated
 temporary pip `--target` install. The HTTP smoke starts a local `tracedb-server`
-and proves all required v0 contract scenarios for the Python surface. This is
-sync SDK contract evidence, not PyPI
+and proves all required v0 contract scenarios for the Python surface. The
+`python_sdk` conformance lane runs that smoke with the package installed into an
+isolated temporary pip `--target`, so source-tree imports cannot mask SDK drift.
+This is sync SDK contract evidence, not PyPI
 readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
 support.
 

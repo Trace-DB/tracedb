@@ -64,6 +64,9 @@ conflict, error envelope parsing, compact, snapshot, restore, and admin jobs. It
 emits `python sdk http smoke ok`.
 
 This is sync Python SDK product-path evidence. The package metadata is local
-project/package-shape evidence only. It is not async support, PyPI release
+project/package-shape evidence only. The platform conformance lane installs a
+copied package into an isolated temporary pip `--target` and runs this HTTP
+smoke with source-path imports disabled, so SDK conformance cannot pass by
+accidentally importing the repo copy. It is not async support, PyPI release
 readiness, managed-cloud proof, SQL compatibility, TraceQL, GraphQL, or
 benchmark evidence.

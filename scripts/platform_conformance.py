@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = Path("docs/platform-contract-v0.json")
 DEFAULT_SURFACES = ["http_direct", "rust_sdk"]
+PYTHON_SDK_CONFORMANCE_EVIDENCE = "installed package + clients/python/http_smoke.py"
 
 
 def load_contract(path: Path) -> dict[str, Any]:
@@ -503,12 +505,20 @@ def run_http_direct_surface(manifest: dict[str, Any], repo_root: Path) -> dict[s
     )
 
 
-def run_command(argv: list[str], cwd: Path) -> dict[str, Any]:
+def run_command(
+    argv: list[str],
+    cwd: Path,
+    *,
+    env_extra: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    env = {**os.environ, "CARGO_TERM_COLOR": "never", "CARGO_INCREMENTAL": "0"}
+    if env_extra:
+        env.update(env_extra)
     started = time.monotonic()
     process = subprocess.run(
         argv,
         cwd=cwd,
-        env={**os.environ, "CARGO_TERM_COLOR": "never", "CARGO_INCREMENTAL": "0"},
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -680,7 +690,7 @@ def map_python_sdk_smoke_summary(
         "python_sdk",
         "checked",
         scenarios,
-        evidence=["python3 clients/python/http_smoke.py"],
+        evidence=[PYTHON_SDK_CONFORMANCE_EVIDENCE],
     )
 
 
@@ -856,17 +866,69 @@ def run_typescript_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dic
     return surface
 
 
+def install_python_sdk_package_for_conformance(repo_root: Path, temp_dir: Path) -> tuple[Path, dict[str, Any]]:
+    source_dir = repo_root / "clients" / "python"
+    package_dir = temp_dir / "python-sdk-package"
+    target_dir = temp_dir / "python-sdk-site"
+    shutil.copytree(
+        source_dir,
+        package_dir,
+        ignore=shutil.ignore_patterns("build", "*.egg-info", "__pycache__"),
+    )
+    command = run_command(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-deps",
+            "--target",
+            str(target_dir),
+            str(package_dir),
+        ],
+        temp_dir,
+    )
+    return target_dir, command
+
+
 def run_python_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="tracedb-python-sdk-conformance-") as temp_dir:
+        temp_path = Path(temp_dir)
         summary_path = Path(temp_dir) / "python-sdk-smoke.json"
+        target_dir, install_command = install_python_sdk_package_for_conformance(repo_root, temp_path)
+        if not install_command["ok"]:
+            return finalize_surface(
+                "python_sdk",
+                "failed",
+                [
+                    scenario_result(
+                        scenario_id,
+                        "failed",
+                        reason=(
+                            "python_sdk package install failed before HTTP smoke: "
+                            f"stdout={install_command['stdout'][-12_000:]} stderr={install_command['stderr_tail']}"
+                        ),
+                    )
+                    for scenario_id in contract_scenario_ids(manifest)
+                ],
+                evidence=[
+                    PYTHON_SDK_CONFORMANCE_EVIDENCE,
+                    json.dumps({"command": install_command["argv"], "returncode": install_command["returncode"]}),
+                ],
+            )
         command = run_command(
             [
-                "python3",
+                sys.executable,
                 "clients/python/http_smoke.py",
                 "--summary-json",
                 str(summary_path),
             ],
             repo_root,
+            env_extra={
+                "PYTHONPATH": str(target_dir),
+                "TRACEDB_PYTHON_IMPORT_MODE": "installed",
+            },
         )
         if not command["ok"]:
             return finalize_surface(
@@ -883,12 +945,25 @@ def run_python_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[st
                     )
                     for scenario_id in contract_scenario_ids(manifest)
                 ],
-                evidence=[json.dumps({"command": command["argv"], "returncode": command["returncode"]})],
+                evidence=[
+                    PYTHON_SDK_CONFORMANCE_EVIDENCE,
+                    json.dumps({"command": install_command["argv"], "returncode": install_command["returncode"]}),
+                    json.dumps({"command": command["argv"], "returncode": command["returncode"]}),
+                ],
             )
         smoke_summary = json.loads(summary_path.read_text())
     surface = map_python_sdk_smoke_summary(manifest, smoke_summary)
+    surface["install_command"] = {
+        "argv": install_command["argv"],
+        "duration_s": install_command["duration_s"],
+        "returncode": install_command["returncode"],
+    }
     surface["command"] = {
         "argv": command["argv"],
+        "env": {
+            "PYTHONPATH": str(target_dir),
+            "TRACEDB_PYTHON_IMPORT_MODE": "installed",
+        },
         "duration_s": command["duration_s"],
         "returncode": command["returncode"],
     }

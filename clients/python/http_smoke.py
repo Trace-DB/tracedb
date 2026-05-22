@@ -11,11 +11,25 @@ import time
 from pathlib import Path
 from typing import Any
 
-from tracedb import TraceDB, TraceDBHTTPError
-
 
 SOURCE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SOURCE_DIR.parents[1]
+
+
+def _configure_import_path() -> None:
+    if os.environ.get("TRACEDB_PYTHON_IMPORT_MODE") != "installed":
+        return
+    source_dir = SOURCE_DIR.resolve()
+    sys.path = [
+        entry
+        for entry in sys.path
+        if Path(entry or os.getcwd()).resolve() != source_dir
+    ]
+
+
+_configure_import_path()
+
+from tracedb import TraceDB, TraceDBHTTPError  # noqa: E402 - import mode must be configured first.
 
 
 def free_port() -> int:
@@ -260,6 +274,7 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                 "snapshot_target": snapshot["target"],
                 "restore_target": restore["target"],
                 "sql_module": "not_implemented",
+                "python_import_mode": os.environ.get("TRACEDB_PYTHON_IMPORT_MODE", "source"),
             }
             if summary_json is not None:
                 summary_json.parent.mkdir(parents=True, exist_ok=True)

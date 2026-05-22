@@ -87,9 +87,11 @@ node --experimental-strip-types clients/typescript/smoke.ts
   envelopes, and query-builder chaining through `where`, `match_text`, `near`,
   `with_options`, `limit`, `all`, and `explain_plan`. It is covered by
   `python3 clients/python/http_smoke.py` and
-  `python3 scripts/platform_conformance.py --surface python_sdk`. This is sync
-  SDK contract evidence, not PyPI readiness, async support, managed-cloud
-  proof, SQL compatibility, or GraphQL support.
+  `python3 scripts/platform_conformance.py --surface python_sdk`; the
+  conformance lane installs the package into an isolated temporary pip
+  `--target` before running the smoke so source-path imports cannot mask drift.
+  This is sync SDK contract evidence, not PyPI readiness, async support,
+  managed-cloud proof, SQL compatibility, or GraphQL support.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
