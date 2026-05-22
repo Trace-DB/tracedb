@@ -292,6 +292,22 @@ public TypeScript `TraceDB` wrapper through the gateway with
 `databaseId=db_local` and `branchId=db_local:main`. This is local gateway
 auth/routing evidence for the public SDK over the generated transport, not
 managed-cloud proof or benchmark evidence.
+The Python SDK now starts the sync-first AI/data SDK lane under
+`clients/python/tracedb`. `TraceDB(url, token="dev-token")` exposes table
+handles and a query builder with `insert`, `insert_batch`, `patch`, `get`,
+`scan`, `delete`, `where`, `match_text`, `near`, `with_options`, `limit`,
+`all`, and `explain_plan`, plus health/catalog/metrics/admin helpers,
+managed `database_id` / `branch_id` routing metadata injection,
+`Idempotency-Key` support, and parsed HTTP error envelopes.
+`python3 clients/python/http_smoke.py --summary-json
+/tmp/tracedb-python-sdk-smoke.json` starts a local `tracedb-server` and drives
+the Python surface through schema apply, put, batch ingest, patch, get, scan,
+query, explain, delete, idempotency replay/conflict, error-envelope parsing,
+compact, snapshot, restore, and admin jobs. `python3
+scripts/platform_conformance.py --surface python_sdk --summary-json
+/tmp/tracedb-python-sdk-conformance.json` maps that smoke into all required v0
+contract scenarios. This is sync SDK contract evidence, not PyPI readiness,
+async support, managed-cloud proof, SQL compatibility, or GraphQL support.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

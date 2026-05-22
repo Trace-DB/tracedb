@@ -20,13 +20,15 @@ Run the initial executable contract harness with:
 
 ```bash
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
+python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 ```
 
 It reads `docs/platform-contract-v0.json`, drives a raw HTTP `http_direct` lane
 against `tracedb-server`, reuses the Rust SDK quickstart product path for the
-`rust_sdk` lane, and emits one JSON report. The current HTTP direct and Rust
-SDK lanes cover all required v0 scenarios; future lanes must use explicit
-`not_checked` markers until they exercise the same contract IDs.
+`rust_sdk` lane, runs the sync Python SDK smoke for the `python_sdk` lane, and
+emits one JSON report. The current HTTP direct, Rust SDK, and Python SDK lanes
+cover all required v0 scenarios; future lanes must use explicit `not_checked`
+markers until they exercise the same contract IDs.
 
 ## Quickstart
 
@@ -398,6 +400,38 @@ patch, get, scan, query, explain, delete, compact, snapshot, restore, jobs,
 token rejection, and bad-branch rejection. It is local gateway auth/routing
 evidence for the public TypeScript SDK over the generated transport, not
 managed-cloud proof, package publishing readiness, or benchmark evidence.
+
+The Python SDK now has a sync-first package under `clients/python/tracedb`:
+
+```python
+from tracedb import TraceDB
+
+db = TraceDB("http://127.0.0.1:8090", token="dev-token")
+rows = (
+    db.table("docs")
+    .where({"tenant_id": "tenant-a", "status": "published"})
+    .match_text("body", "TraceDB Python")
+    .near("embedding", [1, 0, 0])
+    .with_options(explain=True, freshness="lazy")
+    .limit(20)
+    .all()
+)
+```
+
+Run its local HTTP smoke with:
+
+```bash
+python3 clients/python/http_smoke.py --summary-json /tmp/tracedb-python-sdk-smoke.json
+python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
+```
+
+The client is stdlib-only for now, exposes table handles, a query builder,
+health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
+routing metadata injection, `Idempotency-Key` support, and parsed HTTP error
+envelopes. The smoke starts a local `tracedb-server` and proves all required v0
+contract scenarios for the Python surface. This is sync SDK contract evidence,
+not PyPI readiness, async support, managed-cloud proof, SQL compatibility, or
+GraphQL support.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and

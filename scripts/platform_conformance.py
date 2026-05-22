@@ -598,6 +598,92 @@ def map_rust_sdk_product_summary(
     )
 
 
+def map_python_sdk_smoke_summary(
+    manifest: dict[str, Any],
+    smoke_summary: dict[str, Any],
+) -> dict[str, Any]:
+    steps = smoke_summary.get("steps", {})
+    error_envelope = smoke_summary.get("error_envelope", {})
+
+    def step_passed(name: str) -> bool:
+        return smoke_summary.get("ok") is True and steps.get(name) is True
+
+    def error_envelope_passed() -> bool:
+        return (
+            step_passed("error_envelope")
+            and isinstance(error_envelope, dict)
+            and isinstance(error_envelope.get("status"), int)
+            and error_envelope["status"] >= 400
+            and isinstance(error_envelope.get("error"), str)
+            and bool(error_envelope["error"])
+        )
+
+    scenario_map = {
+        "schema_apply": passed("schema_apply", "python sdk smoke steps.schema_apply")
+        if step_passed("schema_apply")
+        else failed("schema_apply", RuntimeError("Python SDK smoke schema_apply did not pass")),
+        "put": passed(
+            "put",
+            "python sdk smoke steps.put",
+            {"records_put": smoke_summary.get("records_put"), "put_epoch": smoke_summary.get("put_epoch")},
+        )
+        if step_passed("put") and smoke_summary.get("records_put") == 1
+        else failed("put", RuntimeError("Python SDK smoke single-record put evidence missing")),
+        "batch": passed(
+            "batch",
+            "python sdk smoke steps.batch_ingest",
+            {"records_inserted": smoke_summary.get("records_inserted")},
+        )
+        if step_passed("batch_ingest")
+        else failed("batch", RuntimeError("Python SDK smoke batch_ingest did not pass")),
+        "patch": passed("patch", "python sdk smoke steps.patch")
+        if step_passed("patch")
+        else failed("patch", RuntimeError("Python SDK smoke patch did not pass")),
+        "get": passed("get", "python sdk smoke patched get and deleted get checks")
+        if step_passed("get") and smoke_summary.get("patched_status") == "reviewed"
+        else failed("get", RuntimeError("Python SDK smoke get evidence missing")),
+        "scan": passed(
+            "scan",
+            "python sdk smoke steps.scan",
+            {"records_scanned": smoke_summary.get("records_scanned")},
+        )
+        if step_passed("scan")
+        else failed("scan", RuntimeError("Python SDK smoke scan did not pass")),
+        "query": passed("query", "python sdk smoke steps.query")
+        if step_passed("query")
+        else failed("query", RuntimeError("Python SDK smoke query did not pass")),
+        "explain": passed("explain", "python sdk smoke steps.explain")
+        if step_passed("explain")
+        else failed("explain", RuntimeError("Python SDK smoke explain did not pass")),
+        "delete": passed("delete", "python sdk smoke steps.delete and deleted_hidden")
+        if step_passed("delete") and smoke_summary.get("deleted_hidden") is True
+        else failed("delete", RuntimeError("Python SDK smoke delete did not pass")),
+        "idempotency": passed(
+            "idempotency",
+            "python sdk smoke idempotency replay and conflict",
+            {
+                "replay_epoch": smoke_summary.get("idempotency_replay_epoch"),
+                "conflict_status": smoke_summary.get("idempotency_conflict_status"),
+            },
+        )
+        if step_passed("idempotency") and smoke_summary.get("idempotency_conflict_status") == 409
+        else failed("idempotency", RuntimeError("Python SDK smoke idempotency evidence missing")),
+        "errors": passed("errors", "python sdk smoke error_envelope", dict(error_envelope))
+        if error_envelope_passed()
+        else failed("errors", RuntimeError("Python SDK smoke error envelope evidence missing")),
+        "snapshot_restore": passed("snapshot_restore", "python sdk smoke admin snapshot/restore")
+        if step_passed("snapshot") and step_passed("restore")
+        else failed("snapshot_restore", RuntimeError("Python SDK smoke snapshot/restore did not pass")),
+    }
+    scenarios = [scenario_map[scenario_id] for scenario_id in contract_scenario_ids(manifest)]
+    return finalize_surface(
+        "python_sdk",
+        "checked",
+        scenarios,
+        evidence=["python3 clients/python/http_smoke.py"],
+    )
+
+
 def run_rust_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="tracedb-rust-sdk-conformance-") as temp_dir:
         command = run_command(
@@ -632,6 +718,45 @@ def run_rust_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str,
         )
     product_summary = json.loads(command["stdout"])
     surface = map_rust_sdk_product_summary(manifest, product_summary)
+    surface["command"] = {
+        "argv": command["argv"],
+        "duration_s": command["duration_s"],
+        "returncode": command["returncode"],
+    }
+    return surface
+
+
+def run_python_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="tracedb-python-sdk-conformance-") as temp_dir:
+        summary_path = Path(temp_dir) / "python-sdk-smoke.json"
+        command = run_command(
+            [
+                "python3",
+                "clients/python/http_smoke.py",
+                "--summary-json",
+                str(summary_path),
+            ],
+            repo_root,
+        )
+        if not command["ok"]:
+            return finalize_surface(
+                "python_sdk",
+                "failed",
+                [
+                    scenario_result(
+                        scenario_id,
+                        "failed",
+                        reason=(
+                            "python_sdk smoke failed: "
+                            f"stdout={command['stdout'][-12_000:]} stderr={command['stderr_tail']}"
+                        ),
+                    )
+                    for scenario_id in contract_scenario_ids(manifest)
+                ],
+                evidence=[json.dumps({"command": command["argv"], "returncode": command["returncode"]})],
+            )
+        smoke_summary = json.loads(summary_path.read_text())
+    surface = map_python_sdk_smoke_summary(manifest, smoke_summary)
     surface["command"] = {
         "argv": command["argv"],
         "duration_s": command["duration_s"],
@@ -681,6 +806,8 @@ def run_selected_surfaces(
             surfaces.append(run_http_direct_surface(manifest, repo_root))
         elif surface_id == "rust_sdk":
             surfaces.append(run_rust_sdk_surface(manifest, repo_root))
+        elif surface_id == "python_sdk":
+            surfaces.append(run_python_sdk_surface(manifest, repo_root))
         else:
             surfaces.append(
                 empty_surface_report(

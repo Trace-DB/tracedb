@@ -48,6 +48,29 @@ class PlatformConformanceTests(unittest.TestCase):
         )
         self.assertIn("http_direct", module.contract_surface_ids(manifest))
         self.assertIn("rust_sdk", module.contract_surface_ids(manifest))
+        self.assertIn("python_sdk", module.contract_surface_ids(manifest))
+
+    def test_python_sdk_sync_package_declares_contract_surface(self) -> None:
+        package_root = ROOT / "clients" / "python"
+
+        self.assertTrue((package_root / "tracedb" / "__init__.py").exists())
+        self.assertTrue((package_root / "tracedb" / "client.py").exists())
+        self.assertTrue((package_root / "http_smoke.py").exists())
+        self.assertTrue((package_root / "README.md").exists())
+
+        client_source = (package_root / "tracedb" / "client.py").read_text()
+        for token in [
+            "class TraceDB",
+            "class TraceDBTable",
+            "class TraceDBQueryBuilder",
+            "class TraceDBHTTPError",
+            "def insert_batch",
+            "def with_options",
+            "Idempotency-Key",
+            "database_id",
+            "branch_id",
+        ]:
+            self.assertIn(token, client_source)
 
     def test_rust_sdk_product_summary_maps_to_contract_scenarios(self) -> None:
         module = load_module()
@@ -103,6 +126,59 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
         self.assertEqual(scenarios["put"]["status"], "passed")
         self.assertEqual(scenarios["errors"]["status"], "passed")
+
+    def test_python_sdk_smoke_summary_maps_to_contract_scenarios(self) -> None:
+        module = load_module()
+        manifest = module.load_contract(ROOT / "docs" / "platform-contract-v0.json")
+        smoke_summary = {
+            "ok": True,
+            "mode": "python-sdk-http-smoke",
+            "sdk_surface": "python_sync",
+            "steps": {
+                "schema_apply": True,
+                "put": True,
+                "batch_ingest": True,
+                "patch": True,
+                "get": True,
+                "scan": True,
+                "query": True,
+                "explain": True,
+                "delete": True,
+                "idempotency": True,
+                "error_envelope": True,
+                "snapshot": True,
+                "restore": True,
+            },
+            "records_put": 1,
+            "records_inserted": 3,
+            "records_scanned": 3,
+            "patched_status": "reviewed",
+            "deleted_hidden": True,
+            "idempotency_replay_epoch": 2,
+            "idempotency_conflict_status": 409,
+            "error_envelope": {
+                "status": 400,
+                "error": "missing field `table`",
+                "code": "bad_request",
+            },
+        }
+
+        surface = module.map_python_sdk_smoke_summary(manifest, smoke_summary)
+        scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
+
+        self.assertEqual(surface["surface"], "python_sdk")
+        self.assertEqual(scenarios["schema_apply"]["status"], "passed")
+        self.assertEqual(scenarios["put"]["status"], "passed")
+        self.assertEqual(scenarios["batch"]["status"], "passed")
+        self.assertEqual(scenarios["patch"]["status"], "passed")
+        self.assertEqual(scenarios["get"]["status"], "passed")
+        self.assertEqual(scenarios["scan"]["status"], "passed")
+        self.assertEqual(scenarios["query"]["status"], "passed")
+        self.assertEqual(scenarios["explain"]["status"], "passed")
+        self.assertEqual(scenarios["delete"]["status"], "passed")
+        self.assertEqual(scenarios["idempotency"]["status"], "passed")
+        self.assertEqual(scenarios["errors"]["status"], "passed")
+        self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
 
     def test_writes_report_summary_for_selected_surfaces(self) -> None:
         module = load_module()

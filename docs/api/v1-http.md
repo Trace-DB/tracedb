@@ -74,6 +74,17 @@ node --experimental-strip-types clients/typescript/smoke.ts
   `npm run public-smoke` and with real local HTTP through
   `npm run public-http-smoke`; `npm run gateway-smoke` now drives the same
   public wrapper through the local gateway auth/routing lane.
+- The Python SDK under `clients/python/tracedb` is the first sync AI/data SDK
+  lane over this API surface. It is stdlib-only for now and exposes `TraceDB`,
+  table handles, single and batch inserts, patch, get, scan, delete,
+  health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
+  routing metadata injection, `Idempotency-Key` support, parsed HTTP error
+  envelopes, and query-builder chaining through `where`, `match_text`, `near`,
+  `with_options`, `limit`, `all`, and `explain_plan`. It is covered by
+  `python3 clients/python/http_smoke.py` and
+  `python3 scripts/platform_conformance.py --surface python_sdk`. This is sync
+  SDK contract evidence, not PyPI readiness, async support, managed-cloud
+  proof, SQL compatibility, or GraphQL support.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
@@ -123,6 +134,11 @@ configured `databaseId` and `branchId` are added only to absent root
 `database_id` and `branch_id` fields on copied JSON POST bodies. Explicit
 request fields win, the caller's object is not mutated, and GET routes send no
 JSON body.
+
+The Python SDK follows the same routing metadata boundary: configured
+`database_id` and `branch_id` are added only to absent root `database_id` and
+`branch_id` fields on copied JSON POST bodies. Explicit request fields win, the
+caller-provided object is not mutated, and GET routes send no JSON body.
 
 Generated TypeScript aliases are sourced from the OpenAPI component schemas and
 are used in route method signatures. They are intentionally loose: the current

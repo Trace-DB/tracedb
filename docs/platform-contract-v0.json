@@ -61,9 +61,14 @@
     {
       "id": "python_sdk",
       "label": "Python SDK",
-      "status": "planned",
-      "role": "AI/data/notebook ingestion SDK after the contract harness exists",
-      "evidence": []
+      "status": "sync_http_smoked",
+      "role": "sync-first AI/data/notebook SDK over the canonical HTTP contract",
+      "evidence": [
+        "clients/python/tracedb/client.py",
+        "clients/python/http_smoke.py",
+        "clients/python/README.md",
+        "scripts/platform_conformance.py --surface python_sdk"
+      ]
     },
     {
       "id": "traceql_sqlish",

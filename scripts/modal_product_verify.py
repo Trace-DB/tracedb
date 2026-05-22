@@ -161,6 +161,21 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 "cwd": "clients/typescript",
             },
             {
+                "name": "python-platform-conformance-tests",
+                "argv": ["python3", "-m", "unittest", "benchmarks.realworld.tests.test_platform_conformance"],
+            },
+            {
+                "name": "python-sdk-conformance",
+                "argv": [
+                    "python3",
+                    "scripts/platform_conformance.py",
+                    "--surface",
+                    "python_sdk",
+                    "--summary-json",
+                    "/tmp/tracedb-python-sdk-conformance.json",
+                ],
+            },
+            {
                 "name": "tracedb-cli-demo-tests",
                 "argv": [
                     "cargo",
