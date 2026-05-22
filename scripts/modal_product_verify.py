@@ -149,6 +149,7 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 "/tmp/tracedb-agent-memory-flight-recorder.md",
             ],
             "cwd": "benchmarks/realworld",
+            "receipt_json": "/tmp/tracedb-agent-memory-flight-recorder.json",
         },
         {
             "name": "product-quickstart-skip-typescript",
@@ -377,6 +378,64 @@ def validate_reduced_quickstart_receipt(
     }
 
 
+def validate_agent_memory_flight_recorder_receipt(report: dict[str, Any]) -> dict[str, Any]:
+    assert report.get("demo") == "local-chat-memory", "unexpected demo report kind"
+    assert report.get("invariant_failures") == [], "chat demo invariants failed"
+    receipt = report.get("flight_recorder_receipt")
+    assert isinstance(receipt, dict), "missing flight_recorder_receipt"
+    assert receipt.get("receipt_kind") == "agent_memory_flight_recorder"
+    assert receipt.get("substrate") == "TraceDB"
+    assert receipt.get("scope") == "local_product_demo"
+    assert receipt.get("product_identity") == "AI-native transactional candidate-stream database"
+
+    records = receipt.get("records", {})
+    assert records.get("table") == "chat_memory"
+    assert records.get("tenant") == "tenant-alpha"
+    assert records.get("record_count") == 7
+    assert "alpha-memory-1" in records.get("record_ids", [])
+
+    retrieval = receipt.get("retrieval", {})
+    assert retrieval.get("query_text") == "deterministic local memory hybrid"
+    result_ids = retrieval.get("result_ids", [])
+    assert "alpha-memory-1" in result_ids, "expected alpha-memory-1 in retrieval results"
+    assert "beta-memory-1" not in result_ids, "Flight Recorder receipt leaked beta tenant result"
+
+    provenance = receipt.get("provenance", {})
+    assert provenance.get("deleted_subject_visible_after_delete") is False
+
+    replay = receipt.get("replay", {})
+    assert replay.get("commands_recorded", 0) >= 1
+    assert replay.get("command_exit_failures") == []
+
+    runtime = receipt.get("tracefield_runtime", {})
+    assert runtime.get("status") == "not_implemented", "TraceField runtime must remain unimplemented"
+    tensors = receipt.get("tensor_artifacts", {})
+    assert tensors.get("status") == "future_module_layer"
+    non_guarantees = receipt.get("non_guarantees", [])
+    assert "no TraceField runtime behavior" in non_guarantees
+    assert "no tensor artifact support" in non_guarantees
+
+    return {
+        "ok": True,
+        "receipt_kind": receipt["receipt_kind"],
+        "substrate": receipt["substrate"],
+        "scope": receipt["scope"],
+        "record_count": records["record_count"],
+        "result_ids": result_ids,
+        "commands_recorded": replay["commands_recorded"],
+        "tracefield_runtime_status": runtime["status"],
+        "tensor_artifacts_status": tensors["status"],
+        "non_guarantees": non_guarantees,
+    }
+
+
+def _read_json_artifact(path_text: str, repo_root: Path) -> dict[str, Any]:
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = repo_root / path
+    return json.loads(path.read_text())
+
+
 def run_verification(
     mode: str,
     *,
@@ -404,6 +463,11 @@ def run_verification(
             if not result["ok"]:
                 summary["failed_command"] = result["name"]
                 return _finish_summary(summary, started)
+            if result["name"] == "agent-memory-flight-recorder":
+                report = _read_json_artifact(command["receipt_json"], repo_root)
+                summary["flight_recorder_receipt_check"] = (
+                    validate_agent_memory_flight_recorder_receipt(report)
+                )
             if result["name"] == "product-quickstart-skip-typescript":
                 receipt_file = repo_root / RECEIPT_PATH
                 report_summary = json.loads(receipt_file.read_text())

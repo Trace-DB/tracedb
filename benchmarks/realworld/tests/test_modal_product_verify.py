@@ -163,6 +163,66 @@ class ModalProductVerifyTests(unittest.TestCase):
         )
         self.assertEqual(commands[0]["argv"], ["cargo", "build", "-p", "tracedb-cli"])
         self.assertEqual(commands[1]["cwd"], "benchmarks/realworld")
+        self.assertEqual(
+            commands[1]["receipt_json"],
+            "/tmp/tracedb-agent-memory-flight-recorder.json",
+        )
+
+    def test_agent_memory_flight_recorder_receipt_contract(self) -> None:
+        module = load_module()
+        report = {
+            "demo": "local-chat-memory",
+            "invariant_failures": [],
+            "summary": {},
+            "flight_recorder_receipt": {
+                "receipt_kind": "agent_memory_flight_recorder",
+                "substrate": "TraceDB",
+                "scope": "local_product_demo",
+                "product_identity": "AI-native transactional candidate-stream database",
+                "records": {
+                    "table": "chat_memory",
+                    "tenant": "tenant-alpha",
+                    "record_count": 7,
+                    "record_ids": ["alpha-memory-1", "alpha-memory-2"],
+                    "tenants": ["tenant-alpha", "tenant-beta"],
+                },
+                "retrieval": {
+                    "query_text": "deterministic local memory hybrid",
+                    "freshness": "Strict",
+                    "result_ids": ["alpha-memory-1"],
+                },
+                "provenance": {
+                    "deleted_subject_record_ids": ["alpha-erased-1"],
+                    "deleted_subject_visible_after_delete": False,
+                },
+                "replay": {
+                    "commands_recorded": 20,
+                    "command_exit_failures": [],
+                },
+                "tracefield_runtime": {"status": "not_implemented"},
+                "tensor_artifacts": {"status": "future_module_layer"},
+                "non_guarantees": [
+                    "no TraceField runtime behavior",
+                    "no tensor artifact support",
+                ],
+            },
+        }
+
+        summary = module.validate_agent_memory_flight_recorder_receipt(report)
+
+        self.assertEqual(summary["receipt_kind"], "agent_memory_flight_recorder")
+        self.assertEqual(summary["substrate"], "TraceDB")
+        self.assertEqual(summary["record_count"], 7)
+        self.assertEqual(summary["result_ids"], ["alpha-memory-1"])
+        self.assertEqual(summary["commands_recorded"], 20)
+        self.assertEqual(summary["tracefield_runtime_status"], "not_implemented")
+        self.assertEqual(summary["tensor_artifacts_status"], "future_module_layer")
+
+        bad_report = dict(report)
+        bad_report["flight_recorder_receipt"] = dict(report["flight_recorder_receipt"])
+        bad_report["flight_recorder_receipt"]["tracefield_runtime"] = {"status": "implemented"}
+        with self.assertRaisesRegex(AssertionError, "TraceField runtime"):
+            module.validate_agent_memory_flight_recorder_receipt(bad_report)
 
     def test_only_rejects_unknown_modal_product_command(self) -> None:
         module = load_module()

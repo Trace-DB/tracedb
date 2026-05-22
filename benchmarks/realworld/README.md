@@ -60,6 +60,10 @@ modal run scripts/modal_product_verify.py \
   --only agent_memory_flight_recorder
 ```
 
+The Modal summary includes `flight_recorder_receipt_check`, which validates the
+generated JSON receipt shape and the explicit non-guarantees before marking the
+lane passed.
+
 ## OpenRouter Scientific Runs
 
 OpenRouter is automatically used when `OPENROUTER_API_KEY` is configured. For
