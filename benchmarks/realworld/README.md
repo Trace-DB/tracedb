@@ -390,6 +390,24 @@ python3 -m runner railway-backup-receipt \
 
 The helper only writes the receipt artifact. It does not create Railway backups,
 restore Railway volumes, or mutate services.
+Generate the complete non-mutating operator command chain with
+`railway-runbook` before scheduling a backup/restart/redeploy lane. It writes
+JSON and Markdown artifacts with the suite preflight command, backup receipt
+command when required, pre-operation marker command, manual Railway operation
+hint, operation receipt command, and post-operation read-only persistence check:
+
+```bash
+python3 -m runner railway-runbook \
+  --suite-spec suites/soak_railway.json \
+  --suite-id soak-railway-operator-check \
+  --reports-dir reports \
+  --output-json reports/soak-railway-operator-check/railway-runbook.json \
+  --output-md reports/soak-railway-operator-check/railway-runbook.md
+```
+
+The runbook is an artifact plan only. It never creates backups, restarts
+services, redeploys code, or proves persistence until the listed commands and
+operator receipts are actually run.
 Use `--preflight-only` when the goal is to validate configured Railway evidence
 before starting expensive scenarios. The command writes the normal
 `suite.json`, `suite.md`, `suite-gate.json`, optional `railway-manifest.json`,

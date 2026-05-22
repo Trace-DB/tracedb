@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib import error as urlerror
@@ -591,6 +592,286 @@ def build_railway_operation_plan(
     }
 
 
+def build_railway_operator_runbook(
+    config: Mapping[str, Any],
+    *,
+    suite_id: str,
+    suite_spec_id: str,
+    suite_spec_path: str,
+    reports_dir: str,
+    railway: Mapping[str, Any],
+    target: str = "tracedb",
+    surface: str = "sdk",
+    scenarios: str = "sdk_cli_surface",
+    backup_receipt_json: str = "",
+    operation_receipt_json: str = "",
+    pre_manifest_json: str = "",
+    marker_id: str = "",
+    operation: str = "restart",
+    runner_command: str = "python3 -m runner",
+) -> dict[str, Any]:
+    validation = validate_railway_config(config)
+    safe_suite_id = _safe_token(suite_id) or "railway-runbook"
+    backup_required = bool(railway.get("backup_required"))
+    operation_required = bool(railway.get("restart_required") or railway.get("redeploy_required"))
+    selected_operation = operation if operation in RAILWAY_MUTATING_OPERATIONS else "restart"
+    backup_receipt_path = (
+        backup_receipt_json or f"{reports_dir}/{safe_suite_id}/railway-backup-receipt.json"
+    )
+    operation_receipt_path = (
+        operation_receipt_json or f"{reports_dir}/{safe_suite_id}/railway-operation-receipt.json"
+    )
+    pre_run_id = f"{safe_suite_id}-pre"
+    post_run_id = f"{safe_suite_id}-post"
+    pre_manifest_path = pre_manifest_json or f"{reports_dir}/{pre_run_id}/railway-manifest.json"
+    marker = marker_id or "<marker-id-from-pre-manifest>"
+    service_id = str(config.get("tracedb_service_id", ""))
+    operator_command = (
+        f"railway {selected_operation} --service {service_id}"
+        if service_id
+        else f"railway {selected_operation} --service <tracedb-service-id>"
+    )
+
+    commands = [
+        _runbook_command(
+            name="preflight_gate",
+            purpose="Validate Railway config and required receipt artifacts before heavy work.",
+            command=_runner_shell_command(
+                runner_command,
+                [
+                    "suite",
+                    "--preflight-only",
+                    "--suite-spec",
+                    suite_spec_path,
+                    "--run-id",
+                    f"{safe_suite_id}-preflight",
+                    "--reports-dir",
+                    reports_dir,
+                    "--railway-config-from-env",
+                    "--openrouter-mode",
+                    "off",
+                    "--target",
+                    target,
+                    "--surface",
+                    surface,
+                    "--scenarios",
+                    scenarios,
+                    *(
+                        ["--railway-backup-receipt-json", backup_receipt_path]
+                        if backup_required
+                        else []
+                    ),
+                ],
+            ),
+        )
+    ]
+    if backup_required:
+        commands.append(
+            _runbook_command(
+                name="backup_receipt",
+                purpose="Record operator-confirmed Railway backup and restore-validation evidence.",
+                command=_runner_shell_command(
+                    runner_command,
+                    [
+                        "railway-backup-receipt",
+                        "--status",
+                        "passed",
+                        "--suite-id",
+                        safe_suite_id,
+                        "--backup-id",
+                        "<backup-id>",
+                        "--confirm-created",
+                        "--restore-validated",
+                        "--restore-validation-method",
+                        "<restore-validation-method>",
+                        "--output-json",
+                        backup_receipt_path,
+                    ],
+                ),
+            )
+        )
+    if operation_required:
+        commands.extend(
+            [
+                _runbook_command(
+                    name="pre_operation_marker",
+                    purpose="Write and read a marker before the manual restart/redeploy.",
+                    command=_runner_shell_command(
+                        runner_command,
+                        [
+                            "suite",
+                            "--suite-spec",
+                            suite_spec_path,
+                            "--run-id",
+                            pre_run_id,
+                            "--reports-dir",
+                            reports_dir,
+                            "--railway-config-from-env",
+                            "--railway-health-check",
+                            "--railway-stateful-smoke",
+                            "--railway-snapshot-restore-check",
+                            "--railway-verify-restored-marker",
+                            "--railway-restart-redeploy-plan",
+                            "--openrouter-mode",
+                            "off",
+                            "--target",
+                            target,
+                            "--surface",
+                            surface,
+                            "--scenarios",
+                            scenarios,
+                        ],
+                    ),
+                ),
+                _runbook_command(
+                    name=f"operator_{selected_operation}",
+                    purpose="Manual Railway operation. The benchmark harness does not execute this.",
+                    command=operator_command,
+                    manual=True,
+                    mutates=True,
+                ),
+                _runbook_command(
+                    name="operation_receipt",
+                    purpose="Record the operator-confirmed restart/redeploy receipt.",
+                    command=_runner_shell_command(
+                        runner_command,
+                        [
+                            "railway-receipt",
+                            "--operation",
+                            selected_operation,
+                            "--status",
+                            "passed",
+                            "--suite-id",
+                            safe_suite_id,
+                            "--confirm-executed",
+                            "--operator",
+                            "<operator-name>",
+                            "--command",
+                            operator_command,
+                            "--output-json",
+                            operation_receipt_path,
+                        ],
+                    ),
+                ),
+                _runbook_command(
+                    name="post_operation_marker",
+                    purpose="Read the original marker and evaluate persistence after the operation.",
+                    command=_runner_shell_command(
+                        runner_command,
+                        [
+                            "suite",
+                            "--suite-spec",
+                            suite_spec_path,
+                            "--run-id",
+                            post_run_id,
+                            "--reports-dir",
+                            reports_dir,
+                            "--railway-config-from-env",
+                            "--railway-stateful-smoke",
+                            "--railway-stateful-read-only",
+                            "--railway-stateful-marker-id",
+                            marker,
+                            "--railway-persistence-pre-manifest-json",
+                            pre_manifest_path,
+                            "--railway-operation-receipt-json",
+                            operation_receipt_path,
+                            "--openrouter-mode",
+                            "off",
+                            "--target",
+                            target,
+                            "--surface",
+                            surface,
+                            "--scenarios",
+                            scenarios,
+                        ],
+                    ),
+                ),
+            ]
+        )
+
+    return _redact_sensitive(
+        {
+            "kind": "railway_operator_runbook",
+            "suite_id": safe_suite_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": "ready" if validation["ok"] else "blocked_by_missing_config",
+            "missing": validation["missing"],
+            "warnings": validation["warnings"],
+            "suite_spec": {
+                "id": suite_spec_id,
+                "path": suite_spec_path,
+                "railway": dict(railway),
+            },
+            "service": {
+                "project_id": config.get("project_id", ""),
+                "environment_id": config.get("environment_id", ""),
+                "service_id": service_id,
+                "volume_mount_path": config.get("tracedb_volume_mount_path", ""),
+            },
+            "required_evidence": {
+                "railway_config": bool(railway.get("required")),
+                "backup_receipt": backup_required,
+                "operation_receipt": operation_required,
+                "pre_operation_marker": operation_required,
+                "post_operation_marker": operation_required,
+            },
+            "artifact_paths": {
+                "backup_receipt_json": backup_receipt_path if backup_required else "",
+                "operation_receipt_json": operation_receipt_path if operation_required else "",
+                "pre_manifest_json": pre_manifest_path if operation_required else "",
+                "preflight_suite_dir": f"{reports_dir}/{safe_suite_id}-preflight",
+                "pre_operation_suite_dir": f"{reports_dir}/{pre_run_id}" if operation_required else "",
+                "post_operation_suite_dir": f"{reports_dir}/{post_run_id}" if operation_required else "",
+            },
+            "commands": commands,
+            "claim_boundary": "runbook_only_not_executed_no_railway_mutation_or_backup_proof",
+        }
+    )
+
+
+def railway_operator_runbook_markdown(runbook: Mapping[str, Any]) -> str:
+    commands = list(runbook.get("commands", []))
+    lines = [
+        "# TraceDB Railway Operator Runbook",
+        "",
+        f"- Suite ID: `{runbook.get('suite_id', '')}`",
+        f"- Suite spec: `{_dict_value(runbook.get('suite_spec')).get('id', '')}`",
+        f"- Status: `{runbook.get('status', '')}`",
+        f"- Claim boundary: `{runbook.get('claim_boundary', '')}`",
+        "",
+        "## Required Evidence",
+        "",
+    ]
+    required = _dict_value(runbook.get("required_evidence"))
+    for key, value in sorted(required.items()):
+        lines.append(f"- `{key}`: `{value}`")
+    lines.extend(["", "## Commands", ""])
+    for index, command in enumerate(commands, start=1):
+        item = _dict_value(command)
+        lines.extend(
+            [
+                f"### {index}. {item.get('name', '')}",
+                "",
+                str(item.get("purpose", "")),
+                "",
+                f"- Manual: `{item.get('manual', False)}`",
+                f"- Mutates Railway: `{item.get('mutates', False)}`",
+                f"- Execute by default: `{item.get('execute_by_default', False)}`",
+                "",
+                "```bash",
+                str(item.get("command", "")),
+                "```",
+                "",
+            ]
+        )
+    paths = _dict_value(runbook.get("artifact_paths"))
+    lines.extend(["## Artifact Paths", ""])
+    for key, value in sorted(paths.items()):
+        if value:
+            lines.append(f"- `{key}`: `{value}`")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def run_railway_endpoint_health(
     config: Mapping[str, Any],
     *,
@@ -933,6 +1214,29 @@ def redact_env(env: Mapping[str, str]) -> dict[str, str]:
     for key, value in env.items():
         redacted[key] = "<redacted>" if _is_sensitive_key(key) and value else value
     return redacted
+
+
+def _runbook_command(
+    *,
+    name: str,
+    purpose: str,
+    command: str,
+    manual: bool = False,
+    mutates: bool = False,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "purpose": purpose,
+        "command": command,
+        "manual": manual,
+        "mutates": mutates,
+        "execute_by_default": False,
+    }
+
+
+def _runner_shell_command(runner_command: str, args: list[str]) -> str:
+    prefix = [part for part in runner_command.split(" ") if part]
+    return shlex.join(["env", "BENCH_DISABLE_ENV_FILE=1", *prefix, *args])
 
 
 def _redact_sensitive(value: Any) -> Any:

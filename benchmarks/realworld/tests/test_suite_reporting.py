@@ -788,6 +788,63 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(receipt["suite_id"], "railway-backup-suite-test")
         self.assertNotIn("railway-token-secret", repr(receipt))
 
+    def test_railway_runbook_command_writes_operator_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_json = Path(temp_dir) / "railway-runbook.json"
+            output_md = Path(temp_dir) / "railway-runbook.md"
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "railway-runbook",
+                    "--suite-spec",
+                    "suites/soak_railway.json",
+                    "--suite-id",
+                    "soak-runbook",
+                    "--reports-dir",
+                    str(reports),
+                    "--output-json",
+                    str(output_json),
+                    "--output-md",
+                    str(output_md),
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            runbook = json.loads(output_json.read_text())
+            markdown = output_md.read_text()
+
+        self.assertEqual(runbook["kind"], "railway_operator_runbook")
+        self.assertEqual(runbook["suite_spec"]["id"], "soak_railway")
+        self.assertTrue(runbook["required_evidence"]["backup_receipt"])
+        self.assertIn("--preflight-only", markdown)
+        self.assertIn("railway-backup-receipt", markdown)
+        self.assertIn("railway restart --service service_tracedb", markdown)
+        self.assertIn("--railway-stateful-read-only", markdown)
+        self.assertNotIn("railway-token-secret", repr(runbook))
+        self.assertNotIn("railway-token-secret", markdown)
+
     def test_railway_backup_receipt_writes_manifest_and_gate_status(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             reports = Path(temp_dir) / "reports"

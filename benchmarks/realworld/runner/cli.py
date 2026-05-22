@@ -37,7 +37,9 @@ try:
         build_railway_manifest,
         build_railway_operation_receipt,
         build_railway_operation_plan,
+        build_railway_operator_runbook,
         build_railway_persistence_verdict,
+        railway_operator_runbook_markdown,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
@@ -53,7 +55,9 @@ except ImportError:  # pragma: no cover - package import path used by unit disco
         build_railway_manifest,
         build_railway_operation_receipt,
         build_railway_operation_plan,
+        build_railway_operator_runbook,
         build_railway_persistence_verdict,
+        railway_operator_runbook_markdown,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
@@ -253,6 +257,25 @@ def main(argv: list[str] | None = None) -> int:
     railway_backup_receipt.add_argument("--operator", default="")
     railway_backup_receipt.add_argument("--note", action="append", default=[])
 
+    railway_runbook = subcommands.add_parser(
+        "railway-runbook",
+        help="write a non-mutating Railway operator runbook for a suite spec",
+    )
+    railway_runbook.add_argument("--suite-spec", required=True)
+    railway_runbook.add_argument("--suite-id", default="")
+    railway_runbook.add_argument("--run-id", default="")
+    railway_runbook.add_argument("--reports-dir", default="reports")
+    railway_runbook.add_argument("--target", default="tracedb")
+    railway_runbook.add_argument("--surface", default="sdk")
+    railway_runbook.add_argument("--scenarios", default="sdk_cli_surface")
+    railway_runbook.add_argument("--backup-receipt-json", default="")
+    railway_runbook.add_argument("--operation-receipt-json", default="")
+    railway_runbook.add_argument("--pre-manifest-json", default="")
+    railway_runbook.add_argument("--marker-id", default="")
+    railway_runbook.add_argument("--operation", choices=["restart", "redeploy"], default="restart")
+    railway_runbook.add_argument("--output-json", default="reports/railway-runbook.json")
+    railway_runbook.add_argument("--output-md", default="reports/railway-runbook.md")
+
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
     chat_demo.add_argument("--data-dir", default="")
     chat_demo.add_argument("--tracedb-cli", default="")
@@ -297,6 +320,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_railway_receipt(args)
     if args.command == "railway-backup-receipt":
         return run_railway_backup_receipt(args)
+    if args.command == "railway-runbook":
+        return run_railway_runbook(args)
     if args.command == "chat-demo":
         return run_chat_demo(args)
     if args.command == "tracedb-scaling":
@@ -432,6 +457,38 @@ def run_railway_backup_receipt(args: argparse.Namespace) -> int:
             print(f"missing backup receipt field: {missing}", file=sys.stderr)
         return 1
     return 0
+
+
+def run_railway_runbook(args: argparse.Namespace) -> int:
+    lab_root = Path.cwd()
+    suite_spec_path = _resolve_suite_spec_path(lab_root, args.suite_spec)
+    suite_spec = load_suite_spec(suite_spec_path)
+    suite_id = args.suite_id or args.run_id or f"{suite_spec.id}-railway-runbook"
+    config = load_railway_config()
+    runbook = build_railway_operator_runbook(
+        config,
+        suite_id=suite_id,
+        suite_spec_id=suite_spec.id,
+        suite_spec_path=args.suite_spec,
+        reports_dir=args.reports_dir,
+        railway=suite_spec.railway,
+        target=args.target,
+        surface=args.surface,
+        scenarios=args.scenarios,
+        backup_receipt_json=args.backup_receipt_json,
+        operation_receipt_json=args.operation_receipt_json,
+        pre_manifest_json=args.pre_manifest_json,
+        marker_id=args.marker_id,
+        operation=args.operation,
+    )
+    output_json = _resolve_path(lab_root, args.output_json)
+    output_md = _resolve_path(lab_root, args.output_md)
+    write_json(runbook, output_json)
+    output_md.parent.mkdir(parents=True, exist_ok=True)
+    output_md.write_text(railway_operator_runbook_markdown(runbook), encoding="utf-8")
+    print(f"wrote {output_json}")
+    print(f"wrote {output_md}")
+    return 0 if runbook["status"] == "ready" else 1
 
 
 def execute_benchmark(

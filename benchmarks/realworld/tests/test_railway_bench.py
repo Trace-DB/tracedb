@@ -19,6 +19,7 @@ from railway_bench import (
     build_railway_backup_verdict,
     build_railway_operation_receipt,
     build_railway_operation_plan,
+    build_railway_operator_runbook,
     build_railway_manifest,
     build_railway_persistence_verdict,
     load_railway_config,
@@ -601,6 +602,56 @@ class RailwayBenchTests(unittest.TestCase):
         )
 
         self.assertEqual(manifest["operation_plan"], operation_plan)
+
+    def test_operator_runbook_records_preflight_backup_and_restart_chain(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+
+        runbook = build_railway_operator_runbook(
+            config,
+            suite_id="soak-runbook",
+            suite_spec_id="soak_railway",
+            suite_spec_path="suites/soak_railway.json",
+            reports_dir="reports",
+            railway={
+                "required": True,
+                "backup_required": True,
+                "restart_required": True,
+            },
+        )
+        commands = {command["name"]: command for command in runbook["commands"]}
+
+        self.assertEqual(runbook["kind"], "railway_operator_runbook")
+        self.assertEqual(runbook["status"], "ready")
+        self.assertTrue(runbook["required_evidence"]["backup_receipt"])
+        self.assertTrue(runbook["required_evidence"]["operation_receipt"])
+        self.assertIn("--preflight-only", commands["preflight_gate"]["command"])
+        self.assertIn(
+            "--railway-backup-receipt-json reports/soak-runbook/railway-backup-receipt.json",
+            commands["preflight_gate"]["command"],
+        )
+        self.assertIn("railway-backup-receipt", commands["backup_receipt"]["command"])
+        self.assertIn("--railway-stateful-smoke", commands["pre_operation_marker"]["command"])
+        self.assertIn("railway restart --service service_tracedb", commands["operator_restart"]["command"])
+        self.assertTrue(commands["operator_restart"]["manual"])
+        self.assertTrue(commands["operator_restart"]["mutates"])
+        self.assertFalse(commands["operator_restart"]["execute_by_default"])
+        self.assertIn("railway-receipt", commands["operation_receipt"]["command"])
+        self.assertIn("--railway-stateful-read-only", commands["post_operation_marker"]["command"])
+        self.assertIn(
+            "--railway-persistence-pre-manifest-json reports/soak-runbook-pre/railway-manifest.json",
+            commands["post_operation_marker"]["command"],
+        )
+        self.assertIn("runbook_only", runbook["claim_boundary"])
+        self.assertNotIn("railway-token-secret", repr(runbook))
 
     def test_operation_receipt_validation_accepts_confirmed_service_scoped_restart(self) -> None:
         receipt = {
