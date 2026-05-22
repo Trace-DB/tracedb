@@ -162,6 +162,10 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 "cwd": "clients/typescript",
             },
             {
+                "name": "python-sdk-unit-tests",
+                "argv": ["python3", "-m", "unittest", "discover", "-s", "clients/python/tests"],
+            },
+            {
                 "name": "python-platform-conformance-tests",
                 "argv": ["python3", "-m", "unittest", "benchmarks.realworld.tests.test_platform_conformance"],
             },

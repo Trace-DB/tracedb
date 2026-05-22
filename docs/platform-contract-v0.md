@@ -73,7 +73,7 @@ Every product surface must map to these contract components:
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper started | Hand-written `TraceDB` table/query wrapper over the generated transport. |
-| Python SDK | `python_sdk` | Sync HTTP smoked | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
+| Python SDK | `python_sdk` | Sync HTTP smoked with package unit lane | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
 
@@ -142,7 +142,12 @@ The Python package now starts the sync-first AI/data SDK lane in
 table handles and a query builder with `insert`, `insert_batch`, `patch`, `get`,
 `scan`, `delete`, `where`, `match_text`, `near`, `with_options`, `limit`,
 `all`, and `explain_plan`, plus health/catalog/metrics/admin helpers. The
-stdlib-only smoke `python3 clients/python/http_smoke.py` starts a local
+stdlib-only SDK also exposes `TraceDB.from_env()` for `TRACEDB_URL`,
+`TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
+`TRACEDB_TIMEOUT_MS`. The local package/unit lane is `python3 -m unittest
+discover -s clients/python/tests`, and Modal workspace verification runs it
+before the Python conformance smoke. The stdlib-only smoke `python3
+clients/python/http_smoke.py` starts a local
 `tracedb-server` and proves all required v0 contract scenarios through the
 Python surface. It is sync SDK contract evidence, not package publishing
 readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
@@ -172,6 +177,7 @@ Use the smallest ladder that proves the touched surface:
 ```bash
 cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_declares_sdk_conformance_harness -- --exact
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
+python3 -m unittest discover -s clients/python/tests
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 python3 scripts/generate_openapi_v1.py --check
 python3 scripts/generate_typescript_client.py --check

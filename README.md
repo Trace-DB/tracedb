@@ -417,7 +417,7 @@ The Python SDK now has a sync-first package under `clients/python/tracedb`:
 ```python
 from tracedb import TraceDB
 
-db = TraceDB("http://127.0.0.1:8090", token="dev-token")
+db = TraceDB.from_env()
 rows = (
     db.table("docs")
     .where({"tenant_id": "tenant-a", "status": "published"})
@@ -432,17 +432,21 @@ rows = (
 Run its local HTTP smoke with:
 
 ```bash
+python3 -m unittest discover -s clients/python/tests
 python3 clients/python/http_smoke.py --summary-json /tmp/tracedb-python-sdk-smoke.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 ```
 
 The client is stdlib-only for now, exposes table handles, a query builder,
 health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
-routing metadata injection, `Idempotency-Key` support, and parsed HTTP error
-envelopes. The smoke starts a local `tracedb-server` and proves all required v0
-contract scenarios for the Python surface. This is sync SDK contract evidence,
-not PyPI readiness, async support, managed-cloud proof, SQL compatibility, or
-GraphQL support.
+routing metadata injection, `TraceDB.from_env()` for `TRACEDB_URL`,
+`TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
+`TRACEDB_TIMEOUT_MS`, `Idempotency-Key` support, and parsed HTTP error
+envelopes. The unit lane checks the local package shape and env config helper.
+The smoke starts a local `tracedb-server` and proves all required v0 contract
+scenarios for the Python surface. This is sync SDK contract evidence, not PyPI
+readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
+support.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and

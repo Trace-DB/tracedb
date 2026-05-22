@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +49,52 @@ class TraceDB:
         if not self.url or not self.url.strip():
             raise TraceDBRequestError("CONFIG", "url", "TraceDB requires a non-empty url")
         object.__setattr__(self, "url", self.url.rstrip("/"))
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        url: str | None = None,
+        token: str | None = None,
+        database_id: str | None = None,
+        branch_id: str | None = None,
+        timeout: float | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> "TraceDB":
+        source = os.environ if env is None else env
+        resolved_url = url if url is not None else source.get("TRACEDB_URL")
+        if resolved_url is None or not resolved_url.strip():
+            raise TraceDBRequestError("CONFIG", "TRACEDB_URL", "TraceDB.from_env requires TRACEDB_URL")
+
+        resolved_timeout = timeout
+        if resolved_timeout is None:
+            timeout_ms = source.get("TRACEDB_TIMEOUT_MS")
+            if timeout_ms is not None and timeout_ms.strip():
+                try:
+                    resolved_timeout = float(timeout_ms) / 1000.0
+                except ValueError as error:
+                    raise TraceDBRequestError(
+                        "CONFIG",
+                        "TRACEDB_TIMEOUT_MS",
+                        "TRACEDB_TIMEOUT_MS must be a positive number",
+                    ) from error
+
+        if resolved_timeout is not None and resolved_timeout <= 0:
+            raise TraceDBRequestError(
+                "CONFIG",
+                "TRACEDB_TIMEOUT_MS",
+                "TRACEDB_TIMEOUT_MS must be greater than 0",
+            )
+
+        kwargs: dict[str, Any] = {
+            "url": resolved_url,
+            "token": token if token is not None else source.get("TRACEDB_TOKEN"),
+            "database_id": database_id if database_id is not None else source.get("TRACEDB_DATABASE_ID"),
+            "branch_id": branch_id if branch_id is not None else source.get("TRACEDB_BRANCH_ID"),
+        }
+        if resolved_timeout is not None:
+            kwargs["timeout"] = resolved_timeout
+        return cls(**kwargs)
 
     def request_json(
         self,

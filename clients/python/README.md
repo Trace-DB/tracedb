@@ -8,7 +8,7 @@ Current public DX:
 ```python
 from tracedb import TraceDB
 
-db = TraceDB(url, token="dev-token")
+db = TraceDB.from_env()
 docs = db.table("docs").tenant("tenant-a")
 
 docs.insert("intro", {
@@ -28,16 +28,26 @@ rows = (
 )
 ```
 
+`TraceDB.from_env()` reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
+`TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`. Explicit
+keyword arguments override matching environment values. Direct construction
+with `TraceDB(url, token="dev-token")` remains supported.
+
 The client uses only the Python standard library today. It preserves the raw
 HTTP escape hatch with `request_json(...)`, exposes `TraceDBHTTPError` with
 method, path, status, response body, parsed `error`, and optional `code`, and
 supports caller-provided `Idempotency-Key` values on mutation/admin calls.
 
+Run the local unit/package checks:
+
+```bash
+python3 -m unittest discover -s clients/python/tests
+```
+
 Run the local HTTP smoke:
 
 ```bash
-cd clients/python
-python3 http_smoke.py
+python3 clients/python/http_smoke.py
 ```
 
 The smoke starts a local `tracedb-server` and drives schema apply, single put,
@@ -45,6 +55,7 @@ batch ingest, patch, get, scan, query, explain, delete, idempotency replay and
 conflict, error envelope parsing, compact, snapshot, restore, and admin jobs. It
 emits `python sdk http smoke ok`.
 
-This is sync Python SDK product-path evidence. It is not async support, package
-publishing readiness, managed-cloud proof, SQL compatibility, TraceQL, GraphQL,
-or benchmark evidence.
+This is sync Python SDK product-path evidence. The package metadata is local
+project/package-shape evidence only. It is not async support, PyPI release
+readiness, managed-cloud proof, SQL compatibility, TraceQL, GraphQL, or
+benchmark evidence.
