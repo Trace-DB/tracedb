@@ -21,6 +21,7 @@ from railway_bench import (
     run_railway_endpoint_health,
     run_railway_stateful_smoke,
     validate_railway_config,
+    validate_railway_operation_receipt,
 )
 
 
@@ -456,6 +457,50 @@ class RailwayBenchTests(unittest.TestCase):
 
         self.assertEqual(manifest["operation_plan"], operation_plan)
 
+    def test_operation_receipt_validation_accepts_confirmed_service_scoped_restart(self) -> None:
+        receipt = {
+            "kind": "railway_operation_receipt",
+            "operation": "restart",
+            "status": "passed",
+            "executed": True,
+            "confirmed": True,
+            "service_id": "service_tracedb",
+            "RAILWAY_API_TOKEN": "railway-token-secret",
+        }
+
+        result = validate_railway_operation_receipt(
+            receipt,
+            expected_service_id="service_tracedb",
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["status"], "valid")
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["receipt"]["RAILWAY_API_TOKEN"], "<redacted>")
+        self.assertNotIn("railway-token-secret", repr(result))
+
+    def test_operation_receipt_validation_rejects_unconfirmed_wrong_service_operation(self) -> None:
+        receipt = {
+            "kind": "railway_operation_receipt",
+            "operation": "delete",
+            "status": "passed",
+            "executed": True,
+            "confirmed": False,
+            "service_id": "service_other",
+        }
+
+        result = validate_railway_operation_receipt(
+            receipt,
+            expected_service_id="service_tracedb",
+        )
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status"], "invalid")
+        self.assertTrue(any("operation" in error for error in result["errors"]))
+        self.assertTrue(any("confirmed" in error for error in result["errors"]))
+        self.assertTrue(any("service_id" in error for error in result["errors"]))
+
     def test_persistence_verdict_passes_for_matching_marker_and_operator_receipt(self) -> None:
         pre_manifest = {
             "status": "configured",
@@ -486,9 +531,11 @@ class RailwayBenchTests(unittest.TestCase):
             },
         }
         receipt = {
+            "kind": "railway_operation_receipt",
             "operation": "restart",
             "status": "passed",
             "executed": True,
+            "confirmed": True,
             "service_id": "service_tracedb",
             "RAILWAY_API_TOKEN": "railway-token-secret",
         }
@@ -501,7 +548,53 @@ class RailwayBenchTests(unittest.TestCase):
         self.assertTrue(verdict["checks"]["pre_marker_written"])
         self.assertTrue(verdict["checks"]["post_marker_visible"])
         self.assertTrue(verdict["checks"]["operation_executed"])
+        self.assertTrue(verdict["checks"]["operation_confirmed"])
+        self.assertTrue(verdict["checks"]["receipt_valid"])
         self.assertNotIn("railway-token-secret", repr(verdict))
+
+    def test_persistence_verdict_fails_without_confirmed_operator_receipt(self) -> None:
+        pre_manifest = {
+            "status": "configured",
+            "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+            "stateful_smoke": {
+                "status": "passed",
+                "mode": "write_read",
+                "marker": {
+                    "table": "railway_stateful_markers",
+                    "tenant_id": "railway-smoke",
+                    "id": "marker-123",
+                    "run_id": "pre-restart-run",
+                },
+            },
+        }
+        post_manifest = {
+            "status": "configured",
+            "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+            "stateful_smoke": {
+                "status": "passed",
+                "mode": "read_only",
+                "marker": {
+                    "table": "railway_stateful_markers",
+                    "tenant_id": "railway-smoke",
+                    "id": "marker-123",
+                    "run_id": "post-restart-run",
+                },
+            },
+        }
+        receipt = {
+            "kind": "railway_operation_receipt",
+            "operation": "restart",
+            "status": "passed",
+            "executed": True,
+            "service_id": "service_tracedb",
+        }
+
+        verdict = build_railway_persistence_verdict(pre_manifest, post_manifest, receipt)
+
+        self.assertEqual(verdict["status"], "failed")
+        self.assertFalse(verdict["checks"]["operation_confirmed"])
+        self.assertFalse(verdict["checks"]["receipt_valid"])
+        self.assertTrue(any("confirmed" in error for error in verdict["errors"]))
 
     def test_persistence_verdict_fails_for_marker_mismatch(self) -> None:
         pre_manifest = {
@@ -518,7 +611,13 @@ class RailwayBenchTests(unittest.TestCase):
                 "marker": {"table": "railway_stateful_markers", "tenant_id": "railway-smoke", "id": "marker-b"},
             },
         }
-        receipt = {"operation": "restart", "status": "passed", "executed": True}
+        receipt = {
+            "kind": "railway_operation_receipt",
+            "operation": "restart",
+            "status": "passed",
+            "executed": True,
+            "confirmed": True,
+        }
 
         verdict = build_railway_persistence_verdict(pre_manifest, post_manifest, receipt)
 

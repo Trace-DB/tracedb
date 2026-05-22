@@ -592,9 +592,11 @@ class SuiteReportingTests(unittest.TestCase):
             receipt_path.write_text(
                 json.dumps(
                     {
+                        "kind": "railway_operation_receipt",
                         "operation": "restart",
                         "status": "passed",
                         "executed": True,
+                        "confirmed": True,
                         "service_id": "service_tracedb",
                         "RAILWAY_API_TOKEN": "railway-token-secret",
                     }

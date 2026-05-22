@@ -324,7 +324,11 @@ Add `--railway-persistence-pre-manifest-json <pre-manifest>` and
 `railway_persistence` into `suite-gate.json`. The verdict passes only when the
 pre-manifest has a passed write/read marker, the postcheck has a passed read-only
 marker with the same identity, and the receipt says a restart/redeploy actually
-executed successfully.
+executed successfully. The receipt is intentionally strict so a loose JSON blob
+cannot become persistence proof. It must include `kind:
+railway_operation_receipt`, `operation: restart|redeploy`, `status`,
+`executed: true`, `confirmed: true`, and the TraceDB Railway `service_id`; any
+sensitive fields in the receipt are redacted before artifact export.
 `--railway-restart-redeploy-plan` adds a non-mutating `operation_plan` to the
 manifest and reports `railway_restart_redeploy: plan_only` in the gate. The plan
 lists safe preflight commands such as `railway status --json`,

@@ -17,6 +17,18 @@ CONTROL_SERVICE_ENV = {
     "qdrant": "QDRANT_RAILWAY_SERVICE_ID",
     "opensearch": "OPENSEARCH_RAILWAY_SERVICE_ID",
 }
+RAILWAY_MUTATING_OPERATIONS = {"restart", "redeploy"}
+RAILWAY_OPERATION_SUCCESS_STATUSES = {"passed", "completed", "succeeded", "success", "ok"}
+RAILWAY_OPERATION_FAILURE_STATUSES = {
+    "blocked",
+    "cancelled",
+    "canceled",
+    "error",
+    "failed",
+    "failure",
+    "timeout",
+    "timed_out",
+}
 
 
 def load_railway_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -120,6 +132,56 @@ def build_railway_manifest(
     return manifest
 
 
+def validate_railway_operation_receipt(
+    operation_receipt: Mapping[str, Any],
+    *,
+    expected_service_id: str = "",
+) -> dict[str, Any]:
+    receipt = _dict_value(operation_receipt)
+    redacted_receipt = _redact_sensitive(receipt)
+    required = ["kind", "operation", "status", "executed", "confirmed", "service_id"]
+    missing = []
+    for key in required:
+        value = receipt.get(key)
+        if key not in receipt or value is None or value == "":
+            missing.append(key)
+    errors = []
+    warnings = []
+
+    kind = str(receipt.get("kind", ""))
+    if kind and kind != "railway_operation_receipt":
+        errors.append("kind must be railway_operation_receipt")
+
+    operation = str(receipt.get("operation", "")).lower()
+    if operation and operation not in RAILWAY_MUTATING_OPERATIONS:
+        errors.append("operation must be restart or redeploy")
+
+    status = str(receipt.get("status", "")).lower()
+    if status and status not in RAILWAY_OPERATION_SUCCESS_STATUSES | RAILWAY_OPERATION_FAILURE_STATUSES:
+        errors.append("status must be a known operation receipt status")
+
+    if "executed" in receipt and receipt.get("executed") is not True:
+        errors.append("executed must be true for persistence evidence")
+    if "confirmed" in receipt and receipt.get("confirmed") is not True:
+        errors.append("confirmed must be true for operator-approved persistence evidence")
+
+    service_id = str(receipt.get("service_id", ""))
+    if expected_service_id and service_id and service_id != expected_service_id:
+        errors.append("service_id does not match the TraceDB Railway service")
+    if not expected_service_id:
+        errors.append("expected TraceDB service_id is required for receipt matching")
+
+    ok = not missing and not errors
+    return {
+        "ok": ok,
+        "status": "valid" if ok else "invalid",
+        "missing": missing,
+        "errors": errors,
+        "warnings": warnings,
+        "receipt": redacted_receipt,
+    }
+
+
 def build_railway_persistence_verdict(
     pre_manifest: Mapping[str, Any],
     post_manifest: Mapping[str, Any],
@@ -129,7 +191,13 @@ def build_railway_persistence_verdict(
     post_smoke = _dict_value(post_manifest.get("stateful_smoke"))
     pre_marker = _dict_value(pre_smoke.get("marker"))
     post_marker = _dict_value(post_smoke.get("marker"))
-    redacted_receipt = _redact_sensitive(operation_receipt)
+    expected_service_id = _tracedb_service_id(post_manifest) or _tracedb_service_id(pre_manifest)
+    receipt = _dict_value(operation_receipt)
+    receipt_validation = validate_railway_operation_receipt(
+        receipt,
+        expected_service_id=expected_service_id,
+    )
+    redacted_receipt = receipt_validation["receipt"]
 
     checks = {
         "pre_marker_written": pre_smoke.get("status") == "passed"
@@ -138,9 +206,11 @@ def build_railway_persistence_verdict(
         and post_smoke.get("mode") == "read_only",
         "marker_match": _marker_identity(pre_marker) == _marker_identity(post_marker)
         and bool(pre_marker.get("id")),
-        "operation_executed": bool(operation_receipt.get("executed")),
-        "operation_succeeded": str(operation_receipt.get("status", "")).lower()
-        in {"passed", "completed", "succeeded", "success", "ok"},
+        "receipt_valid": receipt_validation["ok"],
+        "operation_executed": receipt.get("executed") is True,
+        "operation_confirmed": receipt.get("confirmed") is True,
+        "operation_succeeded": str(receipt.get("status", "")).lower()
+        in RAILWAY_OPERATION_SUCCESS_STATUSES,
     }
     errors = []
     if not checks["pre_marker_written"]:
@@ -149,8 +219,13 @@ def build_railway_persistence_verdict(
         errors.append("post-operation read-only marker evidence is missing or failed")
     if not checks["marker_match"]:
         errors.append("marker mismatch between pre-operation and post-operation evidence")
+    if not checks["receipt_valid"]:
+        errors.extend(receipt_validation["errors"])
+        errors.extend(f"missing receipt field: {field}" for field in receipt_validation["missing"])
     if not checks["operation_executed"]:
         errors.append("operation receipt does not show an executed restart/redeploy")
+    if not checks["operation_confirmed"]:
+        errors.append("operation receipt does not show explicit operator confirmation")
     if not checks["operation_succeeded"]:
         errors.append("operation receipt status is not successful")
 
@@ -168,8 +243,15 @@ def build_railway_persistence_verdict(
         "operation": {
             "operation": redacted_receipt.get("operation", ""),
             "status": redacted_receipt.get("status", ""),
-            "executed": bool(operation_receipt.get("executed")),
+            "executed": receipt.get("executed") is True,
+            "confirmed": receipt.get("confirmed") is True,
             "service_id": redacted_receipt.get("service_id", ""),
+            "validation": {
+                "status": receipt_validation["status"],
+                "missing": receipt_validation["missing"],
+                "errors": receipt_validation["errors"],
+                "warnings": receipt_validation["warnings"],
+            },
             "receipt": redacted_receipt,
         },
         "checks": checks,
@@ -441,6 +523,16 @@ def _marker_identity(marker: Mapping[str, Any]) -> tuple[str, str, str]:
         str(marker.get("tenant_id", "")),
         str(marker.get("id", "")),
     )
+
+
+def _tracedb_service_id(manifest: Mapping[str, Any]) -> str:
+    services = manifest.get("services")
+    if not isinstance(services, list):
+        return ""
+    for service in services:
+        if isinstance(service, Mapping) and service.get("role") == "tracedb":
+            return str(service.get("service_id", ""))
+    return ""
 
 
 def _ssh_hints(services: list[dict[str, Any]]) -> list[str]:
