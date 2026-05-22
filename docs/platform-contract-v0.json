@@ -48,7 +48,7 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "public_wrapper_http_and_gateway_smoked",
+      "status": "public_wrapper_conformance_checked",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/src/client.ts",
@@ -56,7 +56,8 @@
         "clients/typescript/public-sdk-smoke.ts",
         "clients/typescript/public-http-smoke.ts",
         "clients/typescript/http-smoke.ts",
-        "clients/typescript/gateway-smoke.ts"
+        "clients/typescript/gateway-smoke.ts",
+        "scripts/platform_conformance.py --surface typescript_sdk"
       ]
     },
     {

@@ -127,7 +127,9 @@ benchmark evidence, and not SQL compatibility.
 public-http-smoke)`, which starts its own local `tracedb-server` child process
 and exercises the public TypeScript SDK wrapper over the generated transport,
 and emits one-step `local-product-regression` JSON with `only_step:
-"typescript_http_smoke"`. This is local public TypeScript SDK HTTP smoke evidence only, not full product
+"typescript_http_smoke"`. The smoke now includes idempotency replay/conflict
+and parsed error-envelope evidence for the shared conformance harness. This is
+local public TypeScript SDK HTTP smoke evidence only, not full product
 gate coverage, not embedded demo/verify, not `http_demo`, not local
 `doctor http` diagnostics, not Rust SDK quickstart evidence, not
 `typescript_check`, not generated-transport `http-smoke`, not TypeScript gateway
@@ -144,6 +146,17 @@ auth/routing evidence only, not full product gate coverage, not embedded
 demo/verify, not `http_demo`, not local `doctor http` diagnostics, not Rust SDK
 quickstart evidence, not `typescript_check`, not TypeScript HTTP smoke, not
 managed-cloud proof, not benchmark evidence, and not SQL compatibility.
+
+Current TypeScript conformance checkpoint: `scripts/platform_conformance.py
+--surface typescript_sdk` maps the public TypeScript SDK HTTP smoke summary
+into all 12 Platform Contract v0 scenario IDs. Modal workspace run
+`ap-r24Nuud9z7Xepz1W7g6BFu` passed in 54.330s, including
+`typescript-sdk-conformance`, `npm run public-http-smoke`, `npm run
+gateway-smoke`, and `cargo test --workspace --all-targets`. This pass also
+fixed a TypeScript gateway smoke race by allocating the gateway port only after
+the engine has bound its port. This is local TypeScript SDK conformance
+evidence, not managed-cloud proof, SQL compatibility, TraceQL, GraphQL, or
+benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -272,8 +285,11 @@ scan, delete, admin compact/snapshot/restore/jobs, and query-builder chaining
 through `where({ tenant_id })`, `match`, `near`, `with`, `limit`, `all`, and
 `explainPlan`. `npm run public-smoke` verifies this wrapper with a fake
 transport and missing-tenant request validation; `npm run public-http-smoke`
-verifies it against a real local `tracedb-server`. This is public-DX smoke
-evidence, not npm publishing readiness or managed-cloud proof.
+verifies it against a real local `tracedb-server` with idempotency and
+error-envelope evidence, and `scripts/platform_conformance.py --surface
+typescript_sdk` now maps it into the shared Platform Contract v0 scenario IDs.
+This is public-DX conformance evidence, not npm publishing readiness or
+managed-cloud proof.
 `node --experimental-strip-types clients/typescript/smoke.ts` verifies the
 artifact imports and executes in the local Node runtime with fake-fetch coverage
 for representative generated aliases, GET no-body behavior, POST routing
@@ -289,7 +305,8 @@ run http-smoke` starts a local `tracedb-server` child process and drives the
 generated TypeScript transport over real HTTP routes; `npm run public-http-smoke`
 drives the public `TraceDB` wrapper over the same generated transport through
 ready, health, catalog, metrics, schema apply, insert, batch ingest, patch, get,
-scan, query, explain, delete, compact, snapshot, restore, and admin jobs.
+scan, query, explain, delete, idempotency replay/conflict, parsed error
+envelopes, compact, snapshot, restore, and admin jobs.
 `TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run
 quickstart` runs the generated TypeScript client against an existing HTTP
 endpoint through readiness, health, catalog, metrics, schema apply, batch ingest,

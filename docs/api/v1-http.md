@@ -355,7 +355,9 @@ benchmark evidence, and not SQL compatibility.
 public-http-smoke` in `clients/typescript`, which starts its own local
 `tracedb-server` child process and exercises the public TypeScript SDK wrapper
 over the generated transport, and emits one-step `local-product-regression` JSON
-with `only_step: "typescript_http_smoke"`. This is local public TypeScript SDK HTTP
+with `only_step: "typescript_http_smoke"`. The smoke includes idempotency
+replay/conflict and parsed error-envelope evidence for the shared
+`typescript_sdk` platform conformance lane. This is local public TypeScript SDK HTTP
 smoke evidence only, not full product gate coverage, not embedded demo/verify,
 not `http_demo`, not local `doctor http`, not Rust SDK quickstart, not
 `typescript_check`, not generated-transport `http-smoke`, not TypeScript gateway
@@ -445,7 +447,10 @@ npm run public-http-smoke
 and uses the generated client against real HTTP routes. `public-http-smoke`
 starts the same kind of local server and uses the public `TraceDB` wrapper for
 schema apply, insert, batch ingest, patch, get, scan, query, explain, delete,
-compact, snapshot, restore, and admin jobs.
+idempotency replay/conflict, parsed error envelopes, compact, snapshot, restore,
+and admin jobs. `python3 scripts/platform_conformance.py --surface
+typescript_sdk` maps the public smoke summary into the Platform Contract v0
+scenario IDs.
 
 It also has an endpoint quickstart for an already-running local or
 managed-style HTTP endpoint:

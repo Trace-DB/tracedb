@@ -95,14 +95,23 @@ Run the public SDK wrapper against a real local HTTP server:
 ```bash
 cd clients/typescript
 npm run public-http-smoke
+npm run public-http-smoke -- --summary-json /tmp/tracedb-typescript-sdk-smoke.json
 ```
 
 The public HTTP smoke starts a local `tracedb-server` child process with an
 isolated temporary data directory, waits for readiness, then drives `TraceDB`
 and table handles through health, catalog, metrics, schema apply, insert, batch
-ingest, patch, get, scan, query, explain, delete, compact, snapshot, restore,
-and admin jobs. It emits a JSON summary and `typescript public sdk http smoke
-ok`. This is local loopback product evidence for the public wrapper over the
+ingest, patch, get, scan, query, explain, delete, idempotency replay/conflict,
+parsed error envelopes, compact, snapshot, restore, and admin jobs. It emits a
+JSON summary and `typescript public sdk http smoke ok`. This is local loopback
+product evidence for the public wrapper over the generated transport and is the
+input for:
+
+```bash
+python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
+```
+
+This is local loopback conformance evidence for the public wrapper over the
 generated transport, not package publishing readiness, managed-cloud health, or
 benchmark evidence.
 

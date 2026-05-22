@@ -20,15 +20,17 @@ Run the initial executable contract harness with:
 
 ```bash
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
+python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 ```
 
 It reads `docs/platform-contract-v0.json`, drives a raw HTTP `http_direct` lane
 against `tracedb-server`, reuses the Rust SDK quickstart product path for the
-`rust_sdk` lane, runs the sync Python SDK smoke for the `python_sdk` lane, and
-emits one JSON report. The current HTTP direct, Rust SDK, and Python SDK lanes
-cover all required v0 scenarios; future lanes must use explicit `not_checked`
-markers until they exercise the same contract IDs.
+`rust_sdk` lane, maps the public TypeScript SDK HTTP smoke for the
+`typescript_sdk` lane, runs the sync Python SDK smoke for the `python_sdk` lane,
+and emits one JSON report. The current HTTP direct, Rust SDK, TypeScript SDK,
+and Python SDK lanes cover all required v0 scenarios; future lanes must use
+explicit `not_checked` markers until they exercise the same contract IDs.
 
 ## Quickstart
 
@@ -358,8 +360,12 @@ The wrapper lives in `clients/typescript/src/sdk.ts`, uses the generated
 `TraceDbClient` as its transport, and is covered by `npm run public-smoke`.
 `npm run public-http-smoke` starts a local server and drives the public wrapper
 through schema apply, insert, batch ingest, patch, get, scan, query, explain,
-delete, compact, snapshot, restore, and jobs. It is the start of TypeScript
-public-DX parity, not a published npm package claim.
+delete, idempotency replay/conflict, parsed error envelopes, compact, snapshot,
+restore, and jobs. `npm run public-http-smoke -- --summary-json
+/tmp/tracedb-typescript-sdk-smoke.json` writes the machine-readable summary
+that `python3 scripts/platform_conformance.py --surface typescript_sdk` maps
+onto the Platform Contract v0 scenario IDs. It is TypeScript public-DX parity
+evidence, not a published npm package claim.
 
 The generated TypeScript client also has a private local package boundary for
 typechecking the artifact and smoke script:

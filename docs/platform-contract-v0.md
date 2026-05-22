@@ -72,7 +72,7 @@ Every product surface must map to these contract components:
 | --- | --- | --- | --- |
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
-| TypeScript SDK | `typescript_sdk` | Public wrapper started | Hand-written `TraceDB` table/query wrapper over the generated transport. |
+| TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked with package unit lane | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
@@ -107,6 +107,7 @@ Run the current executable lanes with:
 
 ```bash
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
+python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 ```
 
@@ -114,7 +115,11 @@ The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`.
 The `rust_sdk` lane maps the existing Rust SDK quickstart product path into the
 same manifest scenario IDs. The current executable lanes cover all required v0
 scenarios for HTTP direct and Rust SDK, including single-record put and parsed
-error-envelope evidence. The `python_sdk` lane runs the sync SDK smoke in
+error-envelope evidence. The `typescript_sdk` lane runs the public TypeScript
+SDK smoke through `npm run public-http-smoke -- --summary-json ...` and maps
+schema apply, put, batch, patch, get, scan, query, explain, delete,
+idempotency, errors, and snapshot/restore into the same scenario IDs. The
+`python_sdk` lane runs the sync SDK smoke in
 `clients/python/http_smoke.py` and maps schema apply, put, batch, patch, get,
 scan, query, explain, delete, idempotency, errors, and snapshot/restore into
 the same scenario IDs. Future surfaces must report unimplemented scenarios as
@@ -139,8 +144,10 @@ generated `TraceDbClient` transport and exposes table handles with
 compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
 and `explainPlan`. The wrapper is fake-fetch/typecheck guarded and now has real
 local HTTP and gateway smokes through `npm run public-http-smoke` and
-`npm run gateway-smoke`; the generated transport remains available and remains
-the source of route methods.
+`npm run gateway-smoke`. The public HTTP smoke now emits machine-readable
+idempotency and error-envelope evidence for `scripts/platform_conformance.py
+--surface typescript_sdk`; the generated transport remains available and
+remains the source of route methods.
 
 The Python package now starts the sync-first AI/data SDK lane in
 `clients/python/tracedb/client.py`. `TraceDB(url, token="dev-token")` exposes
@@ -182,6 +189,7 @@ Use the smallest ladder that proves the touched surface:
 ```bash
 cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_declares_sdk_conformance_harness -- --exact
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
+python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 -m unittest discover -s clients/python/tests
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 python3 scripts/generate_openapi_v1.py --check

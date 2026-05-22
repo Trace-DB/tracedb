@@ -157,6 +157,17 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 "cwd": "clients/typescript",
             },
             {
+                "name": "typescript-sdk-conformance",
+                "argv": [
+                    "python3",
+                    "scripts/platform_conformance.py",
+                    "--surface",
+                    "typescript_sdk",
+                    "--summary-json",
+                    "/tmp/tracedb-typescript-sdk-conformance.json",
+                ],
+            },
+            {
                 "name": "typescript-npm-public-gateway-smoke",
                 "argv": ["npm", "run", "gateway-smoke"],
                 "cwd": "clients/typescript",

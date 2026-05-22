@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   TraceDB,
+  TraceDbHttpError,
   type ReadyResponse,
   type TableSchema,
 } from "./src/sdk.ts";
@@ -99,7 +100,20 @@ async function waitForReady(
   );
 }
 
+function summaryJsonPath(argv: string[]): string | undefined {
+  const index = argv.indexOf("--summary-json");
+  if (index === -1) {
+    return undefined;
+  }
+  const value = argv[index + 1];
+  if (value === undefined || value.trim().length === 0) {
+    throw new Error("--summary-json requires a path");
+  }
+  return value;
+}
+
 const runId = `${process.pid}-${Date.now()}`;
+const summaryJson = summaryJsonPath(process.argv.slice(2));
 const root = await mkdtemp(join(tmpdir(), "tracedb-ts-public-http-smoke-"));
 const dataDir = join(root, "data");
 const adminDir = join(root, "admin");
@@ -139,15 +153,38 @@ try {
   await db.applySchema(schema, { idempotencyKey: `ts-public-${runId}-schema` });
 
   const docs = db.table("docs").tenant("tenant-a");
-  await docs.insert(
+  const putFields = {
+    body: "TraceDB TypeScript public SDK HTTP smoke",
+    embedding: [1, 0, 0],
+    status: "published",
+  };
+  const putIdempotencyKey = `ts-public-${runId}-put`;
+  const putResponse = await docs.insert(
     "intro",
-    {
-      body: "TraceDB TypeScript public SDK HTTP smoke",
-      embedding: [1, 0, 0],
-      status: "published",
-    },
-    { idempotencyKey: `ts-public-${runId}-put` },
+    putFields,
+    { idempotencyKey: putIdempotencyKey },
   );
+  const replayResponse = await docs.insert("intro", putFields, {
+    idempotencyKey: putIdempotencyKey,
+  });
+  assert.equal(replayResponse.epoch, putResponse.epoch);
+  let idempotencyConflictStatus: number | undefined;
+  try {
+    await docs.insert(
+      "intro",
+      {
+        body: "TraceDB TypeScript public SDK HTTP smoke changed",
+        embedding: [1, 0, 0],
+        status: "published",
+      },
+      { idempotencyKey: putIdempotencyKey },
+    );
+  } catch (error) {
+    assert.equal(error instanceof TraceDbHttpError, true);
+    idempotencyConflictStatus = (error as TraceDbHttpError).status;
+  }
+  assert.equal(idempotencyConflictStatus, 409);
+
   const batch = await docs.insertBatch(
     [
       {
@@ -224,7 +261,32 @@ try {
   const jobs = await db.listAdminJobs();
   assert.equal(jobs.jobs?.some((job) => job.queue === "tracedb.snapshot.create"), true);
 
-  console.log(JSON.stringify({
+  let errorEnvelope:
+    | {
+        status: number;
+        error: string | undefined;
+        code: string | undefined;
+        method: string;
+        path: string;
+      }
+    | undefined;
+  try {
+    await db.client.getRecord({} as never);
+  } catch (error) {
+    assert.equal(error instanceof TraceDbHttpError, true);
+    const httpError = error as TraceDbHttpError;
+    errorEnvelope = {
+      status: httpError.status,
+      error: httpError.responseError,
+      code: httpError.responseCode,
+      method: httpError.method,
+      path: httpError.path,
+    };
+  }
+  assert.equal(errorEnvelope?.status, 400);
+  assert.equal(typeof errorEnvelope?.error, "string");
+
+  const summary = {
     ok: true,
     mode: "local-http-typescript-public-sdk-smoke",
     server_url: baseUrl,
@@ -236,6 +298,7 @@ try {
       catalog: true,
       metrics: true,
       schema_apply: true,
+      put: true,
       insert: true,
       batch_ingest: true,
       patch: true,
@@ -244,20 +307,32 @@ try {
       query: true,
       explain: true,
       delete: true,
+      idempotency: true,
+      error_envelope: true,
       compact: true,
       snapshot: true,
       restore: true,
       jobs: true,
     },
+    records_put: 1,
     records_inserted: 3,
     records_scanned: scanResponse.returned_count,
     catalog_databases: databases.databases?.length,
+    put_epoch: putResponse.epoch,
+    idempotency_replay_observed: replayResponse.epoch === putResponse.epoch,
+    idempotency_conflict_status: idempotencyConflictStatus,
     patched_status: patched.record?.fields?.status,
     deleted_hidden: deleted.record === null,
+    error_envelope: errorEnvelope,
     snapshot_target: snapshotResponse.target,
     restore_target: restoreResponse.target,
     sql_module: "not_implemented",
-  }, null, 2));
+  };
+  if (summaryJson !== undefined) {
+    await mkdir(dirname(summaryJson), { recursive: true });
+    await writeFile(summaryJson, `${JSON.stringify(summary, null, 2)}\n`);
+  }
+  console.log(JSON.stringify(summary, null, 2));
   console.log("typescript public sdk http smoke ok");
 } finally {
   await stopServer(child);

@@ -127,11 +127,8 @@ const adminDir = join(root, "admin");
 const snapshotTarget = join(adminDir, "snapshot");
 const restoreTarget = join(adminDir, "restore");
 const enginePort = await freePort();
-const gatewayPort = await freePort();
 const engineBind = `127.0.0.1:${enginePort}`;
-const gatewayBind = `127.0.0.1:${gatewayPort}`;
 const engineUrl = `http://${engineBind}`;
-const gatewayUrl = `http://${gatewayBind}`;
 const engineOutput: ServerOutput = { stderr: "", stdout: "" };
 const gatewayOutput: ServerOutput = { stderr: "", stdout: "" };
 const engine = startTracedbServer({
@@ -144,6 +141,9 @@ let gateway: ChildProcessWithoutNullStreams | undefined;
 try {
   await mkdir(adminDir, { recursive: true });
   await waitForReady("tracedb engine", new TraceDB({ url: engineUrl, token }), engine, engineOutput);
+  const gatewayPort = await freePort();
+  const gatewayBind = `127.0.0.1:${gatewayPort}`;
+  const gatewayUrl = `http://${gatewayBind}`;
   gateway = startTracedbServer({
     TRACEDB_API_TOKEN: token,
     TRACEDB_BIND: gatewayBind,

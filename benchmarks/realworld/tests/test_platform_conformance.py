@@ -48,6 +48,7 @@ class PlatformConformanceTests(unittest.TestCase):
         )
         self.assertIn("http_direct", module.contract_surface_ids(manifest))
         self.assertIn("rust_sdk", module.contract_surface_ids(manifest))
+        self.assertIn("typescript_sdk", module.contract_surface_ids(manifest))
         self.assertIn("python_sdk", module.contract_surface_ids(manifest))
 
     def test_python_sdk_sync_package_declares_contract_surface(self) -> None:
@@ -71,6 +72,26 @@ class PlatformConformanceTests(unittest.TestCase):
             "branch_id",
         ]:
             self.assertIn(token, client_source)
+
+    def test_typescript_public_http_smoke_declares_contract_evidence_output(self) -> None:
+        smoke_source = (ROOT / "clients" / "typescript" / "public-http-smoke.ts").read_text()
+
+        for token in [
+            "--summary-json",
+            "idempotency",
+            "idempotency_conflict_status",
+            "error_envelope",
+            "TraceDbHttpError",
+        ]:
+            self.assertIn(token, smoke_source)
+
+    def test_typescript_gateway_smoke_allocates_gateway_port_after_engine_binds(self) -> None:
+        smoke_source = (ROOT / "clients" / "typescript" / "gateway-smoke.ts").read_text()
+
+        engine_ready_index = smoke_source.index('await waitForReady("tracedb engine"')
+        gateway_port_index = smoke_source.index("const gatewayPort = await freePort();")
+
+        self.assertLess(engine_ready_index, gateway_port_index)
 
     def test_rust_sdk_product_summary_maps_to_contract_scenarios(self) -> None:
         module = load_module()
@@ -167,6 +188,61 @@ class PlatformConformanceTests(unittest.TestCase):
         scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
 
         self.assertEqual(surface["surface"], "python_sdk")
+        self.assertEqual(scenarios["schema_apply"]["status"], "passed")
+        self.assertEqual(scenarios["put"]["status"], "passed")
+        self.assertEqual(scenarios["batch"]["status"], "passed")
+        self.assertEqual(scenarios["patch"]["status"], "passed")
+        self.assertEqual(scenarios["get"]["status"], "passed")
+        self.assertEqual(scenarios["scan"]["status"], "passed")
+        self.assertEqual(scenarios["query"]["status"], "passed")
+        self.assertEqual(scenarios["explain"]["status"], "passed")
+        self.assertEqual(scenarios["delete"]["status"], "passed")
+        self.assertEqual(scenarios["idempotency"]["status"], "passed")
+        self.assertEqual(scenarios["errors"]["status"], "passed")
+        self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
+
+    def test_typescript_sdk_smoke_summary_maps_to_contract_scenarios(self) -> None:
+        module = load_module()
+        manifest = module.load_contract(ROOT / "docs" / "platform-contract-v0.json")
+        smoke_summary = {
+            "ok": True,
+            "mode": "local-http-typescript-public-sdk-smoke",
+            "sdk_surface": "public",
+            "steps": {
+                "schema_apply": True,
+                "put": True,
+                "batch_ingest": True,
+                "patch": True,
+                "get": True,
+                "scan": True,
+                "query": True,
+                "explain": True,
+                "delete": True,
+                "idempotency": True,
+                "error_envelope": True,
+                "snapshot": True,
+                "restore": True,
+            },
+            "records_put": 1,
+            "records_inserted": 3,
+            "records_scanned": 3,
+            "patched_status": "reviewed",
+            "deleted_hidden": True,
+            "idempotency_replay_observed": True,
+            "idempotency_conflict_status": 409,
+            "error_envelope": {
+                "status": 400,
+                "error": "missing field `table`",
+                "code": "bad_request",
+                "method": "POST",
+                "path": "/v1/records/get",
+            },
+        }
+
+        surface = module.map_typescript_sdk_smoke_summary(manifest, smoke_summary)
+        scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
+
+        self.assertEqual(surface["surface"], "typescript_sdk")
         self.assertEqual(scenarios["schema_apply"]["status"], "passed")
         self.assertEqual(scenarios["put"]["status"], "passed")
         self.assertEqual(scenarios["batch"]["status"], "passed")
