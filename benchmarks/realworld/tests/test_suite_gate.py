@@ -206,6 +206,72 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(gate["status"], "usable")
         self.assertEqual(gate["claim_status"]["railway_endpoint_health"], "healthy")
 
+    def test_railway_stateful_smoke_failure_blocks_when_manifest_includes_probe(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [
+                    {
+                        "role": "tracedb",
+                        "service_id": "service_tracedb",
+                        "configured": True,
+                    }
+                ],
+                "stateful_smoke": {
+                    "status": "failed",
+                    "marker": {"table": "railway_stateful_markers", "id": "marker-123"},
+                    "errors": ["marker write was not visible"],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "failed")
+        self.assertTrue(
+            any("stateful smoke" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
+    def test_railway_stateful_smoke_is_recorded_when_probe_passes(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [
+                    {
+                        "role": "tracedb",
+                        "service_id": "service_tracedb",
+                        "configured": True,
+                    }
+                ],
+                "stateful_smoke": {
+                    "status": "passed",
+                    "marker": {"table": "railway_stateful_markers", "id": "marker-123"},
+                    "errors": [],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "passed")
+
     def test_gate_json_writer_persists_stable_artifact(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
         gate = build_suite_gate(

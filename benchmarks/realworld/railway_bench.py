@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from urllib import error as urlerror
@@ -69,6 +70,7 @@ def build_railway_manifest(
     *,
     suite_id: str,
     endpoint_health: Mapping[str, Any] | None = None,
+    stateful_smoke: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = validate_railway_config(config)
     services = []
@@ -107,6 +109,8 @@ def build_railway_manifest(
     }
     if endpoint_health is not None:
         manifest["endpoint_health"] = dict(endpoint_health)
+    if stateful_smoke is not None:
+        manifest["stateful_smoke"] = dict(stateful_smoke)
     return manifest
 
 
@@ -142,6 +146,110 @@ def run_railway_endpoint_health(
         "base_url": base_url,
         "checks": [ready],
         "errors": [] if ready["ok"] else [ready["error"]],
+    }
+
+
+def run_railway_stateful_smoke(
+    config: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 5.0,
+    bearer_token: str | None = None,
+    run_id: str = "",
+    marker_id: str | None = None,
+) -> dict[str, Any]:
+    base_url = _endpoint_base_url(config)
+    marker = _stateful_marker(run_id=run_id, marker_id=marker_id)
+    if not base_url:
+        return {
+            "status": "not_configured",
+            "base_url": "",
+            "marker": marker,
+            "operations": [],
+            "errors": ["no TraceDB Railway URL configured"],
+        }
+
+    schema = {
+        "name": marker["table"],
+        "primary_id_column": "id",
+        "tenant_id_column": "tenant",
+        "scalar_columns": ["kind", "run_id", "status", "marker_id"],
+        "text_indexed_columns": ["body"],
+        "vector_columns": [],
+    }
+    record = {
+        "table": marker["table"],
+        "id": marker["id"],
+        "tenant_id": marker["tenant_id"],
+        "fields": {
+            "id": marker["id"],
+            "tenant": marker["tenant_id"],
+            "kind": "railway_stateful_smoke",
+            "run_id": marker["run_id"],
+            "status": "written",
+            "marker_id": marker["id"],
+            "body": f"TraceDB Railway stateful smoke marker {marker['id']}",
+        },
+    }
+    get_request = {
+        "table": marker["table"],
+        "tenant_id": marker["tenant_id"],
+        "id": marker["id"],
+    }
+
+    operations = [
+        _request_json_operation(
+            "schema_apply",
+            base_url,
+            "POST",
+            "/v1/schema/apply",
+            schema,
+            timeout_seconds=timeout_seconds,
+            bearer_token=bearer_token,
+            idempotency_key=f"railway-smoke:{marker['id']}:schema",
+        )
+    ]
+    errors = [operation["error"] for operation in operations if not operation["ok"]]
+    if not errors:
+        operations.append(
+            _request_json_operation(
+                "record_put",
+                base_url,
+                "POST",
+                "/v1/records/put",
+                record,
+                timeout_seconds=timeout_seconds,
+                bearer_token=bearer_token,
+                idempotency_key=f"railway-smoke:{marker['id']}:put",
+            )
+        )
+        if not operations[-1]["ok"]:
+            errors.append(operations[-1]["error"])
+    if not errors:
+        operations.append(
+            _request_json_operation(
+                "record_get",
+                base_url,
+                "POST",
+                "/v1/records/get",
+                get_request,
+                timeout_seconds=timeout_seconds,
+                bearer_token=bearer_token,
+            )
+        )
+        if not operations[-1]["ok"]:
+            errors.append(operations[-1]["error"])
+        elif not _marker_visible(operations[-1].get("response"), marker):
+            errors.append("marker write was not visible")
+
+    status = "passed" if not errors else "failed"
+    if errors and any(operation.get("status_code") is None for operation in operations):
+        status = "unreachable"
+    return {
+        "status": status,
+        "base_url": base_url,
+        "marker": marker,
+        "operations": operations,
+        "errors": errors,
     }
 
 
@@ -220,3 +328,107 @@ def _probe_http_endpoint(
         "body_excerpt": body[:200],
         "error": "" if 200 <= status_code < 300 else f"HTTP {status_code}",
     }
+
+
+def _stateful_marker(*, run_id: str, marker_id: str | None) -> dict[str, str]:
+    fallback_id = datetime.now(timezone.utc).strftime("railway-smoke-%Y%m%d%H%M%S%f")
+    selected_run_id = run_id or fallback_id
+    selected_marker_id = marker_id or f"{_safe_token(selected_run_id)}-{fallback_id}"
+    return {
+        "table": "railway_stateful_markers",
+        "tenant_id": "railway-smoke",
+        "id": _safe_token(selected_marker_id),
+        "run_id": selected_run_id,
+    }
+
+
+def _safe_token(value: str) -> str:
+    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in value)[:96]
+
+
+def _request_json_operation(
+    name: str,
+    base_url: str,
+    method: str,
+    path: str,
+    body: Mapping[str, Any] | None,
+    *,
+    timeout_seconds: float,
+    bearer_token: str | None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    url = parse.urljoin(f"{base_url.rstrip('/')}/", path.lstrip("/"))
+    headers = {"Accept": "application/json"}
+    data = None
+    if body is not None:
+        data = json.dumps(body, sort_keys=True).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    req = request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as response:
+            raw_body = response.read(4096)
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            status_code = int(response.status)
+    except urlerror.HTTPError as error:
+        try:
+            raw_body = error.read(4096)
+            text = raw_body.decode("utf-8", errors="replace")
+        finally:
+            error.close()
+        return {
+            "name": name,
+            "method": method,
+            "path": path,
+            "status_code": int(error.code),
+            "ok": False,
+            "response": _decode_json_or_excerpt(text),
+            "error": f"HTTP {int(error.code)}",
+        }
+    except Exception as error:
+        return {
+            "name": name,
+            "method": method,
+            "path": path,
+            "status_code": None,
+            "ok": False,
+            "response": {},
+            "error": str(error),
+        }
+    return {
+        "name": name,
+        "method": method,
+        "path": path,
+        "status_code": status_code,
+        "ok": 200 <= status_code < 300,
+        "response": payload,
+        "error": "" if 200 <= status_code < 300 else f"HTTP {status_code}",
+    }
+
+
+def _decode_json_or_excerpt(text: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"body_excerpt": text[:200]}
+    return payload if isinstance(payload, dict) else {"body": payload}
+
+
+def _marker_visible(response: Any, marker: Mapping[str, str]) -> bool:
+    if not isinstance(response, dict):
+        return False
+    record = response.get("record")
+    if not isinstance(record, dict):
+        return False
+    fields = record.get("fields")
+    if not isinstance(fields, dict):
+        return False
+    return (
+        record.get("id") == marker["id"]
+        and record.get("tenant_id") == marker["tenant_id"]
+        and fields.get("marker_id") == marker["id"]
+        and fields.get("run_id") == marker["run_id"]
+    )

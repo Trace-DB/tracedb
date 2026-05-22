@@ -295,6 +295,7 @@ BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
   --suite-spec suites/railway_stateful.json \
   --railway-config-from-env \
   --railway-health-check \
+  --railway-stateful-smoke \
   --openrouter-mode off \
   --target tracedb \
   --surface sdk \
@@ -305,15 +306,20 @@ Missing Railway config blocks Railway-required specs. A configured manifest
 makes the gate usable. `--railway-health-check` additionally probes the TraceDB
 endpoint `/ready`, writes the result into `railway-manifest.json`, and blocks the
 gate if the requested probe is unhealthy or unreachable. This is live endpoint
-evidence only: it still does not create services, restart services, redeploy
-images, or validate persisted state. Backups, usage limits, SSH key setup,
-restart/redeploy execution, and restore validation remain required before the
-`railway_stateful`, `soak_railway`, or `release_100k` specs should be treated as
-full Railway product proof.
+evidence only. `--railway-stateful-smoke` applies a small marker schema, writes
+one marker record through `POST /v1/records/put`, reads it back through
+`POST /v1/records/get`, records the result as `stateful_smoke`, and blocks the
+gate if the requested marker is not visible. This proves live write/read
+behavior for the current endpoint only: it still does not create services,
+restart services, redeploy images, or prove volume survival across a restart.
+Backups, usage limits, SSH key setup, restart/redeploy execution, and restore
+validation remain required before the `railway_stateful`, `soak_railway`, or
+`release_100k` specs should be treated as full Railway product proof.
 
 The Modal `railway_stateful`, `soak_railway`, and `release_100k` presets pass
-both `--railway-config-from-env` and `--railway-health-check`, so scheduled or
-remote Railway lanes fail fast when the persistent lab is not reachable.
+`--railway-config-from-env`, `--railway-health-check`, and
+`--railway-stateful-smoke`, so scheduled or remote Railway lanes fail fast when
+the persistent lab is not reachable or cannot accept a marker write/read.
 
 ## Modal CPU/RAM Smoke
 

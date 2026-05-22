@@ -152,6 +152,11 @@ def build_suite_gate(
         blocking_failures.append(
             f"Railway endpoint health check failed with status={railway_endpoint_health}"
         )
+    railway_stateful_smoke = _railway_stateful_smoke_status(railway_manifest)
+    if railway_stateful_smoke not in {"not_checked", "passed"}:
+        blocking_failures.append(
+            f"Railway stateful smoke failed with status={railway_stateful_smoke}"
+        )
 
     if control_status == "external_control_unavailable" and not spec.requires_external_controls:
         warnings.append("external controls were requested but unavailable")
@@ -187,6 +192,7 @@ def build_suite_gate(
             "external_control_required": spec.requires_external_controls,
             "external_control_available": external_control_available,
             "railway_endpoint_health": railway_endpoint_health,
+            "railway_stateful_smoke": railway_stateful_smoke,
             "unsupported_coverage": spec.unsupported_coverage,
         },
         "artifact_paths": artifact_paths,
@@ -229,6 +235,16 @@ def _railway_endpoint_health_status(railway_manifest: dict[str, Any] | None) -> 
     if not isinstance(endpoint_health, dict):
         return "not_checked"
     status = endpoint_health.get("status")
+    return str(status) if status else "unknown"
+
+
+def _railway_stateful_smoke_status(railway_manifest: dict[str, Any] | None) -> str:
+    if not railway_manifest:
+        return "not_checked"
+    stateful_smoke = railway_manifest.get("stateful_smoke")
+    if not isinstance(stateful_smoke, dict):
+        return "not_checked"
+    status = stateful_smoke.get("status")
     return str(status) if status else "unknown"
 
 

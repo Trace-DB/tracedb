@@ -32,9 +32,46 @@ class ReadyHandler(BaseHTTPRequestHandler):
         return
 
 
+class StatefulSmokeHandler(ReadyHandler):
+    def do_POST(self) -> None:
+        body = self._read_body()
+        if self.path == "/v1/schema/apply":
+            self._send_json(200, {"epoch": 1})
+            return
+        if self.path == "/v1/records/put":
+            record = body.get("record", body)
+            self.server.records[(record["table"], record["tenant_id"], record["id"])] = {
+                "table": record["table"],
+                "tenant_id": record["tenant_id"],
+                "id": record["id"],
+                "fields": record["fields"],
+            }
+            self._send_json(200, {"epoch": 2})
+            return
+        if self.path == "/v1/records/get":
+            key = (body["table"], body["tenant_id"], body["id"])
+            self._send_json(200, {"record": self.server.records.get(key)})
+            return
+        self._send_json(404, {"error": "not found"})
+
+    def _read_body(self) -> dict:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        raw_body = self.rfile.read(content_length) if content_length else b"{}"
+        return json.loads(raw_body.decode("utf-8"))
+
+    def _send_json(self, status: int, payload: dict) -> None:
+        encoded = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
 class TestHttpServer:
-    def __init__(self) -> None:
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), ReadyHandler)
+    def __init__(self, handler: type[BaseHTTPRequestHandler] = ReadyHandler) -> None:
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.server.records = {}
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
 
@@ -298,6 +335,70 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(manifest["endpoint_health"]["status"], "healthy")
         self.assertEqual(manifest["endpoint_health"]["checks"][0]["status_code"], 200)
         self.assertEqual(gate["claim_status"]["railway_endpoint_health"], "healthy")
+        self.assertEqual(gate["status"], "usable")
+
+    def test_railway_stateful_smoke_writes_marker_result_into_manifest_and_gate(self) -> None:
+        with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": server.base_url,
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-stateful-smoke-suite-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/railway_stateful.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-stateful-smoke",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-stateful-smoke-suite-test"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+
+        self.assertEqual(manifest["stateful_smoke"]["status"], "passed")
+        self.assertEqual(
+            manifest["stateful_smoke"]["marker"]["table"],
+            "railway_stateful_markers",
+        )
+        self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "passed")
         self.assertEqual(gate["status"], "usable")
 
     def test_suite_report_marks_unavailable_external_controls(self) -> None:
