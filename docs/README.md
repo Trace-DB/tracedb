@@ -49,7 +49,9 @@ The `traceql_sqlish` lane now has native HTTP execution evidence through
 `traceql_query_from_str` and compiles it into `HybridQuery`. The same route now
 accepts the bounded SQL-ish adapter form `EXPLAIN? SELECT * FROM <table> WHERE
 tenant_id = <value> [AND field = value]* [LIMIT n]`; broader SQL,
-PostgreSQL compatibility, and GraphQL remain unimplemented.
+PostgreSQL compatibility, and GraphQL HTTP support remain unimplemented. The
+current GraphQL evidence is limited to the bounded `graphql_query_from_str`
+compiler primitive in `tracedb-query`.
 
 Local product smoke:
 

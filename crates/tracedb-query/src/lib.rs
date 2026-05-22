@@ -3295,6 +3295,473 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
     })
 }
 
+/// Parses TraceDB's bounded GraphQL adapter query form into `HybridQuery`.
+/// This is a compiler primitive only, not a resolver runtime or GraphQL server.
+pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
+    let body = graphql_operation_body(input)?;
+    let (table, arguments) = graphql_root_selection(body)?;
+    let argument_pairs = split_graphql_top_level(arguments, ',')?;
+
+    let mut tenant_id = None;
+    let mut text = None;
+    let mut vector = None;
+    let mut scalar_eq = Map::new();
+    let mut top_k = 10;
+    let mut freshness = FreshnessMode::Strict;
+    let mut explain = false;
+    let mut seen = BTreeSet::new();
+
+    for argument in argument_pairs {
+        let argument = argument.trim();
+        if argument.is_empty() {
+            continue;
+        }
+        let (name, value) = split_graphql_name_value(argument)?;
+        let canonical_name = match name {
+            "tenant_id" | "tenant" => "tenant_id",
+            "where" | "filter" => "where",
+            "match" | "text" => "match",
+            "near" | "vector" => "near",
+            other => other,
+        };
+        if !seen.insert(canonical_name.to_string()) {
+            return Err(invalid_graphql_adapter(format!(
+                "argument {canonical_name:?} cannot be specified more than once"
+            )));
+        }
+        match name {
+            "tenant_id" | "tenant" => {
+                tenant_id = Some(parse_graphql_string(value, "tenant_id")?);
+            }
+            "where" | "filter" => {
+                let predicates = parse_graphql_scalar_object(value, "where")?;
+                for (key, value) in predicates {
+                    if scalar_eq.insert(key.clone(), value).is_some() {
+                        return Err(invalid_graphql_adapter(format!(
+                            "where field {key:?} cannot be specified more than once"
+                        )));
+                    }
+                }
+            }
+            "match" | "text" => {
+                text = Some(parse_graphql_string(value, name)?);
+            }
+            "near" | "vector" => {
+                vector = Some(parse_graphql_vector(value, name)?);
+            }
+            "limit" => {
+                top_k = parse_graphql_limit(value)?;
+            }
+            "freshness" => {
+                freshness = parse_graphql_freshness(value)?;
+            }
+            "explain" => {
+                explain = parse_graphql_bool(value, "explain")?;
+            }
+            _ => {
+                return Err(invalid_graphql_adapter(format!(
+                    "unknown root argument {name:?}"
+                )));
+            }
+        }
+    }
+
+    Ok(HybridQuery {
+        table: table.to_string(),
+        tenant_id: tenant_id.ok_or_else(|| invalid_graphql_adapter("tenant_id is required"))?,
+        text,
+        vector,
+        scalar_eq,
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k,
+        freshness,
+        explain,
+    })
+}
+
+fn graphql_operation_body(input: &str) -> Result<&str> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(invalid_graphql_adapter("query cannot be empty"));
+    }
+    let Some(open_index) = input.find('{') else {
+        return Err(invalid_graphql_adapter("query selection set is required"));
+    };
+    let prefix = input[..open_index].trim();
+    if !prefix.is_empty() {
+        let mut tokens = prefix.split_whitespace();
+        let operation = tokens.next().unwrap_or_default();
+        if operation != "query" {
+            return Err(invalid_graphql_adapter(
+                "only query operations are supported; mutations and subscriptions are not adapters",
+            ));
+        }
+        if prefix.contains('(') {
+            return Err(invalid_graphql_adapter(
+                "operation variables are not supported by the bounded adapter",
+            ));
+        }
+        if let Some(operation_name) = tokens.next() {
+            let valid_name = take_graphql_identifier(operation_name)
+                .is_some_and(|(_, rest)| rest.trim().is_empty());
+            if !valid_name {
+                return Err(invalid_graphql_adapter(
+                    "operation name must be a GraphQL identifier",
+                ));
+            }
+        }
+        if tokens.next().is_some() {
+            return Err(invalid_graphql_adapter(
+                "operation directives are not supported by the bounded adapter",
+            ));
+        }
+    }
+    let close_index = matching_graphql_delimiter(input, open_index, '{', '}')
+        .ok_or_else(|| invalid_graphql_adapter("query selection set is not closed"))?;
+    if !input[close_index + 1..].trim().is_empty() {
+        return Err(invalid_graphql_adapter(
+            "unexpected content after query selection set",
+        ));
+    }
+    Ok(&input[open_index + 1..close_index])
+}
+
+fn graphql_root_selection(body: &str) -> Result<(&str, &str)> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(invalid_graphql_adapter("one root field is required"));
+    }
+    if body.starts_with("...") {
+        return Err(invalid_graphql_adapter("fragments are not supported"));
+    }
+
+    let (table, rest) = take_graphql_identifier(body)
+        .ok_or_else(|| invalid_graphql_adapter("root field is required"))?;
+    if table.starts_with("__") {
+        return Err(invalid_graphql_adapter(
+            "introspection fields are not supported",
+        ));
+    }
+    let rest = rest.trim_start();
+    if rest.starts_with(':') {
+        return Err(invalid_graphql_adapter("root aliases are not supported"));
+    }
+    if !rest.starts_with('(') {
+        return Err(invalid_graphql_adapter("root field arguments are required"));
+    }
+    let argument_offset = body.len() - rest.len();
+    let argument_end = matching_graphql_delimiter(body, argument_offset, '(', ')')
+        .ok_or_else(|| invalid_graphql_adapter("root field arguments are not closed"))?;
+    let arguments = &body[argument_offset + 1..argument_end];
+    let rest = body[argument_end + 1..].trim_start();
+    if !rest.starts_with('{') {
+        return Err(invalid_graphql_adapter(
+            "root field selection set is required",
+        ));
+    }
+    let selection_offset = body.len() - rest.len();
+    let selection_end = matching_graphql_delimiter(body, selection_offset, '{', '}')
+        .ok_or_else(|| invalid_graphql_adapter("root field selection set is not closed"))?;
+    let selection_body = body[selection_offset + 1..selection_end].trim();
+    if selection_body.is_empty() {
+        return Err(invalid_graphql_adapter(
+            "root field selection set cannot be empty",
+        ));
+    }
+    if selection_body.contains("...") {
+        return Err(invalid_graphql_adapter("fragments are not supported"));
+    }
+    if !body[selection_end + 1..].trim().is_empty() {
+        return Err(invalid_graphql_adapter(
+            "exactly one root field is supported",
+        ));
+    }
+    Ok((table, arguments))
+}
+
+fn take_graphql_identifier(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim_start();
+    let mut chars = input.char_indices();
+    let (_, first) = chars.next()?;
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return None;
+    }
+    let mut end = first.len_utf8();
+    for (index, ch) in chars {
+        if ch == '_' || ch.is_ascii_alphanumeric() {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    Some((&input[..end], &input[end..]))
+}
+
+fn split_graphql_top_level(input: &str, separator: char) -> Result<Vec<&str>> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut paren_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '(' => paren_depth += 1,
+            ')' => {
+                paren_depth = paren_depth.checked_sub(1).ok_or_else(|| {
+                    invalid_graphql_adapter("unexpected closing parenthesis in argument value")
+                })?;
+            }
+            '{' => brace_depth += 1,
+            '}' => {
+                brace_depth = brace_depth.checked_sub(1).ok_or_else(|| {
+                    invalid_graphql_adapter("unexpected closing brace in argument value")
+                })?;
+            }
+            '[' => bracket_depth += 1,
+            ']' => {
+                bracket_depth = bracket_depth.checked_sub(1).ok_or_else(|| {
+                    invalid_graphql_adapter("unexpected closing bracket in argument value")
+                })?;
+            }
+            _ if ch == separator && paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
+                parts.push(input[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if in_string || paren_depth != 0 || brace_depth != 0 || bracket_depth != 0 {
+        return Err(invalid_graphql_adapter("unterminated argument value"));
+    }
+    parts.push(input[start..].trim());
+    Ok(parts)
+}
+
+fn split_graphql_name_value(input: &str) -> Result<(&str, &str)> {
+    let Some(index) = top_level_graphql_separator(input, ':') else {
+        return Err(invalid_graphql_adapter("arguments must use name: value"));
+    };
+    let name = input[..index].trim();
+    let value = input[index + 1..].trim();
+    if take_graphql_identifier(name).is_none_or(|(_, rest)| !rest.trim().is_empty()) {
+        return Err(invalid_graphql_adapter(
+            "argument name must be an identifier",
+        ));
+    }
+    if value.is_empty() {
+        return Err(invalid_graphql_adapter(format!(
+            "argument {name:?} value cannot be empty"
+        )));
+    }
+    Ok((name, value))
+}
+
+fn top_level_graphql_separator(input: &str, separator: char) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            _ if ch == separator && paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
+                return Some(index);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn matching_graphql_delimiter(
+    input: &str,
+    open_index: usize,
+    open: char,
+    close: char,
+) -> Option<usize> {
+    if !input[open_index..].starts_with(open) {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in input[open_index..].char_indices() {
+        let index = open_index + index;
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+        } else if ch == open {
+            depth += 1;
+        } else if ch == close {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn parse_graphql_scalar_object(input: &str, name: &str) -> Result<Map<String, Value>> {
+    let input = input.trim();
+    if !input.starts_with('{') {
+        return Err(invalid_graphql_adapter(format!("{name} must be an object")));
+    }
+    let close_index = matching_graphql_delimiter(input, 0, '{', '}')
+        .ok_or_else(|| invalid_graphql_adapter(format!("{name} object is not closed")))?;
+    if !input[close_index + 1..].trim().is_empty() {
+        return Err(invalid_graphql_adapter(format!(
+            "unexpected content after {name} object"
+        )));
+    }
+    let mut output = Map::new();
+    for entry in split_graphql_top_level(&input[1..close_index], ',')? {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (field, value) = split_graphql_name_value(entry)?;
+        if output
+            .insert(field.to_string(), parse_graphql_value(value)?)
+            .is_some()
+        {
+            return Err(invalid_graphql_adapter(format!(
+                "{name} field {field:?} cannot be specified more than once"
+            )));
+        }
+    }
+    Ok(output)
+}
+
+fn parse_graphql_string(input: &str, name: &str) -> Result<String> {
+    match parse_graphql_value(input)? {
+        Value::String(value) if !value.is_empty() => Ok(value),
+        _ => Err(invalid_graphql_adapter(format!(
+            "{name} must be a non-empty string"
+        ))),
+    }
+}
+
+fn parse_graphql_vector(input: &str, name: &str) -> Result<Vec<f32>> {
+    let value = parse_graphql_value(input)?;
+    let vector = value_as_f32_vec(&value)
+        .ok_or_else(|| invalid_graphql_adapter(format!("{name} must be a numeric vector array")))?;
+    if vector.is_empty() {
+        return Err(invalid_graphql_adapter(format!(
+            "{name} vector cannot be empty"
+        )));
+    }
+    Ok(vector)
+}
+
+fn parse_graphql_limit(input: &str) -> Result<usize> {
+    let value = parse_graphql_value(input)?;
+    let limit = match value {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok()),
+        _ => None,
+    }
+    .ok_or_else(|| invalid_graphql_adapter("limit must be a positive integer"))?;
+    if limit == 0 {
+        return Err(invalid_graphql_adapter("limit must be greater than zero"));
+    }
+    Ok(limit)
+}
+
+fn parse_graphql_bool(input: &str, name: &str) -> Result<bool> {
+    match parse_graphql_value(input)? {
+        Value::Bool(value) => Ok(value),
+        _ => Err(invalid_graphql_adapter(format!("{name} must be a boolean"))),
+    }
+}
+
+fn parse_graphql_freshness(input: &str) -> Result<FreshnessMode> {
+    let raw = match parse_graphql_value(input)? {
+        Value::String(value) => value,
+        _ => {
+            return Err(invalid_graphql_adapter(
+                "freshness must be STRICT, LAZY, or ALLOW_DIRTY",
+            ));
+        }
+    };
+    match raw.to_ascii_uppercase().as_str() {
+        "STRICT" => Ok(FreshnessMode::Strict),
+        "LAZY" => Ok(FreshnessMode::Lazy),
+        "ALLOW_DIRTY" | "ALLOWDIRTY" | "ALLOW-DIRTY" => Ok(FreshnessMode::AllowDirty),
+        _ => Err(invalid_graphql_adapter(
+            "freshness must be STRICT, LAZY, or ALLOW_DIRTY",
+        )),
+    }
+}
+
+fn parse_graphql_value(input: &str) -> Result<Value> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(invalid_graphql_adapter("value cannot be empty"));
+    }
+    if input.starts_with('{') {
+        return Err(invalid_graphql_adapter(
+            "nested objects are only supported for where/filter",
+        ));
+    }
+    match serde_json::from_str::<Value>(input) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if input.starts_with('"') || input.ends_with('"') {
+                Err(invalid_graphql_adapter(format!(
+                    "quoted value must be valid JSON: {error}"
+                )))
+            } else {
+                Ok(Value::String(input.to_string()))
+            }
+        }
+    }
+}
+
 fn starts_with_sqlish_select(input: &str) -> bool {
     strip_sqlish_keyword_prefix(input, "SELECT").is_some()
         || strip_sqlish_keyword_prefix(input, "EXPLAIN")
@@ -3706,6 +4173,10 @@ fn invalid_sqlish(message: impl Into<String>) -> TraceDbError {
     TraceDbError::InvalidCommand(format!("invalid SQL-ish: {}", message.into()))
 }
 
+fn invalid_graphql_adapter(message: impl Into<String>) -> TraceDbError {
+    TraceDbError::InvalidCommand(format!("invalid GraphQL adapter: {}", message.into()))
+}
+
 pub fn value_object(fields: &[(&str, Value)]) -> Map<String, Value> {
     fields
         .iter()
@@ -3885,6 +4356,92 @@ mod tests {
         assert!(
             matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("SQL-ish"))
         );
+    }
+
+    #[test]
+    fn graphql_query_string_compiles_to_hybrid_query() {
+        let query = graphql_query_from_str(
+            r#"
+            query SearchDocs {
+              docs(
+                tenant_id: "tenant-a",
+                where: { category: "code", status: "reviewed" },
+                match: "TraceDB",
+                near: [1.0, 0.0, 0.0],
+                limit: 7,
+                freshness: ALLOW_DIRTY,
+                explain: true
+              ) {
+                record_id
+                fields
+                score
+              }
+            }
+            "#,
+        )
+        .expect("bounded GraphQL query");
+
+        assert_eq!(query.table, "docs");
+        assert_eq!(query.tenant_id, "tenant-a");
+        assert_eq!(query.scalar_eq.get("category"), Some(&json!("code")));
+        assert_eq!(query.scalar_eq.get("status"), Some(&json!("reviewed")));
+        assert_eq!(query.text.as_deref(), Some("TraceDB"));
+        assert_eq!(query.vector, Some(vec![1.0, 0.0, 0.0]));
+        assert_eq!(query.top_k, 7);
+        assert_eq!(query.freshness, FreshnessMode::AllowDirty);
+        assert!(query.explain);
+    }
+
+    #[test]
+    fn graphql_query_rejects_mutation_resolver_model() {
+        let error = graphql_query_from_str(
+            r#"
+            mutation {
+              putDoc(table: "docs", tenant_id: "tenant-a", id: "intro") {
+                record_id
+              }
+            }
+            "#,
+        )
+        .expect_err("mutations should not be accepted by the query adapter");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("invalid GraphQL adapter"))
+        );
+    }
+
+    #[test]
+    fn graphql_query_rejects_resolver_specific_features() {
+        for query in [
+            r#"
+            query {
+              docsAlias: docs(tenant_id: "tenant-a") {
+                record_id
+              }
+            }
+            "#,
+            r#"
+            query {
+              docs(tenant_id: "tenant-a") {
+                ...DocFields
+              }
+            }
+            "#,
+            r#"
+            query {
+              docs(tenant_id: "tenant-a", tenant: "tenant-b") {
+                record_id
+              }
+            }
+            "#,
+        ] {
+            let error =
+                graphql_query_from_str(query).expect_err("resolver-specific GraphQL rejected");
+
+            assert!(
+                matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("invalid GraphQL adapter"))
+            );
+        }
     }
 
     #[test]

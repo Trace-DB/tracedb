@@ -160,7 +160,7 @@ covered through `TraceDbClient::traceql_typed`; `typescript-sdk-conformance`
 proved `typescript_sdk` at 13/13; and `python-sdk-conformance` proved
 `python_sdk` at 13/13 with installed-package TraceQL result and explain
 evidence. This is SDK conformance evidence, not managed-cloud proof, SQL
-compatibility, GraphQL, or benchmark evidence.
+compatibility, GraphQL HTTP support, or benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -376,7 +376,7 @@ compact, snapshot, restore, and admin jobs. `python3
 scripts/platform_conformance.py --surface python_sdk --summary-json
 /tmp/tracedb-python-sdk-conformance.json` maps that smoke into all required v0
 contract scenarios. This is sync SDK contract evidence, not PyPI readiness,
-async support, managed-cloud proof, SQL compatibility, or GraphQL support.
+async support, managed-cloud proof, SQL compatibility, or GraphQL HTTP support.
 
 Native TraceQL now executes through the canonical HTTP surface:
 `POST /v1/traceql` accepts `{ "query": string }`, parses line-oriented `FROM`,
@@ -393,9 +393,11 @@ passes that scenario through `/v1/traceql`, the Rust SDK lane passes it through
 `TraceDB.traceql()`, and the Python SDK lane passes it through the sync
 `TraceDB.traceql()` helper. It also has a dedicated partial `traceql_sqlish`
 lane that checks bounded SQL-ish query, explain, and error behavior while
-leaving schema/write/admin scenarios `not_checked`. This is TraceQL/query-adapter execution evidence
-only; SQL compatibility, PostgreSQL compatibility, and GraphQL remain
-unimplemented.
+leaving schema/write/admin scenarios `not_checked`. This is
+TraceQL/query-adapter execution evidence only; SQL compatibility, PostgreSQL
+compatibility, and GraphQL HTTP support remain unimplemented. The current
+GraphQL evidence is limited to the bounded `graphql_query_from_str` compiler
+primitive in `tracedb-query`.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

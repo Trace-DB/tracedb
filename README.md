@@ -36,6 +36,9 @@ all required v0 scenarios. The SQL-ish lane is intentionally partial: it checks
 query, TraceQL string execution, explain, and error-envelope behavior, while
 schema/write/admin scenarios remain explicit `not_checked` results until that
 adapter surface owns more semantics.
+GraphQL has a bounded `graphql_query_from_str` compiler primitive in
+`tracedb-query`, but there is still no GraphQL HTTP endpoint, schema generator,
+resolver runtime, or conformance lane.
 
 ## Quickstart
 
@@ -496,9 +499,8 @@ temporary pip `--target` install. The HTTP smoke starts a local `tracedb-server`
 and proves all required v0 contract scenarios for the Python surface. The
 `python_sdk` conformance lane runs that smoke with the package installed into an
 isolated temporary pip `--target`, so source-tree imports cannot mask SDK drift.
-This is sync SDK contract evidence, not PyPI
-readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
-support.
+This is sync SDK contract evidence, not PyPI readiness, async support,
+managed-cloud proof, SQL compatibility, or GraphQL HTTP support.
 
 Native TraceQL now executes through the canonical HTTP surface:
 `POST /v1/traceql` accepts `{ "query": string }`, parses line-oriented `FROM`,
@@ -515,9 +517,11 @@ through `TraceDbClient::traceql_typed`, the TypeScript SDK lane passes it
 through the public `TraceDB.traceql()` helper, and the Python SDK lane passes it
 through the sync `TraceDB.traceql()` helper. The dedicated `traceql_sqlish`
 lane checks the bounded SQL-ish adapter against the same scenario manifest as a
-partial surface. This is TraceQL/query-adapter
-execution evidence only; SQL compatibility, PostgreSQL compatibility, and
-GraphQL remain unimplemented.
+partial surface. This is TraceQL/query-adapter execution evidence only; SQL
+compatibility, PostgreSQL compatibility, and GraphQL HTTP support remain
+unimplemented; the current GraphQL evidence is limited to the bounded
+`graphql_query_from_str` compiler primitive in
+`tracedb-query`.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and
