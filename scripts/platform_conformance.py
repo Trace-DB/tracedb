@@ -531,15 +531,33 @@ def map_rust_sdk_product_summary(
     step = product_summary.get("steps", {}).get("rust_sdk_quickstart", {})
     quickstart = step.get("summary", {})
     quickstart_steps = quickstart.get("steps", {})
+    error_envelope = quickstart.get("error_envelope", {})
+    records_put = quickstart.get("records_put")
 
     def step_passed(name: str) -> bool:
         return step.get("ok") is True and quickstart.get("ok") is True and quickstart_steps.get(name) is True
+
+    def error_envelope_passed() -> bool:
+        return (
+            step_passed("error_envelope")
+            and isinstance(error_envelope, dict)
+            and isinstance(error_envelope.get("status"), int)
+            and error_envelope["status"] >= 400
+            and isinstance(error_envelope.get("error"), str)
+            and bool(error_envelope["error"])
+        )
 
     scenario_map = {
         "schema_apply": passed("schema_apply", "rust_sdk_quickstart steps.schema_apply")
         if step_passed("schema_apply")
         else failed("schema_apply", RuntimeError("Rust SDK quickstart schema_apply did not pass")),
-        "put": not_checked("put", "Rust SDK quickstart currently exercises batch ingest, not single-record put"),
+        "put": passed(
+            "put",
+            "rust_sdk_quickstart steps.put",
+            {"records_put": records_put, "put_epoch": quickstart.get("put_epoch")},
+        )
+        if step_passed("put") and isinstance(records_put, int) and records_put >= 1
+        else failed("put", RuntimeError("Rust SDK quickstart single-record put evidence missing")),
         "batch": passed("batch", "rust_sdk_quickstart steps.batch_ingest")
         if step_passed("batch_ingest")
         else failed("batch", RuntimeError("Rust SDK quickstart batch_ingest did not pass")),
@@ -564,7 +582,9 @@ def map_rust_sdk_product_summary(
         "idempotency": passed("idempotency", "rust_sdk_quickstart idempotency_keys")
         if quickstart.get("idempotency_keys") is True and quickstart.get("idempotency_retries", 0) >= 1
         else failed("idempotency", RuntimeError("Rust SDK quickstart idempotency evidence missing")),
-        "errors": not_checked("errors", "Rust SDK quickstart does not intentionally exercise non-2xx error envelopes"),
+        "errors": passed("errors", "rust_sdk_quickstart error_envelope", dict(error_envelope))
+        if error_envelope_passed()
+        else failed("errors", RuntimeError("Rust SDK quickstart error envelope evidence missing")),
         "snapshot_restore": passed("snapshot_restore", "rust_sdk_quickstart admin snapshot/restore")
         if step_passed("snapshot") and step_passed("restore")
         else failed("snapshot_restore", RuntimeError("Rust SDK quickstart snapshot/restore did not pass")),

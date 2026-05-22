@@ -74,11 +74,13 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["steps"]["catalog"], true);
     assert_eq!(summary["steps"]["metrics"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
+    assert_eq!(summary["steps"]["put"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["query"], true);
     assert_eq!(summary["steps"]["scan"], true);
     assert_eq!(summary["steps"]["delete"], true);
+    assert_eq!(summary["steps"]["error_envelope"], true);
     assert_eq!(summary["steps"]["compact"], true);
     assert_eq!(summary["steps"]["snapshot"], true);
     assert_eq!(summary["steps"]["restore"], true);
@@ -94,8 +96,15 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["admin"]["restore"], true);
     assert_eq!(summary["idempotency_retries"], 1);
     assert_eq!(summary["idempotency_keys"], true);
+    assert_eq!(summary["records_put"], 1);
+    assert_eq!(summary["records_batched"], 2);
+    assert_eq!(summary["records_inserted"], 3);
+    assert_eq!(summary["records_scanned"], 3);
     assert_eq!(summary["patched"], true);
     assert_eq!(summary["patched_status"], "reviewed");
+    assert_eq!(summary["error_envelope"]["status"], 400);
+    assert_eq!(summary["error_envelope"]["method"], "POST");
+    assert_eq!(summary["error_envelope"]["path"], "/v1/records/get");
     let snapshot_target = summary["snapshot_target"]
         .as_str()
         .expect("snapshot target path");
@@ -113,7 +122,7 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     let restored_scan = restored
         .scan(RecordScanRequest::new("docs", "tenant-a").limit(10))
         .expect("scan restored database");
-    assert_eq!(restored_scan.returned_count, 1);
+    assert_eq!(restored_scan.returned_count, 2);
     assert_eq!(summary["sql_module"], "not_implemented");
 }
 
@@ -168,11 +177,13 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["steps"]["catalog"], true);
     assert_eq!(summary["steps"]["metrics"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
+    assert_eq!(summary["steps"]["put"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["query"], true);
     assert_eq!(summary["steps"]["scan"], true);
     assert_eq!(summary["steps"]["delete"], true);
+    assert_eq!(summary["steps"]["error_envelope"], true);
     assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["steps"]["snapshot"], false);
     assert_eq!(summary["steps"]["restore"], false);
@@ -188,8 +199,18 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["admin"]["restore"], "skipped");
     assert_eq!(summary["idempotency_retries"], 0);
     assert_eq!(summary["idempotency_keys"], false);
+    assert_eq!(summary["records_put"], 1);
+    assert_eq!(summary["records_batched"], 2);
+    assert_eq!(summary["records_inserted"], 3);
+    assert_eq!(summary["records_scanned"], 3);
     assert_eq!(summary["patched"], true);
     assert_eq!(summary["patched_status"], "reviewed");
+    assert_eq!(summary["error_envelope"]["status"], 400);
+    assert_eq!(summary["error_envelope"]["method"], "POST");
+    assert_eq!(summary["error_envelope"]["path"], "/v1/records/get");
+    assert!(summary["error_envelope"]["error"]
+        .as_str()
+        .is_some_and(|error| !error.is_empty()));
     assert!(summary["snapshot_target"].is_null());
     assert!(summary["restore_target"].is_null());
     assert_eq!(summary["sql_module"], "not_implemented");
@@ -248,9 +269,11 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["steps"]["catalog"], true);
     assert_eq!(summary["steps"]["metrics"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);
+    assert_eq!(summary["steps"]["put"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["delete"], true);
+    assert_eq!(summary["steps"]["error_envelope"], true);
     assert_eq!(summary["steps"]["compact"], false);
     assert_eq!(summary["steps"]["jobs"], true);
     assert_eq!(summary["admin"]["requested"], false);
@@ -258,6 +281,10 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["admin"]["snapshot"], "skipped");
     assert_eq!(summary["admin"]["restore"], "skipped");
     assert_eq!(summary["health_ok"], true);
+    assert_eq!(summary["records_put"], 1);
+    assert_eq!(summary["records_batched"], 2);
+    assert_eq!(summary["records_inserted"], 3);
+    assert_eq!(summary["error_envelope"]["status"], 400);
     assert_eq!(summary["sql_module"], "not_implemented");
 }
 

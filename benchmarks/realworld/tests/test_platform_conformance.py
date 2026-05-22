@@ -63,17 +63,26 @@ class PlatformConformanceTests(unittest.TestCase):
                         "mode": "rust-sdk-quickstart",
                         "steps": {
                             "schema_apply": True,
+                            "put": True,
                             "batch_ingest": True,
                             "patch": True,
                             "scan": True,
                             "query": True,
                             "explain": True,
                             "delete": True,
+                            "error_envelope": True,
                             "snapshot": True,
                             "restore": True,
                         },
                         "patched_status": "reviewed",
                         "deleted_hidden": True,
+                        "records_put": 1,
+                        "put_epoch": 2,
+                        "error_envelope": {
+                            "status": 400,
+                            "error": "missing field `table`",
+                            "code": "bad_request",
+                        },
                         "idempotency_keys": True,
                         "idempotency_retries": 1,
                     },
@@ -92,8 +101,8 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["delete"]["status"], "passed")
         self.assertEqual(scenarios["idempotency"]["status"], "passed")
         self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
-        self.assertEqual(scenarios["put"]["status"], "not_checked")
-        self.assertEqual(scenarios["errors"]["status"], "not_checked")
+        self.assertEqual(scenarios["put"]["status"], "passed")
+        self.assertEqual(scenarios["errors"]["status"], "passed")
 
     def test_writes_report_summary_for_selected_surfaces(self) -> None:
         module = load_module()

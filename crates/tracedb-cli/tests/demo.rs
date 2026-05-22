@@ -714,10 +714,12 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["steps"]["catalog"], true);
     assert_eq!(sdk_summary["steps"]["metrics"], true);
     assert_eq!(sdk_summary["steps"]["schema_apply"], true);
+    assert_eq!(sdk_summary["steps"]["put"], true);
     assert_eq!(sdk_summary["steps"]["batch_ingest"], true);
     assert_eq!(sdk_summary["steps"]["patch"], true);
     assert_eq!(sdk_summary["steps"]["query"], true);
     assert_eq!(sdk_summary["steps"]["delete"], true);
+    assert_eq!(sdk_summary["steps"]["error_envelope"], true);
     assert_eq!(sdk_summary["steps"]["compact"], true);
     assert_eq!(sdk_summary["steps"]["snapshot"], true);
     assert_eq!(sdk_summary["steps"]["restore"], true);
@@ -731,8 +733,15 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["admin"]["compact"], true);
     assert_eq!(sdk_summary["admin"]["snapshot"], true);
     assert_eq!(sdk_summary["admin"]["restore"], true);
+    assert_eq!(sdk_summary["records_put"], 1);
+    assert_eq!(sdk_summary["records_batched"], 2);
+    assert_eq!(sdk_summary["records_inserted"], 3);
+    assert_eq!(sdk_summary["records_scanned"], 3);
     assert_eq!(sdk_summary["patched"], true);
     assert_eq!(sdk_summary["patched_status"], "reviewed");
+    assert_eq!(sdk_summary["error_envelope"]["status"], 400);
+    assert_eq!(sdk_summary["error_envelope"]["method"], "POST");
+    assert_eq!(sdk_summary["error_envelope"]["path"], "/v1/records/get");
     assert_eq!(sdk_summary["sql_module"], "not_implemented");
     let snapshot_target = sdk_summary["snapshot_target"]
         .as_str()

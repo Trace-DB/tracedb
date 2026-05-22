@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,8 @@ use tracedb_query::{
     RecordPatchRequest, RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
-    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbRequestOptions,
+    ErrorResponse, RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig,
+    TraceDbClientError, TraceDbRequestOptions,
 };
 
 fn main() {
@@ -71,6 +72,12 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         Some(options) => client.apply_schema_typed_with_options(&schema_request, options)?,
         None => client.apply_schema_typed(&schema_request)?,
     };
+    let put_record = record("put", "tenant-a", "single record put path", [0.6, 0.4, 0.0]);
+    let put_options = idempotency_options(idempotency_run_id.as_deref(), "put-single");
+    let put = match put_options.as_ref() {
+        Some(options) => client.put_typed_with_options(&put_record, options)?,
+        None => client.put_typed(&put_record)?,
+    };
     let batch = RecordPutBatchRequest::new(vec![
         record(
             "intro",
@@ -102,6 +109,7 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         None => client.delete_typed(&delete_request)?,
     };
     let deleted = client.get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "ops"))?;
+    let error_envelope = error_envelope_smoke(&client)?;
     let admin = args
         .admin_dir
         .as_ref()
@@ -127,12 +135,14 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         "catalog": true,
         "metrics": metrics.latest_epoch.is_some(),
         "schema_apply": true,
+        "put": true,
         "batch_ingest": true,
         "patch": true,
         "scan": true,
         "query": true,
         "explain": true,
         "delete": true,
+        "error_envelope": true,
         "jobs": true,
         "compact": admin.as_ref().map(|admin| admin.compacted).unwrap_or(false),
         "snapshot": admin.as_ref().map(|admin| admin.snapshot).unwrap_or(false),
@@ -155,7 +165,10 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         "metrics_latest_epoch": metrics.latest_epoch,
         "admin_job_count": jobs.jobs.len(),
         "schema_epoch": schema.epoch,
-        "records_inserted": ingest.record_count,
+        "put_epoch": put.epoch,
+        "records_put": 1,
+        "records_batched": ingest.record_count,
+        "records_inserted": ingest.record_count + 1,
         "patched": patch.epoch > schema.epoch,
         "patched_status": patched
             .record
@@ -167,6 +180,7 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         "explain_returned_count": explain.returned_count,
         "deleted": delete.deleted,
         "deleted_hidden": deleted.record.is_none(),
+        "error_envelope": error_envelope,
         "snapshot_target": admin.as_ref().map(|admin| admin.snapshot_target.as_str()),
         "restore_target": admin.as_ref().map(|admin| admin.restore_target.as_str()),
         "idempotency_retries": args.idempotency_retries.unwrap_or(0),
@@ -223,12 +237,14 @@ impl QuickstartFailure {
             "catalog": false,
             "metrics": false,
             "schema_apply": false,
+            "put": false,
             "batch_ingest": false,
             "patch": false,
             "scan": false,
             "query": false,
             "explain": false,
             "delete": false,
+            "error_envelope": false,
             "jobs": false,
             "compact": false,
             "snapshot": false,
@@ -560,6 +576,40 @@ fn record(id: &str, tenant: &str, body: &str, embedding: [f32; 3]) -> RecordInpu
         .expect("object fields")
         .clone(),
     }
+}
+
+fn error_envelope_smoke(client: &TraceDbClient) -> Result<Value, Box<dyn Error>> {
+    match client.request_json("POST", "/v1/records/get", Some(&json!({}))) {
+        Ok(value) => Err(quickstart_error(format!(
+            "expected /v1/records/get error envelope, got success response {value}"
+        ))),
+        Err(TraceDbClientError::HttpStatus {
+            method,
+            path,
+            status,
+            body,
+        }) if status == 400 => {
+            let envelope: ErrorResponse = serde_json::from_str(&body)?;
+            if envelope.error.trim().is_empty() {
+                return Err(quickstart_error("error envelope had an empty error field"));
+            }
+            Ok(json!({
+                "status": status,
+                "method": method,
+                "path": path,
+                "error": envelope.error,
+                "code": envelope.code,
+            }))
+        }
+        Err(error) => Err(Box::new(error)),
+    }
+}
+
+fn quickstart_error(message: impl Into<String>) -> Box<dyn Error> {
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        message.into(),
+    ))
 }
 
 fn patch_request() -> RecordPatchRequest {

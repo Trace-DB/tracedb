@@ -35,6 +35,8 @@ and GraphQL parity work.
 `scripts/platform_conformance.py` is the first executable harness over that
 manifest. It currently runs `http_direct` through raw HTTP requests and maps
 the existing Rust SDK quickstart product path into `rust_sdk` scenario results.
+Both current lanes cover all required v0 scenarios; unimplemented future lanes
+must keep explicit `not_checked` results until they reach parity.
 
 Local product smoke:
 

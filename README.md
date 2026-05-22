@@ -24,8 +24,9 @@ python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk
 
 It reads `docs/platform-contract-v0.json`, drives a raw HTTP `http_direct` lane
 against `tracedb-server`, reuses the Rust SDK quickstart product path for the
-`rust_sdk` lane, and emits one JSON report with explicit `not_checked`
-scenarios where a surface is not yet complete.
+`rust_sdk` lane, and emits one JSON report. The current HTTP direct and Rust
+SDK lanes cover all required v0 scenarios; future lanes must use explicit
+`not_checked` markers until they exercise the same contract IDs.
 
 ## Quickstart
 
@@ -281,12 +282,14 @@ steps. The SDK also exposes typed local admin helpers for compact, snapshot, and
 restore. Its JSON summary uses a stable operator envelope with
 `mode: "rust-sdk-quickstart"`, `server_url`, optional `database_id` /
 `branch_id`, `table`, `tenant_id`, and a structured `admin` object that reports
-whether compact, snapshot, and restore were requested or skipped. Configuration
-failures such as an invalid `--url`, invalid retry count, or relative
-`--admin-dir` also emit a parseable `ok: false` JSON summary on stdout with the
-same mode, endpoint metadata, `error.kind`, `error.message`, false step statuses,
-and `sql_module: not_implemented`, while stderr keeps the short human-readable
-error line.
+whether compact, snapshot, and restore were requested or skipped. The quickstart
+also reports `records_put`, `records_batched`, and an `error_envelope` sample so
+the platform conformance runner can prove single-record put and SDK error
+parsing. Configuration failures such as an invalid `--url`, invalid retry count,
+or relative `--admin-dir` also emit a parseable `ok: false` JSON summary on
+stdout with the same mode, endpoint metadata, `error.kind`, `error.message`,
+false step statuses, and `sql_module: not_implemented`, while stderr keeps the
+short human-readable error line.
 
 The current versioned HTTP route reference is in `docs/api/v1-http.md`; the
 machine-readable OpenAPI artifact is `docs/api/v1-openapi.json`. A checked

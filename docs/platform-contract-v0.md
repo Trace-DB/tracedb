@@ -111,8 +111,10 @@ python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk
 
 The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`.
 The `rust_sdk` lane maps the existing Rust SDK quickstart product path into the
-same manifest scenario IDs. Scenarios that are not yet exercised by a surface
-are reported as `not_checked` rather than silently treated as success.
+same manifest scenario IDs. The current executable lanes cover all required v0
+scenarios for HTTP direct and Rust SDK, including single-record put and parsed
+error-envelope evidence. Future surfaces must report unimplemented scenarios as
+`not_checked` rather than silently treating them as success.
 
 ## Surface Implementation Rules
 

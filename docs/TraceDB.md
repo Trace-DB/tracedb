@@ -185,15 +185,19 @@ TRACEDB_URL=https://<endpoint> TRACEDB_TOKEN=$TRACEDB_TOKEN TRACEDB_DATABASE_ID=
 ```
 
 The SDK quickstart uses typed convenience response methods, including typed
-health, catalog, metrics, admin-jobs, patch, and query rows, over the current
-HTTP JSON shapes. It accepts `--timeout-ms` for the blocking SDK request timeout,
-`--safe-retries` for bounded health/read route retries, `--idempotency-retries` /
-`TRACEDB_IDEMPOTENCY_RETRIES` for idempotency-key-gated write/admin retries, and
-optional `--admin-dir` to run compact/snapshot/restore against an absolute
-server-side local scratch directory. The quickstart checks diagnostics before
-the write path, patches a record, verifies patched visibility before
-scan/query/delete, and generates per-run idempotency keys for that mutation when
-idempotency retries are enabled. The admin path is interpreted by the
+health, catalog, metrics, admin-jobs, single-record put, batch ingest, patch,
+and query rows, over the current HTTP JSON shapes. It accepts `--timeout-ms` for
+the blocking SDK request timeout, `--safe-retries` for bounded health/read route
+retries, `--idempotency-retries` / `TRACEDB_IDEMPOTENCY_RETRIES` for
+idempotency-key-gated write/admin retries, and optional `--admin-dir` to run
+compact/snapshot/restore against an absolute server-side local scratch
+directory. The quickstart checks diagnostics before the write path, writes one
+record through typed `put`, batch-ingests two more records, patches a record,
+verifies patched visibility before scan/query/delete, and generates per-run
+idempotency keys for those mutations when idempotency retries are enabled. It
+also intentionally exercises one non-2xx server response and reports the parsed
+`error_envelope` so SDK error behavior is conformance-visible. The admin path is
+interpreted by the
 `tracedb-server` process, and restore creates a separate database directory
 instead of replacing the running server.
 `TraceDbRequestOptions` can manually attach `Idempotency-Key` to individual
