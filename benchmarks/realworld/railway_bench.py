@@ -614,6 +614,10 @@ def build_railway_operator_runbook(
     marker_id: str = "",
     operation: str = "restart",
     runner_command: str = "python3 -m runner",
+    runbook_json: str = "",
+    runbook_verification_json: str = "",
+    runbook_verification_md: str = "",
+    suite_baseline_dir: str = "",
 ) -> dict[str, Any]:
     validation = validate_railway_config(config)
     safe_suite_id = _safe_token(suite_id) or "railway-runbook"
@@ -629,6 +633,15 @@ def build_railway_operator_runbook(
     pre_run_id = f"{safe_suite_id}-pre"
     post_run_id = f"{safe_suite_id}-post"
     pre_manifest_path = pre_manifest_json or f"{reports_dir}/{pre_run_id}/railway-manifest.json"
+    runbook_path = runbook_json or f"{reports_dir}/{safe_suite_id}/railway-runbook.json"
+    runbook_verification_path = (
+        runbook_verification_json
+        or f"{reports_dir}/{safe_suite_id}/railway-runbook-verification.json"
+    )
+    runbook_verification_markdown_path = (
+        runbook_verification_md
+        or f"{reports_dir}/{safe_suite_id}/railway-runbook-verification.md"
+    )
     marker = marker_id or "<marker-id-from-pre-manifest>"
     service_id = str(config.get("tracedb_service_id", ""))
     operator_command = (
@@ -794,6 +807,62 @@ def build_railway_operator_runbook(
             ]
         )
 
+    final_suite_args = [
+        "suite",
+        "--suite-spec",
+        suite_spec_path,
+        "--run-id",
+        safe_suite_id,
+        "--reports-dir",
+        reports_dir,
+        "--railway-config-from-env",
+        "--railway-health-check",
+        "--railway-stateful-smoke",
+        "--railway-snapshot-restore-check",
+        "--railway-verify-restored-marker",
+        "--railway-restart-redeploy-plan",
+        "--railway-runbook-verification-json",
+        runbook_verification_path,
+        "--railway-require-runbook-verification",
+        "--openrouter-mode",
+        "off",
+        "--target",
+        target,
+        "--surface",
+        surface,
+        "--scenarios",
+        scenarios,
+    ]
+    if backup_required:
+        final_suite_args.extend(["--railway-backup-receipt-json", backup_receipt_path])
+    if suite_baseline_dir:
+        final_suite_args.extend(["--suite-baseline-dir", suite_baseline_dir])
+    commands.extend(
+        [
+            _runbook_command(
+                name="runbook_verification",
+                purpose="Verify required Railway proof artifacts before the final suite gate.",
+                command=_runner_shell_command(
+                    runner_command,
+                    [
+                        "railway-runbook-verify",
+                        "--runbook-json",
+                        runbook_path,
+                        "--output-json",
+                        runbook_verification_path,
+                        "--output-md",
+                        runbook_verification_markdown_path,
+                    ],
+                ),
+            ),
+            _runbook_command(
+                name="verified_suite_gate",
+                purpose="Run the full suite after runbook verification is complete.",
+                command=_runner_shell_command(runner_command, final_suite_args),
+            ),
+        ]
+    )
+
     return _redact_sensitive(
         {
             "kind": "railway_operator_runbook",
@@ -819,14 +888,19 @@ def build_railway_operator_runbook(
                 "operation_receipt": operation_required,
                 "pre_operation_marker": operation_required,
                 "post_operation_marker": operation_required,
+                "runbook_verification": True,
             },
             "artifact_paths": {
+                "runbook_json": runbook_path,
+                "runbook_verification_json": runbook_verification_path,
+                "runbook_verification_md": runbook_verification_markdown_path,
                 "backup_receipt_json": backup_receipt_path if backup_required else "",
                 "operation_receipt_json": operation_receipt_path if operation_required else "",
                 "pre_manifest_json": pre_manifest_path if operation_required else "",
                 "preflight_suite_dir": f"{reports_dir}/{safe_suite_id}-preflight",
                 "pre_operation_suite_dir": f"{reports_dir}/{pre_run_id}" if operation_required else "",
                 "post_operation_suite_dir": f"{reports_dir}/{post_run_id}" if operation_required else "",
+                "final_suite_dir": f"{reports_dir}/{safe_suite_id}",
             },
             "commands": commands,
             "claim_boundary": "runbook_only_not_executed_no_railway_mutation_or_backup_proof",

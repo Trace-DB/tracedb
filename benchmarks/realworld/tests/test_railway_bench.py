@@ -629,6 +629,9 @@ class RailwayBenchTests(unittest.TestCase):
                 "backup_required": True,
                 "restart_required": True,
             },
+            runbook_json="reports/soak-runbook/railway-runbook.json",
+            runbook_verification_json="reports/soak-runbook/railway-runbook-verification.json",
+            suite_baseline_dir="reports/history",
         )
         commands = {command["name"]: command for command in runbook["commands"]}
 
@@ -636,6 +639,7 @@ class RailwayBenchTests(unittest.TestCase):
         self.assertEqual(runbook["status"], "ready")
         self.assertTrue(runbook["required_evidence"]["backup_receipt"])
         self.assertTrue(runbook["required_evidence"]["operation_receipt"])
+        self.assertTrue(runbook["required_evidence"]["runbook_verification"])
         self.assertIn("--preflight-only", commands["preflight_gate"]["command"])
         self.assertIn(
             "--railway-backup-receipt-json reports/soak-runbook/railway-backup-receipt.json",
@@ -653,6 +657,23 @@ class RailwayBenchTests(unittest.TestCase):
             "--railway-persistence-pre-manifest-json reports/soak-runbook-pre/railway-manifest.json",
             commands["post_operation_marker"]["command"],
         )
+        self.assertIn(
+            "railway-runbook-verify --runbook-json reports/soak-runbook/railway-runbook.json",
+            commands["runbook_verification"]["command"],
+        )
+        self.assertIn(
+            "--railway-runbook-verification-json reports/soak-runbook/railway-runbook-verification.json",
+            commands["verified_suite_gate"]["command"],
+        )
+        self.assertIn(
+            "--suite-baseline-dir reports/history",
+            commands["verified_suite_gate"]["command"],
+        )
+        self.assertEqual(
+            runbook["artifact_paths"]["runbook_verification_json"],
+            "reports/soak-runbook/railway-runbook-verification.json",
+        )
+        self.assertEqual(runbook["artifact_paths"]["final_suite_dir"], "reports/soak-runbook")
         self.assertIn("runbook_only", runbook["claim_boundary"])
         self.assertNotIn("railway-token-secret", repr(runbook))
 

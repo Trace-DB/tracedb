@@ -1028,6 +1028,10 @@ class SuiteReportingTests(unittest.TestCase):
                     "soak-runbook",
                     "--reports-dir",
                     str(reports),
+                    "--runbook-verification-json",
+                    str(reports / "soak-runbook" / "railway-runbook-verification.json"),
+                    "--suite-baseline-dir",
+                    str(reports),
                     "--output-json",
                     str(output_json),
                     "--output-md",
@@ -1052,6 +1056,9 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("railway-backup-receipt", markdown)
         self.assertIn("railway restart --service service_tracedb", markdown)
         self.assertIn("--railway-stateful-read-only", markdown)
+        self.assertIn("railway-runbook-verify", markdown)
+        self.assertIn("--railway-runbook-verification-json", markdown)
+        self.assertIn("--suite-baseline-dir", markdown)
         self.assertNotIn("railway-token-secret", repr(runbook))
         self.assertNotIn("railway-token-secret", markdown)
 

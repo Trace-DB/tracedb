@@ -410,13 +410,16 @@ Generate the complete non-mutating operator command chain with
 `railway-runbook` before scheduling a backup/restart/redeploy lane. It writes
 JSON and Markdown artifacts with the suite preflight command, backup receipt
 command when required, pre-operation marker command, manual Railway operation
-hint, operation receipt command, and post-operation read-only persistence check:
+hint, operation receipt command, post-operation read-only persistence check,
+runbook verification command, and final verified suite command:
 
 ```bash
 python3 -m runner railway-runbook \
   --suite-spec suites/soak_railway.json \
   --suite-id soak-railway-operator-check \
   --reports-dir reports \
+  --runbook-verification-json reports/soak-railway-operator-check/railway-runbook-verification.json \
+  --suite-baseline-dir reports \
   --output-json reports/soak-railway-operator-check/railway-runbook.json \
   --output-md reports/soak-railway-operator-check/railway-runbook.md
 ```
@@ -439,6 +442,11 @@ then reports `complete` or `blocked` with `missing_steps`, `failed_steps`, and
 `stale_steps`. It is proof-of-artifacts only: it never creates backups,
 restarts services, redeploys code, or turns plan-only evidence into persistence
 proof.
+The generated runbook now includes this verification command plus a
+`verified_suite_gate` command that consumes the verifier with
+`--railway-runbook-verification-json`, requires it with
+`--railway-require-runbook-verification`, and includes `--suite-baseline-dir`
+when configured so the final lane compares against rolling suite history.
 Feed a completed verification artifact into a suite gate with
 `--railway-runbook-verification-json`. Add
 `--railway-require-runbook-verification` when the lane must stop before child

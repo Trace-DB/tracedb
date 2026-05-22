@@ -310,6 +310,9 @@ def main(argv: list[str] | None = None) -> int:
     railway_runbook.add_argument("--pre-manifest-json", default="")
     railway_runbook.add_argument("--marker-id", default="")
     railway_runbook.add_argument("--operation", choices=["restart", "redeploy"], default="restart")
+    railway_runbook.add_argument("--runbook-verification-json", default="")
+    railway_runbook.add_argument("--runbook-verification-md", default="")
+    railway_runbook.add_argument("--suite-baseline-dir", default="")
     railway_runbook.add_argument("--output-json", default="reports/railway-runbook.json")
     railway_runbook.add_argument("--output-md", default="reports/railway-runbook.md")
 
@@ -539,6 +542,10 @@ def run_railway_runbook(args: argparse.Namespace) -> int:
         pre_manifest_json=args.pre_manifest_json,
         marker_id=args.marker_id,
         operation=args.operation,
+        runbook_json=args.output_json,
+        runbook_verification_json=args.runbook_verification_json,
+        runbook_verification_md=args.runbook_verification_md,
+        suite_baseline_dir=args.suite_baseline_dir,
     )
     output_json = _resolve_path(lab_root, args.output_json)
     output_md = _resolve_path(lab_root, args.output_md)
