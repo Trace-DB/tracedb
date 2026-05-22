@@ -881,6 +881,9 @@
           },
           "target": {
             "type": "string"
+          },
+          "verify_record": {
+            "$ref": "#/components/schemas/RecordGetRequest"
           }
         },
         "type": "object"
@@ -896,6 +899,39 @@
             "type": "string"
           },
           "target": {
+            "type": "string"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/RestoreVerification"
+          }
+        },
+        "type": "object"
+      },
+      "RestoreVerification": {
+        "additionalProperties": true,
+        "description": "Optional restored-target record verification.",
+        "properties": {
+          "record": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecordOutput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "record_visible": {
+            "type": "boolean"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RecordGetRequest"
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed"
+            ],
             "type": "string"
           }
         },

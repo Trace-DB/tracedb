@@ -481,8 +481,20 @@ fn handle_inner(
                     "restore target is required",
                 ))
             })?;
-            TraceDb::restore_snapshot(source, target).map_err(to_io_error)?;
-            ok(json!({ "restored": true, "source": source, "target": target }))
+            let restored = TraceDb::restore_snapshot(source, target).map_err(to_io_error)?;
+            let mut response = json!({ "restored": true, "source": source, "target": target });
+            if let Some(verify_record) = value.get("verify_record") {
+                let request: RecordGetRequest =
+                    serde_json::from_value(verify_record.clone()).map_err(to_io_error)?;
+                let record = restored.get(request.clone()).map_err(to_io_error)?;
+                response["verification"] = json!({
+                    "status": if record.is_some() { "passed" } else { "failed" },
+                    "record_visible": record.is_some(),
+                    "request": request,
+                    "record": record,
+                });
+            }
+            ok(response)
         }
         ("GET", "/v1/admin/jobs") => ok(json!({
             "jobs": [

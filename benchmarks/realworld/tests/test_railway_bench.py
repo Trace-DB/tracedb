@@ -131,14 +131,22 @@ class SnapshotRestoreHandler(StatefulSmokeHandler):
             self._send_json(200, {"snapshot": True, "target": body["target"]})
             return
         if self.path == "/v1/admin/restore":
-            self._send_json(
-                200,
-                {
-                    "restored": True,
-                    "source": body["source"],
-                    "target": body["target"],
-                },
-            )
+            payload = {
+                "restored": True,
+                "source": body["source"],
+                "target": body["target"],
+            }
+            if "verify_record" in body:
+                payload["verification"] = {
+                    "status": "passed",
+                    "record_visible": True,
+                    "record": {
+                        "table": body["verify_record"]["table"],
+                        "tenant_id": body["verify_record"]["tenant_id"],
+                        "id": body["verify_record"]["id"],
+                    },
+                }
+            self._send_json(200, payload)
             return
         return super().do_POST()
 
@@ -445,6 +453,7 @@ class RailwayBenchTests(unittest.TestCase):
                 marker_id="marker-123",
                 timeout_seconds=1.0,
                 bearer_token="gateway-secret-token",
+                verify_restored_marker=True,
             )
 
         self.assertEqual(result["status"], "passed", result)
@@ -458,6 +467,8 @@ class RailwayBenchTests(unittest.TestCase):
         )
         self.assertEqual([op["name"] for op in result["operations"]], ["snapshot", "restore"])
         self.assertTrue(all(op["ok"] for op in result["operations"]))
+        self.assertEqual(result["restored_read"]["status"], "passed")
+        self.assertTrue(result["restored_read"]["record_visible"])
         self.assertIn("not_managed_backup_dr", result["claim_boundary"])
         self.assertNotIn("gateway-secret-token", repr(result))
         self.assertNotIn("railway-token-secret", repr(result))

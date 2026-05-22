@@ -58,14 +58,22 @@ class StatefulSmokeHandler(ReadyHandler):
             self._send_json(200, {"snapshot": True, "target": body["target"]})
             return
         if self.path == "/v1/admin/restore":
-            self._send_json(
-                200,
-                {
-                    "restored": True,
-                    "source": body["source"],
-                    "target": body["target"],
-                },
-            )
+            payload = {
+                "restored": True,
+                "source": body["source"],
+                "target": body["target"],
+            }
+            if "verify_record" in body:
+                payload["verification"] = {
+                    "status": "passed",
+                    "record_visible": True,
+                    "record": {
+                        "table": body["verify_record"]["table"],
+                        "tenant_id": body["verify_record"]["tenant_id"],
+                        "id": body["verify_record"]["id"],
+                    },
+                }
+            self._send_json(200, payload)
             return
         self._send_json(404, {"error": "not found"})
 
@@ -462,6 +470,7 @@ class SuiteReportingTests(unittest.TestCase):
                     "--railway-config-from-env",
                     "--railway-stateful-smoke",
                     "--railway-snapshot-restore-check",
+                    "--railway-verify-restored-marker",
                 ],
                 cwd=LAB_ROOT,
                 env=env,
@@ -477,15 +486,22 @@ class SuiteReportingTests(unittest.TestCase):
             artifacts = json.loads((suite_dir / "railway-artifacts.json").read_text())
 
         self.assertEqual(manifest["snapshot_restore"]["status"], "passed")
+        self.assertEqual(manifest["snapshot_restore"]["restored_read"]["status"], "passed")
+        self.assertTrue(manifest["snapshot_restore"]["restored_read"]["record_visible"])
         self.assertEqual(
             manifest["snapshot_restore"]["paths"]["snapshot"],
             "/srv/tracedb-admin/railway-snapshot-restore-suite-test/"
             f"{manifest['stateful_smoke']['marker']['id']}/snapshot",
         )
         self.assertEqual(gate["claim_status"]["railway_snapshot_restore"], "passed")
+        self.assertEqual(gate["claim_status"]["railway_restored_read"], "passed")
         self.assertEqual(gate["status"], "usable")
         self.assertEqual(
             artifacts["railway_claim_status"]["snapshot_restore"],
+            "passed",
+        )
+        self.assertEqual(
+            artifacts["railway_claim_status"]["restored_read"],
             "passed",
         )
         self.assertNotIn("railway-token-secret", repr(manifest))

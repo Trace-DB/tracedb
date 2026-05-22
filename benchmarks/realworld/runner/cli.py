@@ -138,6 +138,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Override TRACEDB_RAILWAY_SNAPSHOT_ROOT for the server-side snapshot/restore scratch path.",
     )
     suite.add_argument(
+        "--railway-verify-restored-marker",
+        action="store_true",
+        help="Ask /v1/admin/restore to read the stateful smoke marker from the restored target.",
+    )
+    suite.add_argument(
         "--railway-restart-redeploy-plan",
         action="store_true",
         help="Record a non-mutating Railway restart/redeploy readiness plan in railway-manifest.json.",
@@ -774,6 +779,7 @@ def _load_or_write_railway_manifest(
                 run_id=suite_id,
                 marker_id=snapshot_marker_id or args.railway_stateful_marker_id or None,
                 snapshot_root=args.railway_snapshot_root or None,
+                verify_restored_marker=args.railway_verify_restored_marker,
             )
             if args.railway_snapshot_restore_check
             else None

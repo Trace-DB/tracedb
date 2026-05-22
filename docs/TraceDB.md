@@ -237,7 +237,9 @@ also intentionally exercises one non-2xx server response and reports the parsed
 `error_envelope` so SDK error behavior is conformance-visible. The admin path is
 interpreted by the
 `tracedb-server` process, and restore creates a separate database directory
-instead of replacing the running server.
+instead of replacing the running server. Restore requests may include
+`verify_record` to read a marker from the restored target and return a
+`verification` object without promoting that target to the live service.
 `TraceDbRequestOptions` can manually attach `Idempotency-Key` to individual
 write/admin requests. The SDK also exposes typed local admin helpers for
 compact, snapshot, and restore. The quickstart JSON summary now uses the same

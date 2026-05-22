@@ -169,6 +169,7 @@ def build_railway_artifact_manifest(
             "endpoint_health": claim_status.get("railway_endpoint_health", "not_checked"),
             "stateful_smoke": claim_status.get("railway_stateful_smoke", "not_checked"),
             "snapshot_restore": claim_status.get("railway_snapshot_restore", "not_checked"),
+            "restored_read": claim_status.get("railway_restored_read", "not_checked"),
             "restart_redeploy": claim_status.get("railway_restart_redeploy", "not_checked"),
             "persistence": claim_status.get("railway_persistence", "not_checked"),
         },
@@ -590,10 +591,16 @@ def run_railway_snapshot_restore_check(
     run_id: str = "",
     marker_id: str | None = None,
     snapshot_root: str | None = None,
+    verify_restored_marker: bool = False,
 ) -> dict[str, Any]:
     base_url = _endpoint_base_url(config)
     selected_root = str(snapshot_root or config.get("tracedb_snapshot_root") or "").rstrip("/")
     marker = _stateful_marker(run_id=run_id, marker_id=marker_id)
+    restored_read_not_checked = {
+        "status": "not_checked",
+        "record_visible": False,
+        "errors": [],
+    }
     if not base_url:
         return {
             "kind": "railway_snapshot_restore_check",
@@ -602,6 +609,7 @@ def run_railway_snapshot_restore_check(
             "snapshot_root": selected_root,
             "marker": marker,
             "paths": {},
+            "restored_read": restored_read_not_checked,
             "operations": [],
             "errors": ["no TraceDB Railway URL configured"],
             "claim_boundary": "not_checked_no_snapshot_restore_or_backup_dr_proof",
@@ -614,6 +622,7 @@ def run_railway_snapshot_restore_check(
             "snapshot_root": "",
             "marker": marker,
             "paths": {},
+            "restored_read": restored_read_not_checked,
             "operations": [],
             "errors": [
                 "TRACEDB_RAILWAY_SNAPSHOT_ROOT or TRACEDB_REMOTE_SNAPSHOT_ROOT is required"
@@ -628,6 +637,7 @@ def run_railway_snapshot_restore_check(
             "snapshot_root": selected_root,
             "marker": marker,
             "paths": {},
+            "restored_read": restored_read_not_checked,
             "operations": [],
             "errors": ["snapshot root must be an absolute server-side path"],
             "claim_boundary": "not_checked_no_snapshot_restore_or_backup_dr_proof",
@@ -641,6 +651,7 @@ def run_railway_snapshot_restore_check(
             "snapshot_root": selected_root,
             "marker": marker,
             "paths": {},
+            "restored_read": restored_read_not_checked,
             "operations": [],
             "errors": ["snapshot root must differ from the configured Railway volume path"],
             "claim_boundary": "not_checked_no_snapshot_restore_or_backup_dr_proof",
@@ -672,14 +683,22 @@ def run_railway_snapshot_restore_check(
         if response.get("snapshot") is not True or response.get("target") != snapshot_dir:
             errors.append("snapshot response did not confirm the requested target")
 
+    restored_read = dict(restored_read_not_checked)
     if not errors:
+        restore_body = {"source": snapshot_dir, "target": restore_dir}
+        if verify_restored_marker:
+            restore_body["verify_record"] = {
+                "table": marker["table"],
+                "tenant_id": marker["tenant_id"],
+                "id": marker["id"],
+            }
         operations.append(
             _request_json_operation(
                 "restore",
                 base_url,
                 "POST",
                 "/v1/admin/restore",
-                {"source": snapshot_dir, "target": restore_dir},
+                restore_body,
                 timeout_seconds=timeout_seconds,
                 bearer_token=bearer_token,
                 idempotency_key=f"railway-restore:{safe_run_id}:{safe_marker_id}",
@@ -695,6 +714,31 @@ def run_railway_snapshot_restore_check(
                 or response.get("target") != restore_dir
             ):
                 errors.append("restore response did not confirm the requested source and target")
+            if verify_restored_marker:
+                verification = _dict_value(response.get("verification"))
+                record = _dict_value(verification.get("record"))
+                record_visible = (
+                    verification.get("status") == "passed"
+                    and verification.get("record_visible") is True
+                    and record.get("id") == marker["id"]
+                    and record.get("tenant_id") == marker["tenant_id"]
+                    and record.get("table") == marker["table"]
+                )
+                restored_read = {
+                    "status": "passed" if record_visible else "failed",
+                    "record_visible": record_visible,
+                    "request": {
+                        "table": marker["table"],
+                        "tenant_id": marker["tenant_id"],
+                        "id": marker["id"],
+                    },
+                    "record": record,
+                    "errors": []
+                    if record_visible
+                    else ["restore verification did not return the requested marker"],
+                }
+                if not record_visible:
+                    errors.append("restored marker was not visible in restore verification")
 
     status = "passed" if not errors else "failed"
     if errors and any(operation.get("status_code") is None for operation in operations):
@@ -709,9 +753,12 @@ def run_railway_snapshot_restore_check(
             "snapshot": snapshot_dir,
             "restore": restore_dir,
         },
+        "restored_read": restored_read,
         "operations": operations,
         "errors": errors,
-        "claim_boundary": "admin_route_snapshot_restore_not_managed_backup_dr_or_restored_service_read_proof",
+        "claim_boundary": "admin_route_snapshot_restore_not_managed_backup_dr"
+        if verify_restored_marker
+        else "admin_route_snapshot_restore_not_managed_backup_dr_or_restored_service_read_proof",
     }
 
 
@@ -762,12 +809,10 @@ def _artifact_proof_gaps(claim_status: Mapping[str, Any]) -> list[str]:
         gaps.append("snapshot_restore_admin_route_only_not_managed_backup_dr")
     else:
         gaps.append("snapshot_restore_not_checked")
-    gaps.extend(
-        [
-            "backup_validation_not_checked",
-            "artifact_manifest_not_live_restore_proof",
-        ]
-    )
+    restored_read_status = claim_status.get("railway_restored_read", "not_checked")
+    if restored_read_status != "passed":
+        gaps.append("restored_read_not_checked")
+    gaps.append("backup_validation_not_checked")
     return gaps
 
 

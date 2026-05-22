@@ -569,23 +569,30 @@ fn snapshot_typed_posts_target_and_decodes_response() {
 #[test]
 fn restore_typed_posts_source_target_and_decodes_response() {
     let (url, request_body) = capture_json_body_response_server(
-        r#"{"restored":true,"source":"/tmp/tracedb-snapshot","target":"/tmp/tracedb-restore"}"#,
+        r#"{"restored":true,"source":"/tmp/tracedb-snapshot","target":"/tmp/tracedb-restore","verification":{"status":"passed","record_visible":true,"record":{"table":"docs","id":"a","tenant_id":"tenant-a","version_id":1,"fields":{"id":"a"}}}}"#,
     );
     let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
     let response = client
-        .restore_typed(&RestoreRequest::new(
-            "/tmp/tracedb-snapshot",
-            "/tmp/tracedb-restore",
-        ))
+        .restore_typed(
+            &RestoreRequest::new("/tmp/tracedb-snapshot", "/tmp/tracedb-restore")
+                .verify_record(RecordGetRequest::new("docs", "tenant-a", "a")),
+        )
         .expect("restore");
     let body = request_body.join().expect("request body");
 
     assert!(response.restored);
     assert_eq!(response.source, "/tmp/tracedb-snapshot");
     assert_eq!(response.target, "/tmp/tracedb-restore");
+    let verification = response.verification.expect("restore verification");
+    assert_eq!(verification.status, "passed");
+    assert!(verification.record_visible);
+    assert_eq!(verification.record.expect("verified record").id, "a");
     assert_eq!(body["source"], "/tmp/tracedb-snapshot");
     assert_eq!(body["target"], "/tmp/tracedb-restore");
+    assert_eq!(body["verify_record"]["table"], "docs");
+    assert_eq!(body["verify_record"]["tenant_id"], "tenant-a");
+    assert_eq!(body["verify_record"]["id"], "a");
 }
 
 #[test]

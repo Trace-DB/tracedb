@@ -295,6 +295,39 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
         r#"{}"#,
         "\"compacted\":true",
     );
+    let snapshot_dir = temp.path().join("http-snapshot");
+    let restore_dir = temp.path().join("http-restore");
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/admin/snapshot",
+        &json!({ "target": snapshot_dir }).to_string(),
+        "\"snapshot\":true",
+    );
+    let restore_response = http_response(
+        addr,
+        "POST",
+        "/v1/admin/restore",
+        &json!({
+            "source": snapshot_dir,
+            "target": restore_dir,
+            "verify_record": {
+                "table": "docs",
+                "tenant_id": "tenant-a",
+                "id": "a"
+            }
+        })
+        .to_string(),
+    );
+    assert!(
+        restore_response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected restore response: {restore_response}"
+    );
+    let restore_json = http_json_body(&restore_response);
+    assert_eq!(restore_json["restored"], json!(true));
+    assert_eq!(restore_json["verification"]["status"], json!("passed"));
+    assert_eq!(restore_json["verification"]["record_visible"], json!(true));
+    assert_eq!(restore_json["verification"]["record"]["id"], json!("a"));
     assert_http_contains(addr, "GET", "/v1/admin/jobs", "", "tracedb.segment.compact");
     let missing_response = http_response(addr, "GET", "/v1/missing", "");
     assert!(

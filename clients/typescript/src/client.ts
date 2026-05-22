@@ -389,12 +389,21 @@ export interface RecordScanRequest extends JsonObject {
 export interface RestoreRequest extends JsonObject {
   source?: string;
   target?: string;
+  verify_record?: RecordGetRequest;
 }
 
 export interface RestoreResponse extends JsonObject {
   restored?: boolean;
   source?: string;
   target?: string;
+  verification?: RestoreVerification;
+}
+
+export interface RestoreVerification extends JsonObject {
+  record?: RecordOutput | null;
+  record_visible?: boolean;
+  request?: RecordGetRequest;
+  status?: string;
 }
 
 export interface SnapshotRequest extends JsonObject {

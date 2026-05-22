@@ -1379,6 +1379,8 @@ pub struct SnapshotResponse {
 pub struct RestoreRequest {
     pub source: String,
     pub target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_record: Option<RecordGetRequest>,
 }
 
 impl RestoreRequest {
@@ -1386,15 +1388,33 @@ impl RestoreRequest {
         Self {
             source: source.into(),
             target: target.into(),
+            verify_record: None,
         }
+    }
+
+    pub fn verify_record(mut self, request: RecordGetRequest) -> Self {
+        self.verify_record = Some(request);
+        self
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RestoreResponse {
     pub restored: bool,
     pub source: String,
     pub target: String,
+    #[serde(default)]
+    pub verification: Option<RestoreVerification>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RestoreVerification {
+    pub status: String,
+    pub record_visible: bool,
+    #[serde(default)]
+    pub request: Option<RecordGetRequest>,
+    #[serde(default)]
+    pub record: Option<RecordOutput>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -264,7 +264,7 @@ claims.
 | --- | --- | --- |
 | `POST /v1/admin/compact` | Empty JSON object. | `{ "compacted": true }`. |
 | `POST /v1/admin/snapshot` | `{ "target": "/path/to/snapshot" }`. | `{ "snapshot": true, "target": string }`. |
-| `POST /v1/admin/restore` | `{ "source": "/path/to/snapshot", "target": "/path/to/restore" }`. | `{ "restored": true, "source": string, "target": string }`. |
+| `POST /v1/admin/restore` | `{ "source": "/path/to/snapshot", "target": "/path/to/restore" }`, optionally with `verify_record` as a `RecordGetRequest`. | `{ "restored": true, "source": string, "target": string }`, optionally with `verification: { "status": "passed"|"failed", "record_visible": boolean, "request": RecordGetRequest, "record": RecordOutput|null }`. |
 | `GET /v1/admin/jobs` | No body. | Idle job queue state for segment compaction, snapshot creation, and feature indexing. |
 
 Admin routes can mutate durable files or create out-of-band filesystem state.
@@ -277,9 +277,9 @@ when the individual request includes an `Idempotency-Key`; `safe_retries` alone
 never retries admin requests.
 
 The Rust SDK provides typed `SnapshotRequest`, `SnapshotResponse`,
-`RestoreRequest`, and `RestoreResponse` wrappers plus raw/typed snapshot and
-restore helpers over these local admin routes. The wire contract remains JSON
-string paths.
+`RestoreRequest`, `RestoreResponse`, and optional `RestoreVerification` wrappers
+plus raw/typed snapshot and restore helpers over these local admin routes. The
+wire contract remains JSON string paths plus an optional restored-record check.
 
 ## Minimal Product Path
 

@@ -205,6 +205,7 @@ class ModalBenchTests(unittest.TestCase):
         config = _parse_args(
             [
                 "--railway-snapshot-restore-check",
+                "--railway-verify-restored-marker",
                 "--railway-snapshot-root",
                 "/srv/tracedb-admin",
                 "--run-id",
@@ -214,8 +215,10 @@ class ModalBenchTests(unittest.TestCase):
         command = build_suite_command(config)
 
         self.assertTrue(config.railway_snapshot_restore_check)
+        self.assertTrue(config.railway_verify_restored_marker)
         self.assertEqual(config.railway_snapshot_root, "/srv/tracedb-admin")
         self.assertIn("--railway-snapshot-restore-check", command)
+        self.assertIn("--railway-verify-restored-marker", command)
         self.assertIn("--railway-snapshot-root", command)
         self.assertEqual(command[command.index("--railway-snapshot-root") + 1], "/srv/tracedb-admin")
 

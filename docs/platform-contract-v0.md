@@ -104,7 +104,7 @@ and must not invent surface-specific semantics.
 | Delete | `delete` | `POST /v1/records/delete` | Hides deleted records from get, scan, query, and explain materialization. |
 | Idempotency | `idempotency` | `Idempotency-Key` on mutation/admin routes | Same key plus same method/path/body replays; same key with different body returns `409`. |
 | Errors | `errors` | Current JSON error envelope | SDKs expose status/method/path/body plus parsed `error` and optional `code`. |
-| Snapshot/restore | `snapshot_restore` | `POST /v1/admin/snapshot`, `POST /v1/admin/restore` | Snapshot local state, restore into a separate target, and preserve visible state. |
+| Snapshot/restore | `snapshot_restore` | `POST /v1/admin/snapshot`, `POST /v1/admin/restore` | Snapshot local state, restore into a separate target, and optionally verify a restored record with `verify_record`. |
 
 Future harness lanes: `pagination_cursors` and `durable_jobs`. These stay out
 of the v0 pass/fail contract until the engine exposes concrete behavior.

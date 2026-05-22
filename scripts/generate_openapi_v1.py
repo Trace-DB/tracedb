@@ -171,6 +171,7 @@ def components() -> dict[str, Any]:
             "RestoreRequest": object_schema("Snapshot restore request.", {
                 "source": {"type": "string"},
                 "target": {"type": "string"},
+                "verify_record": schema_ref("RecordGetRequest"),
             }),
             "HealthResponse": object_schema("Health response.", {
                 "ok": {"type": "boolean"},
@@ -333,6 +334,13 @@ def components() -> dict[str, Any]:
                 "restored": {"type": "boolean"},
                 "source": {"type": "string"},
                 "target": {"type": "string"},
+                "verification": schema_ref("RestoreVerification"),
+            }),
+            "RestoreVerification": object_schema("Optional restored-target record verification.", {
+                "status": {"type": "string", "enum": ["passed", "failed"]},
+                "record_visible": {"type": "boolean"},
+                "request": schema_ref("RecordGetRequest"),
+                "record": nullable_schema(schema_ref("RecordOutput")),
             }),
             "AdminJob": object_schema("Admin job queue entry.", {
                 "queue": {"type": "string"},
