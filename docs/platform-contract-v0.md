@@ -37,7 +37,8 @@ The initial executable conformance runner is `scripts/platform_conformance.py`.
 
 - Status is `contract-freeze-draft`. This is a source-of-truth checklist for
   SDK/adaptor work, not a managed-cloud SLA.
-- SQL compatibility is not implemented.
+- SQL compatibility is not implemented; the bounded SQL-ish `SELECT` adapter
+  under `/v1/traceql` is not a SQL engine.
 - TraceDB is not PostgreSQL-compatible. Future SQL-ish work must compile into
   TraceDB's native query model instead of becoming a PostgreSQL emulation layer.
 - GraphQL is planned after SDK/query contract stabilization and must compile
@@ -59,7 +60,7 @@ Every product surface must map to these contract components:
 | `record_writes` | Single-record put/patch/delete must share record identity, tenant identity, and field semantics across surfaces. |
 | `batch_ingest` | Batch writes are first-class and should preserve `record_count`, epoch, and optional write timing where exposed. |
 | `query_builder` | SDK builders should compile into the same `HybridQuery`/TraceQuery model as direct JSON calls. |
-| `traceql_string_execution` | Native TraceQL v0 strings execute through `POST /v1/traceql` after compiling into `HybridQuery`; SQL-ish syntax remains a future adapter over the same query model, not a separate engine. |
+| `traceql_string_execution` | Native TraceQL v0 strings and the bounded SQL-ish `SELECT * FROM ... WHERE tenant_id = ... [AND field = value]* [LIMIT n]` adapter execute through `POST /v1/traceql` after compiling into `HybridQuery`; neither form is a separate engine. |
 | `result_envelope` | Success responses are route-specific JSON; errors preserve the current `{ "error": string, "code"?: string }` envelope plus SDK context. |
 | `explain_provenance_freshness_jobs` | Query/explain surfaces share `HybridExplain` fields for access paths, planner candidates, counters, timings, and freshness/provenance evidence as they mature. |
 | `errors_retries_idempotency` | Safe retries stay read-only. Mutation/admin retries require caller-provided `Idempotency-Key`; same key/body replays, body mismatch returns `409`. |
@@ -74,7 +75,7 @@ Every product surface must map to these contract components:
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
-| TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; SQL-ish syntax parked | Future adapter into the same TraceQuery/query model. |
+| TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; bounded SQL-ish `SELECT` adapter checked | Adapter into the same TraceQuery/query model, not SQL compatibility. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
 
 Maintenance mode means a platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics.
@@ -223,6 +224,14 @@ the same query execution and response shaping as `POST /v1/query`. This is
 native TraceQL evidence only. It is not SQL compatibility, PostgreSQL
 compatibility, GraphQL support, or a separate query engine.
 
+The same `/v1/traceql` parser now accepts a deliberately bounded SQL-ish form:
+`EXPLAIN? SELECT * FROM <table> WHERE tenant_id = <value> [AND field = value]*
+[LIMIT n]`. It maps `tenant_id`/`tenant` to `HybridQuery.tenant_id`, additional
+equality predicates to `scalar_eq`, `LIMIT` to `top_k`, and `EXPLAIN` to the
+shared explain flag. Unsupported SQL constructs such as `JOIN`, `GROUP`,
+`ORDER`, `UNION`, mutation DDL/DML, and PostgreSQL-specific behavior fail as
+`invalid SQL-ish` bad-request responses rather than implying compatibility.
+
 ## Surface Implementation Rules
 
 - HTTP direct remains the source of wire truth.
@@ -233,8 +242,9 @@ compatibility, GraphQL support, or a separate query engine.
 - Python starts sync-first for ingestion, AI workflows, notebooks, and platform
   conformance tests. Async can follow after sync parity.
 - TraceQL / SQL-ish must parse into the same query model. Do not claim SQL
-  compatibility or PostgreSQL compatibility. The current native TraceQL HTTP
-  surface is `/v1/traceql`; SQL-ish syntax remains parked.
+  compatibility or PostgreSQL compatibility. The current HTTP surface is
+  `/v1/traceql`; the SQL-ish surface is limited to the checked bounded
+  `SELECT` adapter until a broader TraceQL adapter is explicitly designed.
 - GraphQL must be schema-generated from TraceDB schema and compile into the same
   query model. It should not own database semantics.
 

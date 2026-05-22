@@ -107,8 +107,8 @@
     {
       "id": "traceql_sqlish",
       "label": "TraceQL / SQL-ish",
-      "status": "native_traceql_http_execution_checked_sqlish_parked",
-      "role": "future adapter into the same TraceQuery model",
+      "status": "native_traceql_http_execution_checked_bounded_sqlish_select_checked",
+      "role": "adapter into the same TraceQuery model, not SQL compatibility",
       "evidence": [
         "crates/tracedb-query/src/lib.rs",
         "crates/tracedb-server/src/lib.rs",
@@ -117,6 +117,9 @@
         "docs/api/v1-openapi.json",
         "POST /v1/traceql",
         "traceql_query_from_str",
+        "EXPLAIN? SELECT * FROM <table> WHERE tenant_id = <value> [AND field = value]* [LIMIT n]",
+        "invalid SQL-ish bad-request errors for unsupported constructs",
+        "cargo test -p tracedb-query traceql_sqlish --no-run",
         "cargo test -p tracedb-query traceql_query_string --no-run",
         "cargo test -p tracedb-testkit --test usability_acceptance http_traceql_endpoint_executes_native_query_string_through_hybrid_query --no-run"
       ]

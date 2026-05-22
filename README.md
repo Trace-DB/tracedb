@@ -501,13 +501,17 @@ Native TraceQL now executes through the canonical HTTP surface:
 `TENANT`, `WHERE`, `MATCH`, `NEAR`, `FRESHNESS`, `LIMIT`, and `EXPLAIN`
 directives with `traceql_query_from_str`, and compiles them into the existing
 `HybridQuery` model before returning the same result shape as `POST /v1/query`.
+The same parser also accepts the bounded SQL-ish adapter form
+`EXPLAIN? SELECT * FROM <table> WHERE tenant_id = <value> [AND field = value]*
+[LIMIT n]`, compiling it into the same `HybridQuery` path and returning
+`invalid SQL-ish` bad-request errors for unsupported constructs such as `JOIN`.
 The platform conformance harness now includes `traceql_string_execution`; HTTP
 direct passes that scenario through `/v1/traceql`, the Rust SDK lane passes it
 through `TraceDbClient::traceql_typed`, the TypeScript SDK lane passes it
 through the public `TraceDB.traceql()` helper, and the Python SDK lane passes it
-through the sync `TraceDB.traceql()` helper. This is native TraceQL execution
-evidence only; SQL compatibility, PostgreSQL compatibility, and GraphQL remain
-unimplemented.
+through the sync `TraceDB.traceql()` helper. This is TraceQL/query-adapter
+execution evidence only; SQL compatibility, PostgreSQL compatibility, and
+GraphQL remain unimplemented.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and

@@ -682,6 +682,41 @@ fn http_traceql_endpoint_executes_native_query_string_through_hybrid_query() {
             .contains("invalid TraceQL"),
         "invalid TraceQL body: {invalid_body}"
     );
+
+    let sqlish = json!({
+        "query": "SELECT * FROM docs WHERE tenant_id = \"tenant-a\" AND status = \"published\" LIMIT 5"
+    })
+    .to_string();
+    let sqlish_response = http_response(addr, "POST", "/v1/traceql", &sqlish);
+    assert!(
+        sqlish_response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected SQL-ish TraceQL response: {sqlish_response}"
+    );
+    let sqlish_body = http_json_body(&sqlish_response);
+    assert_eq!(sqlish_body["results"][0]["record_id"], json!("a"));
+    assert!(
+        sqlish_body.get("explain").is_none(),
+        "SQL-ish body: {sqlish_body}"
+    );
+
+    let invalid_sqlish = json!({
+        "query": "SELECT * FROM docs JOIN users ON docs.user_id = users.id WHERE tenant_id = \"tenant-a\""
+    })
+    .to_string();
+    let invalid_sqlish_response = http_response(addr, "POST", "/v1/traceql", &invalid_sqlish);
+    assert!(
+        invalid_sqlish_response.starts_with("HTTP/1.1 400 Bad Request"),
+        "invalid SQL-ish should preserve bad-request envelope: {invalid_sqlish_response}"
+    );
+    let invalid_sqlish_body = http_json_body(&invalid_sqlish_response);
+    assert_eq!(invalid_sqlish_body["code"], json!("bad_request"));
+    assert!(
+        invalid_sqlish_body["error"]
+            .as_str()
+            .expect("error string")
+            .contains("SQL-ish"),
+        "invalid SQL-ish body: {invalid_sqlish_body}"
+    );
 }
 
 #[test]

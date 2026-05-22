@@ -3169,9 +3169,15 @@ pub fn query_from_json(value: Value) -> Result<HybridQuery> {
     Ok(serde_json::from_value(value)?)
 }
 
-/// Parses TraceDB's native line-oriented TraceQL v0 query form into the shared
-/// `HybridQuery` model. This is intentionally not SQL or PostgreSQL syntax.
+/// Parses TraceDB's native line-oriented TraceQL v0 query form, plus the
+/// bounded SQL-ish `SELECT` adapter form, into the shared `HybridQuery` model.
+/// The SQL-ish adapter is intentionally not SQL or PostgreSQL compatibility.
 pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
+    let input = input.trim();
+    if starts_with_sqlish_select(input) {
+        return traceql_sqlish_select_from_str(input);
+    }
+
     let mut table = None;
     let mut tenant_id = None;
     let mut text = None;
@@ -3286,6 +3292,289 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
         top_k,
         freshness,
         explain,
+    })
+}
+
+fn starts_with_sqlish_select(input: &str) -> bool {
+    strip_sqlish_keyword_prefix(input, "SELECT").is_some()
+        || strip_sqlish_keyword_prefix(input, "EXPLAIN")
+            .and_then(|rest| strip_sqlish_keyword_prefix(rest, "SELECT"))
+            .is_some()
+}
+
+fn traceql_sqlish_select_from_str(input: &str) -> Result<HybridQuery> {
+    let mut query = normalize_sqlish_whitespace(input);
+    query = query.trim().trim_end_matches(';').trim().to_string();
+
+    reject_unsupported_sqlish_keywords(&query)?;
+
+    let mut explain = false;
+    let mut rest = query.as_str();
+    if let Some(after_explain) = strip_sqlish_keyword_prefix(rest, "EXPLAIN") {
+        explain = true;
+        rest = after_explain;
+    }
+    rest = strip_sqlish_keyword_prefix(rest, "SELECT")
+        .ok_or_else(|| invalid_sqlish("SELECT is required"))?;
+
+    rest = rest.trim_start();
+    let Some(after_star) = rest.strip_prefix('*') else {
+        return Err(invalid_sqlish("only SELECT * is supported"));
+    };
+    rest = after_star.trim_start();
+    rest = strip_sqlish_keyword_prefix(rest, "FROM")
+        .ok_or_else(|| invalid_sqlish("FROM is required after SELECT *"))?;
+
+    let (table, after_table) =
+        take_sqlish_identifier(rest).ok_or_else(|| invalid_sqlish("FROM requires a table"))?;
+    rest = strip_sqlish_keyword_prefix(after_table, "WHERE")
+        .ok_or_else(|| invalid_sqlish("WHERE tenant_id = value is required"))?;
+
+    let (where_clause, limit_clause) = if let Some(limit_index) = find_sqlish_keyword(rest, "LIMIT")
+    {
+        (
+            &rest[..limit_index],
+            Some(&rest[limit_index + "LIMIT".len()..]),
+        )
+    } else {
+        (rest, None)
+    };
+    let top_k = if let Some(limit_clause) = limit_clause {
+        let value = limit_clause.trim();
+        if value.is_empty() {
+            return Err(invalid_sqlish("LIMIT requires a positive integer"));
+        }
+        if value.split_whitespace().count() != 1 {
+            return Err(invalid_sqlish("LIMIT accepts exactly one positive integer"));
+        }
+        let parsed = value
+            .parse::<usize>()
+            .map_err(|err| invalid_sqlish(format!("LIMIT must be a positive integer: {err}")))?;
+        if parsed == 0 {
+            return Err(invalid_sqlish("LIMIT must be greater than zero"));
+        }
+        parsed
+    } else {
+        10
+    };
+
+    let mut tenant_id = None;
+    let mut scalar_eq = Map::new();
+    for condition in split_sqlish_and_conditions(where_clause) {
+        let condition = condition.trim();
+        if condition.is_empty() {
+            return Err(invalid_sqlish("WHERE contains an empty condition"));
+        }
+        let (field, raw_value) = condition
+            .split_once('=')
+            .ok_or_else(|| invalid_sqlish("WHERE conditions must use field = value"))?;
+        let field = field.trim();
+        if field.is_empty() || field.split_whitespace().count() != 1 {
+            return Err(invalid_sqlish("WHERE field must be one identifier"));
+        }
+        let value = parse_sqlish_value(raw_value.trim())?;
+        if field.eq_ignore_ascii_case("tenant_id") || field.eq_ignore_ascii_case("tenant") {
+            match value {
+                Value::String(value) if !value.is_empty() => {
+                    if tenant_id.replace(value).is_some() {
+                        return Err(invalid_sqlish(
+                            "tenant_id cannot be specified more than once",
+                        ));
+                    }
+                }
+                _ => return Err(invalid_sqlish("tenant_id must be a string value")),
+            }
+        } else {
+            scalar_eq.insert(field.to_string(), value);
+        }
+    }
+
+    Ok(HybridQuery {
+        table: table.to_string(),
+        tenant_id: tenant_id.ok_or_else(|| invalid_sqlish("tenant_id is required"))?,
+        text: None,
+        vector: None,
+        scalar_eq,
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k,
+        freshness: FreshnessMode::Strict,
+        explain,
+    })
+}
+
+fn reject_unsupported_sqlish_keywords(input: &str) -> Result<()> {
+    for keyword in [
+        "JOIN", "GROUP", "ORDER", "HAVING", "UNION", "INSERT", "UPDATE", "DELETE", "DROP",
+        "CREATE", "ALTER",
+    ] {
+        if find_sqlish_keyword(input, keyword).is_some() {
+            return Err(invalid_sqlish(format!(
+                "{keyword} is not supported by the bounded SELECT adapter"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_sqlish_whitespace(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
+    let mut escaped = false;
+    let mut pending_space = false;
+
+    for ch in input.chars() {
+        if in_double_quote {
+            if pending_space {
+                output.push(' ');
+                pending_space = false;
+            }
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_double_quote = false;
+            }
+            continue;
+        }
+        if in_single_quote {
+            if pending_space {
+                output.push(' ');
+                pending_space = false;
+            }
+            output.push(ch);
+            if ch == '\'' {
+                in_single_quote = false;
+            }
+            continue;
+        }
+        if ch.is_whitespace() {
+            pending_space = !output.is_empty();
+            continue;
+        }
+        if pending_space {
+            output.push(' ');
+            pending_space = false;
+        }
+        if ch == '"' {
+            in_double_quote = true;
+        } else if ch == '\'' {
+            in_single_quote = true;
+        }
+        output.push(ch);
+    }
+
+    output
+}
+
+fn strip_sqlish_keyword_prefix<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
+    let input = input.trim_start();
+    let prefix = input.get(..keyword.len())?;
+    if !prefix.eq_ignore_ascii_case(keyword) {
+        return None;
+    }
+    let rest = &input[keyword.len()..];
+    if rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace) {
+        Some(rest.trim_start())
+    } else {
+        None
+    }
+}
+
+fn take_sqlish_identifier(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim_start();
+    let end = input.find(char::is_whitespace).unwrap_or(input.len());
+    if end == 0 {
+        None
+    } else {
+        Some((&input[..end], &input[end..]))
+    }
+}
+
+fn find_sqlish_keyword(input: &str, keyword: &str) -> Option<usize> {
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
+    let mut escaped = false;
+
+    for (index, ch) in input.char_indices() {
+        if in_double_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_double_quote = false;
+            }
+            continue;
+        }
+        if in_single_quote {
+            if ch == '\'' {
+                in_single_quote = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_double_quote = true;
+            continue;
+        }
+        if ch == '\'' {
+            in_single_quote = true;
+            continue;
+        }
+
+        let Some(candidate) = input[index..].get(..keyword.len()) else {
+            continue;
+        };
+        if !candidate.eq_ignore_ascii_case(keyword) {
+            continue;
+        }
+        let before_is_boundary = input[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !is_sqlish_identifier_char(before));
+        let after_is_boundary = input[index + keyword.len()..]
+            .chars()
+            .next()
+            .is_none_or(|after| !is_sqlish_identifier_char(after));
+        if before_is_boundary && after_is_boundary {
+            return Some(index);
+        }
+    }
+
+    None
+}
+
+fn is_sqlish_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'
+}
+
+fn split_sqlish_and_conditions(where_clause: &str) -> Vec<&str> {
+    let mut conditions = Vec::new();
+    let mut rest = where_clause;
+    while let Some(index) = find_sqlish_keyword(rest, "AND") {
+        conditions.push(&rest[..index]);
+        rest = &rest[index + "AND".len()..];
+    }
+    conditions.push(rest);
+    conditions
+}
+
+fn parse_sqlish_value(raw: &str) -> Result<Value> {
+    let value = raw.trim();
+    if value.starts_with('\'') || value.ends_with('\'') {
+        if !(value.starts_with('\'') && value.ends_with('\'')) || value.len() < 2 {
+            return Err(invalid_sqlish("single-quoted value is not closed"));
+        }
+        return Ok(Value::String(value[1..value.len() - 1].replace("''", "'")));
+    }
+    parse_traceql_value(value, 1).map_err(|err| match err {
+        TraceDbError::InvalidCommand(message) => TraceDbError::InvalidCommand(
+            message.replace("invalid TraceQL at line 1", "invalid SQL-ish"),
+        ),
+        other => other,
     })
 }
 
@@ -3411,6 +3700,10 @@ fn invalid_traceql(line_number: usize, message: impl Into<String>) -> TraceDbErr
     } else {
         TraceDbError::InvalidCommand(format!("invalid TraceQL at line {line_number}: {message}"))
     }
+}
+
+fn invalid_sqlish(message: impl Into<String>) -> TraceDbError {
+    TraceDbError::InvalidCommand(format!("invalid SQL-ish: {}", message.into()))
 }
 
 pub fn value_object(fields: &[(&str, Value)]) -> Map<String, Value> {
@@ -3556,6 +3849,41 @@ mod tests {
 
         assert!(
             matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("TENANT"))
+        );
+    }
+
+    #[test]
+    fn traceql_sqlish_select_compiles_to_hybrid_query() {
+        let query = traceql_query_from_str(
+            r#"
+            EXPLAIN SELECT * FROM docs
+            WHERE tenant_id = "tenant-a" AND category = "code"
+            LIMIT 7
+            "#,
+        )
+        .expect("sql-ish query");
+
+        assert_eq!(query.table, "docs");
+        assert_eq!(query.tenant_id, "tenant-a");
+        assert_eq!(query.scalar_eq.get("category"), Some(&json!("code")));
+        assert_eq!(query.top_k, 7);
+        assert!(query.explain);
+        assert!(query.text.is_none());
+        assert!(query.vector.is_none());
+    }
+
+    #[test]
+    fn traceql_sqlish_select_rejects_join_compatibility_claims() {
+        let error = traceql_query_from_str(
+            r#"
+            SELECT * FROM docs JOIN users ON docs.user_id = users.id
+            WHERE tenant_id = "tenant-a"
+            "#,
+        )
+        .expect_err("join should not be accepted");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("SQL-ish"))
         );
     }
 

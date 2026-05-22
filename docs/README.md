@@ -43,8 +43,10 @@ all required v0 scenarios; unimplemented future lanes must keep explicit
 `not_checked` results until they reach parity.
 The `traceql_sqlish` lane now has native HTTP execution evidence through
 `POST /v1/traceql`, which parses line-oriented TraceQL with
-`traceql_query_from_str` and compiles it into `HybridQuery`; SQL-ish syntax
-remains parked.
+`traceql_query_from_str` and compiles it into `HybridQuery`. The same route now
+accepts the bounded SQL-ish adapter form `EXPLAIN? SELECT * FROM <table> WHERE
+tenant_id = <value> [AND field = value]* [LIMIT n]`; broader SQL,
+PostgreSQL compatibility, and GraphQL remain unimplemented.
 
 Local product smoke:
 
