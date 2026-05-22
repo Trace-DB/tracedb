@@ -13,6 +13,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from railway_bench import (
+    build_railway_operation_receipt,
     build_railway_operation_plan,
     build_railway_manifest,
     build_railway_persistence_verdict,
@@ -500,6 +501,46 @@ class RailwayBenchTests(unittest.TestCase):
         self.assertTrue(any("operation" in error for error in result["errors"]))
         self.assertTrue(any("confirmed" in error for error in result["errors"]))
         self.assertTrue(any("service_id" in error for error in result["errors"]))
+
+    def test_operation_receipt_builder_emits_valid_redacted_operator_receipt(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+
+        receipt = build_railway_operation_receipt(
+            config,
+            suite_id="railway-test",
+            operation="restart",
+            status="passed",
+            executed=True,
+            confirmed=True,
+            command="railway restart --service service_tracedb",
+            operator="benchmark-operator",
+            notes=["manual restart completed"],
+            extra={"RAILWAY_API_TOKEN": "railway-token-secret"},
+        )
+        validation = validate_railway_operation_receipt(
+            receipt,
+            expected_service_id="service_tracedb",
+        )
+
+        self.assertEqual(receipt["kind"], "railway_operation_receipt")
+        self.assertEqual(receipt["operation"], "restart")
+        self.assertTrue(receipt["executed"])
+        self.assertTrue(receipt["confirmed"])
+        self.assertEqual(receipt["service_id"], "service_tracedb")
+        self.assertEqual(receipt["project_id"], "project_123")
+        self.assertEqual(receipt["environment_id"], "env_123")
+        self.assertIn("receipt_only", receipt["claim_boundary"])
+        self.assertTrue(validation["ok"], validation)
+        self.assertNotIn("railway-token-secret", repr(receipt))
 
     def test_persistence_verdict_passes_for_matching_marker_and_operator_receipt(self) -> None:
         pre_manifest = {

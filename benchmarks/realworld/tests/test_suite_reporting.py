@@ -15,6 +15,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from runner.suite import SCENARIOS, build_suite_report, write_suite_markdown
+from railway_bench import validate_railway_operation_receipt
 
 
 class ReadyHandler(BaseHTTPRequestHandler):
@@ -549,6 +550,68 @@ class SuiteReportingTests(unittest.TestCase):
         )
         self.assertEqual(gate["status"], "usable")
         self.assertNotIn("railway-token-secret", repr(manifest))
+
+    def test_railway_operation_receipt_command_writes_valid_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            receipt_path = Path(temp_dir) / "operation-receipt.json"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "railway-receipt",
+                    "--operation",
+                    "restart",
+                    "--status",
+                    "passed",
+                    "--suite-id",
+                    "railway-receipt-suite-test",
+                    "--confirm-executed",
+                    "--operator",
+                    "benchmark-operator",
+                    "--command",
+                    "railway restart --service service_tracedb",
+                    "--note",
+                    "manual restart completed",
+                    "--output-json",
+                    str(receipt_path),
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            receipt = json.loads(receipt_path.read_text())
+            validation = validate_railway_operation_receipt(
+                receipt,
+                expected_service_id="service_tracedb",
+            )
+
+        self.assertTrue(validation["ok"], validation)
+        self.assertEqual(receipt["kind"], "railway_operation_receipt")
+        self.assertEqual(receipt["operation"], "restart")
+        self.assertTrue(receipt["executed"])
+        self.assertTrue(receipt["confirmed"])
+        self.assertEqual(receipt["service_id"], "service_tracedb")
+        self.assertEqual(receipt["suite_id"], "railway-receipt-suite-test")
+        self.assertNotIn("railway-token-secret", repr(receipt))
 
     def test_railway_persistence_verdict_combines_pre_manifest_receipt_and_postcheck(self) -> None:
         with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:

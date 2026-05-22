@@ -182,6 +182,48 @@ def validate_railway_operation_receipt(
     }
 
 
+def build_railway_operation_receipt(
+    config: Mapping[str, Any],
+    *,
+    suite_id: str,
+    operation: str,
+    status: str,
+    executed: bool,
+    confirmed: bool,
+    command: str = "",
+    operator: str = "",
+    deployment_id: str = "",
+    notes: list[str] | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    validation = validate_railway_config(config)
+    receipt = {
+        "kind": "railway_operation_receipt",
+        "suite_id": suite_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "operation": str(operation).lower(),
+        "status": str(status).lower(),
+        "executed": bool(executed),
+        "confirmed": bool(confirmed),
+        "project_id": config.get("project_id", ""),
+        "environment_id": config.get("environment_id", ""),
+        "service_id": config.get("tracedb_service_id", ""),
+        "operator": operator,
+        "command": command,
+        "deployment_id": deployment_id,
+        "notes": list(notes or []),
+        "config_validation": {
+            "ok": validation["ok"],
+            "missing": validation["missing"],
+            "warnings": validation["warnings"],
+        },
+        "claim_boundary": "operator_reported_receipt_only_not_railway_mutation_execution",
+    }
+    if extra:
+        receipt["extra"] = _redact_sensitive(extra)
+    return _redact_sensitive(receipt)
+
+
 def build_railway_persistence_verdict(
     pre_manifest: Mapping[str, Any],
     post_manifest: Mapping[str, Any],

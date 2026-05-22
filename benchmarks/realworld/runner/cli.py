@@ -32,20 +32,24 @@ from .types import RunConfig
 try:
     from railway_bench import (
         build_railway_manifest,
+        build_railway_operation_receipt,
         build_railway_operation_plan,
         build_railway_persistence_verdict,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_stateful_smoke,
+        validate_railway_operation_receipt,
     )
 except ImportError:  # pragma: no cover - package import path used by unit discovery.
     from ..railway_bench import (
         build_railway_manifest,
+        build_railway_operation_receipt,
         build_railway_operation_plan,
         build_railway_persistence_verdict,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_stateful_smoke,
+        validate_railway_operation_receipt,
     )
 
 
@@ -129,6 +133,42 @@ def main(argv: list[str] | None = None) -> int:
         help="Operator-provided restart/redeploy receipt JSON for persistence verdict evaluation.",
     )
 
+    railway_receipt = subcommands.add_parser(
+        "railway-receipt",
+        help="write a non-mutating operator receipt for a manual Railway restart/redeploy",
+    )
+    railway_receipt.add_argument("--operation", required=True, choices=["restart", "redeploy"])
+    railway_receipt.add_argument(
+        "--status",
+        default="passed",
+        choices=[
+            "passed",
+            "completed",
+            "succeeded",
+            "success",
+            "ok",
+            "blocked",
+            "cancelled",
+            "canceled",
+            "error",
+            "failed",
+            "failure",
+            "timeout",
+            "timed_out",
+        ],
+    )
+    railway_receipt.add_argument("--suite-id", default="")
+    railway_receipt.add_argument("--output-json", default="reports/railway-operation-receipt.json")
+    railway_receipt.add_argument(
+        "--confirm-executed",
+        action="store_true",
+        help="Set executed=true and confirmed=true after the operator has manually run the operation.",
+    )
+    railway_receipt.add_argument("--operator", default="")
+    railway_receipt.add_argument("--command", dest="operation_command", default="")
+    railway_receipt.add_argument("--deployment-id", default="")
+    railway_receipt.add_argument("--note", action="append", default=[])
+
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
     chat_demo.add_argument("--data-dir", default="")
     chat_demo.add_argument("--tracedb-cli", default="")
@@ -169,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
         return doctor_openrouter(args)
     if args.command == "suite":
         return run_suite(args)
+    if args.command == "railway-receipt":
+        return run_railway_receipt(args)
     if args.command == "chat-demo":
         return run_chat_demo(args)
     if args.command == "tracedb-scaling":
@@ -242,6 +284,37 @@ def run_benchmark(args: argparse.Namespace) -> int:
         print("one or more required services were unavailable", file=sys.stderr)
         return 1
     return exit_code
+
+
+def run_railway_receipt(args: argparse.Namespace) -> int:
+    lab_root = Path.cwd()
+    config = load_railway_config()
+    receipt = build_railway_operation_receipt(
+        config,
+        suite_id=args.suite_id,
+        operation=args.operation,
+        status=args.status,
+        executed=args.confirm_executed,
+        confirmed=args.confirm_executed,
+        command=args.operation_command,
+        operator=args.operator,
+        deployment_id=args.deployment_id,
+        notes=args.note,
+    )
+    validation = validate_railway_operation_receipt(
+        receipt,
+        expected_service_id=str(config.get("tracedb_service_id", "")),
+    )
+    output_path = _resolve_path(lab_root, args.output_json)
+    write_json(receipt, output_path)
+    print(f"wrote {output_path}")
+    if not validation["ok"]:
+        for error in validation["errors"]:
+            print(error, file=sys.stderr)
+        for missing in validation["missing"]:
+            print(f"missing receipt field: {missing}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def execute_benchmark(

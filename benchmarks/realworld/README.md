@@ -329,6 +329,22 @@ cannot become persistence proof. It must include `kind:
 railway_operation_receipt`, `operation: restart|redeploy`, `status`,
 `executed: true`, `confirmed: true`, and the TraceDB Railway `service_id`; any
 sensitive fields in the receipt are redacted before artifact export.
+After the operator manually executes the Railway restart or redeploy, generate
+that receipt with:
+
+```bash
+python3 -m runner railway-receipt \
+  --operation restart \
+  --status passed \
+  --suite-id <suite-id> \
+  --confirm-executed \
+  --operator <operator-name> \
+  --command "railway restart --service <tracedb-service-id>" \
+  --output-json reports/railway-operation-receipt.json
+```
+
+The helper only writes the receipt artifact. It does not call Railway, restart
+services, or redeploy code.
 `--railway-restart-redeploy-plan` adds a non-mutating `operation_plan` to the
 manifest and reports `railway_restart_redeploy: plan_only` in the gate. The plan
 lists safe preflight commands such as `railway status --json`,
