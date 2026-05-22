@@ -17,9 +17,9 @@ use std::thread;
 use std::time::Duration;
 use tracedb_features::FeatureFreshnessMode;
 use tracedb_query::{
-    HybridExplain, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordOutput, RecordPatchRequest, RecordPutBatchRequest, RecordScanOutput, RecordScanRequest,
-    TableSchema, WritePathTiming,
+    FreshnessMode, HybridExplain, HybridQuery, HybridQueryRow, RecordDeleteRequest,
+    RecordGetRequest, RecordInput, RecordOutput, RecordPatchRequest, RecordPutBatchRequest,
+    RecordScanOutput, RecordScanRequest, TableSchema, WritePathTiming,
 };
 
 pub type TraceDbClientResult<T> = std::result::Result<T, TraceDbClientError>;
@@ -615,14 +615,17 @@ impl TraceDbClient {
 
     pub fn table(&self, table: impl Into<String>) -> QueryBuilder {
         QueryBuilder {
+            client_config: Some(self.config.clone()),
             table: table.into(),
             tenant_id: None,
             text_field: None,
             text_query: None,
             vector_field: None,
             vector: None,
+            scalar_eq: Map::new(),
             freshness: FeatureFreshnessMode::Strict,
             limit: 10,
+            explain: true,
         }
     }
 
@@ -1456,19 +1459,27 @@ fn decode_typed<T: for<'de> Deserialize<'de>>(
 
 #[derive(Clone, Debug)]
 pub struct QueryBuilder {
+    client_config: Option<TraceDbClientConfig>,
     table: String,
     tenant_id: Option<String>,
     text_field: Option<String>,
     text_query: Option<String>,
     vector_field: Option<String>,
     vector: Option<Vec<f32>>,
+    scalar_eq: Map<String, Value>,
     freshness: FeatureFreshnessMode,
     limit: usize,
+    explain: bool,
 }
 
 impl QueryBuilder {
     pub fn tenant(mut self, tenant_id: impl Into<String>) -> Self {
         self.tenant_id = Some(tenant_id.into());
+        self
+    }
+
+    pub fn where_eq(mut self, field: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.scalar_eq.insert(field.into(), value.into());
         self
     }
 
@@ -1494,6 +1505,121 @@ impl QueryBuilder {
         self
     }
 
+    pub fn with_explain(mut self) -> Self {
+        self.explain = true;
+        self
+    }
+
+    pub fn without_explain(mut self) -> Self {
+        self.explain = false;
+        self
+    }
+
+    pub fn insert(
+        &self,
+        id: impl Into<String>,
+        fields: Map<String, Value>,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let options = TraceDbRequestOptions::default();
+        self.insert_with_options(id, fields, &options)
+    }
+
+    pub fn insert_with_options(
+        &self,
+        id: impl Into<String>,
+        mut fields: Map<String, Value>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let path = "/v1/records/put";
+        let id = id.into();
+        let tenant_id = self.required_tenant_id("POST", path)?;
+        fields
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(id.clone()));
+        fields
+            .entry("tenant".to_string())
+            .or_insert_with(|| Value::String(tenant_id.clone()));
+        let record = RecordInput {
+            table: self.table.clone(),
+            id,
+            tenant_id,
+            fields,
+        };
+        self.client("POST", path)?
+            .put_typed_with_options(&record, options)
+    }
+
+    pub fn patch_record(
+        &self,
+        id: impl Into<String>,
+        fields: Map<String, Value>,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let options = TraceDbRequestOptions::default();
+        self.patch_record_with_options(id, fields, &options)
+    }
+
+    pub fn patch_record_with_options(
+        &self,
+        id: impl Into<String>,
+        fields: Map<String, Value>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<EpochResponse> {
+        let path = "/v1/records/patch";
+        let request = RecordPatchRequest::new(
+            self.table.clone(),
+            self.required_tenant_id("POST", path)?,
+            id,
+            fields,
+        );
+        self.client("POST", path)?
+            .patch_typed_with_options(&request, options)
+    }
+
+    pub fn get_record(&self, id: impl Into<String>) -> TraceDbClientResult<GetRecordResponse> {
+        let path = "/v1/records/get";
+        let request = RecordGetRequest::new(
+            self.table.clone(),
+            self.required_tenant_id("POST", path)?,
+            id,
+        );
+        self.client("POST", path)?.get_record_typed(&request)
+    }
+
+    pub fn scan_typed(&self) -> TraceDbClientResult<RecordScanOutput> {
+        let path = "/v1/records/scan";
+        let request =
+            RecordScanRequest::new(self.table.clone(), self.required_tenant_id("POST", path)?)
+                .limit(self.limit);
+        self.client("POST", path)?.scan_typed(&request)
+    }
+
+    pub fn delete_record(&self, id: impl Into<String>) -> TraceDbClientResult<DeleteResponse> {
+        let options = TraceDbRequestOptions::default();
+        self.delete_record_with_options(id, &options)
+    }
+
+    pub fn delete_record_with_options(
+        &self,
+        id: impl Into<String>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<DeleteResponse> {
+        let path = "/v1/records/delete";
+        let request = RecordDeleteRequest::new(
+            self.table.clone(),
+            self.required_tenant_id("POST", path)?,
+            id,
+        );
+        self.client("POST", path)?
+            .delete_typed_with_options(&request, options)
+    }
+
+    pub fn all(self) -> TraceDbClientResult<QueryResponse> {
+        let path = "/v1/query";
+        let client = self.client("POST", path)?;
+        let query = self.into_hybrid_query()?;
+        client.query_typed(&query)
+    }
+
     pub fn build(self) -> TraceQueryRequest {
         let freshness = match self.freshness {
             FeatureFreshnessMode::Strict => "Strict",
@@ -1506,9 +1632,10 @@ impl QueryBuilder {
             tenant_id: self.tenant_id.unwrap_or_default(),
             text: self.text_query,
             vector: self.vector,
+            scalar_eq: self.scalar_eq,
             top_k: self.limit,
             freshness: freshness.to_string(),
-            explain: true,
+            explain: self.explain,
         }
     }
 
@@ -1537,6 +1664,54 @@ impl QueryBuilder {
             tombstone: "user_delete".to_string(),
         }
     }
+
+    fn into_hybrid_query(self) -> TraceDbClientResult<HybridQuery> {
+        let tenant_id = self.required_tenant_id("POST", "/v1/query")?;
+        let freshness = self.hybrid_freshness();
+        Ok(HybridQuery {
+            table: self.table,
+            tenant_id,
+            text: self.text_query,
+            vector: self.vector,
+            scalar_eq: self.scalar_eq,
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: self.limit,
+            freshness,
+            explain: self.explain,
+        })
+    }
+
+    fn hybrid_freshness(&self) -> FreshnessMode {
+        match self.freshness {
+            FeatureFreshnessMode::Strict => FreshnessMode::Strict,
+            FeatureFreshnessMode::Lazy
+            | FeatureFreshnessMode::OnRead
+            | FeatureFreshnessMode::AllowStale => FreshnessMode::Lazy,
+        }
+    }
+
+    fn client(&self, method: &str, path: &str) -> TraceDbClientResult<TraceDbClient> {
+        self.client_config
+            .clone()
+            .map(TraceDbClient::new)
+            .ok_or_else(|| TraceDbClientError::InvalidRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                message: "table handle is not bound to a TraceDbClient".to_string(),
+            })
+    }
+
+    fn required_tenant_id(&self, method: &str, path: &str) -> TraceDbClientResult<String> {
+        match self.tenant_id.as_ref().filter(|tenant| !tenant.is_empty()) {
+            Some(tenant_id) => Ok(tenant_id.clone()),
+            None => Err(TraceDbClientError::InvalidRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                message: "table handle execution requires tenant(...)".to_string(),
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1545,6 +1720,8 @@ pub struct TraceQueryRequest {
     pub tenant_id: String,
     pub text: Option<String>,
     pub vector: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub scalar_eq: Map<String, Value>,
     pub top_k: usize,
     pub freshness: String,
     pub explain: bool,

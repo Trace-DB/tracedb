@@ -116,6 +116,13 @@ scenarios for HTTP direct and Rust SDK, including single-record put and parsed
 error-envelope evidence. Future surfaces must report unimplemented scenarios as
 `not_checked` rather than silently treating them as success.
 
+The Rust SDK also has a first ergonomic reference layer over the same wire
+contract: `TraceDbClient::table("docs").tenant("tenant-a")` can execute table
+insert/get/scan/delete calls and build query requests with `where_eq`,
+`match_text`, `near`, `with_explain`, `limit`, and `all()`. These helpers
+compile into the existing `RecordInput`, record request, and `HybridQuery`
+models; the raw HTTP methods remain available.
+
 ## Surface Implementation Rules
 
 - HTTP direct remains the source of wire truth.

@@ -529,6 +529,34 @@ fn restore_typed_posts_source_target_and_decodes_response() {
 }
 
 #[test]
+fn table_handle_query_builder_posts_canonical_hybrid_query() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = client
+        .table("docs")
+        .tenant("tenant-a")
+        .where_eq("status", "published")
+        .match_text("body", "rust sdk")
+        .near("embedding", vec![1.0, 0.0, 0.0])
+        .with_explain()
+        .limit(20)
+        .all()
+        .expect("table query");
+    let body = request_body.join().expect("request body");
+
+    assert!(response.results.is_empty());
+    assert_eq!(body["table"], "docs");
+    assert_eq!(body["tenant_id"], "tenant-a");
+    assert_eq!(body["scalar_eq"]["status"], "published");
+    assert_eq!(body["text"], "rust sdk");
+    assert_eq!(body["vector"], json!([1.0, 0.0, 0.0]));
+    assert_eq!(body["top_k"], 20);
+    assert_eq!(body["freshness"], "Strict");
+    assert_eq!(body["explain"], true);
+}
+
+#[test]
 fn request_options_send_idempotency_key_header_without_enabling_write_retries() {
     let (url, request) = capture_http_request_server();
     let client =
@@ -1295,6 +1323,73 @@ fn client_executes_typed_http_product_path() {
         .jobs
         .iter()
         .any(|job| job.queue == "tracedb.snapshot.create" && job.state == "idle"));
+}
+
+#[test]
+fn table_handle_executes_real_typed_product_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let url = start_real_http_server(temp.path().to_path_buf());
+
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+    client.apply_schema_typed(&schema()).expect("schema");
+    let docs = client.table("docs").tenant("tenant-a");
+
+    let intro = docs
+        .insert(
+            "ergonomic-intro",
+            json!({
+                "status": "published",
+                "body": "ergonomic rust sdk table handle",
+                "embedding": [1.0, 0.0, 0.0],
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+        .expect("insert intro");
+    assert_eq!(intro.epoch, 2);
+
+    let ops = docs
+        .insert(
+            "ergonomic-ops",
+            json!({
+                "status": "draft",
+                "body": "ergonomic delete path",
+                "embedding": [0.0, 1.0, 0.0],
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+        .expect("insert ops");
+    assert_eq!(ops.epoch, 3);
+
+    let got = docs.get_record("ergonomic-intro").expect("get intro");
+    assert_eq!(got.record.expect("record").id, "ergonomic-intro");
+
+    let scan = docs.clone().limit(10).scan_typed().expect("scan");
+    assert_eq!(scan.returned_count, 2);
+
+    let query = docs
+        .clone()
+        .where_eq("status", "published")
+        .match_text("body", "ergonomic rust")
+        .near("embedding", vec![1.0, 0.0, 0.0])
+        .with_explain()
+        .limit(5)
+        .all()
+        .expect("query");
+    assert!(query.explain.is_some());
+    assert!(query
+        .results
+        .iter()
+        .any(|row| row.record_id == "ergonomic-intro"));
+
+    let delete = docs.delete_record("ergonomic-ops").expect("delete ops");
+    assert!(delete.deleted);
+
+    let deleted = docs.get_record("ergonomic-ops").expect("get deleted");
+    assert!(deleted.record.is_none());
 }
 
 #[test]
