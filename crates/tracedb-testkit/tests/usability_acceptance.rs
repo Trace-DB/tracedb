@@ -898,7 +898,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         );
         assert!(
             markdown.contains("--only typescript_gateway_smoke"),
-            "{name} should document targeted generated TypeScript gateway smoke execution"
+            "{name} should document targeted public TypeScript SDK gateway smoke execution"
         );
     }
 }
@@ -1827,18 +1827,27 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
     let gateway_smoke = std::fs::read_to_string(root.join("clients/typescript/gateway-smoke.ts"))
         .expect("read TypeScript gateway smoke");
     for token in [
-        "typescript client gateway smoke ok",
+        "typescript public sdk gateway smoke ok",
+        "new TraceDB",
+        "await db.applySchema",
+        "await docs.insert",
+        "await docs.insertBatch",
+        "await docs.patch",
+        "await docs.get",
+        "await docs.limit(10).scan",
+        ".explainPlan()",
         "TRACEDB_SERVICE_MODE",
         "gateway",
         "TRACEDB_REQUIRE_API_KEY",
         "TRACEDB_API_TOKEN",
         "TRACEDB_ENGINE_URL",
-        "TRACEDB_DATABASE_ID",
-        "TRACEDB_BRANCH_ID",
+        "databaseId",
+        "branchId",
         "TraceDbHttpError",
         "invalid api token",
         "unknown branch db_missing:main",
-        "typescript client endpoint quickstart ok",
+        "local-gateway-typescript-public-sdk-smoke",
+        "sdk_surface: \"public\"",
         "sql_module: \"not_implemented\"",
     ] {
         assert!(

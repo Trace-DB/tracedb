@@ -971,17 +971,25 @@ fn product_regression_only_typescript_gateway_smoke_runs_single_gate_step() {
     );
     let smoke_summary = &summary["steps"]["typescript_gateway_smoke"]["summary"];
     assert_eq!(smoke_summary["ok"], true);
-    assert_eq!(smoke_summary["mode"], "local-gateway-typescript-smoke");
+    assert_eq!(
+        smoke_summary["mode"],
+        "local-gateway-typescript-public-sdk-smoke"
+    );
+    assert_eq!(smoke_summary["sdk_surface"], "public");
     assert_eq!(smoke_summary["token_required"], true);
     assert_eq!(smoke_summary["token_enforcement"], true);
     assert_eq!(smoke_summary["routing_enforcement"], true);
     assert_eq!(smoke_summary["database_id"], "db_local");
     assert_eq!(smoke_summary["branch_id"], "db_local:main");
-    assert_eq!(
-        smoke_summary["quickstart_mode"],
-        "typescript-endpoint-quickstart"
-    );
-    assert_eq!(smoke_summary["quickstart_steps"]["patch"], true);
+    assert_eq!(smoke_summary["steps"]["schema_apply"], true);
+    assert_eq!(smoke_summary["steps"]["batch_ingest"], true);
+    assert_eq!(smoke_summary["steps"]["patch"], true);
+    assert_eq!(smoke_summary["steps"]["query"], true);
+    assert_eq!(smoke_summary["steps"]["explain"], true);
+    assert_eq!(smoke_summary["steps"]["delete"], true);
+    assert_eq!(smoke_summary["steps"]["compact"], true);
+    assert_eq!(smoke_summary["steps"]["snapshot"], true);
+    assert_eq!(smoke_summary["steps"]["restore"], true);
     assert_eq!(smoke_summary["patched"], true);
     assert_eq!(smoke_summary["patched_status"], "reviewed");
     assert_eq!(smoke_summary["deleted_hidden"], true);

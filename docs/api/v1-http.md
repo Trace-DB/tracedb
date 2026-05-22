@@ -72,8 +72,8 @@ node --experimental-strip-types clients/typescript/smoke.ts
   chaining through `where({ tenant_id })`, `match`, `near`, `with`, `limit`,
   `all`, and `explainPlan`. It is smoke-tested with fake fetch through
   `npm run public-smoke` and with real local HTTP through
-  `npm run public-http-smoke`; gateway smoke still runs through the generated
-  endpoint quickstart until the wrapper is promoted through that lane.
+  `npm run public-http-smoke`; `npm run gateway-smoke` now drives the same
+  public wrapper through the local gateway auth/routing lane.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
@@ -337,10 +337,10 @@ compatibility.
 `product-regression --only typescript_gateway_smoke` runs only `npm run
 gateway-smoke` in `clients/typescript`, which starts a local engine plus
 gateway-mode `tracedb-server`, requires bearer auth, checks missing-token and
-bad-branch rejection, and runs the generated TypeScript endpoint quickstart
-through the gateway with managed routing metadata plus a local admin scratch
-dir. It emits one-step `local-product-regression` JSON with `only_step:
-"typescript_gateway_smoke"`. This is local generated TypeScript gateway
+bad-branch rejection, and runs the public TypeScript SDK wrapper through the
+gateway with managed routing metadata plus a local admin scratch dir. It emits
+one-step `local-product-regression` JSON with `only_step:
+"typescript_gateway_smoke"`. This is local public TypeScript SDK gateway
 auth/routing evidence only, not full product gate coverage, not embedded
 demo/verify, not `http_demo`, not local `doctor http`, not Rust SDK quickstart,
 not `typescript_check`, not TypeScript HTTP smoke, not managed-cloud proof, not
@@ -437,7 +437,7 @@ visibility, scan, query, explain, delete, and admin jobs. The quickstart emits
 `sql_module: not_implemented` and remains endpoint example evidence, not SQL
 compatibility, managed-cloud backup/DR, or benchmark evidence.
 
-The generated TypeScript client also has a local gateway smoke:
+The public TypeScript SDK also has a local gateway smoke:
 
 ```bash
 cd clients/typescript
@@ -446,8 +446,8 @@ npm run gateway-smoke
 
 That smoke starts an engine plus a gateway-mode server with
 `TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
-`TRACEDB_ENGINE_URL` pointing at the engine. It runs the endpoint quickstart
-through the gateway with `TRACEDB_DATABASE_ID=db_local`,
-`TRACEDB_BRANCH_ID=db_local:main`, and a local admin scratch path. This is local
-gateway bearer-auth and managed-routing evidence for the generated TypeScript
-artifact, not managed-cloud proof or benchmark evidence.
+`TRACEDB_ENGINE_URL` pointing at the engine. It runs the public `TraceDB`
+wrapper through the gateway with `databaseId=db_local`, `branchId=db_local:main`,
+and a local admin scratch path. This is local gateway bearer-auth and
+managed-routing evidence for the public TypeScript SDK over the generated
+transport, not managed-cloud proof or benchmark evidence.

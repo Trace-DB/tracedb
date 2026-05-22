@@ -128,9 +128,10 @@ The TypeScript package now starts the public SDK layer in
 generated `TraceDbClient` transport and exposes table handles with
 `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
 compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
-and `explainPlan`. The wrapper is fake-fetch/typecheck guarded and now has a
-real local HTTP smoke through `npm run public-http-smoke`; the generated
-transport remains available and remains the source of route methods.
+and `explainPlan`. The wrapper is fake-fetch/typecheck guarded and now has real
+local HTTP and gateway smokes through `npm run public-http-smoke` and
+`npm run gateway-smoke`; the generated transport remains available and remains
+the source of route methods.
 
 ## Surface Implementation Rules
 

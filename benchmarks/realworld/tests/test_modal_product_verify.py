@@ -66,6 +66,7 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertIn("typescript-npm-ci", command_names)
         self.assertIn("tracedb-cli-demo-tests", command_names)
         self.assertIn("tracedb-testkit-usability-tests", command_names)
+        self.assertIn("typescript-npm-public-gateway-smoke", command_names)
         self.assertIn("workspace-all-targets", command_names)
 
     def test_reduced_quickstart_receipt_contract(self) -> None:

@@ -126,7 +126,7 @@ summary and `typescript client endpoint quickstart ok`. It is a
 managed-endpoint example for the generated artifact, not package publishing
 readiness, not SQL compatibility, and not benchmark evidence.
 
-Run the generated TypeScript client through a local gateway that requires a
+Run the public TypeScript SDK wrapper through a local gateway that requires a
 bearer token and routes by managed metadata:
 
 ```bash
@@ -136,12 +136,13 @@ npm run gateway-smoke
 
 The gateway smoke starts a local engine plus `tracedb-gateway` mode with
 `TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
-`TRACEDB_ENGINE_URL` pointing at the engine. It then runs the endpoint
-quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local`,
-`TRACEDB_BRANCH_ID=db_local:main`, and a local `TRACEDB_ADMIN_DIR`. It emits
-`typescript client gateway smoke ok`. This proves bearer-auth forwarding and
-managed-routing metadata on the generated client against the local gateway
-path; it is still not managed-cloud proof or benchmark evidence.
+`TRACEDB_ENGINE_URL` pointing at the engine. It then runs `new TraceDB({
+url, token, databaseId, branchId })` through schema apply, insert, batch,
+patch, get, scan, query, explain, delete, compact, snapshot, restore, jobs,
+missing-token rejection, and bad-branch rejection. It emits `typescript public
+sdk gateway smoke ok`. This proves bearer-auth forwarding and managed-routing
+metadata on the public wrapper against the local gateway path; it is still not
+managed-cloud proof or benchmark evidence.
 
 The repo-level local product regression gate also runs this generated client
 surface:
@@ -184,14 +185,14 @@ controls, or SQL compatibility checks.
 starts its own local `tracedb-server` child process and exercises the public
 TypeScript SDK wrapper over the generated transport. It does not run embedded demo/verify,
 `http_demo`, local `doctor http`, the Rust SDK quickstart, `typescript_check`,
-generated-transport `http-smoke`, `gateway-smoke`, managed-cloud checks, benchmark controls, or SQL
-compatibility checks.
+generated-transport `http-smoke`, TypeScript gateway smoke, managed-cloud
+checks, benchmark controls, or SQL compatibility checks.
 `--only typescript_gateway_smoke` runs only `npm run gateway-smoke`, which
 starts a local engine plus gateway-mode server, requires bearer auth, checks
-missing-token and bad-branch rejection, and runs the generated TypeScript
-endpoint quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local`,
-`TRACEDB_BRANCH_ID=db_local:main`, and a local `TRACEDB_ADMIN_DIR`. It does not
-run embedded demo/verify, `http_demo`, local `doctor http`, the Rust SDK
+missing-token and bad-branch rejection, and runs the public TypeScript SDK
+wrapper through the gateway with `databaseId=db_local`, `branchId=db_local:main`,
+and a local admin scratch dir. It does not run embedded demo/verify, `http_demo`,
+local `doctor http`, the Rust SDK
 quickstart, `typescript_check`, `http-smoke`, managed-cloud checks, benchmark
 controls, or SQL compatibility checks.
 

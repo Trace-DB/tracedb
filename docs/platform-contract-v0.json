@@ -47,7 +47,7 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "public_wrapper_started",
+      "status": "public_wrapper_http_and_gateway_smoked",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/src/client.ts",

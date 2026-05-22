@@ -125,10 +125,10 @@ compatibility.
 `--only typescript_gateway_smoke` runs only `(cd clients/typescript && npm run
 gateway-smoke)`, which starts a local engine plus gateway-mode
 `tracedb-server`, requires bearer auth, checks missing-token and bad-branch
-rejection, and runs the generated TypeScript endpoint quickstart through the
-gateway with managed routing metadata plus a local admin scratch dir. It emits
+rejection, and runs the public TypeScript SDK wrapper through the gateway with
+managed routing metadata plus a local admin scratch dir. It emits
 one-step `local-product-regression` JSON with `only_step:
-"typescript_gateway_smoke"`. This is local generated TypeScript gateway
+"typescript_gateway_smoke"`. This is local public TypeScript SDK gateway
 auth/routing evidence only, not full product gate coverage, not embedded
 demo/verify, not `http_demo`, not local `doctor http` diagnostics, not Rust SDK
 quickstart evidence, not `typescript_check`, not TypeScript HTTP smoke, not
@@ -288,9 +288,10 @@ benchmark evidence. `cd clients/typescript && npm run gateway-smoke` starts a
 local engine plus gateway-mode server with `TRACEDB_REQUIRE_API_KEY=true`,
 `TRACEDB_API_TOKEN=dev-token`, and `TRACEDB_ENGINE_URL` pointing at the engine,
 proves missing-token `401` and bad-branch `400` enforcement, then runs the
-endpoint quickstart through the gateway with `TRACEDB_DATABASE_ID=db_local` and
-`TRACEDB_BRANCH_ID=db_local:main`. This is local gateway auth/routing evidence
-for the generated artifact, not managed-cloud proof or benchmark evidence.
+public TypeScript `TraceDB` wrapper through the gateway with
+`databaseId=db_local` and `branchId=db_local:main`. This is local gateway
+auth/routing evidence for the public SDK over the generated transport, not
+managed-cloud proof or benchmark evidence.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful
