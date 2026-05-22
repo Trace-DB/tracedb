@@ -46,6 +46,8 @@ def load_railway_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         or source.get("RAILWAY_TRACEDB_URL", "")
         or source.get("TRACEDB_HTTP_URL", ""),
         "tracedb_volume_mount_path": source.get("TRACEDB_RAILWAY_VOLUME_PATH", ""),
+        "tracedb_snapshot_root": source.get("TRACEDB_RAILWAY_SNAPSHOT_ROOT", "")
+        or source.get("TRACEDB_REMOTE_SNAPSHOT_ROOT", ""),
         "control_service_ids": {
             role: source.get(env_key, "")
             for role, env_key in CONTROL_SERVICE_ENV.items()
@@ -72,6 +74,9 @@ def validate_railway_config(config: Mapping[str, Any]) -> dict[str, Any]:
     volume = str(config.get("tracedb_volume_mount_path", ""))
     if volume and not volume.startswith("/"):
         warnings.append("TRACEDB_RAILWAY_VOLUME_PATH should be an absolute mount path")
+    snapshot_root = str(config.get("tracedb_snapshot_root", ""))
+    if snapshot_root and not snapshot_root.startswith("/"):
+        warnings.append("TRACEDB_RAILWAY_SNAPSHOT_ROOT should be an absolute server-side path")
     return {
         "ok": not missing,
         "missing": missing,
@@ -85,6 +90,7 @@ def build_railway_manifest(
     suite_id: str,
     endpoint_health: Mapping[str, Any] | None = None,
     stateful_smoke: Mapping[str, Any] | None = None,
+    snapshot_restore: Mapping[str, Any] | None = None,
     operation_plan: Mapping[str, Any] | None = None,
     persistence_verdict: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -127,6 +133,8 @@ def build_railway_manifest(
         manifest["endpoint_health"] = dict(endpoint_health)
     if stateful_smoke is not None:
         manifest["stateful_smoke"] = dict(stateful_smoke)
+    if snapshot_restore is not None:
+        manifest["snapshot_restore"] = dict(snapshot_restore)
     if operation_plan is not None:
         manifest["operation_plan"] = dict(operation_plan)
     if persistence_verdict is not None:
@@ -160,14 +168,11 @@ def build_railway_artifact_manifest(
             "manifest_status": railway_manifest.get("status", "not_checked"),
             "endpoint_health": claim_status.get("railway_endpoint_health", "not_checked"),
             "stateful_smoke": claim_status.get("railway_stateful_smoke", "not_checked"),
+            "snapshot_restore": claim_status.get("railway_snapshot_restore", "not_checked"),
             "restart_redeploy": claim_status.get("railway_restart_redeploy", "not_checked"),
             "persistence": claim_status.get("railway_persistence", "not_checked"),
         },
-        "open_proof_gaps": [
-            "snapshot_restore_not_checked",
-            "backup_validation_not_checked",
-            "artifact_manifest_not_live_restore_proof",
-        ],
+        "open_proof_gaps": _artifact_proof_gaps(claim_status),
         "claim_boundary": "artifact_manifest_indexes_suite_outputs_not_backup_snapshot_restore_proof",
     }
 
@@ -577,6 +582,139 @@ def run_railway_stateful_smoke(
     }
 
 
+def run_railway_snapshot_restore_check(
+    config: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 60.0,
+    bearer_token: str | None = None,
+    run_id: str = "",
+    marker_id: str | None = None,
+    snapshot_root: str | None = None,
+) -> dict[str, Any]:
+    base_url = _endpoint_base_url(config)
+    selected_root = str(snapshot_root or config.get("tracedb_snapshot_root") or "").rstrip("/")
+    marker = _stateful_marker(run_id=run_id, marker_id=marker_id)
+    if not base_url:
+        return {
+            "kind": "railway_snapshot_restore_check",
+            "status": "not_configured",
+            "base_url": "",
+            "snapshot_root": selected_root,
+            "marker": marker,
+            "paths": {},
+            "operations": [],
+            "errors": ["no TraceDB Railway URL configured"],
+            "claim_boundary": "not_checked_no_snapshot_restore_or_backup_dr_proof",
+        }
+    if not selected_root:
+        return {
+            "kind": "railway_snapshot_restore_check",
+            "status": "not_configured",
+            "base_url": base_url,
+            "snapshot_root": "",
+            "marker": marker,
+            "paths": {},
+            "operations": [],
+            "errors": [
+                "TRACEDB_RAILWAY_SNAPSHOT_ROOT or TRACEDB_REMOTE_SNAPSHOT_ROOT is required"
+            ],
+            "claim_boundary": "not_checked_no_snapshot_restore_or_backup_dr_proof",
+        }
+    if not selected_root.startswith("/"):
+        return {
+            "kind": "railway_snapshot_restore_check",
+            "status": "invalid",
+            "base_url": base_url,
+            "snapshot_root": selected_root,
+            "marker": marker,
+            "paths": {},
+            "operations": [],
+            "errors": ["snapshot root must be an absolute server-side path"],
+            "claim_boundary": "not_checked_no_snapshot_restore_or_backup_dr_proof",
+        }
+    volume_path = str(config.get("tracedb_volume_mount_path") or "").rstrip("/")
+    if volume_path and selected_root == volume_path:
+        return {
+            "kind": "railway_snapshot_restore_check",
+            "status": "invalid",
+            "base_url": base_url,
+            "snapshot_root": selected_root,
+            "marker": marker,
+            "paths": {},
+            "operations": [],
+            "errors": ["snapshot root must differ from the configured Railway volume path"],
+            "claim_boundary": "not_checked_no_snapshot_restore_or_backup_dr_proof",
+        }
+
+    safe_run_id = _safe_token(marker["run_id"])
+    safe_marker_id = _safe_token(marker["id"])
+    snapshot_dir = f"{selected_root}/{safe_run_id}/{safe_marker_id}/snapshot"
+    restore_dir = f"{selected_root}/{safe_run_id}/{safe_marker_id}/restore"
+    operations = []
+    errors = []
+
+    operations.append(
+        _request_json_operation(
+            "snapshot",
+            base_url,
+            "POST",
+            "/v1/admin/snapshot",
+            {"target": snapshot_dir},
+            timeout_seconds=timeout_seconds,
+            bearer_token=bearer_token,
+            idempotency_key=f"railway-snapshot:{safe_run_id}:{safe_marker_id}",
+        )
+    )
+    if not operations[-1]["ok"]:
+        errors.append(operations[-1]["error"])
+    else:
+        response = _dict_value(operations[-1].get("response"))
+        if response.get("snapshot") is not True or response.get("target") != snapshot_dir:
+            errors.append("snapshot response did not confirm the requested target")
+
+    if not errors:
+        operations.append(
+            _request_json_operation(
+                "restore",
+                base_url,
+                "POST",
+                "/v1/admin/restore",
+                {"source": snapshot_dir, "target": restore_dir},
+                timeout_seconds=timeout_seconds,
+                bearer_token=bearer_token,
+                idempotency_key=f"railway-restore:{safe_run_id}:{safe_marker_id}",
+            )
+        )
+        if not operations[-1]["ok"]:
+            errors.append(operations[-1]["error"])
+        else:
+            response = _dict_value(operations[-1].get("response"))
+            if (
+                response.get("restored") is not True
+                or response.get("source") != snapshot_dir
+                or response.get("target") != restore_dir
+            ):
+                errors.append("restore response did not confirm the requested source and target")
+
+    status = "passed" if not errors else "failed"
+    if errors and any(operation.get("status_code") is None for operation in operations):
+        status = "unreachable"
+    return {
+        "kind": "railway_snapshot_restore_check",
+        "status": status,
+        "base_url": base_url,
+        "snapshot_root": selected_root,
+        "marker": marker,
+        "paths": {
+            "snapshot": snapshot_dir,
+            "restore": restore_dir,
+        },
+        "operations": operations,
+        "errors": errors,
+        "claim_boundary": "admin_route_snapshot_restore_not_managed_backup_dr_or_restored_service_read_proof",
+    }
+
+
 def redact_env(env: Mapping[str, str]) -> dict[str, str]:
     redacted = {}
     for key, value in env.items():
@@ -615,6 +753,22 @@ def _artifact_entry(suite_dir: Path, name: str, path: str) -> dict[str, Any]:
         entry["size_bytes"] = len(data)
         entry["sha256"] = hashlib.sha256(data).hexdigest()
     return entry
+
+
+def _artifact_proof_gaps(claim_status: Mapping[str, Any]) -> list[str]:
+    gaps = []
+    snapshot_restore_status = claim_status.get("railway_snapshot_restore", "not_checked")
+    if snapshot_restore_status == "passed":
+        gaps.append("snapshot_restore_admin_route_only_not_managed_backup_dr")
+    else:
+        gaps.append("snapshot_restore_not_checked")
+    gaps.extend(
+        [
+            "backup_validation_not_checked",
+            "artifact_manifest_not_live_restore_proof",
+        ]
+    )
+    return gaps
 
 
 def _marker_identity(marker: Mapping[str, Any]) -> tuple[str, str, str]:

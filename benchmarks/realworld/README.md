@@ -280,6 +280,8 @@ least-privilege credentials:
 - Optional public fallback for local control-plane checks:
   `TRACEDB_RAILWAY_URL` or `RAILWAY_TRACEDB_URL`
 - `TRACEDB_RAILWAY_VOLUME_PATH`, usually `/data/tracedb`
+- `TRACEDB_RAILWAY_SNAPSHOT_ROOT` for snapshot/restore checks, an absolute
+  server-side scratch path that must differ from the active volume/data path
 - Optional control service IDs: `POSTGRES_RAILWAY_SERVICE_ID`,
   `PGVECTOR_RAILWAY_SERVICE_ID`, `MONGODB_RAILWAY_SERVICE_ID`,
   `QDRANT_RAILWAY_SERVICE_ID`, and `OPENSEARCH_RAILWAY_SERVICE_ID`
@@ -296,6 +298,7 @@ BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
   --railway-config-from-env \
   --railway-health-check \
   --railway-stateful-smoke \
+  --railway-snapshot-restore-check \
   --railway-restart-redeploy-plan \
   --openrouter-mode off \
   --target tracedb \
@@ -313,6 +316,18 @@ one marker record through `POST /v1/records/put`, reads it back through
 gate if the requested marker is not visible. This proves live write/read
 behavior for the current endpoint only: it still does not create services,
 restart services, redeploy images, or prove volume survival across a restart.
+`--railway-snapshot-restore-check` posts to `POST /v1/admin/snapshot` and
+`POST /v1/admin/restore` using `TRACEDB_RAILWAY_SNAPSHOT_ROOT` or
+`--railway-snapshot-root`, records `snapshot_restore` in
+`railway-manifest.json`, feeds `railway_snapshot_restore` into
+`suite-gate.json`, and blocks failed requested checks. The scratch root must be
+an explicit absolute server-side path and must not equal
+`TRACEDB_RAILWAY_VOLUME_PATH`; this prevents the harness from guessing remote
+filesystem layout or writing snapshot targets directly into the active data
+path. A passed check proves the HTTP admin snapshot/restore routes accepted the
+requested paths and returned matching confirmations. It is not managed
+backup/DR proof and does not prove a live service has reopened the restored
+target.
 After a manually executed Railway restart/redeploy, rerun the same suite with
 `--railway-stateful-smoke --railway-stateful-read-only
 --railway-stateful-marker-id <marker-id>` to read the original marker without
@@ -357,16 +372,19 @@ full Railway product proof.
 
 The Modal `railway_stateful`, `soak_railway`, and `release_100k` presets pass
 `--railway-config-from-env`, `--railway-health-check`, and
-`--railway-stateful-smoke`, and `--railway-restart-redeploy-plan`, so scheduled
-or remote Railway lanes fail fast when the persistent lab is not reachable or
-cannot accept a marker write/read while also carrying an explicit operator plan
-for the next persistence gate.
+`--railway-stateful-smoke`, `--railway-snapshot-restore-check`, and
+`--railway-restart-redeploy-plan`, so scheduled or remote Railway lanes fail
+fast when the persistent lab is not reachable, cannot accept a marker
+write/read, or cannot execute the admin snapshot/restore route check while also
+carrying an explicit operator plan for the next persistence gate.
 When a Railway manifest is present, `runner suite` also writes
 `railway-artifacts.json` and records it in `suite-gate.json` as
 `artifact_paths.railway_artifacts_json`. That file indexes the suite artifacts
 by relative path, existence, size, and SHA-256 without copying artifact contents,
-so Modal bundles carry a compact review manifest for Railway evidence. It is
-not backup, snapshot, restore, or live recovery proof.
+so Modal bundles carry a compact review manifest for Railway evidence. It is not
+backup or live recovery proof; when snapshot/restore passes, the artifact
+manifest still marks that proof as admin-route-only rather than managed backup/DR
+or restored-service-read evidence.
 
 ## Modal CPU/RAM Smoke
 

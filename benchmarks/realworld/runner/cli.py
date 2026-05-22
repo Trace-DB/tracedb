@@ -38,6 +38,7 @@ try:
         build_railway_persistence_verdict,
         load_railway_config,
         run_railway_endpoint_health,
+        run_railway_snapshot_restore_check,
         run_railway_stateful_smoke,
         validate_railway_operation_receipt,
     )
@@ -50,6 +51,7 @@ except ImportError:  # pragma: no cover - package import path used by unit disco
         build_railway_persistence_verdict,
         load_railway_config,
         run_railway_endpoint_health,
+        run_railway_snapshot_restore_check,
         run_railway_stateful_smoke,
         validate_railway_operation_receipt,
     )
@@ -118,6 +120,22 @@ def main(argv: list[str] | None = None) -> int:
         "--railway-stateful-read-only",
         action="store_true",
         help="When used with --railway-stateful-smoke, read an existing marker without schema apply or put.",
+    )
+    suite.add_argument(
+        "--railway-snapshot-restore-check",
+        action="store_true",
+        help="POST Railway TraceDB admin snapshot/restore routes using an explicit server-side scratch root.",
+    )
+    suite.add_argument(
+        "--railway-snapshot-restore-timeout-seconds",
+        type=float,
+        default=60.0,
+        help="Per-request timeout for --railway-snapshot-restore-check.",
+    )
+    suite.add_argument(
+        "--railway-snapshot-root",
+        default="",
+        help="Override TRACEDB_RAILWAY_SNAPSHOT_ROOT for the server-side snapshot/restore scratch path.",
     )
     suite.add_argument(
         "--railway-restart-redeploy-plan",
@@ -720,6 +738,8 @@ def _load_or_write_railway_manifest(
 ) -> dict[str, Any] | None:
     if args.railway_config_from_env:
         config = load_railway_config()
+        if args.railway_snapshot_root:
+            config["tracedb_snapshot_root"] = args.railway_snapshot_root
         endpoint_health = (
             run_railway_endpoint_health(
                 config,
@@ -741,6 +761,23 @@ def _load_or_write_railway_manifest(
             if args.railway_stateful_smoke
             else None
         )
+        snapshot_marker_id = None
+        if isinstance(stateful_smoke, dict):
+            snapshot_marker = stateful_smoke.get("marker")
+            if isinstance(snapshot_marker, dict):
+                snapshot_marker_id = str(snapshot_marker.get("id") or "") or None
+        snapshot_restore = (
+            run_railway_snapshot_restore_check(
+                config,
+                timeout_seconds=args.railway_snapshot_restore_timeout_seconds,
+                bearer_token=os.environ.get("TRACEDB_HTTP_BEARER_TOKEN") or None,
+                run_id=suite_id,
+                marker_id=snapshot_marker_id or args.railway_stateful_marker_id or None,
+                snapshot_root=args.railway_snapshot_root or None,
+            )
+            if args.railway_snapshot_restore_check
+            else None
+        )
         operation_plan = (
             build_railway_operation_plan(config, suite_id=suite_id)
             if args.railway_restart_redeploy_plan
@@ -751,6 +788,7 @@ def _load_or_write_railway_manifest(
             suite_id=suite_id,
             endpoint_health=endpoint_health,
             stateful_smoke=stateful_smoke,
+            snapshot_restore=snapshot_restore,
             operation_plan=operation_plan,
         )
         if args.railway_persistence_pre_manifest_json or args.railway_operation_receipt_json:

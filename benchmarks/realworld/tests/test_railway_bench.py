@@ -22,6 +22,7 @@ from railway_bench import (
     load_railway_config,
     redact_env,
     run_railway_endpoint_health,
+    run_railway_snapshot_restore_check,
     run_railway_stateful_smoke,
     validate_railway_config,
     validate_railway_operation_receipt,
@@ -120,6 +121,26 @@ class MissingMarkerHandler(StatefulSmokeHandler):
             self._send_json(200, {"record": None})
             return
         self._send_json(404, {"error": "not found"})
+
+
+class SnapshotRestoreHandler(StatefulSmokeHandler):
+    def do_POST(self) -> None:
+        body = self._read_body()
+        self.server.requests.append({"path": self.path, "body": body})
+        if self.path == "/v1/admin/snapshot":
+            self._send_json(200, {"snapshot": True, "target": body["target"]})
+            return
+        if self.path == "/v1/admin/restore":
+            self._send_json(
+                200,
+                {
+                    "restored": True,
+                    "source": body["source"],
+                    "target": body["target"],
+                },
+            )
+            return
+        return super().do_POST()
 
 
 class TestHttpServer:
@@ -403,6 +424,113 @@ class RailwayBenchTests(unittest.TestCase):
         )
 
         self.assertEqual(manifest["stateful_smoke"], stateful_smoke)
+
+    def test_snapshot_restore_check_posts_admin_routes_with_safe_paths(self) -> None:
+        with TestHttpServer(SnapshotRestoreHandler) as server:
+            config = load_railway_config(
+                {
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": server.base_url,
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                    "TRACEDB_RAILWAY_SNAPSHOT_ROOT": "/srv/tracedb-admin",
+                }
+            )
+
+            result = run_railway_snapshot_restore_check(
+                config,
+                run_id="suite-run-123",
+                marker_id="marker-123",
+                timeout_seconds=1.0,
+                bearer_token="gateway-secret-token",
+            )
+
+        self.assertEqual(result["status"], "passed", result)
+        self.assertEqual(
+            result["paths"]["snapshot"],
+            "/srv/tracedb-admin/suite-run-123/marker-123/snapshot",
+        )
+        self.assertEqual(
+            result["paths"]["restore"],
+            "/srv/tracedb-admin/suite-run-123/marker-123/restore",
+        )
+        self.assertEqual([op["name"] for op in result["operations"]], ["snapshot", "restore"])
+        self.assertTrue(all(op["ok"] for op in result["operations"]))
+        self.assertIn("not_managed_backup_dr", result["claim_boundary"])
+        self.assertNotIn("gateway-secret-token", repr(result))
+        self.assertNotIn("railway-token-secret", repr(result))
+
+    def test_snapshot_restore_check_requires_explicit_absolute_snapshot_root(self) -> None:
+        missing_root = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+        relative_root = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                "TRACEDB_RAILWAY_SNAPSHOT_ROOT": "relative/path",
+            }
+        )
+        same_as_volume = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                "TRACEDB_RAILWAY_SNAPSHOT_ROOT": "/data/tracedb",
+            }
+        )
+
+        missing = run_railway_snapshot_restore_check(missing_root, run_id="suite-run-123")
+        invalid = run_railway_snapshot_restore_check(relative_root, run_id="suite-run-123")
+        unsafe = run_railway_snapshot_restore_check(same_as_volume, run_id="suite-run-123")
+
+        self.assertEqual(missing["status"], "not_configured")
+        self.assertTrue(any("TRACEDB_RAILWAY_SNAPSHOT_ROOT" in error for error in missing["errors"]))
+        self.assertEqual(invalid["status"], "invalid")
+        self.assertTrue(any("absolute" in error for error in invalid["errors"]))
+        self.assertEqual(unsafe["status"], "invalid")
+        self.assertTrue(any("must differ" in error for error in unsafe["errors"]))
+
+    def test_manifest_can_include_snapshot_restore_result(self) -> None:
+        snapshot_restore = {
+            "status": "passed",
+            "paths": {"snapshot": "/srv/tracedb-admin/run/marker/snapshot"},
+            "operations": [{"name": "snapshot", "ok": True, "status_code": 200}],
+        }
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+
+        manifest = build_railway_manifest(
+            config,
+            suite_id="railway-test",
+            snapshot_restore=snapshot_restore,
+        )
+
+        self.assertEqual(manifest["snapshot_restore"], snapshot_restore)
 
     def test_operation_plan_records_restart_redeploy_readiness_without_leaking_token(self) -> None:
         config = load_railway_config(

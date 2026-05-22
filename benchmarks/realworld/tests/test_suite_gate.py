@@ -363,6 +363,61 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(gate["status"], "usable")
         self.assertEqual(gate["claim_status"]["railway_persistence"], "passed")
 
+    def test_railway_snapshot_restore_pass_records_claim_status(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "snapshot_restore": {
+                    "status": "passed",
+                    "paths": {
+                        "snapshot": "/srv/tracedb-admin/run/marker/snapshot",
+                        "restore": "/srv/tracedb-admin/run/marker/restore",
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["claim_status"]["railway_snapshot_restore"], "passed")
+
+    def test_railway_snapshot_restore_failure_blocks(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "snapshot_restore": {
+                    "status": "failed",
+                    "errors": ["snapshot route failed"],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_snapshot_restore"], "failed")
+        self.assertTrue(
+            any("snapshot/restore" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
     def test_railway_persistence_verdict_failure_blocks(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
 

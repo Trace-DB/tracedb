@@ -126,6 +126,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_config_from_env": True,
         "railway_health_check": True,
         "railway_stateful_smoke": True,
+        "railway_snapshot_restore_check": True,
         "railway_restart_redeploy_plan": True,
     },
     "release_100k": {
@@ -141,6 +142,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_config_from_env": True,
         "railway_health_check": True,
         "railway_stateful_smoke": True,
+        "railway_snapshot_restore_check": True,
         "railway_restart_redeploy_plan": True,
     },
     "soak_railway": {
@@ -155,6 +157,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_config_from_env": True,
         "railway_health_check": True,
         "railway_stateful_smoke": True,
+        "railway_snapshot_restore_check": True,
         "railway_restart_redeploy_plan": True,
     },
     "manual_1m": {
@@ -188,6 +191,9 @@ class ModalSmokeConfig:
     railway_stateful_smoke_timeout_seconds: float = 5.0
     railway_stateful_marker_id: str = ""
     railway_stateful_read_only: bool = False
+    railway_snapshot_restore_check: bool = False
+    railway_snapshot_restore_timeout_seconds: float = 60.0
+    railway_snapshot_root: str = ""
     railway_restart_redeploy_plan: bool = False
     railway_persistence_pre_manifest_json: str = ""
     railway_operation_receipt_json: str = ""
@@ -493,6 +499,16 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
             command.append("--railway-stateful-read-only")
         if config.railway_stateful_marker_id:
             command.extend(["--railway-stateful-marker-id", config.railway_stateful_marker_id])
+    if config.railway_snapshot_restore_check:
+        command.append("--railway-snapshot-restore-check")
+        command.extend(
+            [
+                "--railway-snapshot-restore-timeout-seconds",
+                str(config.railway_snapshot_restore_timeout_seconds),
+            ]
+        )
+        if config.railway_snapshot_root:
+            command.extend(["--railway-snapshot-root", config.railway_snapshot_root])
     if config.railway_restart_redeploy_plan:
         command.append("--railway-restart-redeploy-plan")
     if config.railway_persistence_pre_manifest_json:
@@ -1449,6 +1465,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--railway-stateful-smoke-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--railway-stateful-marker-id", default="")
     parser.add_argument("--railway-stateful-read-only", action="store_true")
+    parser.add_argument("--railway-snapshot-restore-check", action="store_true")
+    parser.add_argument("--railway-snapshot-restore-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--railway-snapshot-root", default="")
     parser.add_argument("--railway-restart-redeploy-plan", action="store_true")
     parser.add_argument("--railway-persistence-pre-manifest-json", default="")
     parser.add_argument("--railway-operation-receipt-json", default="")
@@ -1515,6 +1534,10 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         railway_stateful_smoke_timeout_seconds=args.railway_stateful_smoke_timeout_seconds,
         railway_stateful_marker_id=args.railway_stateful_marker_id,
         railway_stateful_read_only=args.railway_stateful_read_only,
+        railway_snapshot_restore_check=args.railway_snapshot_restore_check
+        or bool(preset.get("railway_snapshot_restore_check", False)),
+        railway_snapshot_restore_timeout_seconds=args.railway_snapshot_restore_timeout_seconds,
+        railway_snapshot_root=args.railway_snapshot_root,
         railway_restart_redeploy_plan=args.railway_restart_redeploy_plan
         or bool(preset.get("railway_restart_redeploy_plan", False)),
         railway_persistence_pre_manifest_json=args.railway_persistence_pre_manifest_json,

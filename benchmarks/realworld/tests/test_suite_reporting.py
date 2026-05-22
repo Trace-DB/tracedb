@@ -54,6 +54,19 @@ class StatefulSmokeHandler(ReadyHandler):
             key = (body["table"], body["tenant_id"], body["id"])
             self._send_json(200, {"record": self.server.records.get(key)})
             return
+        if self.path == "/v1/admin/snapshot":
+            self._send_json(200, {"snapshot": True, "target": body["target"]})
+            return
+        if self.path == "/v1/admin/restore":
+            self._send_json(
+                200,
+                {
+                    "restored": True,
+                    "source": body["source"],
+                    "target": body["target"],
+                },
+            )
+            return
         self._send_json(404, {"error": "not found"})
 
     def _read_body(self) -> dict:
@@ -403,6 +416,79 @@ class SuiteReportingTests(unittest.TestCase):
         )
         self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "passed")
         self.assertEqual(gate["status"], "usable")
+
+    def test_railway_snapshot_restore_check_writes_manifest_and_gate(self) -> None:
+        with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": server.base_url,
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                    "TRACEDB_RAILWAY_SNAPSHOT_ROOT": "/srv/tracedb-admin",
+                }
+            )
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-snapshot-restore-suite-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/railway_stateful.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-stateful-smoke",
+                    "--railway-snapshot-restore-check",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-snapshot-restore-suite-test"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+            artifacts = json.loads((suite_dir / "railway-artifacts.json").read_text())
+
+        self.assertEqual(manifest["snapshot_restore"]["status"], "passed")
+        self.assertEqual(
+            manifest["snapshot_restore"]["paths"]["snapshot"],
+            "/srv/tracedb-admin/railway-snapshot-restore-suite-test/"
+            f"{manifest['stateful_smoke']['marker']['id']}/snapshot",
+        )
+        self.assertEqual(gate["claim_status"]["railway_snapshot_restore"], "passed")
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(
+            artifacts["railway_claim_status"]["snapshot_restore"],
+            "passed",
+        )
+        self.assertNotIn("railway-token-secret", repr(manifest))
 
     def test_railway_stateful_read_only_marker_probe_writes_manifest_without_put(self) -> None:
         with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:

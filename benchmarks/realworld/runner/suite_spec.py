@@ -157,6 +157,11 @@ def build_suite_gate(
         blocking_failures.append(
             f"Railway stateful smoke failed with status={railway_stateful_smoke}"
         )
+    railway_snapshot_restore = _railway_snapshot_restore_status(railway_manifest)
+    if railway_snapshot_restore not in {"not_checked", "passed"}:
+        blocking_failures.append(
+            f"Railway snapshot/restore check failed with status={railway_snapshot_restore}"
+        )
     railway_restart_redeploy = _railway_restart_redeploy_status(railway_manifest)
     if _railway_restart_redeploy_failed(railway_manifest, railway_restart_redeploy):
         blocking_failures.append(
@@ -203,6 +208,7 @@ def build_suite_gate(
             "external_control_available": external_control_available,
             "railway_endpoint_health": railway_endpoint_health,
             "railway_stateful_smoke": railway_stateful_smoke,
+            "railway_snapshot_restore": railway_snapshot_restore,
             "railway_restart_redeploy": railway_restart_redeploy,
             "railway_persistence": railway_persistence,
             "unsupported_coverage": spec.unsupported_coverage,
@@ -267,6 +273,16 @@ def _railway_restart_redeploy_status(railway_manifest: dict[str, Any] | None) ->
     if not isinstance(operation_plan, dict):
         return "not_checked"
     status = operation_plan.get("status")
+    return str(status) if status else "unknown"
+
+
+def _railway_snapshot_restore_status(railway_manifest: dict[str, Any] | None) -> str:
+    if not railway_manifest:
+        return "not_checked"
+    snapshot_restore = railway_manifest.get("snapshot_restore")
+    if not isinstance(snapshot_restore, dict):
+        return "not_checked"
+    status = snapshot_restore.get("status")
     return str(status) if status else "unknown"
 
 

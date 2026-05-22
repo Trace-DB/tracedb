@@ -143,10 +143,12 @@ class ModalBenchTests(unittest.TestCase):
         self.assertTrue(config.railway_config_from_env)
         self.assertTrue(config.railway_health_check)
         self.assertTrue(config.railway_stateful_smoke)
+        self.assertTrue(config.railway_snapshot_restore_check)
         self.assertTrue(config.railway_restart_redeploy_plan)
         self.assertIn("--railway-config-from-env", command)
         self.assertIn("--railway-health-check", command)
         self.assertIn("--railway-stateful-smoke", command)
+        self.assertIn("--railway-snapshot-restore-check", command)
         self.assertIn("--railway-restart-redeploy-plan", command)
 
     def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
@@ -196,6 +198,26 @@ class ModalBenchTests(unittest.TestCase):
 
         self.assertTrue(config.railway_restart_redeploy_plan)
         self.assertIn("--railway-restart-redeploy-plan", command)
+
+    def test_railway_snapshot_restore_check_can_be_enabled_without_preset(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(
+            [
+                "--railway-snapshot-restore-check",
+                "--railway-snapshot-root",
+                "/srv/tracedb-admin",
+                "--run-id",
+                "railway-snapshot-restore-test",
+            ]
+        )
+        command = build_suite_command(config)
+
+        self.assertTrue(config.railway_snapshot_restore_check)
+        self.assertEqual(config.railway_snapshot_root, "/srv/tracedb-admin")
+        self.assertIn("--railway-snapshot-restore-check", command)
+        self.assertIn("--railway-snapshot-root", command)
+        self.assertEqual(command[command.index("--railway-snapshot-root") + 1], "/srv/tracedb-admin")
 
     def test_railway_persistence_artifact_paths_can_be_enabled_without_preset(self) -> None:
         from modal_bench import build_suite_command, _parse_args
