@@ -65,6 +65,13 @@ node --experimental-strip-types clients/typescript/smoke.ts
   real local HTTP smoke validation; it does not declare package publishing
   fields. It rejects empty or CR/LF-containing `idempotencyKey` request options
   before `fetchImpl` is called.
+- The TypeScript public SDK wrapper under `clients/typescript/src/sdk.ts` is the
+  first hand-written platform SDK layer over that generated transport. It
+  exposes `TraceDB`, table handles, single and batch inserts, scan/get/delete,
+  and query-builder chaining through `where({ tenant_id })`, `match`, `near`,
+  `with`, `limit`, and `all`. It is smoke-tested with fake fetch through
+  `npm run public-smoke`; real HTTP and gateway smokes still run through the
+  generated transport examples until the wrapper is promoted through those lanes.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.

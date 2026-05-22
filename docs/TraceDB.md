@@ -249,6 +249,13 @@ catalog, metrics, and admin-jobs responses now have concrete generated aliases
 as well; fields stay optional where local-engine and gateway shapes differ. It
 is not a published npm package, not a hand-maintained managed SDK, not a strict
 runtime validator, and not a SQL compatibility claim.
+The TypeScript package now also starts the public platform SDK layer at
+`clients/typescript/src/sdk.ts`. `TraceDB` wraps the generated `TraceDbClient`
+transport and exposes table handles for single insert, batch insert, get, scan,
+delete, and query-builder chaining through `where({ tenant_id })`, `match`,
+`near`, `with`, `limit`, and `all`. `npm run public-smoke` verifies this wrapper
+with a fake transport and missing-tenant request validation; it is public-DX
+smoke evidence, not npm publishing readiness or managed-cloud proof.
 `node --experimental-strip-types clients/typescript/smoke.ts` verifies the
 artifact imports and executes in the local Node runtime with fake-fetch coverage
 for representative generated aliases, GET no-body behavior, POST routing
@@ -258,7 +265,7 @@ envelopes on `TraceDbHttpError`. Stable machine-readable error `code` values
 are preserved when present. It rejects empty or CR/LF-containing
 `idempotencyKey` request options before `fetchImpl` as `TraceDbRequestError`.
 `cd clients/typescript && npm ci && npm run check` installs the locked private
-tooling and typechecks the generated artifact plus smoke script. The package is
+tooling and typechecks the generated artifact plus smoke scripts. The package is
 private and does not declare publishing fields. `cd clients/typescript && npm
 run http-smoke` starts a local `tracedb-server` child process with an isolated
 temporary data directory and drives the generated TypeScript client over real

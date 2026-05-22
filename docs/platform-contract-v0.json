@@ -47,10 +47,12 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "generated_transport_current",
-      "role": "transport artifact today, public platform SDK later",
+      "status": "public_wrapper_started",
+      "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/src/client.ts",
+        "clients/typescript/src/sdk.ts",
+        "clients/typescript/public-sdk-smoke.ts",
         "clients/typescript/http-smoke.ts",
         "clients/typescript/gateway-smoke.ts"
       ]

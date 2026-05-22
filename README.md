@@ -317,6 +317,29 @@ The TypeScript client smoke runs with local Node type stripping:
 node --experimental-strip-types clients/typescript/smoke.ts
 ```
 
+The TypeScript package now also has a first public SDK wrapper over the
+generated transport:
+
+```ts
+import { TraceDB } from "./src/sdk";
+
+const db = new TraceDB({ url: "http://127.0.0.1:8090", token: "dev-token" });
+
+const result = await db
+  .table("docs")
+  .where({ tenant_id: "tenant-a", status: "published" })
+  .match("body", "rust sdk")
+  .near("embedding", [1, 0, 0])
+  .with({ explain: true, freshness: "lazy" })
+  .limit(20)
+  .all();
+```
+
+The wrapper lives in `clients/typescript/src/sdk.ts`, uses the generated
+`TraceDbClient` as its transport, and is covered by `npm run public-smoke`.
+It is the start of TypeScript public-DX parity, not a published npm package
+claim.
+
 The generated TypeScript client also has a private local package boundary for
 typechecking the artifact and smoke script:
 

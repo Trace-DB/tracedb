@@ -1629,6 +1629,10 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         json!("node --experimental-strip-types smoke.ts")
     );
     assert_eq!(
+        package["scripts"]["public-smoke"],
+        json!("node --experimental-strip-types public-sdk-smoke.ts")
+    );
+    assert_eq!(
         package["scripts"]["http-smoke"],
         json!("node --experimental-strip-types http-smoke.ts")
     );
@@ -1642,7 +1646,7 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
     );
     assert_eq!(
         package["scripts"]["check"],
-        json!("npm run typecheck && npm run smoke")
+        json!("npm run typecheck && npm run smoke && npm run public-smoke")
     );
     assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));
     assert_eq!(package["devDependencies"]["@types/node"], json!("25.9.0"));
@@ -1690,12 +1694,50 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         tsconfig["include"],
         json!([
             "src/client.ts",
+            "src/sdk.ts",
             "smoke.ts",
+            "public-sdk-smoke.ts",
             "http-smoke.ts",
             "quickstart.ts",
             "gateway-smoke.ts"
         ])
     );
+
+    let public_sdk = std::fs::read_to_string(root.join("clients/typescript/src/sdk.ts"))
+        .expect("read TypeScript public SDK wrapper");
+    for token in [
+        "export class TraceDB",
+        "table(name: string): TraceDBTable",
+        "export class TraceDBTable",
+        "insertBatch",
+        "RecordPutBatchRequest",
+        "where({ tenant_id })",
+        "TraceDbClient",
+    ] {
+        assert!(
+            public_sdk.contains(token),
+            "TypeScript public SDK wrapper should include {token}"
+        );
+    }
+
+    let public_smoke = std::fs::read_to_string(root.join("clients/typescript/public-sdk-smoke.ts"))
+        .expect("read TypeScript public SDK smoke");
+    for token in [
+        "typescript public sdk smoke ok",
+        "new TraceDB",
+        ".table(\"docs\")",
+        ".insertBatch",
+        ".where({ tenant_id",
+        ".match(\"body\"",
+        ".near(\"embedding\"",
+        ".with({ explain: true, freshness: \"lazy\" })",
+        "TraceDbRequestError",
+    ] {
+        assert!(
+            public_smoke.contains(token),
+            "TypeScript public SDK smoke should include {token}"
+        );
+    }
 
     let http_smoke = std::fs::read_to_string(root.join("clients/typescript/http-smoke.ts"))
         .expect("read TypeScript HTTP smoke");
@@ -1769,6 +1811,7 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "npm ci",
         "npm run typecheck",
         "npm run smoke",
+        "npm run public-smoke",
         "npm run http-smoke",
         "npm run quickstart",
         "npm run gateway-smoke",
@@ -1781,6 +1824,8 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "RecordScanOutput.records",
         "QueryResponse.results",
         "HybridScoreComponents",
+        "TraceDB",
+        "insertBatch",
         "not a package publishing pipeline",
     ] {
         assert!(

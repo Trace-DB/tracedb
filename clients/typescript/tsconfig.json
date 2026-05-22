@@ -12,7 +12,9 @@
   },
   "include": [
     "src/client.ts",
+    "src/sdk.ts",
     "smoke.ts",
+    "public-sdk-smoke.ts",
     "http-smoke.ts",
     "quickstart.ts",
     "gateway-smoke.ts"

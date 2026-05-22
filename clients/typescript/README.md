@@ -1,12 +1,19 @@
-# TraceDB TypeScript Client Artifact
+# TraceDB TypeScript Client And SDK
 
 This directory contains a generated, dependency-free TypeScript `fetch` client
-for the current TraceDB v1 HTTP API.
+for the current TraceDB v1 HTTP API plus a hand-written public SDK wrapper over
+that transport.
 
 It is generated from `docs/api/v1-openapi.json` and is checked in so product
 smokes and examples can import a stable artifact without waiting for a package
 publishing pipeline. It is not a managed-cloud SDK promise and not a published
 npm package contract.
+
+The public wrapper lives in `src/sdk.ts`. It intentionally uses the generated
+`TraceDbClient` as its transport layer instead of duplicating HTTP routes.
+Current public DX starts with `new TraceDB({ url, token })`, table handles,
+record writes, batch ingest, scan/get/delete, and a query builder that compiles
+to the canonical `HybridQuery` body.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
 schemas and uses them in method signatures. These aliases intentionally preserve
@@ -38,6 +45,8 @@ Run the local dependency-free Node smoke:
 
 ```bash
 node --experimental-strip-types clients/typescript/smoke.ts
+cd clients/typescript
+npm run public-smoke
 ```
 
 The smoke imports `src/client.ts`, uses a fake `fetchImpl`, verifies generated
@@ -56,6 +65,14 @@ readiness, database catalog, branch catalog, public-safe metrics, and admin
 jobs.
 This is runtime smoke coverage for the checked artifact, not a package
 publishing pipeline.
+
+The public SDK smoke imports `src/sdk.ts` and verifies the first table/query
+wrapper layer against a fake transport. It checks `TraceDB`, table-scoped
+`insert`, `insertBatch`, `get`, `scan`, `delete`, and query-builder chaining via
+`where({ tenant_id })`, `match`, `near`, `with`, `limit`, and `all`. It also
+checks missing-tenant validation raises `TraceDbRequestError` before `fetchImpl`
+is called. This is public-DX smoke coverage over the generated transport, not
+publishing readiness or managed-cloud proof.
 
 Run the real local HTTP smoke from the TypeScript package directory:
 
@@ -142,10 +159,10 @@ server.
 `--skip-typescript` is for the full product gate and non-TypeScript selectors;
 a TypeScript `--only` selector conflicts with --skip-typescript.
 `--only typescript_check` runs only `npm run check`, which currently performs
-the private package typecheck plus dependency-free generated-client smoke. It
-does not run `http-smoke`, `gateway-smoke`, `http_demo`, local `doctor http`,
-the Rust SDK quickstart, managed-cloud checks, benchmark controls, or SQL
-compatibility checks.
+the private package typecheck plus dependency-free generated-client and public
+SDK smokes. It does not run `http-smoke`, `gateway-smoke`, `http_demo`, local
+`doctor http`, the Rust SDK quickstart, managed-cloud checks, benchmark
+controls, or SQL compatibility checks.
 `--only typescript_http_smoke` runs only `npm run http-smoke`, which starts its
 own local `tracedb-server` child process and exercises the generated
 TypeScript client HTTP product path. It does not run embedded demo/verify,
@@ -168,6 +185,7 @@ cd clients/typescript
 npm ci
 npm run typecheck
 npm run smoke
+npm run public-smoke
 npm run http-smoke
 npm run quickstart
 npm run gateway-smoke
@@ -175,17 +193,17 @@ npm run check
 ```
 
 The package is marked `private: true` and exists to typecheck the generated
-artifact plus smoke script. This is not a package publishing pipeline. It
+artifact plus smoke scripts. This is not a package publishing pipeline. It
 deliberately does not declare package publishing fields such as `exports`,
 `main`, `types`, `files`, or `publishConfig`.
 
 ## Local Usage
 
 ```ts
-import { TraceDbClient, type TableSchema } from "./src/client";
+import { TraceDB, type TableSchema } from "./src/sdk";
 
-const client = new TraceDbClient({
-  baseUrl: "http://127.0.0.1:8090",
+const db = new TraceDB({
+  url: "http://127.0.0.1:8090",
   token: "dev-token",
 });
 
@@ -198,14 +216,31 @@ const schema: TableSchema = {
   vector_columns: [{ name: "embedding", dimensions: 3, source_columns: ["body"] }],
 };
 
-await client.ready();
-await client.applySchema(schema);
-await client.putRecord({
-  table: "docs",
-  id: "a",
-  tenant_id: "tenant-a",
-  fields: { body: "hello" },
-});
+await db.ready();
+await db.applySchema(schema);
+
+const docs = db.table("docs").tenant("tenant-a");
+await docs.insert("a", { body: "hello", embedding: [1, 0, 0] });
+await docs.insertBatch([
+  { id: "b", fields: { body: "batch", embedding: [0, 1, 0] } },
+]);
+
+const result = await db
+  .table("docs")
+  .where({ tenant_id: "tenant-a", status: "published" })
+  .match("body", "hello")
+  .near("embedding", [1, 0, 0])
+  .with({ explain: true, freshness: "lazy" })
+  .limit(20)
+  .all();
+
+console.log(result.results);
+```
+
+The generated transport remains available for raw route access:
+
+```ts
+import { TraceDbClient } from "./src/client";
 ```
 
 ## Managed-Routing Metadata

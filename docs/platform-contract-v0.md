@@ -72,7 +72,7 @@ Every product surface must map to these contract components:
 | --- | --- | --- | --- |
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
-| TypeScript SDK | `typescript_sdk` | Generated transport current | Transport artifact today; public platform SDK later. |
+| TypeScript SDK | `typescript_sdk` | Public wrapper started | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Planned | AI/data/notebook ingestion SDK after the harness exists. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
@@ -122,6 +122,14 @@ insert, batch insert, get, scan, and delete calls and build query requests with
 `where_eq`, `match_text`, `near`, `with_explain`, `limit`, and `all()`. These
 helpers compile into the existing `RecordInput`, `RecordPutBatchRequest`, record
 request, and `HybridQuery` models; the raw HTTP methods remain available.
+
+The TypeScript package now starts the public SDK layer in
+`clients/typescript/src/sdk.ts`. `new TraceDB({ url, token })` wraps the
+generated `TraceDbClient` transport and exposes table handles with
+`insert`, `insertBatch`, `get`, `scan`, `delete`, `where`, `match`, `near`,
+`with`, `limit`, and `all`. This first wrapper is fake-fetch/typecheck guarded;
+the generated transport remains available and remains the source of route
+methods.
 
 ## Surface Implementation Rules
 
