@@ -274,10 +274,11 @@ methods over the current HTTP response shapes and accepts a configurable SDK
 request timeout; the original raw `serde_json::Value` methods remain available.
 The blocking SDK now also exposes a first ergonomic table/query layer through
 `TraceDbClient::table("docs").tenant("tenant-a")`: table handles can
-`insert`, `get_record`, `scan_typed`, and `delete_record`, and their query
-builder supports `where_eq`, `match_text`, `near`, `with_explain`, `limit`, and
-`all()`. The builder posts the canonical `HybridQuery` wire shape and is covered
-by both request-shape and real loopback-server SDK tests.
+`insert`, `insert_batch`, `get_record`, `scan_typed`, and `delete_record`, and
+their query builder supports `where_eq`, `match_text`, `near`, `with_explain`,
+`limit`, and `all()`. The table helpers post the canonical record/batch wire
+shapes, the builder posts the canonical `HybridQuery` wire shape, and both paths
+are covered by request-shape and real loopback-server SDK tests.
 Bounded safe retries are available for SDK health/read routes only. Callers can
 manually attach `Idempotency-Key` per write/admin request with
 `TraceDbRequestOptions`; `TraceDbClientConfig::with_idempotency_retries` can then

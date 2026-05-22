@@ -17,8 +17,9 @@ use tracedb_query::{
 };
 use tracedb_sdk::{
     BranchesResponse, DatabasesResponse, ErrorResponse, HealthResponse, JobsResponse,
-    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TraceDbAsyncClient,
-    TraceDbClient, TraceDbClientConfig, TraceDbClientError, TraceDbRequestOptions,
+    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TableRecordInput,
+    TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
+    TraceDbRequestOptions,
 };
 
 fn schema() -> TableSchema {
@@ -554,6 +555,59 @@ fn table_handle_query_builder_posts_canonical_hybrid_query() {
     assert_eq!(body["top_k"], 20);
     assert_eq!(body["freshness"], "Strict");
     assert_eq!(body["explain"], true);
+}
+
+#[test]
+fn table_handle_insert_batch_posts_canonical_batch_body() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"epoch":7,"record_count":2}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+    let options = TraceDbRequestOptions::new().with_idempotency_key("table-batch-1");
+
+    let response = client
+        .table("docs")
+        .tenant("tenant-a")
+        .insert_batch_with_options(
+            vec![
+                TableRecordInput::new(
+                    "batch-intro",
+                    json!({
+                        "status": "published",
+                        "body": "batch ergonomic rust sdk",
+                        "embedding": [1.0, 0.0, 0.0],
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+                TableRecordInput::new(
+                    "batch-ops",
+                    json!({
+                        "status": "draft",
+                        "body": "batch ergonomic delete path",
+                        "embedding": [0.0, 1.0, 0.0],
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            ],
+            &options,
+        )
+        .expect("table batch insert");
+    let body = request_body.join().expect("request body");
+
+    assert_eq!(response.epoch, 7);
+    assert_eq!(response.record_count, 2);
+    assert_eq!(body["records"][0]["table"], "docs");
+    assert_eq!(body["records"][0]["tenant_id"], "tenant-a");
+    assert_eq!(body["records"][0]["id"], "batch-intro");
+    assert_eq!(body["records"][0]["fields"]["id"], "batch-intro");
+    assert_eq!(body["records"][0]["fields"]["tenant"], "tenant-a");
+    assert_eq!(body["records"][1]["table"], "docs");
+    assert_eq!(body["records"][1]["tenant_id"], "tenant-a");
+    assert_eq!(body["records"][1]["id"], "batch-ops");
+    assert_eq!(body["records"][1]["fields"]["id"], "batch-ops");
+    assert_eq!(body["records"][1]["fields"]["tenant"], "tenant-a");
 }
 
 #[test]
@@ -1390,6 +1444,60 @@ fn table_handle_executes_real_typed_product_path() {
 
     let deleted = docs.get_record("ergonomic-ops").expect("get deleted");
     assert!(deleted.record.is_none());
+}
+
+#[test]
+fn table_handle_insert_batch_executes_real_typed_product_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let url = start_real_http_server(temp.path().to_path_buf());
+
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+    client.apply_schema_typed(&schema()).expect("schema");
+    let docs = client.table("docs").tenant("tenant-a");
+
+    let response = docs
+        .insert_batch(vec![
+            TableRecordInput::new(
+                "ergonomic-batch-intro",
+                json!({
+                    "status": "published",
+                    "body": "ergonomic rust sdk batch ingest",
+                    "embedding": [1.0, 0.0, 0.0],
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+            TableRecordInput::new(
+                "ergonomic-batch-ops",
+                json!({
+                    "status": "draft",
+                    "body": "ergonomic batch scan path",
+                    "embedding": [0.0, 1.0, 0.0],
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        ])
+        .expect("batch insert");
+    assert_eq!(response.epoch, 2);
+    assert_eq!(response.record_count, 2);
+
+    let scan = docs.clone().limit(10).scan_typed().expect("scan");
+    assert_eq!(scan.returned_count, 2);
+
+    let query = docs
+        .where_eq("status", "published")
+        .match_text("body", "batch ingest")
+        .near("embedding", vec![1.0, 0.0, 0.0])
+        .limit(5)
+        .all()
+        .expect("query");
+    assert!(query
+        .results
+        .iter()
+        .any(|row| row.record_id == "ergonomic-batch-intro"));
 }
 
 #[test]

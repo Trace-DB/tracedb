@@ -44,8 +44,8 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - The current Rust SDK is a minimal blocking HTTP client for this API surface.
   It now also has a first ergonomic table/query layer over the same wire
   contract through `TraceDbClient::table("docs").tenant("tenant-a")`, including
-  table insert/get/scan/delete helpers and a query builder that posts the
-  canonical `HybridQuery` shape.
+  table insert, batch insert, get, scan, and delete helpers plus a query builder
+  that posts the canonical `HybridQuery` shape.
   It also exposes `TraceDbAsyncClient` as a minimal async facade over the same
   HTTP contract. This first async surface runs the existing transport on a
   background thread per request so callers can await typed read, write, and

@@ -1457,6 +1457,21 @@ fn decode_typed<T: for<'de> Deserialize<'de>>(
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TableRecordInput {
+    pub id: String,
+    pub fields: Map<String, Value>,
+}
+
+impl TableRecordInput {
+    pub fn new(id: impl Into<String>, fields: Map<String, Value>) -> Self {
+        Self {
+            id: id.into(),
+            fields,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct QueryBuilder {
     client_config: Option<TraceDbClientConfig>,
@@ -1527,26 +1542,38 @@ impl QueryBuilder {
     pub fn insert_with_options(
         &self,
         id: impl Into<String>,
-        mut fields: Map<String, Value>,
+        fields: Map<String, Value>,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<EpochResponse> {
         let path = "/v1/records/put";
-        let id = id.into();
         let tenant_id = self.required_tenant_id("POST", path)?;
-        fields
-            .entry("id".to_string())
-            .or_insert_with(|| Value::String(id.clone()));
-        fields
-            .entry("tenant".to_string())
-            .or_insert_with(|| Value::String(tenant_id.clone()));
-        let record = RecordInput {
-            table: self.table.clone(),
-            id,
-            tenant_id,
-            fields,
-        };
+        let record = self.record_input(TableRecordInput::new(id, fields), &tenant_id);
         self.client("POST", path)?
             .put_typed_with_options(&record, options)
+    }
+
+    pub fn insert_batch(
+        &self,
+        records: Vec<TableRecordInput>,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        let options = TraceDbRequestOptions::default();
+        self.insert_batch_with_options(records, &options)
+    }
+
+    pub fn insert_batch_with_options(
+        &self,
+        records: Vec<TableRecordInput>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        let path = "/v1/records/put-batch";
+        let tenant_id = self.required_tenant_id("POST", path)?;
+        let records = records
+            .into_iter()
+            .map(|record| self.record_input(record, &tenant_id))
+            .collect();
+        let request = RecordPutBatchRequest::new(records);
+        self.client("POST", path)?
+            .put_batch_typed_with_options(&request, options)
     }
 
     pub fn patch_record(
@@ -1710,6 +1737,22 @@ impl QueryBuilder {
                 path: path.to_string(),
                 message: "table handle execution requires tenant(...)".to_string(),
             }),
+        }
+    }
+
+    fn record_input(&self, record: TableRecordInput, tenant_id: &str) -> RecordInput {
+        let mut fields = record.fields;
+        fields
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(record.id.clone()));
+        fields
+            .entry("tenant".to_string())
+            .or_insert_with(|| Value::String(tenant_id.to_string()));
+        RecordInput {
+            table: self.table.clone(),
+            id: record.id,
+            tenant_id: tenant_id.to_string(),
+            fields,
         }
     }
 }
