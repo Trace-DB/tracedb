@@ -11,9 +11,10 @@ npm package contract.
 
 The public wrapper lives in `src/sdk.ts`. It intentionally uses the generated
 `TraceDbClient` as its transport layer instead of duplicating HTTP routes.
-Current public DX starts with `new TraceDB({ url, token })`, table handles,
-record writes, batch ingest, patch, scan/get/delete, admin compact/snapshot/
-restore, and a query builder that compiles to the canonical `HybridQuery` body.
+Current public DX starts with `new TraceDB({ url, token })` or
+`TraceDB.fromEnv()`, table handles, record writes, batch ingest, patch,
+scan/get/delete, admin compact/snapshot/restore, and a query builder that
+compiles to the canonical `HybridQuery` body.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
 schemas and uses them in method signatures. These aliases intentionally preserve
@@ -67,8 +68,10 @@ This is runtime smoke coverage for the checked artifact, not a package
 publishing pipeline.
 
 The public SDK smoke imports `src/sdk.ts` and verifies the first table/query
-wrapper layer against a fake transport. It checks `TraceDB`, table-scoped
-`insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
+wrapper layer against a fake transport. It checks `TraceDB.fromEnv()` for
+`TRACEDB_URL`, `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
+`TRACEDB_TIMEOUT_MS`, then checks table-scoped `insert`, `insertBatch`, `patch`,
+`get`, `scan`, `delete`, admin
 compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
 `match`, `near`, `with`, `limit`, `all`, and `explainPlan`. It also checks
 missing-tenant validation raises `TraceDbRequestError` before `fetchImpl` is

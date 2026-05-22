@@ -14,6 +14,7 @@ export interface JsonObject {
 }
 
 type TraceDbMethod = "GET" | "POST";
+export type TraceDbRequestContext = TraceDbMethod | "CONFIG";
 
 export interface TraceDbFetchResponse {
   ok: boolean;
@@ -93,10 +94,10 @@ export class TraceDbHttpError extends Error {
 }
 
 export class TraceDbRequestError extends Error {
-  readonly method: TraceDbMethod;
+  readonly method: TraceDbRequestContext;
   readonly path: string;
 
-  constructor(method: TraceDbMethod, path: string, message: string) {
+  constructor(method: TraceDbRequestContext, path: string, message: string) {
     super(`TraceDB ${method} ${path} request invalid: ${message}`);
     this.name = "TraceDbRequestError";
     this.method = method;

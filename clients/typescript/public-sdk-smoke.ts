@@ -66,6 +66,58 @@ const db = new TraceDB({
   },
 });
 
+const fromEnvCalls: FetchCall[] = [];
+const fromEnvDb = TraceDB.fromEnv({
+  env: {
+    TRACEDB_URL: "http://127.0.0.1:8090/",
+    TRACEDB_TOKEN: "env-token",
+    TRACEDB_DATABASE_ID: "env-db",
+    TRACEDB_BRANCH_ID: "env-branch",
+    TRACEDB_TIMEOUT_MS: "2500",
+  },
+  fetchImpl: async (input, init) => {
+    fromEnvCalls.push({ input, init });
+    return okJson({ epoch: 7 });
+  },
+});
+
+const fromEnvInsert = await fromEnvDb.table("docs").tenant("tenant-a").insert("env-intro", {
+  body: "from env",
+});
+assert.equal(fromEnvInsert.epoch, 7);
+assert.equal(fromEnvCalls[0].input, "http://127.0.0.1:8090/v1/records/put");
+assert.equal(fromEnvCalls[0].init.headers.Authorization, "Bearer env-token");
+assert.ok(fromEnvCalls[0].init.signal, "TRACEDB_TIMEOUT_MS should attach a request signal");
+const fromEnvBody = JSON.parse(fromEnvCalls[0].init.body ?? "{}");
+assert.equal(fromEnvBody.database_id, "env-db");
+assert.equal(fromEnvBody.branch_id, "env-branch");
+
+assert.throws(
+  () => TraceDB.fromEnv({ env: {} }),
+  (error: unknown) => {
+    assert.ok(error instanceof TraceDbRequestError);
+    assert.equal(error.method, "CONFIG");
+    assert.equal(error.path, "TRACEDB_URL");
+    return true;
+  },
+);
+
+assert.throws(
+  () =>
+    TraceDB.fromEnv({
+      env: {
+        TRACEDB_URL: "http://127.0.0.1:8090",
+        TRACEDB_TIMEOUT_MS: "0",
+      },
+    }),
+  (error: unknown) => {
+    assert.ok(error instanceof TraceDbRequestError);
+    assert.equal(error.method, "CONFIG");
+    assert.equal(error.path, "TRACEDB_TIMEOUT_MS");
+    return true;
+  },
+);
+
 const fields = { body: "hello", embedding: [1, 0, 0] };
 const insert = await db
   .table("docs")

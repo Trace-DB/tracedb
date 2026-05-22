@@ -72,7 +72,7 @@ Every product surface must map to these contract components:
 | --- | --- | --- | --- |
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
-| TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked | Hand-written `TraceDB` table/query wrapper over the generated transport. |
+| TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked with package unit lane | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
@@ -140,13 +140,18 @@ request, and `HybridQuery` models; the raw HTTP methods remain available.
 routing config boundary as the other SDK lanes.
 
 The TypeScript package now starts the public SDK layer in
-`clients/typescript/src/sdk.ts`. `new TraceDB({ url, token })` wraps the
-generated `TraceDbClient` transport and exposes table handles with
+`clients/typescript/src/sdk.ts`. `new TraceDB({ url, token })` or
+`TraceDB.fromEnv()` wraps the generated `TraceDbClient` transport and exposes
+table handles with
 `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
 compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
-and `explainPlan`. The wrapper is fake-fetch/typecheck guarded and now has real
-local HTTP and gateway smokes through `npm run public-http-smoke` and
-`npm run gateway-smoke`. The public HTTP smoke now emits machine-readable
+and `explainPlan`. `TraceDB.fromEnv()` reads `TRACEDB_URL`, optional
+`TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
+`TRACEDB_TIMEOUT_MS` so the TypeScript public SDK shares the same connection and
+routing config boundary as Rust and Python. The wrapper is fake-fetch/typecheck
+guarded and now has real local HTTP and gateway smokes through
+`npm run public-http-smoke` and `npm run gateway-smoke`. The public HTTP smoke
+now emits machine-readable
 idempotency and error-envelope evidence for `scripts/platform_conformance.py
 --surface typescript_sdk`; the generated transport remains available and
 remains the source of route methods.

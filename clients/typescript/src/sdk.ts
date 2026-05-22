@@ -69,6 +69,31 @@ export type {
 export type TraceDBConfig = Omit<TraceDbClientConfig, "baseUrl"> & {
   url?: string;
   baseUrl?: string;
+  timeoutMs?: number;
+};
+
+export type TraceDBEnv = Partial<
+  Record<
+    | "TRACEDB_URL"
+    | "TRACEDB_TOKEN"
+    | "TRACEDB_DATABASE_ID"
+    | "TRACEDB_BRANCH_ID"
+    | "TRACEDB_TIMEOUT_MS",
+    string | undefined
+  >
+>;
+
+export type TraceDBFromEnvOptions = Omit<
+  TraceDBConfig,
+  "url" | "baseUrl" | "token" | "databaseId" | "branchId" | "timeoutMs"
+> & {
+  env?: TraceDBEnv;
+  url?: string;
+  baseUrl?: string;
+  token?: string;
+  databaseId?: string;
+  branchId?: string;
+  timeoutMs?: number;
 };
 
 export type TableRecordInput = {
@@ -91,14 +116,43 @@ export class TraceDB {
   constructor(config: TraceDBConfig) {
     const baseUrl = config.baseUrl ?? config.url;
     if (baseUrl === undefined || baseUrl.trim().length === 0) {
-      throw new Error("TraceDB requires config.url or config.baseUrl");
+      throw new TraceDbRequestError(
+        "CONFIG",
+        "url",
+        "TraceDB requires config.url or config.baseUrl",
+      );
     }
+    const timeoutMs = validateTimeoutMs(config.timeoutMs, "timeoutMs");
     this.transport = new TraceDbClient({
       baseUrl,
       token: config.token,
       databaseId: config.databaseId,
       branchId: config.branchId,
-      fetchImpl: config.fetchImpl,
+      fetchImpl: fetchWithTimeout(config.fetchImpl, timeoutMs),
+    });
+  }
+
+  static fromEnv(options: TraceDBFromEnvOptions = {}): TraceDB {
+    const env = options.env ?? defaultTraceDBEnv();
+    const url = options.baseUrl ?? options.url ?? env.TRACEDB_URL;
+    if (url === undefined || url.trim().length === 0) {
+      throw new TraceDbRequestError(
+        "CONFIG",
+        "TRACEDB_URL",
+        "TraceDB.fromEnv requires TRACEDB_URL",
+      );
+    }
+    const timeoutMs =
+      options.timeoutMs === undefined
+        ? parseTimeoutMsFromEnv(env.TRACEDB_TIMEOUT_MS)
+        : validateTimeoutMs(options.timeoutMs, "timeoutMs");
+    return new TraceDB({
+      url,
+      token: options.token ?? env.TRACEDB_TOKEN,
+      databaseId: options.databaseId ?? env.TRACEDB_DATABASE_ID,
+      branchId: options.branchId ?? env.TRACEDB_BRANCH_ID,
+      fetchImpl: options.fetchImpl,
+      timeoutMs,
     });
   }
 
@@ -445,4 +499,62 @@ function normalizeFreshness(freshness: string): string {
     return "Lazy";
   }
   return freshness;
+}
+
+function defaultTraceDBEnv(): TraceDBEnv {
+  const maybeProcess = globalThis as typeof globalThis & {
+    process?: { env?: TraceDBEnv };
+  };
+  return maybeProcess.process?.env ?? {};
+}
+
+function parseTimeoutMsFromEnv(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim().length === 0) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new TraceDbRequestError(
+      "CONFIG",
+      "TRACEDB_TIMEOUT_MS",
+      "TRACEDB_TIMEOUT_MS must be a positive number",
+    );
+  }
+  return parsed;
+}
+
+function validateTimeoutMs(value: number | undefined, path: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new TraceDbRequestError("CONFIG", path, "timeoutMs must be a positive number");
+  }
+  return value;
+}
+
+function fetchWithTimeout(
+  fetchImpl: TraceDbFetch | undefined,
+  timeoutMs: number | undefined,
+): TraceDbFetch | undefined {
+  if (timeoutMs === undefined) {
+    return fetchImpl;
+  }
+  const defaultFetch = (globalThis as typeof globalThis & { fetch?: TraceDbFetch }).fetch;
+  const resolvedFetch = fetchImpl ?? defaultFetch;
+  if (typeof resolvedFetch !== "function") {
+    return undefined;
+  }
+  return async (input: string, init: TraceDbFetchInit) => {
+    if (init.signal !== undefined) {
+      return resolvedFetch(input, init);
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await resolvedFetch(input, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
 }

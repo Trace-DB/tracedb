@@ -451,7 +451,10 @@ schema apply, insert, batch ingest, patch, get, scan, query, explain, delete,
 idempotency replay/conflict, parsed error envelopes, compact, snapshot, restore,
 and admin jobs. `python3 scripts/platform_conformance.py --surface
 typescript_sdk` maps the public smoke summary into the Platform Contract v0
-scenario IDs.
+scenario IDs. The public wrapper also exposes `TraceDB.fromEnv()` for
+`TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
+`TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`, matching the shared SDK
+connection/routing config boundary.
 
 It also has an endpoint quickstart for an already-running local or
 managed-style HTTP endpoint:

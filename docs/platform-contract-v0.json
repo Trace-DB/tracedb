@@ -50,11 +50,12 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "public_wrapper_conformance_checked",
+      "status": "public_wrapper_conformance_checked_with_env_config",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/src/client.ts",
         "clients/typescript/src/sdk.ts",
+        "TraceDB.fromEnv",
         "clients/typescript/public-sdk-smoke.ts",
         "clients/typescript/public-http-smoke.ts",
         "clients/typescript/http-smoke.ts",

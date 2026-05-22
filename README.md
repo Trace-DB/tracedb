@@ -345,7 +345,7 @@ generated transport:
 ```ts
 import { TraceDB } from "./src/sdk";
 
-const db = new TraceDB({ url: "http://127.0.0.1:8090", token: "dev-token" });
+const db = TraceDB.fromEnv();
 
 const result = await db
   .table("docs")
@@ -359,6 +359,10 @@ const result = await db
 
 The wrapper lives in `clients/typescript/src/sdk.ts`, uses the generated
 `TraceDbClient` as its transport, and is covered by `npm run public-smoke`.
+`TraceDB.fromEnv()` reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
+`TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS` so the
+public TypeScript SDK shares the same connection and routing config boundary as
+Rust and Python.
 `npm run public-http-smoke` starts a local server and drives the public wrapper
 through schema apply, insert, batch ingest, patch, get, scan, query, explain,
 delete, idempotency replay/conflict, parsed error envelopes, compact, snapshot,
