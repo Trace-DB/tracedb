@@ -1,9 +1,15 @@
 use serde_json::Value;
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 use tracedb_bench::{BaselineKind, BenchmarkTarget, WorkloadKind};
+use tracedb_sdk::{TraceDbClient, TraceDbClientConfig};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -11,6 +17,73 @@ fn repo_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("workspace root")
         .to_path_buf()
+}
+
+struct RealworldHttpServer {
+    addr: SocketAddr,
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl RealworldHttpServer {
+    fn start(data_dir: PathBuf) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let server_shutdown = Arc::clone(&shutdown);
+        let handle = std::thread::spawn(move || {
+            let _ = tracedb_server::serve_listener_with_shutdown(data_dir, listener, move || {
+                server_shutdown.load(Ordering::Relaxed)
+            });
+        });
+        let server = Self {
+            addr,
+            shutdown,
+            handle: Some(handle),
+        };
+        server.wait_ready();
+        server
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    fn wait_ready(&self) {
+        let client = TraceDbClient::new(
+            TraceDbClientConfig::managed(self.url(), "dev-token")
+                .with_timeout(Duration::from_millis(100)),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last_error = None;
+        while Instant::now() < deadline {
+            match client.ready_typed() {
+                Ok(response) if response.ready => return,
+                Ok(response) => {
+                    last_error = Some(format!("ready endpoint returned not-ready: {response:?}"));
+                }
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "real-world TraceDB HTTP test server did not become ready at {}; last error: {}",
+            self.url(),
+            last_error.unwrap_or_else(|| "no readiness attempt completed".to_string())
+        );
+    }
+}
+
+impl Drop for RealworldHttpServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(self.addr);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[test]
@@ -49,14 +122,7 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
     let markdown_report = reports.path().join("tracedb-http.md");
     let db_dir = tempfile::tempdir().expect("db tempdir");
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    drop(listener);
-    let data_dir = db_dir.path().to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tracedb_server::serve(data_dir, &addr.to_string());
-    });
-    std::thread::sleep(Duration::from_millis(100));
+    let server = RealworldHttpServer::start(db_dir.path().to_path_buf());
 
     let output = Command::new("python3")
         .arg("-m")
@@ -78,7 +144,7 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
         .arg(&json_report)
         .arg("--output-md")
         .arg(&markdown_report)
-        .env("TRACEDB_HTTP_URL", format!("http://{addr}"))
+        .env("TRACEDB_HTTP_URL", server.url())
         .current_dir(&lab)
         .output()
         .expect("run tracedb http benchmark");
@@ -97,7 +163,13 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
         .find(|entry| entry["name"] == "tracedb")
         .expect("tracedb baseline");
     assert_eq!(tracedb["available"], true);
-    assert_eq!(tracedb["metrics"]["failure_count"], 0);
+    assert_eq!(
+        tracedb["metrics"]["failure_count"],
+        0,
+        "TraceDB HTTP benchmark failure_count was non-zero; notes:\n{}\nreport:\n{}",
+        serde_json::to_string_pretty(&tracedb["notes"]).unwrap(),
+        serde_json::to_string_pretty(&report).unwrap()
+    );
     assert!(tracedb["metrics"]["min_recall_at_5"].is_number());
     assert!(tracedb["metrics"]["min_ndcg_at_5"].is_number());
     assert!(tracedb["metrics"]["ingest_latency_p95_ms"].is_number());
