@@ -142,6 +142,17 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
     if mode == "workspace":
         return commands + [
             {
+                "name": "traceql-sqlish-conformance",
+                "argv": [
+                    "python3",
+                    "scripts/platform_conformance.py",
+                    "--surface",
+                    "traceql_sqlish",
+                    "--summary-json",
+                    "/tmp/tracedb-traceql-sqlish-conformance.json",
+                ],
+            },
+            {
                 "name": "typescript-npm-ci",
                 "argv": ["npm", "ci"],
                 "cwd": "clients/typescript",

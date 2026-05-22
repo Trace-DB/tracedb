@@ -37,10 +37,13 @@ manifest. It currently runs `http_direct` through raw HTTP requests and maps
 the existing Rust SDK quickstart product path into `rust_sdk` scenario results.
 It also maps the public TypeScript SDK HTTP smoke into `typescript_sdk` scenario
 results and installs the Python SDK package before running the sync HTTP smoke
-for `python_sdk` scenario results.
+for `python_sdk` scenario results. The `traceql_sqlish` lane now executes the
+bounded SQL-ish adapter through `/v1/traceql` and reports query, TraceQL string
+execution, explain, and error-envelope behavior against the same manifest.
 The current HTTP direct, Rust SDK, TypeScript SDK, and Python SDK lanes cover
 all required v0 scenarios; unimplemented future lanes must keep explicit
-`not_checked` results until they reach parity.
+`not_checked` results until they reach parity. The SQL-ish adapter lane remains
+partial, with schema/write/admin scenarios intentionally `not_checked`.
 The `traceql_sqlish` lane now has native HTTP execution evidence through
 `POST /v1/traceql`, which parses line-oriented TraceQL with
 `traceql_query_from_str` and compiles it into `HybridQuery`. The same route now

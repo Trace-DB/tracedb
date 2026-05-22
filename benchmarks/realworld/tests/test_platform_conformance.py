@@ -51,6 +51,7 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertIn("rust_sdk", module.contract_surface_ids(manifest))
         self.assertIn("typescript_sdk", module.contract_surface_ids(manifest))
         self.assertIn("python_sdk", module.contract_surface_ids(manifest))
+        self.assertIn("traceql_sqlish", module.contract_surface_ids(manifest))
 
     def test_python_sdk_sync_package_declares_contract_surface(self) -> None:
         package_root = ROOT / "clients" / "python"
@@ -293,6 +294,40 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["errors"]["status"], "passed")
         self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
 
+    def test_traceql_sqlish_summary_maps_adapter_evidence_without_sql_compatibility(self) -> None:
+        module = load_module()
+        manifest = module.load_contract(ROOT / "docs" / "platform-contract-v0.json")
+        smoke_summary = {
+            "ok": True,
+            "mode": "traceql-sqlish-conformance",
+            "surface": "traceql_sqlish",
+            "steps": {
+                "sqlish_select": True,
+                "sqlish_explain": True,
+                "invalid_sqlish": True,
+            },
+            "sql_compatibility": "not_implemented",
+            "postgres_compatibility": "not_compatible",
+            "sqlish_result_ids": ["intro"],
+            "sqlish_explain": True,
+            "invalid_sqlish_status": 400,
+            "invalid_sqlish_code": "bad_request",
+            "invalid_sqlish_error": "invalid SQL-ish: JOIN is not supported",
+        }
+
+        surface = module.map_traceql_sqlish_summary(manifest, smoke_summary)
+        scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
+
+        self.assertEqual(surface["surface"], "traceql_sqlish")
+        self.assertEqual(surface["status"], "checked")
+        self.assertFalse(surface["complete"])
+        self.assertEqual(scenarios["query"]["status"], "passed")
+        self.assertEqual(scenarios["traceql_string_execution"]["status"], "passed")
+        self.assertEqual(scenarios["explain"]["status"], "passed")
+        self.assertEqual(scenarios["errors"]["status"], "passed")
+        self.assertEqual(scenarios["schema_apply"]["status"], "not_checked")
+        self.assertEqual(scenarios["snapshot_restore"]["status"], "not_checked")
+
     def test_http_direct_runner_executes_traceql_string_scenario(self) -> None:
         source = SCRIPT.read_text()
 
@@ -301,6 +336,17 @@ class PlatformConformanceTests(unittest.TestCase):
             "POST /v1/traceql",
             "traceql_string_execution",
             "invalid TraceQL",
+        ]:
+            self.assertIn(token, source)
+
+    def test_traceql_sqlish_surface_is_executable_in_runner(self) -> None:
+        source = SCRIPT.read_text()
+
+        for token in [
+            "run_traceql_sqlish_surface",
+            "map_traceql_sqlish_summary",
+            "traceql_sqlish_conformance_summary",
+            "invalid SQL-ish",
         ]:
             self.assertIn(token, source)
 

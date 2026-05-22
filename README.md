@@ -22,6 +22,7 @@ Run the initial executable contract harness with:
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
+python3 scripts/platform_conformance.py --surface traceql_sqlish --summary-json /tmp/tracedb-traceql-sqlish-conformance.json
 ```
 
 It reads `docs/platform-contract-v0.json`, drives a raw HTTP `http_direct` lane
@@ -29,9 +30,12 @@ against `tracedb-server`, reuses the Rust SDK quickstart product path for the
 `rust_sdk` lane, maps the public TypeScript SDK HTTP smoke for the
 `typescript_sdk` lane, installs the Python SDK package before running the sync
 Python SDK smoke for the `python_sdk` lane,
-and emits one JSON report. The current HTTP direct, Rust SDK, TypeScript SDK,
-and Python SDK lanes cover all required v0 scenarios; future lanes must use
-explicit `not_checked` markers until they exercise the same contract IDs.
+and runs a bounded SQL-ish `/v1/traceql` adapter lane for `traceql_sqlish`.
+The current HTTP direct, Rust SDK, TypeScript SDK, and Python SDK lanes cover
+all required v0 scenarios. The SQL-ish lane is intentionally partial: it checks
+query, TraceQL string execution, explain, and error-envelope behavior, while
+schema/write/admin scenarios remain explicit `not_checked` results until that
+adapter surface owns more semantics.
 
 ## Quickstart
 
@@ -509,7 +513,9 @@ The platform conformance harness now includes `traceql_string_execution`; HTTP
 direct passes that scenario through `/v1/traceql`, the Rust SDK lane passes it
 through `TraceDbClient::traceql_typed`, the TypeScript SDK lane passes it
 through the public `TraceDB.traceql()` helper, and the Python SDK lane passes it
-through the sync `TraceDB.traceql()` helper. This is TraceQL/query-adapter
+through the sync `TraceDB.traceql()` helper. The dedicated `traceql_sqlish`
+lane checks the bounded SQL-ish adapter against the same scenario manifest as a
+partial surface. This is TraceQL/query-adapter
 execution evidence only; SQL compatibility, PostgreSQL compatibility, and
 GraphQL remain unimplemented.
 

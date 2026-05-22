@@ -19,6 +19,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = Path("docs/platform-contract-v0.json")
 DEFAULT_SURFACES = ["http_direct", "rust_sdk"]
 PYTHON_SDK_CONFORMANCE_EVIDENCE = "installed package + clients/python/http_smoke.py"
+TRACEQL_SQLISH_CONFORMANCE_EVIDENCE = "POST /v1/traceql bounded SQL-ish SELECT adapter"
+TRACEQL_SQLISH_NOT_CHECKED_REASON = (
+    "SQL-ish adapter surface only proves query/explain/error behavior; "
+    "schema/write/admin scenarios remain HTTP/SDK surfaces"
+)
+SERVER_READY_TIMEOUT_SECONDS = 120.0
 
 
 def load_contract(path: Path) -> dict[str, Any]:
@@ -162,7 +168,8 @@ def request_json(
 
 def wait_for_ready(base_url: str, process: subprocess.Popen[str]) -> None:
     last_error = "not ready"
-    for _ in range(300):
+    deadline = time.monotonic() + SERVER_READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
         if process.poll() is not None:
             stdout, stderr = process.communicate(timeout=1)
             raise RuntimeError(
@@ -307,6 +314,74 @@ def traceql_string_execution_scenario(base_url: str) -> dict[str, Any]:
             "invalid_code": invalid_payload.get("code"),
         },
     )
+
+
+def traceql_sqlish_conformance_summary(base_url: str) -> dict[str, Any]:
+    steps = {
+        "sqlish_select": False,
+        "sqlish_explain": False,
+        "invalid_sqlish": False,
+    }
+    sqlish_query = (
+        'SELECT * FROM docs WHERE tenant_id = "tenant-a" '
+        'AND status = "reviewed" LIMIT 3'
+    )
+    _, payload = request_json(base_url, "POST", "/v1/traceql", {"query": sqlish_query})
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise RuntimeError(f"SQL-ish TraceQL response missing results list: {payload}")
+    result_ids = [row.get("record_id") for row in results if isinstance(row, dict)]
+    if "intro" not in result_ids:
+        raise RuntimeError(f"SQL-ish TraceQL did not return expected record intro: {payload}")
+    if "explain" in payload:
+        raise RuntimeError(f"SQL-ish SELECT response should be lean without EXPLAIN: {payload}")
+    steps["sqlish_select"] = True
+
+    _, explain_payload = request_json(
+        base_url,
+        "POST",
+        "/v1/traceql",
+        {"query": f"EXPLAIN {sqlish_query}"},
+    )
+    if not isinstance(explain_payload.get("results"), list) or not isinstance(
+        explain_payload.get("explain"),
+        dict,
+    ):
+        raise RuntimeError(f"SQL-ish EXPLAIN response missing results or explain: {explain_payload}")
+    steps["sqlish_explain"] = True
+
+    invalid_status, invalid_payload = request_json(
+        base_url,
+        "POST",
+        "/v1/traceql",
+        {
+            "query": (
+                'SELECT * FROM docs JOIN users ON docs.user_id = users.id '
+                'WHERE tenant_id = "tenant-a"'
+            )
+        },
+        expected_status=400,
+    )
+    invalid_error = invalid_payload.get("error")
+    if invalid_payload.get("code") != "bad_request" or not (
+        isinstance(invalid_error, str) and "SQL-ish" in invalid_error
+    ):
+        raise RuntimeError(f"invalid SQL-ish did not preserve bad-request envelope: {invalid_payload}")
+    steps["invalid_sqlish"] = True
+
+    return {
+        "ok": all(steps.values()),
+        "mode": "traceql-sqlish-conformance",
+        "surface": "traceql_sqlish",
+        "steps": steps,
+        "sql_compatibility": "not_implemented",
+        "postgres_compatibility": "not_compatible",
+        "sqlish_result_ids": result_ids,
+        "sqlish_explain": True,
+        "invalid_sqlish_status": invalid_status,
+        "invalid_sqlish_code": invalid_payload.get("code"),
+        "invalid_sqlish_error": invalid_error,
+    }
 
 
 def run_http_direct_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
@@ -920,6 +995,87 @@ def map_typescript_sdk_smoke_summary(
     )
 
 
+def map_traceql_sqlish_summary(
+    manifest: dict[str, Any],
+    smoke_summary: dict[str, Any],
+) -> dict[str, Any]:
+    steps = smoke_summary.get("steps", {})
+    result_ids = smoke_summary.get("sqlish_result_ids")
+    invalid_error = smoke_summary.get("invalid_sqlish_error")
+
+    def step_passed(name: str) -> bool:
+        return smoke_summary.get("ok") is True and steps.get(name) is True
+
+    def select_passed() -> bool:
+        return step_passed("sqlish_select") and isinstance(result_ids, list) and "intro" in result_ids
+
+    def explain_passed() -> bool:
+        return step_passed("sqlish_explain") and smoke_summary.get("sqlish_explain") is True
+
+    def invalid_sqlish_passed() -> bool:
+        return (
+            step_passed("invalid_sqlish")
+            and smoke_summary.get("invalid_sqlish_status") == 400
+            and smoke_summary.get("invalid_sqlish_code") == "bad_request"
+            and isinstance(invalid_error, str)
+            and "SQL-ish" in invalid_error
+        )
+
+    sqlish_details = {
+        "result_ids": result_ids,
+        "sql_compatibility": smoke_summary.get("sql_compatibility"),
+        "postgres_compatibility": smoke_summary.get("postgres_compatibility"),
+    }
+    scenario_map = {
+        "query": passed("query", TRACEQL_SQLISH_CONFORMANCE_EVIDENCE, sqlish_details)
+        if select_passed()
+        else failed("query", RuntimeError("SQL-ish SELECT did not return expected intro record")),
+        "traceql_string_execution": passed(
+            "traceql_string_execution",
+            TRACEQL_SQLISH_CONFORMANCE_EVIDENCE,
+            sqlish_details,
+        )
+        if select_passed()
+        else failed(
+            "traceql_string_execution",
+            RuntimeError("bounded SQL-ish adapter did not execute through /v1/traceql"),
+        ),
+        "explain": passed(
+            "explain",
+            "EXPLAIN SELECT * FROM docs ... via POST /v1/traceql",
+            {"explain": smoke_summary.get("sqlish_explain")},
+        )
+        if explain_passed()
+        else failed("explain", RuntimeError("SQL-ish EXPLAIN evidence missing")),
+        "errors": passed(
+            "errors",
+            "invalid SQL-ish bad-request envelope",
+            {
+                "status": smoke_summary.get("invalid_sqlish_status"),
+                "code": smoke_summary.get("invalid_sqlish_code"),
+                "error": invalid_error,
+            },
+        )
+        if invalid_sqlish_passed()
+        else failed("errors", RuntimeError("invalid SQL-ish error envelope evidence missing")),
+    }
+    scenarios = ordered_surface_scenarios(
+        manifest,
+        scenario_map,
+        default_reason=TRACEQL_SQLISH_NOT_CHECKED_REASON,
+    )
+    return finalize_surface(
+        "traceql_sqlish",
+        "checked",
+        scenarios,
+        evidence=[
+            TRACEQL_SQLISH_CONFORMANCE_EVIDENCE,
+            "scripts/platform_conformance.py --surface traceql_sqlish",
+            "SQL compatibility not implemented; PostgreSQL compatibility not claimed",
+        ],
+    )
+
+
 def run_rust_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="tracedb-rust-sdk-conformance-") as temp_dir:
         command = run_command(
@@ -1108,6 +1264,70 @@ def run_python_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[st
     return surface
 
 
+def run_traceql_sqlish_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="tracedb-traceql-sqlish-conformance-") as temp_dir:
+        temp = Path(temp_dir)
+        data_dir = temp / "data"
+        bind = f"127.0.0.1:{free_port()}"
+        base_url = f"http://{bind}"
+        env = os.environ.copy()
+        env.update(
+            {
+                "TRACEDB_BIND": bind,
+                "TRACEDB_DATA_DIR": str(data_dir),
+                "TRACEDB_SERVICE_MODE": "engine",
+                "CARGO_TERM_COLOR": "never",
+                "CARGO_INCREMENTAL": "0",
+            }
+        )
+        process = subprocess.Popen(
+            ["cargo", "run", "-q", "-p", "tracedb-server"],
+            cwd=repo_root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_for_ready(base_url, process)
+            request_json(base_url, "POST", "/v1/schema/apply", table_schema())
+            request_json(
+                base_url,
+                "POST",
+                "/v1/records/put-batch",
+                {
+                    "records": [
+                        record(
+                            "intro",
+                            "TraceDB SQL-ish conformance",
+                            "reviewed",
+                            [1.0, 0.0, 0.0],
+                        ),
+                        record(
+                            "draft",
+                            "TraceDB SQL-ish non-matching draft",
+                            "draft",
+                            [0.0, 1.0, 0.0],
+                        ),
+                    ]
+                },
+                headers={"Idempotency-Key": "traceql-sqlish-seed"},
+            )
+            smoke_summary = traceql_sqlish_conformance_summary(base_url)
+        except Exception as error:  # noqa: BLE001 - conformance reports need the failure reason.
+            return finalize_surface(
+                "traceql_sqlish",
+                "failed",
+                [failed(scenario_id, error) for scenario_id in contract_scenario_ids(manifest)],
+                evidence=[TRACEQL_SQLISH_CONFORMANCE_EVIDENCE],
+            )
+        finally:
+            stop_process(process)
+
+    return map_traceql_sqlish_summary(manifest, smoke_summary)
+
+
 def build_report(manifest: dict[str, Any], surfaces: list[dict[str, Any]]) -> dict[str, Any]:
     totals = {
         "surfaces": len(surfaces),
@@ -1153,6 +1373,8 @@ def run_selected_surfaces(
             surfaces.append(run_typescript_sdk_surface(manifest, repo_root))
         elif surface_id == "python_sdk":
             surfaces.append(run_python_sdk_surface(manifest, repo_root))
+        elif surface_id == "traceql_sqlish":
+            surfaces.append(run_traceql_sqlish_surface(manifest, repo_root))
         else:
             surfaces.append(
                 empty_surface_report(

@@ -111,6 +111,7 @@ Run the current executable lanes with:
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
+python3 scripts/platform_conformance.py --surface traceql_sqlish --summary-json /tmp/tracedb-traceql-sqlish-conformance.json
 ```
 
 The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`
@@ -127,17 +128,23 @@ installs a copied `clients/python` package into an isolated temporary pip
 `--target`, then runs `clients/python/http_smoke.py` with source-path imports
 disabled. It maps schema apply, put, batch, patch, get, scan, query, explain,
 TraceQL string execution, delete, idempotency, errors, and snapshot/restore
-into the same scenario IDs through the installed sync SDK. Future surfaces must
-report unimplemented scenarios as `not_checked` rather than silently treating
-them as success.
+into the same scenario IDs through the installed sync SDK. The `traceql_sqlish`
+lane starts the HTTP server, seeds minimal records through canonical wire calls,
+and checks the bounded SQL-ish adapter through `/v1/traceql`. It reports
+`query`, `traceql_string_execution`, `explain`, and `errors` as passed, while
+schema/write/admin scenarios remain explicit `not_checked` results. Future
+surfaces must report unimplemented scenarios as `not_checked` rather than
+silently treating them as success.
 
-Current verified checkpoint: Modal workspace run `ap-OXNVYFecdsQUnmJo00P2He`
-passed in 125.134s. Its `platform-conformance-quick` command reported
+Current verified checkpoint: Modal workspace run `ap-r5VNV1krG3Tck6ZcPTxoxf`
+passed 19/19 commands in 89.373s. Its `platform-conformance-quick` command reported
 `http_direct` 13/13 and `rust_sdk` 13/13, including
 `traceql_string_execution`; its `typescript-sdk-conformance` command reported
 `typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
 `python_sdk` 13/13 with native TraceQL covered by installed-package smoke result
-and explain evidence.
+and explain evidence. Its `traceql-sqlish-conformance` command reported
+`traceql_sqlish` as `ok: true`, `complete: false`, with 4/13 scenarios passed
+and 9/13 intentionally `not_checked`.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and

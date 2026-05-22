@@ -119,6 +119,8 @@
         "traceql_query_from_str",
         "EXPLAIN? SELECT * FROM <table> WHERE tenant_id = <value> [AND field = value]* [LIMIT n]",
         "invalid SQL-ish bad-request errors for unsupported constructs",
+        "scripts/platform_conformance.py --surface traceql_sqlish",
+        "traceql_sqlish reports query/traceql_string_execution/explain/errors as passed and schema/write/admin scenarios as not_checked",
         "cargo test -p tracedb-query traceql_sqlish --no-run",
         "cargo test -p tracedb-query traceql_query_string --no-run",
         "cargo test -p tracedb-testkit --test usability_acceptance http_traceql_endpoint_executes_native_query_string_through_hybrid_query --no-run"

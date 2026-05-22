@@ -71,6 +71,7 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertIn("python-sdk-install-smoke", command_names)
         self.assertIn("python-platform-conformance-tests", command_names)
         self.assertIn("python-sdk-conformance", command_names)
+        self.assertIn("traceql-sqlish-conformance", command_names)
         self.assertIn("workspace-all-targets", command_names)
 
         install_smoke = next(
@@ -79,6 +80,22 @@ class ModalProductVerifyTests(unittest.TestCase):
             if command["name"] == "python-sdk-install-smoke"
         )
         self.assertEqual(install_smoke["argv"], ["python3", "clients/python/install_smoke.py"])
+        sqlish_conformance = next(
+            command
+            for command in module.build_command_plan("workspace")
+            if command["name"] == "traceql-sqlish-conformance"
+        )
+        self.assertEqual(
+            sqlish_conformance["argv"],
+            [
+                "python3",
+                "scripts/platform_conformance.py",
+                "--surface",
+                "traceql_sqlish",
+                "--summary-json",
+                "/tmp/tracedb-traceql-sqlish-conformance.json",
+            ],
+        )
 
     def test_reduced_quickstart_receipt_contract(self) -> None:
         module = load_module()
