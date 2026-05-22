@@ -72,7 +72,7 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertIn("python-platform-conformance-tests", command_names)
         self.assertIn("python-sdk-conformance", command_names)
         self.assertIn("traceql-sqlish-conformance", command_names)
-        self.assertIn("graphql-compiler-conformance", command_names)
+        self.assertIn("graphql-http-conformance", command_names)
         self.assertIn("workspace-all-targets", command_names)
 
         install_smoke = next(
@@ -100,7 +100,7 @@ class ModalProductVerifyTests(unittest.TestCase):
         graphql_conformance = next(
             command
             for command in module.build_command_plan("workspace")
-            if command["name"] == "graphql-compiler-conformance"
+            if command["name"] == "graphql-http-conformance"
         )
         self.assertEqual(
             graphql_conformance["argv"],
@@ -110,7 +110,7 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "--surface",
                 "graphql",
                 "--summary-json",
-                "/tmp/tracedb-graphql-compiler-conformance.json",
+                "/tmp/tracedb-graphql-conformance.json",
             ],
         )
 

@@ -153,14 +153,14 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 ],
             },
             {
-                "name": "graphql-compiler-conformance",
+                "name": "graphql-http-conformance",
                 "argv": [
                     "python3",
                     "scripts/platform_conformance.py",
                     "--surface",
                     "graphql",
                     "--summary-json",
-                    "/tmp/tracedb-graphql-compiler-conformance.json",
+                    "/tmp/tracedb-graphql-conformance.json",
                 ],
             },
             {

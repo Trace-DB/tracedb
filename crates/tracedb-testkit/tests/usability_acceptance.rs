@@ -720,6 +720,100 @@ fn http_traceql_endpoint_executes_native_query_string_through_hybrid_query() {
 }
 
 #[test]
+fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let addr = start_http_test_server(temp.path().to_path_buf());
+
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/schema/apply",
+        &serde_json::to_string(&schema()).unwrap(),
+        "\"epoch\":1",
+    );
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/records/put",
+        &serde_json::to_string(&record(
+            "a",
+            "tenant-a",
+            "rust database kernel",
+            "published",
+            [1.0, 0.0, 0.0],
+        ))
+        .unwrap(),
+        "\"epoch\":2",
+    );
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/records/put",
+        &serde_json::to_string(&record(
+            "b",
+            "tenant-a",
+            "graphql draft note",
+            "draft",
+            [0.0, 1.0, 0.0],
+        ))
+        .unwrap(),
+        "\"epoch\":3",
+    );
+
+    let graphql = json!({
+        "query": "query { docs(tenant_id: \"tenant-a\", where: {status: \"published\"}, match: \"rust\", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, limit: 5) { record_id } }"
+    })
+    .to_string();
+    let response = http_response(addr, "POST", "/v1/graphql", &graphql);
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected GraphQL response: {response}"
+    );
+    let body = http_json_body(&response);
+    assert!(body.get("results").is_some(), "GraphQL body: {body}");
+    assert!(body.get("explain").is_none(), "GraphQL body: {body}");
+    assert_eq!(body["results"][0]["record_id"], json!("a"));
+
+    let explain_graphql = json!({
+        "query": "query { docs(tenant_id: \"tenant-a\", match: \"rust\", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, limit: 5, explain: true) { record_id } }"
+    })
+    .to_string();
+    let explain_response = http_response(addr, "POST", "/v1/graphql", &explain_graphql);
+    assert!(
+        explain_response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected GraphQL explain response: {explain_response}"
+    );
+    let explain_body = http_json_body(&explain_response);
+    assert!(
+        explain_body.get("results").is_some(),
+        "GraphQL explain body: {explain_body}"
+    );
+    assert!(
+        explain_body.get("explain").is_some(),
+        "GraphQL explain body: {explain_body}"
+    );
+
+    let invalid_graphql = json!({
+        "query": "mutation { docs(tenant_id: \"tenant-a\") { record_id } }"
+    })
+    .to_string();
+    let invalid_response = http_response(addr, "POST", "/v1/graphql", &invalid_graphql);
+    assert!(
+        invalid_response.starts_with("HTTP/1.1 400 Bad Request"),
+        "invalid GraphQL should preserve bad-request envelope: {invalid_response}"
+    );
+    let invalid_body = http_json_body(&invalid_response);
+    assert_eq!(invalid_body["code"], json!("bad_request"));
+    assert!(
+        invalid_body["error"]
+            .as_str()
+            .expect("error string")
+            .contains("invalid GraphQL adapter"),
+        "invalid GraphQL body: {invalid_body}"
+    );
+}
+
+#[test]
 fn http_server_rejects_oversized_content_length_before_body_read() {
     let temp = tempfile::tempdir().expect("tempdir");
     let addr = start_http_test_server(temp.path().to_path_buf());
@@ -821,6 +915,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "POST /v1/records/scan",
         "POST /v1/query",
         "POST /v1/traceql",
+        "POST /v1/graphql",
         "POST /v1/explain",
         "POST /v1/admin/compact",
         "POST /v1/admin/snapshot",
@@ -1299,6 +1394,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         ("post", "/v1/records/scan"),
         ("post", "/v1/query"),
         ("post", "/v1/traceql"),
+        ("post", "/v1/graphql"),
         ("post", "/v1/explain"),
         ("post", "/v1/admin/compact"),
         ("post", "/v1/admin/snapshot"),

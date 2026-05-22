@@ -190,6 +190,10 @@ export interface GetRecordResponse extends JsonObject {
   record?: RecordOutput | null;
 }
 
+export interface GraphQlQueryRequest extends JsonObject {
+  query?: string;
+}
+
 export interface HealthResponse extends JsonObject {
   catalog_databases?: number;
   engine_url?: string;
@@ -520,6 +524,12 @@ export class TraceDbClient {
   /** Run native TraceQL query. */
   async traceql(body: TraceQlQueryRequest, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
     return this.request<QueryResponse>("POST", "/v1/traceql", body, options);
+  }
+
+  // postGraphql: POST /v1/graphql
+  /** Run bounded GraphQL query. */
+  async graphql(body: GraphQlQueryRequest, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+    return this.request<QueryResponse>("POST", "/v1/graphql", body, options);
   }
 
   // postExplain: POST /v1/explain

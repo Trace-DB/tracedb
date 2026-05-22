@@ -129,16 +129,20 @@
     {
       "id": "graphql",
       "label": "GraphQL",
-      "status": "bounded_compiler_primitive_checked_not_checked_conformance_lane",
-      "role": "future schema-generated adapter into the same TraceQuery model; current code is a parser/compiler primitive with explicit not_checked conformance reporting",
+      "status": "bounded_http_query_adapter_checked_partial_conformance_lane",
+      "role": "future schema-generated adapter into the same TraceQuery model; current code is a bounded HTTP query adapter with explicit not_checked reporting for scenarios it does not own",
       "evidence": [
         "crates/tracedb-query/src/lib.rs",
+        "crates/tracedb-server/src/lib.rs",
         "graphql_query_from_str",
+        "POST /v1/graphql",
+        "GraphQlQueryRequest",
         "query { <table>(tenant_id: \"...\", where: {...}, match: \"...\", near: [...], limit: n, freshness: ALLOW_DIRTY, explain: true) { ... } }",
         "invalid GraphQL adapter errors for mutation/subscription/fragment/alias/unknown argument/resolver semantics",
-        "cargo test -p tracedb-query graphql_query --no-run",
+        "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run",
         "scripts/platform_conformance.py --surface graphql",
-        "graphql reports all current v0 scenarios as not_checked until HTTP/schema/resolver behavior exists"
+        "graphql reports query/explain/errors as passed and schema/write/admin/TraceQL/idempotency/snapshot scenarios as not_checked",
+        "not GraphQL schema generation or resolver runtime"
       ]
     }
   ],

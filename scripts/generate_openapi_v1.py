@@ -25,6 +25,7 @@ SAFE_RETRY_ROUTES = {
     ("post", "/v1/records/scan"),
     ("post", "/v1/query"),
     ("post", "/v1/traceql"),
+    ("post", "/v1/graphql"),
     ("post", "/v1/explain"),
 }
 
@@ -44,6 +45,7 @@ ROUTES = [
     ("post", "/v1/records/scan", "records", "Scan records", "RecordScanRequest", "RecordScanOutput", False),
     ("post", "/v1/query", "query", "Run hybrid query", "HybridQuery", "QueryResponse", False),
     ("post", "/v1/traceql", "query", "Run native TraceQL query", "TraceQlQueryRequest", "QueryResponse", False),
+    ("post", "/v1/graphql", "query", "Run bounded GraphQL query", "GraphQlQueryRequest", "QueryResponse", False),
     ("post", "/v1/explain", "query", "Explain hybrid query", "HybridQuery", "HybridExplain", False),
     ("post", "/v1/admin/compact", "admin", "Compact local engine state", "EmptyObject", "CompactResponse", True),
     ("post", "/v1/admin/snapshot", "admin", "Create snapshot", "SnapshotRequest", "SnapshotResponse", True),
@@ -145,6 +147,9 @@ def components() -> dict[str, Any]:
                 "explain": {"type": "boolean"},
             }),
             "TraceQlQueryRequest": object_schema("Native TraceQL query request.", {
+                "query": {"type": "string"},
+            }),
+            "GraphQlQueryRequest": object_schema("Bounded GraphQL adapter query request.", {
                 "query": {"type": "string"},
             }),
             "HybridScoreComponents": object_schema("Hybrid query score components.", {

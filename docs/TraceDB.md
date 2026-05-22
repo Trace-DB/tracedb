@@ -148,19 +148,18 @@ demo/verify, not `http_demo`, not local `doctor http` diagnostics, not Rust SDK
 quickstart evidence, not `typescript_check`, not TypeScript HTTP smoke, not
 managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 
-Current SDK conformance checkpoint: `scripts/platform_conformance.py` now maps
+Current platform conformance checkpoint: `scripts/platform_conformance.py` maps
 HTTP direct, Rust SDK, TypeScript SDK, and Python SDK into all 13 Platform
-Contract v0 scenario IDs. Modal workspace run
-`ap-OXNVYFecdsQUnmJo00P2He` passed in 125.134s, including
-`platform-conformance-quick`, `typescript-sdk-conformance`,
-`python-sdk-conformance`, Python unit/install smokes, TypeScript package/HTTP
-lanes, and `cargo test --workspace --all-targets`. The quick conformance lane
-proved `http_direct` at 13/13 and `rust_sdk` at 13/13 with native TraceQL
-covered through `TraceDbClient::traceql_typed`; `typescript-sdk-conformance`
-proved `typescript_sdk` at 13/13; and `python-sdk-conformance` proved
-`python_sdk` at 13/13 with installed-package TraceQL result and explain
-evidence. This is SDK conformance evidence, not managed-cloud proof, SQL
-compatibility, GraphQL HTTP support, or benchmark evidence.
+Contract v0 scenario IDs, plus partial TraceQL/SQL-ish and GraphQL adapter
+lanes. Modal workspace run `ap-kT2bkWU3mZdoQktVrFyxpA` passed 20/20 commands in
+126.884s, including `platform-conformance-quick`,
+`traceql-sqlish-conformance`, `graphql-http-conformance`,
+`typescript-sdk-conformance`, `python-sdk-conformance`, Python unit/install
+smokes, TypeScript package/HTTP/gateway lanes, and
+`cargo test --workspace --all-targets`. The GraphQL lane reported query,
+explain, and error behavior as passed with 10/13 scenarios intentionally
+`not_checked`. This is platform conformance evidence, not managed-cloud proof,
+SQL compatibility, full GraphQL adapter parity, or benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -376,7 +375,8 @@ compact, snapshot, restore, and admin jobs. `python3
 scripts/platform_conformance.py --surface python_sdk --summary-json
 /tmp/tracedb-python-sdk-conformance.json` maps that smoke into all required v0
 contract scenarios. This is sync SDK contract evidence, not PyPI readiness,
-async support, managed-cloud proof, SQL compatibility, or GraphQL HTTP support.
+async support, managed-cloud proof, SQL compatibility, or full GraphQL adapter
+parity.
 
 Native TraceQL now executes through the canonical HTTP surface:
 `POST /v1/traceql` accepts `{ "query": string }`, parses line-oriented `FROM`,
@@ -394,11 +394,13 @@ passes that scenario through `/v1/traceql`, the Rust SDK lane passes it through
 `TraceDB.traceql()` helper. It also has a dedicated partial `traceql_sqlish`
 lane that checks bounded SQL-ish query, explain, and error behavior while
 leaving schema/write/admin scenarios `not_checked`. This is
-TraceQL/query-adapter execution evidence only; SQL compatibility, PostgreSQL
-compatibility, and GraphQL HTTP support remain unimplemented. The current
-GraphQL evidence is limited to the bounded `graphql_query_from_str` compiler
-primitive in `tracedb-query` plus an explicit conformance lane that reports all
-current v0 scenarios as `not_checked`.
+TraceQL/query-adapter execution evidence only; SQL compatibility and PostgreSQL
+compatibility remain unimplemented. `POST /v1/graphql` now exposes a bounded
+GraphQL query adapter over the same `HybridQuery` model, and the GraphQL
+conformance lane checks query, explain, and error behavior while leaving
+schema/write/admin scenarios `not_checked`. GraphQL schema generation,
+mutation support, resolver runtime, and full adapter parity remain
+unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

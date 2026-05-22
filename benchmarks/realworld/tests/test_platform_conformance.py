@@ -351,38 +351,49 @@ class PlatformConformanceTests(unittest.TestCase):
         ]:
             self.assertIn(token, source)
 
-    def test_graphql_surface_reports_compiler_only_not_checked_lane(self) -> None:
+    def test_graphql_surface_reports_http_adapter_owned_scenarios(self) -> None:
         module = load_module()
         manifest = module.load_contract(ROOT / "docs" / "platform-contract-v0.json")
-        compiler_summary = {
+        smoke_summary = {
             "ok": True,
-            "mode": "graphql-compiler-conformance",
+            "mode": "graphql-http-conformance",
             "surface": "graphql",
-            "compiler": "graphql_query_from_str",
-            "status": "compiler_checked",
+            "steps": {
+                "graphql_query": True,
+                "graphql_explain": True,
+                "invalid_graphql": True,
+            },
+            "graphql_result_ids": ["intro"],
+            "graphql_explain": True,
+            "invalid_graphql_status": 400,
+            "invalid_graphql_code": "bad_request",
+            "invalid_graphql_error": "invalid GraphQL adapter: mutation is not supported",
         }
 
-        surface = module.map_graphql_compiler_summary(manifest, compiler_summary)
+        surface = module.map_graphql_http_summary(manifest, smoke_summary)
         scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
 
         self.assertEqual(surface["surface"], "graphql")
-        self.assertEqual(surface["status"], "compiler_checked")
+        self.assertEqual(surface["status"], "checked")
         self.assertTrue(surface["ok"])
         self.assertFalse(surface["complete"])
-        self.assertIn("graphql_query_from_str", " ".join(surface["evidence"]))
-        for scenario in module.contract_scenario_ids(manifest):
-            self.assertEqual(scenarios[scenario]["status"], "not_checked")
-            self.assertIn("compiler primitive", scenarios[scenario]["reason"])
+        self.assertEqual(scenarios["query"]["status"], "passed")
+        self.assertEqual(scenarios["explain"]["status"], "passed")
+        self.assertEqual(scenarios["errors"]["status"], "passed")
+        self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
+        self.assertEqual(scenarios["schema_apply"]["status"], "not_checked")
+        self.assertIn("/v1/graphql", " ".join(surface["evidence"]))
 
-    def test_graphql_surface_is_explicit_in_runner_without_endpoint_claims(self) -> None:
+    def test_graphql_surface_is_http_backed_without_schema_or_resolver_claims(self) -> None:
         source = SCRIPT.read_text()
 
         for token in [
             "run_graphql_surface",
-            "map_graphql_compiler_summary",
-            "graphql-compiler-conformance",
-            "GraphQL compiler primitive",
-            "not GraphQL HTTP support",
+            "map_graphql_http_summary",
+            "graphql_http_conformance_summary",
+            "graphql-http-conformance",
+            "/v1/graphql",
+            "not GraphQL schema generation",
         ]:
             self.assertIn(token, source)
 

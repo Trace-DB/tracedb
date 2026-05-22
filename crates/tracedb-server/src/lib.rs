@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracedb_query::{
-    traceql_query_from_str, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema,
-    TraceDb,
+    graphql_query_from_str, traceql_query_from_str, HybridQuery, RecordDeleteRequest,
+    RecordGetRequest, RecordInput, RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest,
+    RecordScanRequest, TableSchema, TraceDb,
 };
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -55,6 +55,11 @@ struct DurableIdempotencyEntry {
 
 #[derive(Debug, Deserialize)]
 struct TraceQlQueryRequest {
+    query: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlQueryRequest {
     query: String,
 }
 
@@ -387,6 +392,13 @@ fn handle_inner(
             let parse_start = Instant::now();
             let request: TraceQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
             let query = traceql_query_from_str(&request.query).map_err(to_io_error)?;
+            let parse_ms = elapsed_ms(parse_start);
+            query_response(&db, query, request_start, read_ms, parse_ms)?
+        }
+        ("POST", "/v1/graphql") => {
+            let parse_start = Instant::now();
+            let request: GraphQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
+            let query = graphql_query_from_str(&request.query).map_err(to_io_error)?;
             let parse_ms = elapsed_ms(parse_start);
             query_response(&db, query, request_start, read_ms, parse_ms)?
         }

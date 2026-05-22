@@ -41,10 +41,11 @@ The initial executable conformance runner is `scripts/platform_conformance.py`.
   under `/v1/traceql` is not a SQL engine.
 - TraceDB is not PostgreSQL-compatible. Future SQL-ish work must compile into
   TraceDB's native query model instead of becoming a PostgreSQL emulation layer.
-- GraphQL has a checked bounded compiler primitive, not an HTTP route,
-  conformance lane, schema generator, or resolver runtime. Any future GraphQL
-  surface must compile into the same query model instead of creating a
-  resolver-specific database model.
+- GraphQL has a checked bounded HTTP query adapter through `POST /v1/graphql`.
+  It proves query, explain, and error-envelope behavior only. Schema
+  generation, mutations, resolver runtime, and full adapter parity remain
+  unimplemented, and any future GraphQL surface must compile into the same
+  query model instead of creating a resolver-specific database model.
 - Exported performance claims still require an external control and a number to
   beat. Internal TraceDB-only runs are development evidence only.
 
@@ -77,7 +78,7 @@ Every product surface must map to these contract components:
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; bounded SQL-ish `SELECT` adapter checked | Adapter into the same TraceQuery/query model, not SQL compatibility. |
-| GraphQL | `graphql` | Bounded compiler primitive checked; explicit conformance lane reports all scenarios `not_checked` | Future schema-generated adapter into the same TraceQuery/query model. |
+| GraphQL | `graphql` | Bounded `POST /v1/graphql` HTTP adapter checked for query, explain, and errors; other scenarios `not_checked` | Future schema-generated adapter into the same TraceQuery/query model. |
 
 Maintenance mode means a platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics.
 
@@ -113,7 +114,7 @@ python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface traceql_sqlish --summary-json /tmp/tracedb-traceql-sqlish-conformance.json
-python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-compiler-conformance.json
+python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-conformance.json
 ```
 
 The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`
@@ -137,19 +138,24 @@ and checks the bounded SQL-ish adapter through `/v1/traceql`. It reports
 schema/write/admin scenarios remain explicit `not_checked` results. Future
 surfaces must report unimplemented scenarios as `not_checked` rather than
 silently treating them as success.
-The `graphql` lane runs the compiler no-run check for `graphql_query_from_str`
-and then reports every current v0 scenario as `not_checked` until TraceDB has
-GraphQL HTTP, schema generation, resolver runtime, and adapter parity behavior.
+The `graphql` lane starts the HTTP server, seeds minimal records through the
+canonical wire calls, and checks the bounded `POST /v1/graphql` adapter. It
+reports `query`, `explain`, and `errors` as passed, while schema/write/admin,
+TraceQL, idempotency, and snapshot/restore scenarios remain explicit
+`not_checked` results until GraphQL owns those semantics or a schema-generated
+adapter exists.
 
-Current verified checkpoint: Modal workspace run `ap-r5VNV1krG3Tck6ZcPTxoxf`
-passed 19/19 commands in 89.373s. Its `platform-conformance-quick` command reported
-`http_direct` 13/13 and `rust_sdk` 13/13, including
+Current verified checkpoint: Modal workspace run `ap-kT2bkWU3mZdoQktVrFyxpA`
+passed 20/20 commands in 126.884s. Its `platform-conformance-quick` command
+reported `http_direct` 13/13 and `rust_sdk` 13/13, including
 `traceql_string_execution`; its `typescript-sdk-conformance` command reported
 `typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
 `python_sdk` 13/13 with native TraceQL covered by installed-package smoke result
 and explain evidence. Its `traceql-sqlish-conformance` command reported
 `traceql_sqlish` as `ok: true`, `complete: false`, with 4/13 scenarios passed
-and 9/13 intentionally `not_checked`.
+and 9/13 intentionally `not_checked`. Its `graphql-http-conformance` command
+reported `graphql` as `ok: true`, `complete: false`, with query, explain, and
+errors passed and 10/13 scenarios intentionally `not_checked`.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and
@@ -221,8 +227,8 @@ conformance smoke. The stdlib-only smoke `python3
 clients/python/http_smoke.py` starts a local
 `tracedb-server` and proves all required v0 contract scenarios through the
 Python surface. It is sync SDK contract evidence, not package publishing
-readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
-HTTP support. The smoke is also promoted into the local product gate as
+readiness, async support, managed-cloud proof, SQL compatibility, or full
+GraphQL adapter parity. The smoke is also promoted into the local product gate as
 `product-regression --only python_sdk_smoke`, so `product-quickstart
 --skip-typescript` now retains Python SDK contract evidence while omitting only
 the TypeScript lanes.
@@ -234,7 +240,8 @@ line-oriented string with `traceql_query_from_str`, accepts directives such as
 `EXPLAIN`, and compiles them into the existing `HybridQuery` model before using
 the same query execution and response shaping as `POST /v1/query`. This is
 native TraceQL evidence only. It is not SQL compatibility, PostgreSQL
-compatibility, GraphQL HTTP support, or a separate query engine.
+compatibility, GraphQL schema generation, resolver runtime, or a separate query
+engine.
 
 The same `/v1/traceql` parser now accepts a deliberately bounded SQL-ish form:
 `EXPLAIN? SELECT * FROM <table> WHERE tenant_id = <value> [AND field = value]*
@@ -244,17 +251,17 @@ shared explain flag. Unsupported SQL constructs such as `JOIN`, `GROUP`,
 `ORDER`, `UNION`, mutation DDL/DML, and PostgreSQL-specific behavior fail as
 `invalid SQL-ish` bad-request responses rather than implying compatibility.
 
-The query crate also exposes the first bounded GraphQL adapter compiler
-primitive: `graphql_query_from_str`. It accepts one root selection whose field
-name is the table, with arguments such as `tenant_id`, `where`/`filter`,
-`match`/`text`, `near`/`vector`, `limit`, `freshness`, and `explain`, then
-compiles directly into `HybridQuery`. Mutations, subscriptions, fragments,
+The query crate exposes the bounded GraphQL adapter compiler primitive:
+`graphql_query_from_str`. It accepts one root selection whose field name is the
+table, with arguments such as `tenant_id`, `where`/`filter`, `match`/`text`,
+`near`/`vector`, `limit`, `freshness`, and `explain`, then compiles directly
+into `HybridQuery`. The HTTP server exposes that path through
+`POST /v1/graphql` with `GraphQlQueryRequest`, returning the same
+`QueryResponse` shape as `/v1/query`. Mutations, subscriptions, fragments,
 aliases, unknown arguments, duplicate semantic arguments, and multiple root
-fields fail with `invalid GraphQL adapter` errors. This is parser/compiler
-evidence only; TraceDB still has no GraphQL HTTP endpoint, schema generator, or
-resolver runtime. The conformance runner has an explicit `graphql` lane, but it
-reports all current v0 scenarios as `not_checked` rather than treating the
-compiler primitive as adapter parity.
+fields fail with `invalid GraphQL adapter` errors. This is bounded
+query/explain/error execution evidence only; TraceDB still has no GraphQL
+schema generator, mutation support, resolver runtime, or adapter parity.
 
 ## Surface Implementation Rules
 
@@ -270,8 +277,8 @@ compiler primitive as adapter parity.
   `/v1/traceql`; the SQL-ish surface is limited to the checked bounded
   `SELECT` adapter until a broader TraceQL adapter is explicitly designed.
 - GraphQL must be schema-generated from TraceDB schema and compile into the same
-  query model. The current checked code is only `graphql_query_from_str`; it
-  should not own database semantics.
+  query model. The current checked code is bounded `graphql_query_from_str`
+  execution through `POST /v1/graphql`; it should not own database semantics.
 
 ## Verification Ladder
 
@@ -279,8 +286,8 @@ Use the smallest ladder that proves the touched surface:
 
 ```bash
 cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_declares_sdk_conformance_harness -- --exact
-cargo test -p tracedb-query graphql_query --no-run
-python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-compiler-conformance.json
+cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run
+python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-conformance.json
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 -m unittest discover -s clients/python/tests

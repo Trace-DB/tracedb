@@ -24,10 +24,11 @@ TRACEQL_SQLISH_NOT_CHECKED_REASON = (
     "SQL-ish adapter surface only proves query/explain/error behavior; "
     "schema/write/admin scenarios remain HTTP/SDK surfaces"
 )
-GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE = "GraphQL compiler primitive graphql_query_from_str"
-GRAPHQL_COMPILER_NOT_CHECKED_REASON = (
-    "GraphQL compiler primitive exists, but this is not GraphQL HTTP support, "
-    "schema generation, a resolver runtime, or scenario parity"
+GRAPHQL_HTTP_CONFORMANCE_EVIDENCE = "POST /v1/graphql bounded GraphQL query adapter"
+GRAPHQL_HTTP_NOT_CHECKED_REASON = (
+    "GraphQL HTTP adapter surface only proves query/explain/error behavior; "
+    "schema/write/admin scenarios remain HTTP/SDK surfaces; "
+    "this is not GraphQL schema generation or resolver runtime"
 )
 SERVER_READY_TIMEOUT_SECONDS = 120.0
 
@@ -386,6 +387,68 @@ def traceql_sqlish_conformance_summary(base_url: str) -> dict[str, Any]:
         "invalid_sqlish_status": invalid_status,
         "invalid_sqlish_code": invalid_payload.get("code"),
         "invalid_sqlish_error": invalid_error,
+    }
+
+
+def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
+    steps = {
+        "graphql_query": False,
+        "graphql_explain": False,
+        "invalid_graphql": False,
+    }
+    graphql_query = (
+        'query { docs(tenant_id: "tenant-a", where: {status: "reviewed"}, '
+        'match: "TraceDB", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, '
+        "limit: 3) { record_id } }"
+    )
+    _, payload = request_json(base_url, "POST", "/v1/graphql", {"query": graphql_query})
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise RuntimeError(f"GraphQL response missing results list: {payload}")
+    result_ids = [row.get("record_id") for row in results if isinstance(row, dict)]
+    if "intro" not in result_ids:
+        raise RuntimeError(f"GraphQL did not return expected record intro: {payload}")
+    if "explain" in payload:
+        raise RuntimeError(f"GraphQL query response should be lean without explain: {payload}")
+    steps["graphql_query"] = True
+
+    _, explain_payload = request_json(
+        base_url,
+        "POST",
+        "/v1/graphql",
+        {"query": graphql_query.replace("limit: 3)", "limit: 3, explain: true)")},
+    )
+    if not isinstance(explain_payload.get("results"), list) or not isinstance(
+        explain_payload.get("explain"),
+        dict,
+    ):
+        raise RuntimeError(f"GraphQL explain response missing results or explain: {explain_payload}")
+    steps["graphql_explain"] = True
+
+    invalid_status, invalid_payload = request_json(
+        base_url,
+        "POST",
+        "/v1/graphql",
+        {"query": 'mutation { docs(tenant_id: "tenant-a") { record_id } }'},
+        expected_status=400,
+    )
+    invalid_error = invalid_payload.get("error")
+    if invalid_payload.get("code") != "bad_request" or not (
+        isinstance(invalid_error, str) and "invalid GraphQL adapter" in invalid_error
+    ):
+        raise RuntimeError(f"invalid GraphQL did not preserve bad-request envelope: {invalid_payload}")
+    steps["invalid_graphql"] = True
+
+    return {
+        "ok": all(steps.values()),
+        "mode": "graphql-http-conformance",
+        "surface": "graphql",
+        "steps": steps,
+        "graphql_result_ids": result_ids,
+        "graphql_explain": True,
+        "invalid_graphql_status": invalid_status,
+        "invalid_graphql_code": invalid_payload.get("code"),
+        "invalid_graphql_error": invalid_error,
     }
 
 
@@ -1081,46 +1144,72 @@ def map_traceql_sqlish_summary(
     )
 
 
-def graphql_compiler_conformance_summary() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "mode": "graphql-compiler-conformance",
-        "surface": "graphql",
-        "compiler": "graphql_query_from_str",
-        "status": "compiler_checked",
-    }
-
-
-def map_graphql_compiler_summary(
+def map_graphql_http_summary(
     manifest: dict[str, Any],
-    compiler_summary: dict[str, Any],
+    smoke_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    if compiler_summary.get("ok") is not True:
-        return finalize_surface(
-            "graphql",
-            "failed",
-            [
-                failed(
-                    scenario_id,
-                    RuntimeError("GraphQL compiler primitive check failed"),
-                )
-                for scenario_id in contract_scenario_ids(manifest)
-            ],
-            evidence=[GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE],
+    steps = smoke_summary.get("steps", {})
+    result_ids = smoke_summary.get("graphql_result_ids")
+    invalid_error = smoke_summary.get("invalid_graphql_error")
+
+    def step_passed(name: str) -> bool:
+        return smoke_summary.get("ok") is True and steps.get(name) is True
+
+    def query_passed() -> bool:
+        return step_passed("graphql_query") and isinstance(result_ids, list) and "intro" in result_ids
+
+    def explain_passed() -> bool:
+        return step_passed("graphql_explain") and smoke_summary.get("graphql_explain") is True
+
+    def invalid_graphql_passed() -> bool:
+        return (
+            step_passed("invalid_graphql")
+            and smoke_summary.get("invalid_graphql_status") == 400
+            and smoke_summary.get("invalid_graphql_code") == "bad_request"
+            and isinstance(invalid_error, str)
+            and "invalid GraphQL adapter" in invalid_error
         )
 
-    scenarios = [
-        not_checked(scenario_id, GRAPHQL_COMPILER_NOT_CHECKED_REASON)
-        for scenario_id in contract_scenario_ids(manifest)
-    ]
+    scenario_map = {
+        "query": passed(
+            "query",
+            GRAPHQL_HTTP_CONFORMANCE_EVIDENCE,
+            {"result_ids": result_ids},
+        )
+        if query_passed()
+        else failed("query", RuntimeError("GraphQL query did not return expected intro record")),
+        "explain": passed(
+            "explain",
+            "POST /v1/graphql with explain: true",
+            {"explain": smoke_summary.get("graphql_explain")},
+        )
+        if explain_passed()
+        else failed("explain", RuntimeError("GraphQL explain evidence missing")),
+        "errors": passed(
+            "errors",
+            "invalid GraphQL bad-request envelope",
+            {
+                "status": smoke_summary.get("invalid_graphql_status"),
+                "code": smoke_summary.get("invalid_graphql_code"),
+                "error": invalid_error,
+            },
+        )
+        if invalid_graphql_passed()
+        else failed("errors", RuntimeError("invalid GraphQL error envelope evidence missing")),
+    }
+    scenarios = ordered_surface_scenarios(
+        manifest,
+        scenario_map,
+        default_reason=GRAPHQL_HTTP_NOT_CHECKED_REASON,
+    )
     return finalize_surface(
         "graphql",
-        "compiler_checked",
+        "checked",
         scenarios,
         evidence=[
-            GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE,
-            "cargo test -p tracedb-query graphql_query --no-run",
-            "GraphQL scenarios remain not_checked until HTTP/schema/resolver behavior exists",
+            GRAPHQL_HTTP_CONFORMANCE_EVIDENCE,
+            "scripts/platform_conformance.py --surface graphql",
+            "not GraphQL schema generation or resolver runtime",
         ],
     )
 
@@ -1378,37 +1467,67 @@ def run_traceql_sqlish_surface(manifest: dict[str, Any], repo_root: Path) -> dic
 
 
 def run_graphql_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
-    command = run_command(
-        ["cargo", "test", "-p", "tracedb-query", "graphql_query", "--no-run"],
-        repo_root,
-    )
-    if not command["ok"]:
-        return finalize_surface(
-            "graphql",
-            "failed",
-            [
-                scenario_result(
-                    scenario_id,
-                    "failed",
-                    reason=(
-                        "GraphQL compiler primitive no-run compile failed: "
-                        f"stdout={command['stdout'][-12_000:]} stderr={command['stderr_tail']}"
-                    ),
-                )
-                for scenario_id in contract_scenario_ids(manifest)
-            ],
-            evidence=[
-                GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE,
-                json.dumps({"command": command["argv"], "returncode": command["returncode"]}),
-            ],
+    with tempfile.TemporaryDirectory(prefix="tracedb-graphql-conformance-") as temp_dir:
+        temp = Path(temp_dir)
+        data_dir = temp / "data"
+        bind = f"127.0.0.1:{free_port()}"
+        base_url = f"http://{bind}"
+        env = os.environ.copy()
+        env.update(
+            {
+                "TRACEDB_BIND": bind,
+                "TRACEDB_DATA_DIR": str(data_dir),
+                "TRACEDB_SERVICE_MODE": "engine",
+                "CARGO_TERM_COLOR": "never",
+                "CARGO_INCREMENTAL": "0",
+            }
         )
-    surface = map_graphql_compiler_summary(manifest, graphql_compiler_conformance_summary())
-    surface["command"] = {
-        "argv": command["argv"],
-        "duration_s": command["duration_s"],
-        "returncode": command["returncode"],
-    }
-    return surface
+        process = subprocess.Popen(
+            ["cargo", "run", "-q", "-p", "tracedb-server"],
+            cwd=repo_root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_for_ready(base_url, process)
+            request_json(base_url, "POST", "/v1/schema/apply", table_schema())
+            request_json(
+                base_url,
+                "POST",
+                "/v1/records/put-batch",
+                {
+                    "records": [
+                        record(
+                            "intro",
+                            "TraceDB GraphQL conformance",
+                            "reviewed",
+                            [1.0, 0.0, 0.0],
+                        ),
+                        record(
+                            "draft",
+                            "TraceDB GraphQL non-matching draft",
+                            "draft",
+                            [0.0, 1.0, 0.0],
+                        ),
+                    ]
+                },
+                headers={"Idempotency-Key": "graphql-seed"},
+            )
+            smoke_summary = graphql_http_conformance_summary(base_url)
+        except Exception as error:  # noqa: BLE001 - conformance reports need the failure reason.
+            return finalize_surface(
+                "graphql",
+                "failed",
+                [failed(scenario_id, error) for scenario_id in contract_scenario_ids(manifest)],
+                evidence=[GRAPHQL_HTTP_CONFORMANCE_EVIDENCE],
+            )
+        finally:
+            stop_process(process)
+
+    return map_graphql_http_summary(manifest, smoke_summary)
 
 
 def build_report(manifest: dict[str, Any], surfaces: list[dict[str, Any]]) -> dict[str, Any]:
