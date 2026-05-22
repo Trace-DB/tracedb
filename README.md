@@ -95,6 +95,13 @@ Verify the same data directory afterward:
 cargo run -p tracedb-cli -- --data /tmp/tracedb-demo verify
 ```
 
+If local macOS Rust binaries hang before printing CLI output, classify the
+machine-level launch state before treating it as a TraceDB runtime failure:
+
+```bash
+python3 scripts/local_rust_launch_doctor.py
+```
+
 Run the local HTTP plus SDK product smoke with one command:
 
 ```bash

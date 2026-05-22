@@ -64,6 +64,19 @@ The Modal summary includes `flight_recorder_receipt_check`, which validates the
 generated JSON receipt shape and the explicit non-guarantees before marking the
 lane passed.
 
+Use the local Rust launch doctor when a macOS checkout appears to hang before
+the CLI reaches `main`:
+
+```bash
+python3 scripts/local_rust_launch_doctor.py \
+  --summary-json /tmp/tracedb-local-rust-launch-doctor.json
+```
+
+The doctor reports `passed`, `blocked`, `failed`, or `missing`. A
+`pre_main_launch_timeout` classification means local Rust binary execution is
+blocked for that checkout; use Modal for runtime evidence until the machine
+policy/toolchain issue is fixed.
+
 ## OpenRouter Scientific Runs
 
 OpenRouter is automatically used when `OPENROUTER_API_KEY` is configured. For
