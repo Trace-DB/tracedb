@@ -100,6 +100,46 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(claim_ready["status"], "claim-ready")
         self.assertEqual(claim_ready["claim_status"]["performance_claim"], "claim_ready")
 
+    def test_railway_stateful_gate_requires_configured_manifest(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        blocked = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={"suite_json": "suite.json", "suite_md": "suite.md"},
+        )
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertTrue(
+            any("Railway" in item for item in blocked["blocking_failures"]),
+            blocked["blocking_failures"],
+        )
+
+        configured = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [
+                    {
+                        "role": "tracedb",
+                        "service_id": "service_tracedb",
+                        "configured": True,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(configured["status"], "usable")
+        self.assertEqual(configured["railway_services"][0]["role"], "tracedb")
+        self.assertEqual(
+            configured["artifact_paths"]["railway_manifest_json"],
+            "railway-manifest.json",
+        )
+
     def test_gate_json_writer_persists_stable_artifact(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
         gate = build_suite_gate(

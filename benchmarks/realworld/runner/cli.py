@@ -29,6 +29,11 @@ from .suite_spec import (
 )
 from .types import RunConfig
 
+try:
+    from railway_bench import build_railway_manifest, load_railway_config
+except ImportError:  # pragma: no cover - package import path used by unit discovery.
+    from ..railway_bench import build_railway_manifest, load_railway_config
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m runner")
@@ -52,6 +57,16 @@ def main(argv: list[str] | None = None) -> int:
     suite.set_defaults(records=None)
     suite.add_argument("--scenarios", default="all")
     suite.add_argument("--suite-spec", default="")
+    suite.add_argument(
+        "--railway-config-from-env",
+        action="store_true",
+        help="Write railway-manifest.json from Railway env vars and feed it into suite-gate.json.",
+    )
+    suite.add_argument(
+        "--railway-manifest-json",
+        default="",
+        help="Existing Railway manifest JSON to feed into suite-gate.json.",
+    )
 
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
     chat_demo.add_argument("--data-dir", default="")
@@ -398,16 +413,21 @@ def run_suite(args: argparse.Namespace) -> int:
         records=args.records,
         reports=child_reports,
     )
+    railway_manifest = _load_or_write_railway_manifest(args, lab_root, suite_dir, suite_id)
+    artifact_paths = {
+        "suite_json": "suite.json",
+        "suite_md": "suite.md",
+        "suite_gate_json": "suite-gate.json",
+    }
+    if railway_manifest is not None:
+        artifact_paths["railway_manifest_json"] = "railway-manifest.json"
     write_suite_json(suite_report, suite_dir / "suite.json")
     write_suite_markdown(suite_report, suite_dir / "suite.md")
     suite_gate = build_suite_gate(
         suite_report,
         gate_spec,
-        artifact_paths={
-            "suite_json": "suite.json",
-            "suite_md": "suite.md",
-            "suite_gate_json": "suite-gate.json",
-        },
+        artifact_paths=artifact_paths,
+        railway_manifest=railway_manifest,
     )
     write_suite_gate_json(suite_gate, suite_dir / "suite-gate.json")
     if suite_gate["blocking_failures"]:
@@ -544,3 +564,26 @@ def _resolve_suite_spec_path(root: Path, value: str) -> Path:
         return lab_candidate
     repo_candidate = root.parent.parent / path
     return repo_candidate if repo_candidate.exists() else lab_candidate
+
+
+def _load_or_write_railway_manifest(
+    args: argparse.Namespace,
+    lab_root: Path,
+    suite_dir: Path,
+    suite_id: str,
+) -> dict[str, Any] | None:
+    if args.railway_config_from_env:
+        manifest = build_railway_manifest(load_railway_config(), suite_id=suite_id)
+        _write_railway_manifest(manifest, suite_dir / "railway-manifest.json")
+        return manifest
+    if args.railway_manifest_json:
+        manifest_path = _resolve_path(lab_root, args.railway_manifest_json)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _write_railway_manifest(manifest, suite_dir / "railway-manifest.json")
+        return manifest
+    return None
+
+
+def _write_railway_manifest(manifest: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -123,6 +123,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "surface": "http,curl",
         "scenarios": "http_falsification",
         "tracedb_ingest_mode": "batch",
+        "railway_config_from_env": True,
     },
     "release_100k": {
         "suite_spec": "benchmarks/realworld/suites/release_100k.json",
@@ -134,6 +135,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "allow_large": True,
         "allow_external_controls": True,
         "require_services": True,
+        "railway_config_from_env": True,
     },
     "soak_railway": {
         "suite_spec": "benchmarks/realworld/suites/soak_railway.json",
@@ -144,6 +146,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "tracedb_ingest_mode": "batch",
         "allow_large": True,
         "allow_external_controls": True,
+        "railway_config_from_env": True,
     },
     "manual_1m": {
         "suite_spec": "benchmarks/realworld/suites/manual_1m.json",
@@ -169,6 +172,7 @@ class ModalSmokeConfig:
     surface: str = "sdk"
     scenarios: str = "sdk_cli_surface"
     suite_spec: str = ""
+    railway_config_from_env: bool = False
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
     tracedb_ingest_mode: str = "per_record"
@@ -452,6 +456,8 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
     ]
     if config.suite_spec:
         command.extend(["--suite-spec", config.suite_spec])
+    if config.railway_config_from_env:
+        command.append("--railway-config-from-env")
     command.extend(["--scenarios", config.scenarios])
     if config.embedding_dimensions is not None:
         command.extend(["--embedding-dimensions", str(config.embedding_dimensions)])
@@ -1390,6 +1396,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenarios", default="sdk_cli_surface")
     parser.add_argument("--suite-spec", default="")
     parser.add_argument("--suite-preset", choices=sorted(SUITE_PRESETS), default="")
+    parser.add_argument("--railway-config-from-env", action="store_true")
     parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
     parser.add_argument("--openrouter-cap", default="moderate")
     parser.add_argument(
@@ -1443,6 +1450,8 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         surface=str(preset.get("surface", args.surface)),
         scenarios=str(preset.get("scenarios", args.scenarios)),
         suite_spec=args.suite_spec or str(preset.get("suite_spec", "")),
+        railway_config_from_env=args.railway_config_from_env
+        or bool(preset.get("railway_config_from_env", False)),
         openrouter_mode=args.openrouter_mode,
         openrouter_cap=args.openrouter_cap,
         tracedb_ingest_mode=str(

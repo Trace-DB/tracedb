@@ -283,10 +283,27 @@ least-privilege credentials:
   `QDRANT_RAILWAY_SERVICE_ID`, and `OPENSEARCH_RAILWAY_SERVICE_ID`
 
 `railway_bench.py` validates this config, redacts tokens, and produces a
-manifest for suite gates. It does not create services or volumes yet. Backups,
-usage limits, SSH key setup, restart/redeploy execution, and restore validation
-remain required before the `railway_stateful`, `soak_railway`, or `release_100k`
-specs should be treated as full Railway product proof.
+manifest for suite gates. Use `--railway-config-from-env` to write
+`railway-manifest.json` beside `suite.json`, `suite.md`, and
+`suite-gate.json`:
+
+```bash
+cd benchmarks/realworld
+BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
+  --suite-spec suites/railway_stateful.json \
+  --railway-config-from-env \
+  --openrouter-mode off \
+  --target tracedb \
+  --surface sdk \
+  --scenarios sdk_cli_surface
+```
+
+Missing Railway config blocks Railway-required specs. A configured manifest
+makes the gate usable, but it still does not create services, restart services,
+redeploy images, or validate persisted state. Backups, usage limits, SSH key
+setup, restart/redeploy execution, and restore validation remain required before
+the `railway_stateful`, `soak_railway`, or `release_100k` specs should be
+treated as full Railway product proof.
 
 ## Modal CPU/RAM Smoke
 
@@ -534,16 +551,16 @@ exact recall, same-file recall, nDCG, and MRR for adapters that expose query
 result lists.
 
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`,
-`suite-gate.json`, and `manifest.json`. The manifest records the run config,
-seed, Modal app name, resource class, redacted benchmark environment, and git
-commit/dirty state. Use `--summary-json` for clean local per-run evidence
-instead of scraping Modal logs, and use `--bundle-output` when the full tarball
-must survive the remote Modal container. The saved summary records
-`exported_bundle_path` and `exported_bundle_sha256`; transient returned bundle
-bytes are stripped before summary JSON is written. `--bundle-output` is guarded
-by `--bundle-export-max-mb` (default `64`) because this path returns the bundle
-through the Modal function result; use a durable object store or Modal Volume
-for larger archives. By default this lane reports
+`suite-gate.json`, optional `railway-manifest.json`, and `manifest.json`. The
+manifest records the run config, seed, Modal app name, resource class, redacted
+benchmark environment, and git commit/dirty state. Use `--summary-json` for
+clean local per-run evidence instead of scraping Modal logs, and use
+`--bundle-output` when the full tarball must survive the remote Modal container.
+The saved summary records `exported_bundle_path` and `exported_bundle_sha256`;
+transient returned bundle bytes are stripped before summary JSON is written.
+`--bundle-output` is guarded by `--bundle-export-max-mb` (default `64`) because
+this path returns the bundle through the Modal function result; use a durable
+object store or Modal Volume for larger archives. By default this lane reports
 `control_status=internal_only_smoke`; it is development evidence, not a product
 benchmark claim.
 
