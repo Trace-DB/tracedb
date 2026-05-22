@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   TraceDB,
   TraceDbRequestError,
+  type GraphQlQueryRequest,
   type JsonObject,
   type TraceDbFetchInit,
 } from "./src/sdk.ts";
@@ -37,6 +38,12 @@ const db = new TraceDB({
       return okJson({ results: [{ record_id: "intro", tenant_id: "tenant-a" }] });
     }
     if (input.endsWith("/v1/traceql")) {
+      return okJson({
+        results: [{ record_id: "intro", tenant_id: "tenant-a" }],
+        explain: { returned_count: 1 },
+      });
+    }
+    if (input.endsWith("/v1/graphql")) {
       return okJson({
         results: [{ record_id: "intro", tenant_id: "tenant-a" }],
         explain: { returned_count: 1 },
@@ -147,6 +154,33 @@ assert.equal(
   "TRACEDB_SAFE_RETRIES should retry native TraceQL read-only 5xx responses",
 );
 assert.equal(traceqlRetryCalls[0].input, "http://127.0.0.1:8090/v1/traceql");
+
+const graphqlRetryCalls: FetchCall[] = [];
+let graphqlRetryAttempt = 0;
+const graphqlRetryDb = TraceDB.fromEnv({
+  env: {
+    TRACEDB_URL: "http://127.0.0.1:8090",
+    TRACEDB_SAFE_RETRIES: "1",
+  },
+  fetchImpl: async (input, init) => {
+    graphqlRetryCalls.push({ input, init });
+    graphqlRetryAttempt += 1;
+    if (graphqlRetryAttempt === 1) {
+      return responseJson(503, { error: "temporarily unavailable" });
+    }
+    return okJson({ results: [] });
+  },
+});
+const retriedGraphql = await graphqlRetryDb.graphql(
+  `query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }`,
+);
+assert.equal(retriedGraphql.results?.length, 0);
+assert.equal(
+  graphqlRetryCalls.length,
+  2,
+  "TRACEDB_SAFE_RETRIES should retry bounded GraphQL read-only 5xx responses",
+);
+assert.equal(graphqlRetryCalls[0].input, "http://127.0.0.1:8090/v1/graphql");
 
 const mutationRetryCalls: FetchCall[] = [];
 const mutationRetryDb = new TraceDB({
@@ -347,6 +381,19 @@ assert.equal(traceql.results?.[0]?.record_id, "intro");
 assert.equal(traceql.explain?.returned_count, 1);
 const traceqlBody = JSON.parse(calls[5].init.body ?? "{}");
 assert.equal(traceqlBody.query, "FROM docs\nTENANT tenant-a\nLIMIT 1\nEXPLAIN");
+
+const graphqlQuery = `query { docs(tenant_id: "tenant-a", limit: 1, explain: true) { record_id } }`;
+const graphql = await db.graphql(graphqlQuery);
+assert.equal(graphql.results?.[0]?.record_id, "intro");
+assert.equal(graphql.explain?.returned_count, 1);
+const graphqlBody = JSON.parse(calls[6].init.body ?? "{}");
+assert.equal(graphqlBody.query, graphqlQuery);
+
+const graphqlRequest: GraphQlQueryRequest = { query: graphqlQuery };
+const graphqlViaRequest = await db.graphqlRequest(graphqlRequest);
+assert.equal(graphqlViaRequest.results?.[0]?.record_id, "intro");
+const graphqlRequestBody = JSON.parse(calls[7].init.body ?? "{}");
+assert.equal(graphqlRequestBody.query, graphqlQuery);
 
 await db.table("docs").tenant("tenant-a").get("intro");
 await db.table("docs").tenant("tenant-a").limit(5).scan();

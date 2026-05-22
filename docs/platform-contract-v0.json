@@ -51,7 +51,7 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "packed_consumer_entrypoint_conformance_checked_with_safe_and_idempotency_retries",
+      "status": "packed_consumer_entrypoint_conformance_checked_with_traceql_graphql_safe_and_idempotency_retries",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/package.json",
@@ -62,6 +62,9 @@
         "TRACEDB_IDEMPOTENCY_RETRIES",
         "safeRetries",
         "idempotencyRetries",
+        "TraceDB.graphql",
+        "graphqlRequest",
+        "GraphQlQueryRequest",
         "clients/typescript/public-sdk-smoke.ts",
         "clients/typescript/public-http-smoke.ts",
         "clients/typescript/http-smoke.ts",
@@ -137,6 +140,9 @@
         "graphql_query_from_str",
         "POST /v1/graphql",
         "GraphQlQueryRequest",
+        "TraceDB.graphql",
+        "TraceDB.graphqlRequest",
+        "TraceDbClient::graphql_typed",
         "query { <table>(tenant_id: \"...\", where: {...}, match: \"...\", near: [...], limit: n, freshness: ALLOW_DIRTY, explain: true) { ... } }",
         "invalid GraphQL adapter errors for mutation/subscription/fragment/alias/unknown argument/resolver semantics",
         "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run",

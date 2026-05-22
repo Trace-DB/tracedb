@@ -57,7 +57,8 @@ resolver runtime, and full GraphQL adapter parity remain unimplemented. The
 current GraphQL evidence is limited to bounded `graphql_query_from_str`
 compilation, `POST /v1/graphql` query/explain/error conformance, and the Rust
 SDK helper methods `TraceDbClient::graphql_typed` and
-`TraceDbAsyncClient::graphql_typed` over that same HTTP route.
+`TraceDbAsyncClient::graphql_typed` plus the TypeScript public SDK
+`TraceDB.graphql()` helper over that same HTTP route.
 
 Local product smoke:
 

@@ -44,8 +44,9 @@ conformance lane checks query, explain, and error-envelope behavior, while
 schema/write/admin scenarios remain explicit `not_checked` results. This is not
 GraphQL schema generation, mutation support, resolver runtime, or adapter
 parity. Rust SDK callers can use `TraceDbClient::graphql_typed` or
-`graphql_request_typed` with `GraphQlQueryRequest` to exercise the same bounded
-wire contract.
+`graphql_request_typed` with `GraphQlQueryRequest`, and TypeScript SDK callers
+can use `TraceDB.graphql()` or `graphqlRequest({ query })` to exercise the
+same bounded wire contract.
 
 ## Quickstart
 
@@ -528,10 +529,11 @@ partial surface. `POST /v1/graphql` now exposes a bounded GraphQL query adapter
 over the same `HybridQuery` model and the GraphQL conformance lane checks query,
 explain, and error behavior. The Rust SDK exposes this bounded HTTP adapter
 through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
-`GraphQlQueryRequest`. This is TraceQL/query-adapter and bounded GraphQL
-query-adapter evidence only; SQL compatibility, PostgreSQL compatibility,
-GraphQL schema generation, mutation support, resolver runtime, and full adapter
-parity remain unimplemented.
+`GraphQlQueryRequest`; the TypeScript SDK exposes it through
+`TraceDB.graphql()` and `graphqlRequest({ query })`. This is
+TraceQL/query-adapter and bounded GraphQL query-adapter evidence only; SQL
+compatibility, PostgreSQL compatibility, GraphQL schema generation, mutation
+support, resolver runtime, and full adapter parity remain unimplemented.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and

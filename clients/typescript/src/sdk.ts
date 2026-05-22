@@ -7,6 +7,7 @@ import {
   type DeleteResponse,
   type EpochResponse,
   type GetRecordResponse,
+  type GraphQlQueryRequest,
   type HealthResponse,
   type HybridExplain,
   type HybridQuery,
@@ -41,6 +42,7 @@ export type {
   DeleteResponse,
   EpochResponse,
   GetRecordResponse,
+  GraphQlQueryRequest,
   HealthResponse,
   HybridExplain,
   HybridQuery,
@@ -219,6 +221,17 @@ export class TraceDB {
     options: TraceDbRequestOptions = {},
   ): Promise<QueryResponse> {
     return this.transport.traceql({ ...request }, options);
+  }
+
+  async graphql(query: string, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+    return this.graphqlRequest({ query }, options);
+  }
+
+  async graphqlRequest(
+    request: GraphQlQueryRequest,
+    options: TraceDbRequestOptions = {},
+  ): Promise<QueryResponse> {
+    return this.transport.graphql({ ...request }, options);
   }
 
   async listDatabases(options: TraceDbRequestOptions = {}): Promise<DatabasesResponse> {
@@ -678,6 +691,7 @@ function isRetrySafeRequest(input: string, init: TraceDbFetchInit): boolean {
       requestPath(input) === "/v1/records/scan" ||
       requestPath(input) === "/v1/query" ||
       requestPath(input) === "/v1/traceql" ||
+      requestPath(input) === "/v1/graphql" ||
       requestPath(input) === "/v1/explain"
     )
   );

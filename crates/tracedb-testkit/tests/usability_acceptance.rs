@@ -2064,6 +2064,8 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         "restore",
         "listAdminJobs",
         "RecordPutBatchRequest",
+        "graphql(query: string",
+        "graphqlRequest",
         "where({ tenant_id })",
         "TraceDbClient",
     ] {
@@ -2141,6 +2143,9 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         ".match(\"body\"",
         ".near(\"embedding\"",
         ".with({ explain: true, freshness: \"lazy\" })",
+        "TRACEDB_SAFE_RETRIES should retry bounded GraphQL",
+        "db.graphql",
+        "db.graphqlRequest",
         "TraceDbRequestError",
     ] {
         assert!(
@@ -2161,6 +2166,8 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         "await docs.patch",
         "await docs.get",
         "await docs.limit(10).scan",
+        "await db.graphql",
+        "graphql_query_execution",
         ".explainPlan()",
         "await db.compact",
         "await db.snapshot",

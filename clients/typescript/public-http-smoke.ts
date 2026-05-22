@@ -256,6 +256,22 @@ try {
   const traceqlExplain = await db.traceql(`${traceqlQuery}\nEXPLAIN`);
   assert.equal(typeof traceqlExplain.explain?.returned_count, "number");
 
+  const graphqlQuery =
+    `query { docs(tenant_id: "tenant-a", where: {status: "published"}, match: "TypeScript", ` +
+    `near: [1.0, 0.0, 0.0], freshness: STRICT, limit: 3) { record_id } }`;
+  const graphqlResponse = await db.graphql(graphqlQuery);
+  const graphqlResults = graphqlResponse.results ?? [];
+  assert.equal(Array.isArray(graphqlResults), true);
+  assert.ok(
+    graphqlResults.some((result) => result.record_id === "intro"),
+    "GraphQL should return the intro record through the public TypeScript SDK",
+  );
+  const graphqlExplain = await db.graphql(
+    `query { docs(tenant_id: "tenant-a", match: "TypeScript", near: [1.0, 0.0, 0.0], ` +
+      `freshness: STRICT, limit: 3, explain: true) { record_id } }`,
+  );
+  assert.equal(typeof graphqlExplain.explain?.returned_count, "number");
+
   const deleteResponse = await docs.delete("ops", {
     idempotencyKey: `ts-public-${runId}-delete`,
     tombstone: "typescript_public_http_smoke",
@@ -325,6 +341,7 @@ try {
       scan: true,
       query: true,
       traceql_string_execution: true,
+      graphql_query_execution: true,
       explain: true,
       delete: true,
       idempotency: true,
@@ -339,6 +356,8 @@ try {
     records_scanned: scanResponse.returned_count,
     traceql_result_count: traceqlResults.length,
     traceql_explain: traceqlExplain.explain !== undefined,
+    graphql_result_count: graphqlResults.length,
+    graphql_explain: graphqlExplain.explain !== undefined,
     catalog_databases: databases.databases?.length,
     put_epoch: putResponse.epoch,
     idempotency_replay_observed: replayResponse.epoch === putResponse.epoch,
