@@ -23,6 +23,8 @@ try:
 except ImportError:  # pragma: no cover - local tests should not require Modal.
     modal = None
 
+from runner.suite_spec import load_suite_spec, select_suite_baseline_json
+
 
 LAB_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = LAB_ROOT.parent.parent
@@ -218,6 +220,7 @@ class ModalSmokeConfig:
     scenarios: str = "sdk_cli_surface"
     suite_spec: str = ""
     suite_baseline_json: str = ""
+    suite_baseline_dir: str = ""
     regression_tolerance_pct: float = 15.0
     regression_tolerance_absolute: float = 0.0
     suite_preflight_only: bool = False
@@ -529,6 +532,12 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         command.extend(
             ["--regression-tolerance-absolute", str(config.regression_tolerance_absolute)]
         )
+    elif config.suite_baseline_dir:
+        command.extend(["--suite-baseline-dir", config.suite_baseline_dir])
+        command.extend(["--regression-tolerance-pct", str(config.regression_tolerance_pct)])
+        command.extend(
+            ["--regression-tolerance-absolute", str(config.regression_tolerance_absolute)]
+        )
     if config.railway_config_from_env:
         command.append("--railway-config-from-env")
     if config.railway_health_check:
@@ -781,6 +790,40 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def resolve_modal_suite_baseline(
+    config: ModalSmokeConfig,
+    *,
+    lab_root: Path = LAB_ROOT,
+) -> tuple[ModalSmokeConfig, dict[str, Any] | None]:
+    if config.suite_baseline_json or not config.suite_baseline_dir:
+        return config, None
+    baseline_dir = _resolve_local_artifact_path(config.suite_baseline_dir, lab_root=lab_root)
+    suite_spec_id = _suite_spec_id_for_modal_config(config, lab_root=lab_root)
+    selection = select_suite_baseline_json(
+        baseline_dir,
+        suite_id=config.run_id,
+        suite_spec_id=suite_spec_id,
+        dataset=config.dataset,
+        records=config.records,
+    )
+    if selection is None:
+        return config, None
+    return replace(config, suite_baseline_json=str(selection["path"])), selection
+
+
+def _suite_spec_id_for_modal_config(
+    config: ModalSmokeConfig,
+    *,
+    lab_root: Path = LAB_ROOT,
+) -> str:
+    if not config.suite_spec:
+        return "ad_hoc"
+    suite_spec_path = _resolve_local_artifact_path(config.suite_spec, lab_root=lab_root)
+    if suite_spec_path.exists():
+        return load_suite_spec(suite_spec_path).id
+    return Path(config.suite_spec).stem
 
 
 def stage_modal_input_artifacts(
@@ -1607,6 +1650,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suite-spec", default="")
     parser.add_argument("--suite-preset", choices=sorted(SUITE_PRESETS), default="")
     parser.add_argument("--suite-baseline-json", default="")
+    parser.add_argument("--suite-baseline-dir", default="")
     parser.add_argument("--regression-tolerance-pct", type=float, default=15.0)
     parser.add_argument("--regression-tolerance-absolute", type=float, default=0.0)
     parser.add_argument("--suite-preflight-only", action="store_true")
@@ -1681,6 +1725,7 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         scenarios=str(preset.get("scenarios", args.scenarios)),
         suite_spec=args.suite_spec or str(preset.get("suite_spec", "")),
         suite_baseline_json=args.suite_baseline_json,
+        suite_baseline_dir=args.suite_baseline_dir,
         regression_tolerance_pct=args.regression_tolerance_pct,
         regression_tolerance_absolute=args.regression_tolerance_absolute,
         suite_preflight_only=args.suite_preflight_only
@@ -2112,6 +2157,7 @@ if modal is not None:
         suite_spec: str = "",
         suite_preset: str = "",
         suite_baseline_json: str = "",
+        suite_baseline_dir: str = "",
         regression_tolerance_pct: float = 15.0,
         regression_tolerance_absolute: float = 0.0,
         suite_preflight_only: bool = False,
@@ -2170,6 +2216,7 @@ if modal is not None:
             suite_spec=suite_spec,
             suite_preset=suite_preset,
             suite_baseline_json=suite_baseline_json,
+            suite_baseline_dir=suite_baseline_dir,
             regression_tolerance_pct=regression_tolerance_pct,
             regression_tolerance_absolute=regression_tolerance_absolute,
             suite_preflight_only=suite_preflight_only,
@@ -2218,12 +2265,15 @@ if modal is not None:
             modal_image_kind=selected_image_kind,
             **source_git_kwargs(),
         )
+        config, selected_suite_baseline = resolve_modal_suite_baseline(config)
         config, staged_input_artifacts = stage_modal_input_artifacts(config)
         result = run_smoke_remote.remote(
             export_bundle=bool(bundle_output),
             bundle_export_max_mb=bundle_export_max_mb,
             **asdict(config),
         )
+        if selected_suite_baseline is not None:
+            result["selected_suite_baseline"] = selected_suite_baseline
         if staged_input_artifacts:
             result["staged_input_artifacts"] = staged_input_artifacts
         result = write_bundle_output(result, bundle_output, max_mb=bundle_export_max_mb)

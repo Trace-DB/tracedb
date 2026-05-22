@@ -249,6 +249,13 @@ that exceed `--regression-tolerance-pct` or
 regressions; PR-oriented warning policies degrade instead of blocking. This
 keeps performance gates tied to same-suite artifact deltas rather than a single
 noisy run.
+Pass `--suite-baseline-dir <reports-root>` when the runner should discover the
+latest compatible prior `suite.json` automatically. Auto-selection only accepts
+artifacts with the same `suite_spec`, `dataset`, and `records`, and skips the
+current `suite_id`; the selected path and suite id are recorded in
+`suite-gate.json` artifact metadata. If no compatible artifact exists, the run
+continues without regression comparison so a first scheduled lane can seed the
+history.
 
 Unsupported SQL and GraphQL coverage is reported as explicit
 `unsupported_coverage` in the gate. It must not be counted as passing behavior.
@@ -507,6 +514,11 @@ copied into `benchmarks/realworld/.modal-input-artifacts/<run-id>/` before the
 remote call and the container receives the mounted `/workspace/TraceDB/...`
 path. This keeps generated reports excluded from the Modal source mount while
 still letting scheduled soak/release jobs consume explicit operator evidence.
+Modal also accepts `--suite-baseline-dir`: the local entrypoint resolves the
+latest compatible prior suite artifact before staging, then sends the remote
+container an explicit mounted `--suite-baseline-json` path. This makes scheduled
+push/soak/release lanes use rolling history without mounting the whole reports
+tree into Modal.
 The staging directory is ignored by git; it is transport for evidence artifacts,
 not new proof by itself.
 When a Railway manifest is present, `runner suite` also writes

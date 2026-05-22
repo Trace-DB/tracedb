@@ -132,6 +132,63 @@ def suite_spec_from_mapping(payload: dict[str, Any], *, source: str = "<memory>"
     return spec
 
 
+def select_suite_baseline_json(
+    root: Path,
+    *,
+    suite_id: str,
+    suite_spec_id: str,
+    dataset: str,
+    records: int,
+) -> dict[str, Any] | None:
+    """Select the latest compatible prior suite.json from a reports tree."""
+
+    root = Path(root)
+    if not root.exists():
+        return None
+    candidates: list[tuple[float, Path, dict[str, Any]]] = []
+    for path in root.rglob("suite.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("suite_id", "")) == suite_id:
+            continue
+        if str(payload.get("suite_spec", "")) != suite_spec_id:
+            continue
+        if str(payload.get("dataset", "")) != dataset:
+            continue
+        candidate_records = payload.get("records")
+        if isinstance(candidate_records, bool):
+            continue
+        try:
+            if int(candidate_records) != int(records):
+                continue
+        except (TypeError, ValueError):
+            continue
+        try:
+            modified_time = path.stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((modified_time, path, payload))
+    if not candidates:
+        return None
+    modified_time, path, payload = sorted(
+        candidates,
+        key=lambda item: (item[0], str(item[1])),
+    )[-1]
+    return {
+        "source": "auto_latest",
+        "path": str(path),
+        "suite_id": str(payload.get("suite_id", "")),
+        "suite_spec": str(payload.get("suite_spec", "")),
+        "dataset": str(payload.get("dataset", "")),
+        "records": int(payload.get("records", 0)),
+        "modified_time": modified_time,
+    }
+
+
 def build_suite_gate(
     report: dict[str, Any],
     spec: SuiteSpec,

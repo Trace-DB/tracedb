@@ -313,6 +313,70 @@ class ModalBenchTests(unittest.TestCase):
                 "2.0",
             )
 
+    def test_modal_suite_baseline_dir_resolves_latest_compatible_history(self) -> None:
+        from modal_bench import (
+            ModalSmokeConfig,
+            build_suite_command,
+            resolve_modal_suite_baseline,
+            stage_modal_input_artifacts,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            lab_root = root / "benchmarks" / "realworld"
+            lab_root.mkdir(parents=True)
+            history = root / "reports"
+            baseline = history / "previous" / "suite.json"
+            current = history / "current" / "suite.json"
+            for path, suite_id, mtime in [
+                (baseline, "previous", 1000),
+                (current, "current", 2000),
+            ]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps(
+                        {
+                            "suite_id": suite_id,
+                            "suite_spec": "platform_push_10k",
+                            "dataset": "generated",
+                            "records": 10000,
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                os.utime(path, (mtime, mtime))
+
+            config = ModalSmokeConfig(
+                run_id="current",
+                records=10000,
+                dataset="generated",
+                suite_spec="benchmarks/realworld/suites/platform_push_10k.json",
+                suite_baseline_dir=str(history),
+                regression_tolerance_pct=10.0,
+            )
+            resolved_config, selection = resolve_modal_suite_baseline(
+                config,
+                lab_root=lab_root,
+            )
+            staged_config, staged_artifacts = stage_modal_input_artifacts(
+                resolved_config,
+                lab_root=lab_root,
+                remote_lab_root=Path("/workspace/TraceDB/benchmarks/realworld"),
+            )
+
+        self.assertIsNotNone(selection)
+        self.assertEqual(selection["suite_id"], "previous")
+        self.assertEqual(resolved_config.suite_baseline_json, str(baseline))
+        self.assertEqual(staged_artifacts[0]["kind"], "suite_baseline")
+        command = build_suite_command(staged_config)
+        self.assertEqual(
+            command[command.index("--suite-baseline-json") + 1],
+            "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
+            "current/suite-baseline.json",
+        )
+        self.assertEqual(command[command.index("--regression-tolerance-pct") + 1], "10.0")
+
     def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
         from modal_bench import build_suite_command, _parse_args
 

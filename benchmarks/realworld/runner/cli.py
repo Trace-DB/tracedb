@@ -25,6 +25,7 @@ from .suite_spec import (
     build_suite_gate,
     default_suite_spec,
     load_suite_spec,
+    select_suite_baseline_json,
     write_suite_gate_json,
 )
 from .types import RunConfig
@@ -97,6 +98,11 @@ def main(argv: list[str] | None = None) -> int:
         "--suite-baseline-json",
         default="",
         help="Existing suite.json to compare for same-suite performance regressions.",
+    )
+    suite.add_argument(
+        "--suite-baseline-dir",
+        default="",
+        help="Reports tree to scan for the latest compatible prior suite.json when no explicit baseline is provided.",
     )
     suite.add_argument(
         "--regression-tolerance-pct",
@@ -802,6 +808,7 @@ def run_suite(args: argparse.Namespace) -> int:
         records=args.records,
         reports=child_reports,
     )
+    suite_report["suite_spec"] = gate_spec.id
     if args.preflight_only:
         suite_report["preflight"] = {
             "status": "metadata_only",
@@ -849,9 +856,22 @@ def _write_suite_outputs(
         artifact_paths["railway_artifacts_json"] = "railway-artifacts.json"
     if railway_runbook_verification is not None:
         artifact_paths["railway_runbook_verification_json"] = "railway-runbook-verification.json"
-    regression_baseline = _load_suite_baseline(args, lab_root)
+    regression_baseline, baseline_selection = _load_suite_baseline(
+        args,
+        lab_root,
+        suite_id=suite_id,
+        suite_spec_id=str(gate_spec.id),
+        dataset=str(suite_report.get("dataset", "")),
+        records=int(suite_report.get("records", 0)),
+    )
     if regression_baseline is not None:
-        artifact_paths["suite_baseline_json"] = args.suite_baseline_json
+        artifact_paths["suite_baseline_json"] = str(baseline_selection["path"])
+        artifact_paths["suite_baseline_source"] = str(baseline_selection["source"])
+        if baseline_selection.get("suite_id"):
+            artifact_paths["suite_baseline_suite_id"] = str(baseline_selection["suite_id"])
+    elif getattr(args, "suite_baseline_dir", ""):
+        artifact_paths["suite_baseline_dir"] = args.suite_baseline_dir
+        artifact_paths["suite_baseline_source"] = "auto_latest_not_found"
     write_suite_json(suite_report, suite_dir / "suite.json")
     write_suite_markdown(suite_report, suite_dir / "suite.md")
     suite_gate = build_suite_gate(
@@ -1124,14 +1144,42 @@ def _load_or_write_railway_runbook_verification(
 def _load_suite_baseline(
     args: argparse.Namespace,
     lab_root: Path,
-) -> dict[str, Any] | None:
-    if not args.suite_baseline_json:
-        return None
-    path = _resolve_path(lab_root, args.suite_baseline_json)
+    *,
+    suite_id: str,
+    suite_spec_id: str,
+    dataset: str,
+    records: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not args.suite_baseline_json and not getattr(args, "suite_baseline_dir", ""):
+        return None, None
+    if args.suite_baseline_json:
+        path = _resolve_path(lab_root, args.suite_baseline_json)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("--suite-baseline-json must contain a JSON object")
+        return payload, {
+            "source": "explicit",
+            "path": str(path),
+            "suite_id": str(payload.get("suite_id", "")),
+            "suite_spec": str(payload.get("suite_spec", "")),
+            "dataset": str(payload.get("dataset", "")),
+            "records": payload.get("records"),
+        }
+    baseline_dir = _resolve_path(lab_root, args.suite_baseline_dir)
+    selection = select_suite_baseline_json(
+        baseline_dir,
+        suite_id=suite_id,
+        suite_spec_id=suite_spec_id,
+        dataset=dataset,
+        records=records,
+    )
+    if selection is None:
+        return None, None
+    path = Path(selection["path"])
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("--suite-baseline-json must contain a JSON object")
-    return payload
+        raise ValueError("--suite-baseline-dir selected a non-object suite.json")
+    return payload, selection
 
 
 def _railway_runbook_verification_blocks_execution(

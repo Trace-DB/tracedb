@@ -15,6 +15,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from runner.suite import SCENARIOS, build_suite_report, write_suite_markdown
+from runner.suite_spec import select_suite_baseline_json
 from railway_bench import validate_railway_backup_receipt, validate_railway_operation_receipt
 
 
@@ -110,6 +111,84 @@ class TestHttpServer:
 
 
 class SuiteReportingTests(unittest.TestCase):
+    def test_select_suite_baseline_json_uses_latest_compatible_prior_suite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            history = root / "history"
+            older = history / "older" / "suite.json"
+            newer = history / "newer" / "suite.json"
+            wrong_dataset = history / "wrong-dataset" / "suite.json"
+            wrong_records = history / "wrong-records" / "suite.json"
+            current = history / "current" / "suite.json"
+            for path, payload in [
+                (
+                    older,
+                    {
+                        "suite_id": "older",
+                        "suite_spec": "platform_push_10k",
+                        "dataset": "generated",
+                        "records": 10000,
+                    },
+                ),
+                (
+                    newer,
+                    {
+                        "suite_id": "newer",
+                        "suite_spec": "platform_push_10k",
+                        "dataset": "generated",
+                        "records": 10000,
+                    },
+                ),
+                (
+                    wrong_dataset,
+                    {
+                        "suite_id": "wrong-dataset",
+                        "suite_spec": "platform_push_10k",
+                        "dataset": "scifact",
+                        "records": 10000,
+                    },
+                ),
+                (
+                    wrong_records,
+                    {
+                        "suite_id": "wrong-records",
+                        "suite_spec": "platform_push_10k",
+                        "dataset": "generated",
+                        "records": 128,
+                    },
+                ),
+                (
+                    current,
+                    {
+                        "suite_id": "current",
+                        "suite_spec": "platform_push_10k",
+                        "dataset": "generated",
+                        "records": 10000,
+                    },
+                ),
+            ]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            os.utime(older, (1000, 1000))
+            os.utime(newer, (2000, 2000))
+            os.utime(wrong_dataset, (3000, 3000))
+            os.utime(wrong_records, (4000, 4000))
+            os.utime(current, (5000, 5000))
+
+            selection = select_suite_baseline_json(
+                history,
+                suite_id="current",
+                suite_spec_id="platform_push_10k",
+                dataset="generated",
+                records=10000,
+            )
+
+        self.assertIsNotNone(selection)
+        self.assertEqual(selection["path"], str(newer))
+        self.assertEqual(selection["suite_id"], "newer")
+        self.assertEqual(selection["suite_spec"], "platform_push_10k")
+        self.assertEqual(selection["records"], 10000)
+
     def test_suite_command_writes_comprehensive_markdown_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             reports = Path(temp_dir) / "reports"
@@ -285,6 +364,87 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(gate["claim_status"]["performance_regression_baseline"], "provided")
         self.assertEqual(gate["artifact_paths"]["suite_baseline_json"], str(baseline))
         self.assertEqual(gate["regressions"], [])
+
+    def test_suite_command_selects_baseline_from_history_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports = root / "reports"
+            history = root / "history"
+            older = history / "older" / "suite.json"
+            newer = history / "newer" / "suite.json"
+            for path, suite_id, p95 in [
+                (older, "older", 12.0),
+                (newer, "newer", 10.0),
+            ]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps(
+                        {
+                            "suite_id": suite_id,
+                            "suite_spec": "platform_push_10k",
+                            "dataset": "generated",
+                            "records": 10000,
+                            "scenarios": [
+                                {
+                                    "id": "sdk_cli_surface",
+                                    "baselines": [
+                                        {
+                                            "name": "TraceDB",
+                                            "available": True,
+                                            "metrics": {"query_latency_p95_ms": p95},
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            os.utime(older, (1000, 1000))
+            os.utime(newer, (2000, 2000))
+            env = os.environ.copy()
+            env["BENCH_DISABLE_ENV_FILE"] = "1"
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--preflight-only",
+                    "--suite-spec",
+                    "suites/platform_push_10k.json",
+                    "--suite-baseline-dir",
+                    str(history),
+                    "--run-id",
+                    "current",
+                    "--reports-dir",
+                    str(reports),
+                    "--openrouter-mode",
+                    "off",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite = json.loads((reports / "current" / "suite.json").read_text())
+            gate = json.loads((reports / "current" / "suite-gate.json").read_text())
+
+        self.assertEqual(suite["suite_spec"], "platform_push_10k")
+        self.assertEqual(gate["claim_status"]["performance_regression_baseline"], "provided")
+        self.assertEqual(gate["artifact_paths"]["suite_baseline_json"], str(newer))
+        self.assertEqual(gate["artifact_paths"]["suite_baseline_source"], "auto_latest")
+        self.assertEqual(gate["artifact_paths"]["suite_baseline_suite_id"], "newer")
 
     def test_railway_config_from_env_writes_manifest_and_feeds_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
