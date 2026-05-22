@@ -147,6 +147,11 @@ def build_suite_gate(
         railway_status = (railway_manifest or {}).get("status")
         if railway_status != "configured":
             blocking_failures.append("suite requires configured Railway services")
+    railway_endpoint_health = _railway_endpoint_health_status(railway_manifest)
+    if railway_endpoint_health not in {"not_checked", "healthy"}:
+        blocking_failures.append(
+            f"Railway endpoint health check failed with status={railway_endpoint_health}"
+        )
 
     if control_status == "external_control_unavailable" and not spec.requires_external_controls:
         warnings.append("external controls were requested but unavailable")
@@ -181,6 +186,7 @@ def build_suite_gate(
             "control_status": control_status,
             "external_control_required": spec.requires_external_controls,
             "external_control_available": external_control_available,
+            "railway_endpoint_health": railway_endpoint_health,
             "unsupported_coverage": spec.unsupported_coverage,
         },
         "artifact_paths": artifact_paths,
@@ -214,6 +220,16 @@ def _railway_services(
         else:
             normalized.append({"role": str(service), "configured": False})
     return normalized
+
+
+def _railway_endpoint_health_status(railway_manifest: dict[str, Any] | None) -> str:
+    if not railway_manifest:
+        return "not_checked"
+    endpoint_health = railway_manifest.get("endpoint_health")
+    if not isinstance(endpoint_health, dict):
+        return "not_checked"
+    status = endpoint_health.get("status")
+    return str(status) if status else "unknown"
 
 
 def _dict(payload: dict[str, Any], key: str, source: str) -> dict[str, Any]:

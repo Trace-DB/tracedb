@@ -141,7 +141,18 @@ class ModalBenchTests(unittest.TestCase):
 
         self.assertEqual(config.suite_spec, "benchmarks/realworld/suites/railway_stateful.json")
         self.assertTrue(config.railway_config_from_env)
+        self.assertTrue(config.railway_health_check)
         self.assertIn("--railway-config-from-env", command)
+        self.assertIn("--railway-health-check", command)
+
+    def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(["--railway-health-check", "--run-id", "railway-health-test"])
+        command = build_suite_command(config)
+
+        self.assertTrue(config.railway_health_check)
+        self.assertIn("--railway-health-check", command)
 
     def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env

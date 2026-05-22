@@ -30,9 +30,17 @@ from .suite_spec import (
 from .types import RunConfig
 
 try:
-    from railway_bench import build_railway_manifest, load_railway_config
+    from railway_bench import (
+        build_railway_manifest,
+        load_railway_config,
+        run_railway_endpoint_health,
+    )
 except ImportError:  # pragma: no cover - package import path used by unit discovery.
-    from ..railway_bench import build_railway_manifest, load_railway_config
+    from ..railway_bench import (
+        build_railway_manifest,
+        load_railway_config,
+        run_railway_endpoint_health,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,6 +74,17 @@ def main(argv: list[str] | None = None) -> int:
         "--railway-manifest-json",
         default="",
         help="Existing Railway manifest JSON to feed into suite-gate.json.",
+    )
+    suite.add_argument(
+        "--railway-health-check",
+        action="store_true",
+        help="Probe the configured TraceDB Railway endpoint and record readiness in railway-manifest.json.",
+    )
+    suite.add_argument(
+        "--railway-health-timeout-seconds",
+        type=float,
+        default=5.0,
+        help="Per-request timeout for --railway-health-check.",
     )
 
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
@@ -573,7 +592,21 @@ def _load_or_write_railway_manifest(
     suite_id: str,
 ) -> dict[str, Any] | None:
     if args.railway_config_from_env:
-        manifest = build_railway_manifest(load_railway_config(), suite_id=suite_id)
+        config = load_railway_config()
+        endpoint_health = (
+            run_railway_endpoint_health(
+                config,
+                timeout_seconds=args.railway_health_timeout_seconds,
+                bearer_token=os.environ.get("TRACEDB_HTTP_BEARER_TOKEN") or None,
+            )
+            if args.railway_health_check
+            else None
+        )
+        manifest = build_railway_manifest(
+            config,
+            suite_id=suite_id,
+            endpoint_health=endpoint_health,
+        )
         _write_railway_manifest(manifest, suite_dir / "railway-manifest.json")
         return manifest
     if args.railway_manifest_json:

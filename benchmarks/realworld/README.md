@@ -277,6 +277,8 @@ least-privilege credentials:
 - `RAILWAY_ENVIRONMENT_ID`
 - `TRACEDB_RAILWAY_SERVICE_ID`
 - `TRACEDB_RAILWAY_PRIVATE_URL`
+- Optional public fallback for local control-plane checks:
+  `TRACEDB_RAILWAY_URL` or `RAILWAY_TRACEDB_URL`
 - `TRACEDB_RAILWAY_VOLUME_PATH`, usually `/data/tracedb`
 - Optional control service IDs: `POSTGRES_RAILWAY_SERVICE_ID`,
   `PGVECTOR_RAILWAY_SERVICE_ID`, `MONGODB_RAILWAY_SERVICE_ID`,
@@ -292,6 +294,7 @@ cd benchmarks/realworld
 BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
   --suite-spec suites/railway_stateful.json \
   --railway-config-from-env \
+  --railway-health-check \
   --openrouter-mode off \
   --target tracedb \
   --surface sdk \
@@ -299,11 +302,18 @@ BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
 ```
 
 Missing Railway config blocks Railway-required specs. A configured manifest
-makes the gate usable, but it still does not create services, restart services,
-redeploy images, or validate persisted state. Backups, usage limits, SSH key
-setup, restart/redeploy execution, and restore validation remain required before
-the `railway_stateful`, `soak_railway`, or `release_100k` specs should be
-treated as full Railway product proof.
+makes the gate usable. `--railway-health-check` additionally probes the TraceDB
+endpoint `/ready`, writes the result into `railway-manifest.json`, and blocks the
+gate if the requested probe is unhealthy or unreachable. This is live endpoint
+evidence only: it still does not create services, restart services, redeploy
+images, or validate persisted state. Backups, usage limits, SSH key setup,
+restart/redeploy execution, and restore validation remain required before the
+`railway_stateful`, `soak_railway`, or `release_100k` specs should be treated as
+full Railway product proof.
+
+The Modal `railway_stateful`, `soak_railway`, and `release_100k` presets pass
+both `--railway-config-from-env` and `--railway-health-check`, so scheduled or
+remote Railway lanes fail fast when the persistent lab is not reachable.
 
 ## Modal CPU/RAM Smoke
 

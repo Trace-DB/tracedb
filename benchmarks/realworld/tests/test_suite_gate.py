@@ -140,6 +140,72 @@ class SuiteGateTests(unittest.TestCase):
             "railway-manifest.json",
         )
 
+    def test_railway_endpoint_health_failure_blocks_when_manifest_includes_probe(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [
+                    {
+                        "role": "tracedb",
+                        "service_id": "service_tracedb",
+                        "configured": True,
+                    }
+                ],
+                "endpoint_health": {
+                    "status": "unhealthy",
+                    "base_url": "http://127.0.0.1:65535",
+                    "checks": [{"name": "ready", "ok": False, "status_code": 503}],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_endpoint_health"], "unhealthy")
+        self.assertTrue(
+            any("endpoint health" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
+    def test_railway_endpoint_health_is_recorded_when_probe_is_healthy(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [
+                    {
+                        "role": "tracedb",
+                        "service_id": "service_tracedb",
+                        "configured": True,
+                    }
+                ],
+                "endpoint_health": {
+                    "status": "healthy",
+                    "base_url": "http://tracedb.railway.internal:8080",
+                    "checks": [{"name": "ready", "ok": True, "status_code": 200}],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["claim_status"]["railway_endpoint_health"], "healthy")
+
     def test_gate_json_writer_persists_stable_artifact(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
         gate = build_suite_gate(

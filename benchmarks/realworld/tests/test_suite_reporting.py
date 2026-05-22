@@ -6,13 +6,46 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 
 LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from runner.suite import SCENARIOS, build_suite_report, write_suite_markdown
+
+
+class ReadyHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path == "/ready":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ready":true}')
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+class TestHttpServer:
+    def __init__(self) -> None:
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), ReadyHandler)
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def __enter__(self) -> "TestHttpServer":
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
 
 
 class SuiteReportingTests(unittest.TestCase):
@@ -205,6 +238,67 @@ class SuiteReportingTests(unittest.TestCase):
         )
         self.assertEqual(manifest["status"], "configured")
         self.assertNotIn("railway-token-secret", repr(manifest))
+
+    def test_railway_health_check_writes_endpoint_result_into_manifest_and_gate(self) -> None:
+        with TestHttpServer() as server, tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": server.base_url,
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-health-suite-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/railway_stateful.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-health-check",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-health-suite-test"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+
+        self.assertEqual(manifest["endpoint_health"]["status"], "healthy")
+        self.assertEqual(manifest["endpoint_health"]["checks"][0]["status_code"], 200)
+        self.assertEqual(gate["claim_status"]["railway_endpoint_health"], "healthy")
+        self.assertEqual(gate["status"], "usable")
 
     def test_suite_report_marks_unavailable_external_controls(self) -> None:
         child_report = {
