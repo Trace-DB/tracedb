@@ -501,8 +501,11 @@ Native TraceQL now executes through the canonical HTTP surface:
 `TENANT`, `WHERE`, `MATCH`, `NEAR`, `FRESHNESS`, `LIMIT`, and `EXPLAIN`
 directives with `traceql_query_from_str`, and compiles them into the existing
 `HybridQuery` model before returning the same result shape as `POST /v1/query`.
-This is native TraceQL execution evidence only; SQL compatibility, PostgreSQL
-compatibility, and GraphQL remain unimplemented.
+The platform conformance harness now includes `traceql_string_execution`; HTTP
+direct passes that scenario through `/v1/traceql`, while SDK lanes report it as
+`not_checked` until native TraceQL helpers exist. This is native TraceQL
+execution evidence only; SQL compatibility, PostgreSQL compatibility, and
+GraphQL remain unimplemented.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and

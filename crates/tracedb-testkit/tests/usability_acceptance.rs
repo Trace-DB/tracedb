@@ -1105,6 +1105,7 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         "get",
         "scan",
         "query",
+        "traceql_string_execution",
         "explain",
         "delete",
         "idempotency",

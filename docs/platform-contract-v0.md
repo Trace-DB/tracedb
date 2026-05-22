@@ -94,6 +94,7 @@ and must not invent surface-specific semantics.
 | Get | `get` | `POST /v1/records/get` | Returns `RecordOutput` or `null`. |
 | Scan | `scan` | `POST /v1/records/scan` | Returns `records` and `returned_count`; cursor metadata is future. |
 | Query | `query` | `POST /v1/query` | Returns `HybridQueryRow` results with typed score components. |
+| TraceQL string execution | `traceql_string_execution` | `POST /v1/traceql` | Parses native TraceQL strings into the shared `HybridQuery` model and preserves query result/error envelope behavior. |
 | Explain | `explain` | `POST /v1/explain` | Returns `HybridExplain` access paths, planner candidates, counters, and timings. |
 | Delete | `delete` | `POST /v1/records/delete` | Hides deleted records from get, scan, query, and explain materialization. |
 | Idempotency | `idempotency` | `Idempotency-Key` on mutation/admin routes | Same key plus same method/path/body replays; same key with different body returns `409`. |
@@ -111,20 +112,30 @@ python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json 
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 ```
 
-The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`.
-The `rust_sdk` lane maps the existing Rust SDK quickstart product path into the
-same manifest scenario IDs. The current executable lanes cover all required v0
-scenarios for HTTP direct and Rust SDK, including single-record put and parsed
-error-envelope evidence. The `typescript_sdk` lane runs the public TypeScript
-SDK smoke through `npm run public-http-smoke -- --summary-json ...` and maps
+The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`
+and now checks all 13 current v0 scenario IDs, including native
+`traceql_string_execution` through `POST /v1/traceql`. The `rust_sdk` lane maps
+the existing Rust SDK quickstart product path into the same manifest scenario
+IDs and reports `traceql_string_execution` as `not_checked` until the public
+Rust SDK has a native TraceQL helper. The `typescript_sdk` lane runs the public
+TypeScript SDK smoke through `npm run public-http-smoke -- --summary-json ...`
+and maps schema apply, put, batch, patch, get, scan, query, explain, delete,
+idempotency, errors, and snapshot/restore into the same scenario IDs; it also
+reports `traceql_string_execution` as `not_checked` until the public wrapper
+exposes native TraceQL execution. The `python_sdk` lane first installs a copied
+`clients/python` package into an isolated temporary pip `--target`, then runs
+`clients/python/http_smoke.py` with source-path imports disabled. It maps
 schema apply, put, batch, patch, get, scan, query, explain, delete,
-idempotency, errors, and snapshot/restore into the same scenario IDs. The
-`python_sdk` lane first installs a copied `clients/python` package into an
-isolated temporary pip `--target`, then runs `clients/python/http_smoke.py` with
-source-path imports disabled. It maps schema apply, put, batch, patch, get,
-scan, query, explain, delete, idempotency, errors, and snapshot/restore into
-the same scenario IDs. Future surfaces must report unimplemented scenarios as
-`not_checked` rather than silently treating them as success.
+idempotency, errors, and snapshot/restore into the same scenario IDs and
+reports `traceql_string_execution` as `not_checked` until the sync SDK exposes
+native TraceQL execution. Future surfaces must report unimplemented scenarios
+as `not_checked` rather than silently treating them as success.
+
+Current verified checkpoint: Modal workspace run `ap-z22LgowF3bcrjm1HPSAmQL`
+passed in 86.765s. Its `platform-conformance-quick` command reported
+`http_direct` 13/13 passed, including `traceql_string_execution` through
+`POST /v1/traceql`, and `rust_sdk` 12/13 passed with native TraceQL explicitly
+`not_checked`.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and

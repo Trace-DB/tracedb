@@ -171,6 +171,12 @@
       "expected": "returns HybridQueryRow results with typed score components"
     },
     {
+      "id": "traceql_string_execution",
+      "required": true,
+      "wire": "POST /v1/traceql",
+      "expected": "parses native TraceQL strings into the shared HybridQuery model and preserves query result/error envelope behavior"
+    },
+    {
       "id": "explain",
       "required": true,
       "wire": "POST /v1/explain",

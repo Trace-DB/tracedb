@@ -39,6 +39,7 @@ class PlatformConformanceTests(unittest.TestCase):
                 "get",
                 "scan",
                 "query",
+                "traceql_string_execution",
                 "explain",
                 "delete",
                 "idempotency",
@@ -170,6 +171,7 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
         self.assertEqual(scenarios["put"]["status"], "passed")
         self.assertEqual(scenarios["errors"]["status"], "passed")
+        self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
 
     def test_python_sdk_smoke_summary_maps_to_contract_scenarios(self) -> None:
         module = load_module()
@@ -219,6 +221,7 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["get"]["status"], "passed")
         self.assertEqual(scenarios["scan"]["status"], "passed")
         self.assertEqual(scenarios["query"]["status"], "passed")
+        self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
         self.assertEqual(scenarios["explain"]["status"], "passed")
         self.assertEqual(scenarios["delete"]["status"], "passed")
         self.assertEqual(scenarios["idempotency"]["status"], "passed")
@@ -274,11 +277,23 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["get"]["status"], "passed")
         self.assertEqual(scenarios["scan"]["status"], "passed")
         self.assertEqual(scenarios["query"]["status"], "passed")
+        self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
         self.assertEqual(scenarios["explain"]["status"], "passed")
         self.assertEqual(scenarios["delete"]["status"], "passed")
         self.assertEqual(scenarios["idempotency"]["status"], "passed")
         self.assertEqual(scenarios["errors"]["status"], "passed")
         self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
+
+    def test_http_direct_runner_executes_traceql_string_scenario(self) -> None:
+        source = SCRIPT.read_text()
+
+        for token in [
+            "traceql_string_execution_scenario",
+            "POST /v1/traceql",
+            "traceql_string_execution",
+            "invalid TraceQL",
+        ]:
+            self.assertIn(token, source)
 
     def test_writes_report_summary_for_selected_surfaces(self) -> None:
         module = load_module()

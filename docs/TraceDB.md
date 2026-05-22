@@ -150,14 +150,16 @@ managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 
 Current TypeScript conformance checkpoint: `scripts/platform_conformance.py
 --surface typescript_sdk` maps the public TypeScript SDK HTTP smoke summary
-into all 12 Platform Contract v0 scenario IDs. Modal workspace run
-`ap-r24Nuud9z7Xepz1W7g6BFu` passed in 54.330s, including
-`typescript-sdk-conformance`, `npm run public-http-smoke`, `npm run
-gateway-smoke`, and `cargo test --workspace --all-targets`. This pass also
-fixed a TypeScript gateway smoke race by allocating the gateway port only after
-the engine has bound its port. This is local TypeScript SDK conformance
-evidence, not managed-cloud proof, SQL compatibility, TraceQL, GraphQL, or
-benchmark evidence.
+into all 13 Platform Contract v0 scenario IDs, with
+`traceql_string_execution` reported as `not_checked` until the public wrapper
+exposes native TraceQL execution. Modal workspace run
+`ap-z22LgowF3bcrjm1HPSAmQL` passed in 86.765s, including
+`platform-conformance-quick`, `typescript-sdk-conformance`, `npm run
+public-http-smoke`, `npm run gateway-smoke`, and `cargo test --workspace
+--all-targets`. The quick conformance lane proved `http_direct` at 13/13 and
+`rust_sdk` at 12/13 with native TraceQL explicitly `not_checked`. This is local
+SDK conformance evidence, not managed-cloud proof, SQL compatibility, GraphQL,
+or benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -380,8 +382,11 @@ Native TraceQL now executes through the canonical HTTP surface:
 `TENANT`, `WHERE`, `MATCH`, `NEAR`, `FRESHNESS`, `LIMIT`, and `EXPLAIN`
 directives with `traceql_query_from_str`, and compiles them into the existing
 `HybridQuery` model before returning the same result shape as `POST /v1/query`.
-This is native TraceQL execution evidence only; SQL compatibility, PostgreSQL
-compatibility, and GraphQL remain unimplemented.
+The conformance harness now includes `traceql_string_execution`; HTTP direct
+passes that scenario through `/v1/traceql`, while SDK lanes report it as
+`not_checked` until native TraceQL helpers exist. This is native TraceQL
+execution evidence only; SQL compatibility, PostgreSQL compatibility, and
+GraphQL remain unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

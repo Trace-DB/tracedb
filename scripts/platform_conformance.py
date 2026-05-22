@@ -102,6 +102,18 @@ def finalize_surface(
     }
 
 
+def ordered_surface_scenarios(
+    manifest: dict[str, Any],
+    scenario_map: dict[str, dict[str, Any]],
+    *,
+    default_reason: str,
+) -> list[dict[str, Any]]:
+    return [
+        scenario_map.get(scenario_id, not_checked(scenario_id, default_reason))
+        for scenario_id in contract_scenario_ids(manifest)
+    ]
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -234,6 +246,65 @@ def error_envelope_scenario(base_url: str) -> dict[str, Any]:
             "status": status,
             "error": payload["error"],
             "code": payload.get("code"),
+        },
+    )
+
+
+def traceql_string_execution_scenario(base_url: str) -> dict[str, Any]:
+    traceql = "\n".join(
+        [
+            "FROM docs",
+            "TENANT tenant-a",
+            'WHERE status = "reviewed"',
+            'MATCH body "TraceDB"',
+            "NEAR embedding [1.0, 0.0, 0.0]",
+            "FRESHNESS allow_dirty",
+            "LIMIT 3",
+        ]
+    )
+    _, payload = request_json(base_url, "POST", "/v1/traceql", {"query": traceql})
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise RuntimeError(f"TraceQL response missing results list: {payload}")
+    result_ids = [row.get("record_id") for row in results if isinstance(row, dict)]
+    if "intro" not in result_ids:
+        raise RuntimeError(f"TraceQL did not return expected record intro: {payload}")
+    if "explain" in payload:
+        raise RuntimeError(f"TraceQL response should be lean without EXPLAIN: {payload}")
+
+    _, explain_payload = request_json(
+        base_url,
+        "POST",
+        "/v1/traceql",
+        {"query": f"{traceql}\nEXPLAIN"},
+    )
+    if not isinstance(explain_payload.get("results"), list) or not isinstance(
+        explain_payload.get("explain"),
+        dict,
+    ):
+        raise RuntimeError(f"TraceQL EXPLAIN response missing results or explain: {explain_payload}")
+
+    invalid_status, invalid_payload = request_json(
+        base_url,
+        "POST",
+        "/v1/traceql",
+        {"query": "FROM docs\nTENANT tenant-a\nDROP TABLE docs"},
+        expected_status=400,
+    )
+    error = invalid_payload.get("error")
+    if invalid_payload.get("code") != "bad_request" or not (
+        isinstance(error, str) and "invalid TraceQL" in error
+    ):
+        raise RuntimeError(f"invalid TraceQL did not preserve bad-request envelope: {invalid_payload}")
+
+    return passed(
+        "traceql_string_execution",
+        "POST /v1/traceql",
+        {
+            "result_ids": result_ids,
+            "explain": True,
+            "invalid_status": invalid_status,
+            "invalid_code": invalid_payload.get("code"),
         },
     )
 
@@ -393,6 +464,10 @@ def run_http_direct_surface(manifest: dict[str, Any], repo_root: Path) -> dict[s
                         )
                     },
                 ),
+            )
+            run_step(
+                "traceql_string_execution",
+                lambda: traceql_string_execution_scenario(base_url),
             )
             run_step(
                 "explain",
@@ -599,7 +674,11 @@ def map_rust_sdk_product_summary(
         if step_passed("snapshot") and step_passed("restore")
         else failed("snapshot_restore", RuntimeError("Rust SDK quickstart snapshot/restore did not pass")),
     }
-    scenarios = [scenario_map[scenario_id] for scenario_id in contract_scenario_ids(manifest)]
+    scenarios = ordered_surface_scenarios(
+        manifest,
+        scenario_map,
+        default_reason="Rust SDK public surface does not expose native TraceQL execution yet",
+    )
     return finalize_surface(
         "rust_sdk",
         "checked",
@@ -685,7 +764,11 @@ def map_python_sdk_smoke_summary(
         if step_passed("snapshot") and step_passed("restore")
         else failed("snapshot_restore", RuntimeError("Python SDK smoke snapshot/restore did not pass")),
     }
-    scenarios = [scenario_map[scenario_id] for scenario_id in contract_scenario_ids(manifest)]
+    scenarios = ordered_surface_scenarios(
+        manifest,
+        scenario_map,
+        default_reason="Python SDK public surface does not expose native TraceQL execution yet",
+    )
     return finalize_surface(
         "python_sdk",
         "checked",
@@ -773,7 +856,11 @@ def map_typescript_sdk_smoke_summary(
         if step_passed("snapshot") and step_passed("restore")
         else failed("snapshot_restore", RuntimeError("TypeScript SDK smoke snapshot/restore did not pass")),
     }
-    scenarios = [scenario_map[scenario_id] for scenario_id in contract_scenario_ids(manifest)]
+    scenarios = ordered_surface_scenarios(
+        manifest,
+        scenario_map,
+        default_reason="TypeScript public SDK surface does not expose native TraceQL execution yet",
+    )
     return finalize_surface(
         "typescript_sdk",
         "checked",
