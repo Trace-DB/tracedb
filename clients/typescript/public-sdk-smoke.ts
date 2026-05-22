@@ -36,6 +36,12 @@ const db = new TraceDB({
     if (input.endsWith("/v1/query")) {
       return okJson({ results: [{ record_id: "intro", tenant_id: "tenant-a" }] });
     }
+    if (input.endsWith("/v1/traceql")) {
+      return okJson({
+        results: [{ record_id: "intro", tenant_id: "tenant-a" }],
+        explain: { returned_count: 1 },
+      });
+    }
     if (input.endsWith("/v1/explain")) {
       return okJson({ returned_count: 2 });
     }
@@ -116,6 +122,31 @@ const retriedGet = await retryDb.table("docs").tenant("tenant-a").get("intro");
 assert.equal(retriedGet.record?.id, "intro");
 assert.equal(retryCalls.length, 2, "TRACEDB_SAFE_RETRIES should retry read-only 5xx responses");
 assert.equal(retryCalls[0].input, "http://127.0.0.1:8090/v1/records/get");
+
+const traceqlRetryCalls: FetchCall[] = [];
+let traceqlRetryAttempt = 0;
+const traceqlRetryDb = TraceDB.fromEnv({
+  env: {
+    TRACEDB_URL: "http://127.0.0.1:8090",
+    TRACEDB_SAFE_RETRIES: "1",
+  },
+  fetchImpl: async (input, init) => {
+    traceqlRetryCalls.push({ input, init });
+    traceqlRetryAttempt += 1;
+    if (traceqlRetryAttempt === 1) {
+      return responseJson(503, { error: "temporarily unavailable" });
+    }
+    return okJson({ results: [] });
+  },
+});
+const retriedTraceql = await traceqlRetryDb.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1");
+assert.equal(retriedTraceql.results?.length, 0);
+assert.equal(
+  traceqlRetryCalls.length,
+  2,
+  "TRACEDB_SAFE_RETRIES should retry native TraceQL read-only 5xx responses",
+);
+assert.equal(traceqlRetryCalls[0].input, "http://127.0.0.1:8090/v1/traceql");
 
 const mutationRetryCalls: FetchCall[] = [];
 const mutationRetryDb = new TraceDB({
@@ -310,6 +341,12 @@ assert.equal(explain.returned_count, 2);
 const explainBody = JSON.parse(calls[4].init.body ?? "{}");
 assert.equal(explainBody.table, "docs");
 assert.equal(explainBody.tenant_id, "tenant-a");
+
+const traceql = await db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1\nEXPLAIN");
+assert.equal(traceql.results?.[0]?.record_id, "intro");
+assert.equal(traceql.explain?.returned_count, 1);
+const traceqlBody = JSON.parse(calls[5].init.body ?? "{}");
+assert.equal(traceqlBody.query, "FROM docs\nTENANT tenant-a\nLIMIT 1\nEXPLAIN");
 
 await db.table("docs").tenant("tenant-a").get("intro");
 await db.table("docs").tenant("tenant-a").limit(5).scan();

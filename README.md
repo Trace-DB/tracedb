@@ -503,8 +503,9 @@ directives with `traceql_query_from_str`, and compiles them into the existing
 `HybridQuery` model before returning the same result shape as `POST /v1/query`.
 The platform conformance harness now includes `traceql_string_execution`; HTTP
 direct passes that scenario through `/v1/traceql`, and the Rust SDK lane now
-passes it through `TraceDbClient::traceql_typed`. TypeScript and Python still
-report it as `not_checked` until native TraceQL helpers exist. This is native TraceQL
+passes it through `TraceDbClient::traceql_typed`. The TypeScript SDK lane now
+passes it through the public `TraceDB.traceql()` helper. Python still reports it
+as `not_checked` until a native TraceQL helper exists. This is native TraceQL
 execution evidence only; SQL compatibility, PostgreSQL compatibility, and
 GraphQL remain unimplemented.
 

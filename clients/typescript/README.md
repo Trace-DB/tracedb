@@ -18,7 +18,10 @@ generated `TraceDbClient` as its transport layer instead of duplicating HTTP
 routes. Current public DX starts with `new TraceDB({ url, token })` or
 `TraceDB.fromEnv()`, table handles, record writes, batch ingest, patch,
 scan/get/delete, admin compact/snapshot/restore, and a query builder that
-compiles to the canonical `HybridQuery` body.
+compiles to the canonical `HybridQuery` body. The wrapper also exposes native
+TraceQL execution through `TraceDB.traceql(query)` and
+`TraceDB.traceqlRequest({ query })` over the generated `/v1/traceql` transport
+method.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
 schemas and uses them in method signatures. These aliases intentionally preserve
@@ -79,8 +82,9 @@ retries transient 5xx responses only for keyed mutation/admin routes, and then
 checks table-scoped `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
 compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
 `match`, `near`, `with`, `limit`, `all`, and `explainPlan`. It also checks
-missing-tenant validation raises `TraceDbRequestError` before `fetchImpl` is
-called. This is public-DX smoke coverage over the generated transport, not
+`TraceDB.traceql()` request shape and read-only safe retries for native TraceQL,
+and missing-tenant validation raises `TraceDbRequestError` before `fetchImpl`
+is called. This is public-DX smoke coverage over the generated transport, not
 publishing readiness or managed-cloud proof.
 
 The package entry smoke imports from `@tracedb/sdk` and
@@ -123,8 +127,9 @@ npm run public-http-smoke -- --summary-json /tmp/tracedb-typescript-sdk-smoke.js
 The public HTTP smoke starts a local `tracedb-server` child process with an
 isolated temporary data directory, waits for readiness, then drives `TraceDB`
 and table handles through health, catalog, metrics, schema apply, insert, batch
-ingest, patch, get, scan, query, explain, delete, idempotency replay/conflict,
-parsed error envelopes, compact, snapshot, restore, and admin jobs. It emits a
+ingest, patch, get, scan, query, native TraceQL result/explain, explain, delete,
+idempotency replay/conflict, parsed error envelopes, compact, snapshot,
+restore, and admin jobs. It emits a
 JSON summary and `typescript public sdk http smoke ok`. This is local loopback
 product evidence for the public wrapper over the generated transport and is the
 input for:
@@ -342,7 +347,7 @@ network I/O with
 `TraceDbRequestError`.
 The public wrapper's `safeRetries` / `TRACEDB_SAFE_RETRIES` setting is separate:
 it retries transient HTTP 5xx responses only for health/ready, get, scan, query,
-and explain. It does not retry write or admin mutations.
+native TraceQL, and explain. It does not retry write or admin mutations.
 The public wrapper's `idempotencyRetries` / `TRACEDB_IDEMPOTENCY_RETRIES`
 setting is also default-off. It retries transient HTTP 5xx responses for
 mutation/admin routes only when the individual request carries a validated

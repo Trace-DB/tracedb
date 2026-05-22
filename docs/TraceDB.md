@@ -151,16 +151,16 @@ managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 Current TypeScript conformance checkpoint: `scripts/platform_conformance.py
 --surface typescript_sdk` maps the public TypeScript SDK HTTP smoke summary
 into all 13 Platform Contract v0 scenario IDs, with
-`traceql_string_execution` reported as `not_checked` until the public wrapper
-exposes native TraceQL execution. Modal workspace run
-`ap-LKxKE8pqLXZrB8d2Ol232d` passed in 104.284s, including
+`traceql_string_execution` now covered by the public `TraceDB.traceql()` helper.
+Modal workspace run `ap-7dKR46BWCsRmjRBCNctWhn` passed in 82.426s, including
 `platform-conformance-quick`, `typescript-sdk-conformance`, `npm run
 public-http-smoke`, `npm run gateway-smoke`, and `cargo test --workspace
 --all-targets`. The quick conformance lane proved `http_direct` at 13/13 and
 `rust_sdk` at 13/13 with native TraceQL covered through
-`TraceDbClient::traceql_typed`; TypeScript native TraceQL remains `not_checked`.
-This is local SDK conformance evidence, not managed-cloud proof, SQL
-compatibility, GraphQL, or benchmark evidence.
+`TraceDbClient::traceql_typed`; `typescript-sdk-conformance` proved
+`typescript_sdk` at 13/13 with TraceQL result and explain evidence. This is
+local SDK conformance evidence, not managed-cloud proof, SQL compatibility,
+GraphQL, or benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -385,8 +385,9 @@ directives with `traceql_query_from_str`, and compiles them into the existing
 `HybridQuery` model before returning the same result shape as `POST /v1/query`.
 The conformance harness now includes `traceql_string_execution`; HTTP direct
 passes that scenario through `/v1/traceql`, and the Rust SDK lane now passes it
-through `TraceDbClient::traceql_typed`. TypeScript and Python still report it as
-`not_checked` until native TraceQL helpers exist. This is native TraceQL
+through `TraceDbClient::traceql_typed`. The TypeScript SDK lane now passes it
+through `TraceDB.traceql()`. Python still reports it as `not_checked` until a
+native TraceQL helper exists. This is native TraceQL
 execution evidence only; SQL compatibility, PostgreSQL compatibility, and
 GraphQL remain unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local

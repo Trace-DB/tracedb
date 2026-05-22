@@ -120,10 +120,9 @@ IDs and now checks all 13 current IDs, including `traceql_string_execution`
 through `TraceDbClient::traceql_typed`. The `typescript_sdk` lane runs the
 public TypeScript SDK smoke through `npm run public-http-smoke --
 --summary-json ...` and maps schema apply, put, batch, patch, get, scan, query,
-explain, delete, idempotency, errors, and snapshot/restore into the same
-scenario IDs; it still reports `traceql_string_execution` as `not_checked`
-until the public wrapper exposes native TraceQL execution. The `python_sdk` lane
-first installs a copied `clients/python` package into an isolated temporary pip
+TraceQL string execution, explain, delete, idempotency, errors, and
+snapshot/restore into the same scenario IDs. The `python_sdk` lane first
+installs a copied `clients/python` package into an isolated temporary pip
 `--target`, then runs `clients/python/http_smoke.py` with source-path imports
 disabled. It maps schema apply, put, batch, patch, get, scan, query, explain,
 delete, idempotency, errors, and snapshot/restore into the same scenario IDs and
@@ -131,11 +130,12 @@ still reports `traceql_string_execution` as `not_checked` until the sync SDK
 exposes native TraceQL execution. Future surfaces must report unimplemented
 scenarios as `not_checked` rather than silently treating them as success.
 
-Current verified checkpoint: Modal workspace run `ap-LKxKE8pqLXZrB8d2Ol232d`
-passed in 104.284s. Its `platform-conformance-quick` command reported
-`http_direct` 13/13 passed, including `traceql_string_execution` through
-`POST /v1/traceql`, and `rust_sdk` 13/13 passed with native TraceQL covered by
-the Rust SDK quickstart.
+Current verified checkpoint: Modal workspace run `ap-7dKR46BWCsRmjRBCNctWhn`
+passed in 82.426s. Its `platform-conformance-quick` command reported
+`http_direct` 13/13 and `rust_sdk` 13/13, including
+`traceql_string_execution`; its `typescript-sdk-conformance` command reported
+`typescript_sdk` 13/13 with native TraceQL covered by public SDK result and
+explain evidence.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and
@@ -163,13 +163,13 @@ The TypeScript package now starts the public SDK layer in
 `TraceDB.fromEnv()` wraps that transport and exposes table handles with
 `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
 compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
-and `explainPlan`. `TraceDB.fromEnv()` reads `TRACEDB_URL`, optional
-`TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
-`TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
+`explainPlan`, `traceql`, and `traceqlRequest`. `TraceDB.fromEnv()` reads
+`TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
+`TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
 `TRACEDB_IDEMPOTENCY_RETRIES` so the TypeScript public SDK shares the same
 connection, routing, read-only retry, and keyed mutation/admin retry boundary as
 Rust. `safeRetries` only retries transient 5xx responses for health/ready, get,
-scan, query, and explain. `idempotencyRetries` is default-off and retries
+scan, query, native TraceQL, and explain. `idempotencyRetries` is default-off and retries
 transient 5xx responses for mutation/admin routes only when the request carries
 a caller-provided `Idempotency-Key`. The wrapper is fake-fetch,
 build/pack, packed temp-consumer install, package-entry, and typecheck guarded
@@ -177,9 +177,9 @@ and now has real local HTTP and gateway smokes through `npm run
 public-http-smoke` and `npm run gateway-smoke`.
 The
 public HTTP smoke now emits machine-readable
-idempotency and error-envelope evidence for `scripts/platform_conformance.py
---surface typescript_sdk`; the generated transport remains available and
-remains the source of route methods.
+idempotency, TraceQL result/explain, and error-envelope evidence for
+`scripts/platform_conformance.py --surface typescript_sdk`; the generated
+transport remains available and remains the source of route methods.
 
 The Python package now starts the sync-first AI/data SDK lane in
 `clients/python/tracedb/client.py`. `TraceDB(url, token="dev-token")` exposes

@@ -800,6 +800,7 @@ def map_typescript_sdk_smoke_summary(
 ) -> dict[str, Any]:
     steps = smoke_summary.get("steps", {})
     error_envelope = smoke_summary.get("error_envelope", {})
+    traceql_result_count = smoke_summary.get("traceql_result_count")
 
     def step_passed(name: str) -> bool:
         return smoke_summary.get("ok") is True and steps.get(name) is True
@@ -848,6 +849,22 @@ def map_typescript_sdk_smoke_summary(
         "query": passed("query", "typescript public sdk smoke steps.query")
         if step_passed("query")
         else failed("query", RuntimeError("TypeScript SDK smoke query did not pass")),
+        "traceql_string_execution": passed(
+            "traceql_string_execution",
+            "typescript public sdk smoke steps.traceql_string_execution",
+            {
+                "result_count": traceql_result_count,
+                "explain": smoke_summary.get("traceql_explain"),
+            },
+        )
+        if step_passed("traceql_string_execution")
+        and isinstance(traceql_result_count, int)
+        and traceql_result_count >= 1
+        and smoke_summary.get("traceql_explain") is True
+        else failed(
+            "traceql_string_execution",
+            RuntimeError("TypeScript SDK smoke TraceQL string execution evidence missing"),
+        ),
         "explain": passed("explain", "typescript public sdk smoke steps.explain")
         if step_passed("explain")
         else failed("explain", RuntimeError("TypeScript SDK smoke explain did not pass")),

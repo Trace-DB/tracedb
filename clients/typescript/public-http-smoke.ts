@@ -237,6 +237,25 @@ try {
     .explainPlan();
   assert.equal(typeof explainResponse.returned_count, "number");
 
+  const traceqlQuery = [
+    "FROM docs",
+    "TENANT tenant-a",
+    "WHERE status = \"published\"",
+    "MATCH body \"TypeScript public SDK\"",
+    "NEAR embedding [1.0, 0.0, 0.0]",
+    "FRESHNESS STRICT",
+    "LIMIT 3",
+  ].join("\n");
+  const traceqlResponse = await db.traceql(traceqlQuery);
+  const traceqlResults = traceqlResponse.results ?? [];
+  assert.equal(Array.isArray(traceqlResults), true);
+  assert.ok(
+    traceqlResults.some((result) => result.record_id === "intro"),
+    "TraceQL should return the intro record through the public TypeScript SDK",
+  );
+  const traceqlExplain = await db.traceql(`${traceqlQuery}\nEXPLAIN`);
+  assert.equal(typeof traceqlExplain.explain?.returned_count, "number");
+
   const deleteResponse = await docs.delete("ops", {
     idempotencyKey: `ts-public-${runId}-delete`,
     tombstone: "typescript_public_http_smoke",
@@ -305,6 +324,7 @@ try {
       get: true,
       scan: true,
       query: true,
+      traceql_string_execution: true,
       explain: true,
       delete: true,
       idempotency: true,
@@ -317,6 +337,8 @@ try {
     records_put: 1,
     records_inserted: 3,
     records_scanned: scanResponse.returned_count,
+    traceql_result_count: traceqlResults.length,
+    traceql_explain: traceqlExplain.explain !== undefined,
     catalog_databases: databases.databases?.length,
     put_epoch: putResponse.epoch,
     idempotency_replay_observed: replayResponse.epoch === putResponse.epoch,

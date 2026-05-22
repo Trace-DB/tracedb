@@ -26,6 +26,7 @@ import {
   type SnapshotRequest,
   type SnapshotResponse,
   type TableSchema,
+  type TraceQlQueryRequest,
   type TraceDbClientConfig,
   type TraceDbFetch,
   type TraceDbFetchInit,
@@ -61,6 +62,7 @@ export type {
   SnapshotRequest,
   SnapshotResponse,
   TableSchema,
+  TraceQlQueryRequest,
   TraceDbFetch,
   TraceDbFetchInit,
   TraceDbRequestOptions,
@@ -206,6 +208,17 @@ export class TraceDB {
 
   async applySchema(schema: TableSchema, options: TraceDbRequestOptions = {}) {
     return this.transport.applySchema(schema, options);
+  }
+
+  async traceql(query: string, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+    return this.traceqlRequest({ query }, options);
+  }
+
+  async traceqlRequest(
+    request: TraceQlQueryRequest,
+    options: TraceDbRequestOptions = {},
+  ): Promise<QueryResponse> {
+    return this.transport.traceql({ ...request }, options);
   }
 
   async listDatabases(options: TraceDbRequestOptions = {}): Promise<DatabasesResponse> {
@@ -664,6 +677,7 @@ function isRetrySafeRequest(input: string, init: TraceDbFetchInit): boolean {
       requestPath(input) === "/v1/records/get" ||
       requestPath(input) === "/v1/records/scan" ||
       requestPath(input) === "/v1/query" ||
+      requestPath(input) === "/v1/traceql" ||
       requestPath(input) === "/v1/explain"
     )
   );
