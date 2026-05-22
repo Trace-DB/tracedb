@@ -550,6 +550,123 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(gate["status"], "usable")
         self.assertNotIn("railway-token-secret", repr(manifest))
 
+    def test_railway_persistence_verdict_combines_pre_manifest_receipt_and_postcheck(self) -> None:
+        with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:
+            marker = {
+                "table": "railway_stateful_markers",
+                "tenant_id": "railway-smoke",
+                "id": "marker-123",
+                "run_id": "pre-restart-run",
+            }
+            server.server.records[
+                (marker["table"], marker["tenant_id"], marker["id"])
+            ] = {
+                "table": marker["table"],
+                "id": marker["id"],
+                "tenant_id": marker["tenant_id"],
+                "fields": {
+                    "id": marker["id"],
+                    "tenant": marker["tenant_id"],
+                    "kind": "railway_stateful_smoke",
+                    "run_id": marker["run_id"],
+                    "status": "written",
+                    "marker_id": marker["id"],
+                    "body": "TraceDB Railway stateful smoke marker marker-123",
+                },
+            }
+            pre_manifest_path = Path(temp_dir) / "pre-railway-manifest.json"
+            pre_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "status": "configured",
+                        "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                        "stateful_smoke": {
+                            "status": "passed",
+                            "mode": "write_read",
+                            "marker": marker,
+                        },
+                    }
+                )
+            )
+            receipt_path = Path(temp_dir) / "operation-receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "operation": "restart",
+                        "status": "passed",
+                        "executed": True,
+                        "service_id": "service_tracedb",
+                        "RAILWAY_API_TOKEN": "railway-token-secret",
+                    }
+                )
+            )
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": server.base_url,
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-persistence-suite-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/railway_stateful.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-stateful-smoke",
+                    "--railway-stateful-read-only",
+                    "--railway-stateful-marker-id",
+                    "marker-123",
+                    "--railway-persistence-pre-manifest-json",
+                    str(pre_manifest_path),
+                    "--railway-operation-receipt-json",
+                    str(receipt_path),
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-persistence-suite-test"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+
+        self.assertEqual(manifest["persistence_verdict"]["status"], "passed")
+        self.assertEqual(manifest["persistence_verdict"]["marker"]["id"], "marker-123")
+        self.assertEqual(gate["claim_status"]["railway_persistence"], "passed")
+        self.assertEqual(gate["status"], "usable")
+        self.assertNotIn("railway-token-secret", repr(manifest))
+
     def test_suite_report_marks_unavailable_external_controls(self) -> None:
         child_report = {
             "summary": {

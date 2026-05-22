@@ -33,6 +33,7 @@ try:
     from railway_bench import (
         build_railway_manifest,
         build_railway_operation_plan,
+        build_railway_persistence_verdict,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_stateful_smoke,
@@ -41,6 +42,7 @@ except ImportError:  # pragma: no cover - package import path used by unit disco
     from ..railway_bench import (
         build_railway_manifest,
         build_railway_operation_plan,
+        build_railway_persistence_verdict,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_stateful_smoke,
@@ -115,6 +117,16 @@ def main(argv: list[str] | None = None) -> int:
         "--railway-restart-redeploy-plan",
         action="store_true",
         help="Record a non-mutating Railway restart/redeploy readiness plan in railway-manifest.json.",
+    )
+    suite.add_argument(
+        "--railway-persistence-pre-manifest-json",
+        default="",
+        help="Pre-operation railway-manifest.json with marker write/read evidence.",
+    )
+    suite.add_argument(
+        "--railway-operation-receipt-json",
+        default="",
+        help="Operator-provided restart/redeploy receipt JSON for persistence verdict evaluation.",
     )
 
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
@@ -656,6 +668,18 @@ def _load_or_write_railway_manifest(
             stateful_smoke=stateful_smoke,
             operation_plan=operation_plan,
         )
+        if args.railway_persistence_pre_manifest_json or args.railway_operation_receipt_json:
+            pre_manifest = _load_json_if_configured(
+                lab_root, args.railway_persistence_pre_manifest_json
+            )
+            operation_receipt = _load_json_if_configured(
+                lab_root, args.railway_operation_receipt_json
+            )
+            manifest["persistence_verdict"] = build_railway_persistence_verdict(
+                pre_manifest,
+                manifest,
+                operation_receipt,
+            )
         _write_railway_manifest(manifest, suite_dir / "railway-manifest.json")
         return manifest
     if args.railway_manifest_json:
@@ -669,3 +693,11 @@ def _load_or_write_railway_manifest(
 def _write_railway_manifest(manifest: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _load_json_if_configured(root: Path, value: str) -> dict[str, Any]:
+    if not value:
+        return {}
+    path = _resolve_path(root, value)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}

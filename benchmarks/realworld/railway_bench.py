@@ -72,6 +72,7 @@ def build_railway_manifest(
     endpoint_health: Mapping[str, Any] | None = None,
     stateful_smoke: Mapping[str, Any] | None = None,
     operation_plan: Mapping[str, Any] | None = None,
+    persistence_verdict: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = validate_railway_config(config)
     services = []
@@ -114,7 +115,67 @@ def build_railway_manifest(
         manifest["stateful_smoke"] = dict(stateful_smoke)
     if operation_plan is not None:
         manifest["operation_plan"] = dict(operation_plan)
+    if persistence_verdict is not None:
+        manifest["persistence_verdict"] = dict(persistence_verdict)
     return manifest
+
+
+def build_railway_persistence_verdict(
+    pre_manifest: Mapping[str, Any],
+    post_manifest: Mapping[str, Any],
+    operation_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    pre_smoke = _dict_value(pre_manifest.get("stateful_smoke"))
+    post_smoke = _dict_value(post_manifest.get("stateful_smoke"))
+    pre_marker = _dict_value(pre_smoke.get("marker"))
+    post_marker = _dict_value(post_smoke.get("marker"))
+    redacted_receipt = _redact_sensitive(operation_receipt)
+
+    checks = {
+        "pre_marker_written": pre_smoke.get("status") == "passed"
+        and pre_smoke.get("mode", "write_read") == "write_read",
+        "post_marker_visible": post_smoke.get("status") == "passed"
+        and post_smoke.get("mode") == "read_only",
+        "marker_match": _marker_identity(pre_marker) == _marker_identity(post_marker)
+        and bool(pre_marker.get("id")),
+        "operation_executed": bool(operation_receipt.get("executed")),
+        "operation_succeeded": str(operation_receipt.get("status", "")).lower()
+        in {"passed", "completed", "succeeded", "success", "ok"},
+    }
+    errors = []
+    if not checks["pre_marker_written"]:
+        errors.append("pre-operation marker write/read evidence is missing or failed")
+    if not checks["post_marker_visible"]:
+        errors.append("post-operation read-only marker evidence is missing or failed")
+    if not checks["marker_match"]:
+        errors.append("marker mismatch between pre-operation and post-operation evidence")
+    if not checks["operation_executed"]:
+        errors.append("operation receipt does not show an executed restart/redeploy")
+    if not checks["operation_succeeded"]:
+        errors.append("operation receipt status is not successful")
+
+    return {
+        "kind": "railway_persistence_verdict",
+        "status": "passed" if not errors else "failed",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "marker": {
+            "table": pre_marker.get("table", ""),
+            "tenant_id": pre_marker.get("tenant_id", ""),
+            "id": pre_marker.get("id", ""),
+            "pre_run_id": pre_marker.get("run_id", ""),
+            "post_run_id": post_marker.get("run_id", ""),
+        },
+        "operation": {
+            "operation": redacted_receipt.get("operation", ""),
+            "status": redacted_receipt.get("status", ""),
+            "executed": bool(operation_receipt.get("executed")),
+            "service_id": redacted_receipt.get("service_id", ""),
+            "receipt": redacted_receipt,
+        },
+        "checks": checks,
+        "errors": errors,
+        "claim_boundary": "restart_redeploy_persistence_verdict_from_artifacts_not_raw_performance_claim",
+    }
 
 
 def build_railway_operation_plan(
@@ -357,6 +418,29 @@ def redact_env(env: Mapping[str, str]) -> dict[str, str]:
     for key, value in env.items():
         redacted[key] = "<redacted>" if _is_sensitive_key(key) and value else value
     return redacted
+
+
+def _redact_sensitive(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): "<redacted>" if _is_sensitive_key(str(key)) and item else _redact_sensitive(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _marker_identity(marker: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(marker.get("table", "")),
+        str(marker.get("tenant_id", "")),
+        str(marker.get("id", "")),
+    )
 
 
 def _ssh_hints(services: list[dict[str, Any]]) -> list[str]:

@@ -15,6 +15,7 @@ sys.path.insert(0, str(LAB_ROOT))
 from railway_bench import (
     build_railway_operation_plan,
     build_railway_manifest,
+    build_railway_persistence_verdict,
     load_railway_config,
     redact_env,
     run_railway_endpoint_health,
@@ -454,6 +455,76 @@ class RailwayBenchTests(unittest.TestCase):
         )
 
         self.assertEqual(manifest["operation_plan"], operation_plan)
+
+    def test_persistence_verdict_passes_for_matching_marker_and_operator_receipt(self) -> None:
+        pre_manifest = {
+            "status": "configured",
+            "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+            "stateful_smoke": {
+                "status": "passed",
+                "mode": "write_read",
+                "marker": {
+                    "table": "railway_stateful_markers",
+                    "tenant_id": "railway-smoke",
+                    "id": "marker-123",
+                    "run_id": "pre-restart-run",
+                },
+            },
+        }
+        post_manifest = {
+            "status": "configured",
+            "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+            "stateful_smoke": {
+                "status": "passed",
+                "mode": "read_only",
+                "marker": {
+                    "table": "railway_stateful_markers",
+                    "tenant_id": "railway-smoke",
+                    "id": "marker-123",
+                    "run_id": "post-restart-run",
+                },
+            },
+        }
+        receipt = {
+            "operation": "restart",
+            "status": "passed",
+            "executed": True,
+            "service_id": "service_tracedb",
+            "RAILWAY_API_TOKEN": "railway-token-secret",
+        }
+
+        verdict = build_railway_persistence_verdict(pre_manifest, post_manifest, receipt)
+
+        self.assertEqual(verdict["status"], "passed")
+        self.assertEqual(verdict["operation"]["operation"], "restart")
+        self.assertEqual(verdict["marker"]["id"], "marker-123")
+        self.assertTrue(verdict["checks"]["pre_marker_written"])
+        self.assertTrue(verdict["checks"]["post_marker_visible"])
+        self.assertTrue(verdict["checks"]["operation_executed"])
+        self.assertNotIn("railway-token-secret", repr(verdict))
+
+    def test_persistence_verdict_fails_for_marker_mismatch(self) -> None:
+        pre_manifest = {
+            "stateful_smoke": {
+                "status": "passed",
+                "mode": "write_read",
+                "marker": {"table": "railway_stateful_markers", "tenant_id": "railway-smoke", "id": "marker-a"},
+            },
+        }
+        post_manifest = {
+            "stateful_smoke": {
+                "status": "passed",
+                "mode": "read_only",
+                "marker": {"table": "railway_stateful_markers", "tenant_id": "railway-smoke", "id": "marker-b"},
+            },
+        }
+        receipt = {"operation": "restart", "status": "passed", "executed": True}
+
+        verdict = build_railway_persistence_verdict(pre_manifest, post_manifest, receipt)
+
+        self.assertEqual(verdict["status"], "failed")
+        self.assertFalse(verdict["checks"]["marker_match"])
+        self.assertTrue(any("marker mismatch" in error for error in verdict["errors"]))
 
 
 if __name__ == "__main__":

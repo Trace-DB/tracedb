@@ -318,6 +318,13 @@ After a manually executed Railway restart/redeploy, rerun the same suite with
 --railway-stateful-marker-id <marker-id>` to read the original marker without
 schema apply or `put`; this is the non-mutating post-operation visibility probe
 used by the next persistence gate.
+Add `--railway-persistence-pre-manifest-json <pre-manifest>` and
+`--railway-operation-receipt-json <receipt>` to that postcheck to write a
+`persistence_verdict` into `railway-manifest.json` and
+`railway_persistence` into `suite-gate.json`. The verdict passes only when the
+pre-manifest has a passed write/read marker, the postcheck has a passed read-only
+marker with the same identity, and the receipt says a restart/redeploy actually
+executed successfully.
 `--railway-restart-redeploy-plan` adds a non-mutating `operation_plan` to the
 manifest and reports `railway_restart_redeploy: plan_only` in the gate. The plan
 lists safe preflight commands such as `railway status --json`,

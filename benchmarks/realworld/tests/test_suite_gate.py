@@ -338,6 +338,59 @@ class SuiteGateTests(unittest.TestCase):
             gate["blocking_failures"],
         )
 
+    def test_railway_persistence_verdict_pass_records_claim_status(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "persistence_verdict": {
+                    "status": "passed",
+                    "marker": {"id": "marker-123"},
+                    "operation": {"operation": "restart", "executed": True},
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["claim_status"]["railway_persistence"], "passed")
+
+    def test_railway_persistence_verdict_failure_blocks(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "persistence_verdict": {
+                    "status": "failed",
+                    "errors": ["marker mismatch"],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_persistence"], "failed")
+        self.assertTrue(
+            any("persistence" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
     def test_gate_json_writer_persists_stable_artifact(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
         gate = build_suite_gate(

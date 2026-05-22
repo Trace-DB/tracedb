@@ -197,6 +197,26 @@ class ModalBenchTests(unittest.TestCase):
         self.assertTrue(config.railway_restart_redeploy_plan)
         self.assertIn("--railway-restart-redeploy-plan", command)
 
+    def test_railway_persistence_artifact_paths_can_be_enabled_without_preset(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(
+            [
+                "--railway-persistence-pre-manifest-json",
+                "/tmp/pre-railway-manifest.json",
+                "--railway-operation-receipt-json",
+                "/tmp/receipt.json",
+                "--run-id",
+                "railway-persistence-test",
+            ]
+        )
+        command = build_suite_command(config)
+
+        self.assertEqual(config.railway_persistence_pre_manifest_json, "/tmp/pre-railway-manifest.json")
+        self.assertEqual(config.railway_operation_receipt_json, "/tmp/receipt.json")
+        self.assertIn("--railway-persistence-pre-manifest-json", command)
+        self.assertIn("--railway-operation-receipt-json", command)
+
     def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 

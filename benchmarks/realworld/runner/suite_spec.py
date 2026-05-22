@@ -162,6 +162,11 @@ def build_suite_gate(
         blocking_failures.append(
             f"Railway restart/redeploy check failed with status={railway_restart_redeploy}"
         )
+    railway_persistence = _railway_persistence_status(railway_manifest)
+    if railway_persistence not in {"not_checked", "passed"}:
+        blocking_failures.append(
+            f"Railway persistence verdict failed with status={railway_persistence}"
+        )
 
     if control_status == "external_control_unavailable" and not spec.requires_external_controls:
         warnings.append("external controls were requested but unavailable")
@@ -199,6 +204,7 @@ def build_suite_gate(
             "railway_endpoint_health": railway_endpoint_health,
             "railway_stateful_smoke": railway_stateful_smoke,
             "railway_restart_redeploy": railway_restart_redeploy,
+            "railway_persistence": railway_persistence,
             "unsupported_coverage": spec.unsupported_coverage,
         },
         "artifact_paths": artifact_paths,
@@ -275,6 +281,16 @@ def _railway_restart_redeploy_failed(
     if executed and status not in {"passed", "completed"}:
         return True
     return status not in {"plan_only", "missing_config", "passed", "completed"}
+
+
+def _railway_persistence_status(railway_manifest: dict[str, Any] | None) -> str:
+    if not railway_manifest:
+        return "not_checked"
+    persistence_verdict = railway_manifest.get("persistence_verdict")
+    if not isinstance(persistence_verdict, dict):
+        return "not_checked"
+    status = persistence_verdict.get("status")
+    return str(status) if status else "unknown"
 
 
 def _dict(payload: dict[str, Any], key: str, source: str) -> dict[str, Any]:
