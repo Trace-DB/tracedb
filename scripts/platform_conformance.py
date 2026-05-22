@@ -25,10 +25,11 @@ TRACEQL_SQLISH_NOT_CHECKED_REASON = (
     "schema/write/admin scenarios remain HTTP/SDK surfaces"
 )
 GRAPHQL_HTTP_CONFORMANCE_EVIDENCE = "POST /v1/graphql bounded GraphQL query adapter"
+GRAPHQL_SCHEMA_CONFORMANCE_EVIDENCE = "GET /v1/graphql/schema generated SDL from TableSchema"
 GRAPHQL_HTTP_NOT_CHECKED_REASON = (
-    "GraphQL HTTP adapter surface only proves query/explain/error behavior; "
-    "schema/write/admin scenarios remain HTTP/SDK surfaces; "
-    "this is not GraphQL schema generation or resolver runtime"
+    "GraphQL HTTP adapter surface only proves schema export/query/explain/error behavior; "
+    "write/admin scenarios remain HTTP/SDK surfaces; "
+    "this is not GraphQL resolver runtime or full adapter parity"
 )
 SERVER_READY_TIMEOUT_SECONDS = 120.0
 
@@ -392,10 +393,36 @@ def traceql_sqlish_conformance_summary(base_url: str) -> dict[str, Any]:
 
 def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
     steps = {
+        "graphql_schema": False,
         "graphql_query": False,
         "graphql_explain": False,
         "invalid_graphql": False,
     }
+    _, schema_payload = request_json(base_url, "GET", "/v1/graphql/schema")
+    schema_sdl = schema_payload.get("schema")
+    schema_tables = schema_payload.get("tables")
+    schema_tokens = [
+        "scalar TraceDBJSON",
+        "enum TraceDBFreshness",
+        "type Query",
+        "docs(",
+        "tenant_id: ID!",
+        "where: DocsWhere",
+        "type DocsRow",
+        "status: TraceDBJSON",
+        "body: String",
+        "embedding: [Float!]",
+    ]
+    if schema_payload.get("adapter") != "bounded_graphql_query_adapter":
+        raise RuntimeError(f"GraphQL schema adapter marker missing: {schema_payload}")
+    if schema_payload.get("execution") != "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope":
+        raise RuntimeError(f"GraphQL schema execution caveat missing: {schema_payload}")
+    if not isinstance(schema_tables, list) or "docs" not in schema_tables:
+        raise RuntimeError(f"GraphQL schema response missing docs table: {schema_payload}")
+    if not isinstance(schema_sdl, str) or any(token not in schema_sdl for token in schema_tokens):
+        raise RuntimeError(f"GraphQL schema SDL missing required tokens: {schema_payload}")
+    steps["graphql_schema"] = True
+
     graphql_query = (
         'query { docs(tenant_id: "tenant-a", where: {status: "reviewed"}, '
         'match: "TraceDB", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, '
@@ -444,6 +471,8 @@ def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
         "mode": "graphql-http-conformance",
         "surface": "graphql",
         "steps": steps,
+        "graphql_schema_tables": schema_tables,
+        "graphql_schema_tokens": schema_tokens,
         "graphql_result_ids": result_ids,
         "graphql_explain": True,
         "invalid_graphql_status": invalid_status,
@@ -1149,6 +1178,8 @@ def map_graphql_http_summary(
     smoke_summary: dict[str, Any],
 ) -> dict[str, Any]:
     steps = smoke_summary.get("steps", {})
+    schema_tables = smoke_summary.get("graphql_schema_tables")
+    schema_tokens = smoke_summary.get("graphql_schema_tokens")
     result_ids = smoke_summary.get("graphql_result_ids")
     invalid_error = smoke_summary.get("invalid_graphql_error")
 
@@ -1157,6 +1188,15 @@ def map_graphql_http_summary(
 
     def query_passed() -> bool:
         return step_passed("graphql_query") and isinstance(result_ids, list) and "intro" in result_ids
+
+    def schema_passed() -> bool:
+        return (
+            step_passed("graphql_schema")
+            and isinstance(schema_tables, list)
+            and "docs" in schema_tables
+            and isinstance(schema_tokens, list)
+            and "type DocsRow" in schema_tokens
+        )
 
     def explain_passed() -> bool:
         return step_passed("graphql_explain") and smoke_summary.get("graphql_explain") is True
@@ -1171,6 +1211,13 @@ def map_graphql_http_summary(
         )
 
     scenario_map = {
+        "schema_apply": passed(
+            "schema_apply",
+            GRAPHQL_SCHEMA_CONFORMANCE_EVIDENCE,
+            {"tables": schema_tables, "tokens": schema_tokens},
+        )
+        if schema_passed()
+        else failed("schema_apply", RuntimeError("GraphQL generated SDL did not reflect applied schema")),
         "query": passed(
             "query",
             GRAPHQL_HTTP_CONFORMANCE_EVIDENCE,
@@ -1207,9 +1254,10 @@ def map_graphql_http_summary(
         "checked",
         scenarios,
         evidence=[
+            GRAPHQL_SCHEMA_CONFORMANCE_EVIDENCE,
             GRAPHQL_HTTP_CONFORMANCE_EVIDENCE,
             "scripts/platform_conformance.py --surface graphql",
-            "not GraphQL schema generation or resolver runtime",
+            "not GraphQL resolver runtime or full adapter parity",
         ],
     )
 

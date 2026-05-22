@@ -6,7 +6,7 @@ tags:
   - http
 status: current-product-surface
 type: api-reference
-updated: 2026-05-19
+updated: 2026-05-22
 ---
 
 # TraceDB v1 HTTP API Reference
@@ -97,10 +97,11 @@ node --experimental-strip-types clients/typescript/smoke.ts
   conformance lane installs the package into an isolated temporary pip
   `--target` before running the smoke so source-path imports cannot mask drift.
   This is sync SDK contract evidence, not PyPI readiness, async support,
-  managed-cloud proof, SQL compatibility, or GraphQL support.
+  managed-cloud proof, SQL compatibility, or full GraphQL adapter parity.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
-  data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
-  `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
+  data state: `GET /v1/health`, `GET /v1/ready`, `GET /v1/graphql/schema`,
+  `POST /v1/records/get`, `POST /v1/records/scan`, `POST /v1/query`,
+  `POST /v1/traceql`, `POST /v1/graphql`, and `POST /v1/explain`.
 - Idempotency-Key supports local data-dir-backed replay for mutation and admin
   routes. Same key plus same method/path/raw body replays the first successful
   response; same key with a different body returns `409 Conflict`.
@@ -246,7 +247,8 @@ writes.
 | `POST /v1/records/scan` | `RecordScanRequest`: `table`, `tenant_id`, and optional `limit`. | `RecordScanOutput` with `records: RecordOutput[]` and `returned_count`. No cursor metadata is emitted today. |
 | `POST /v1/query` | `HybridQuery`: `table`, `tenant_id`, optional `text`, optional `vector`, optional `scalar_eq`, optional `graph_seed`, optional `temporal_as_of`, `top_k`, `freshness`, and `explain`. | With `explain: false`, returns `{ "results": HybridQueryRow[] }`; with `explain: true`, returns results plus `HybridExplain` metadata. |
 | `POST /v1/traceql` | `TraceQlQueryRequest`: `{ "query": string }`, where `query` is native line-oriented TraceQL that compiles into `HybridQuery`. | Same result shape as `POST /v1/query`: lean results without `EXPLAIN`, results plus `HybridExplain` when the TraceQL string includes `EXPLAIN`. This is not SQL or PostgreSQL compatibility. |
-| `POST /v1/graphql` | `GraphQlQueryRequest`: `{ "query": string }`, where `query` is the bounded GraphQL adapter form with one root table field and arguments such as `tenant_id`, `where`, `match`, `near`, `limit`, `freshness`, and `explain`. Rust SDK callers can use `TraceDbClient::graphql_typed` or `graphql_request_typed`; TypeScript SDK callers can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers can use `TraceDB.graphql()` or `graphql_request({"query": query})`. | Same result shape as `POST /v1/query`: lean results by default, results plus `HybridExplain` when the GraphQL query sets `explain: true`. This is not GraphQL schema generation, mutation support, or resolver runtime. |
+| `GET /v1/graphql/schema` | No body. Generates SDL from currently applied `TableSchema` definitions. | `GraphQlSchemaResponse` with `adapter`, generated `schema` SDL, `tables`, and an execution caveat. This is schema export only; execution still uses `POST /v1/graphql` and returns TraceDB's `QueryResponse`, not a GraphQL data envelope. |
+| `POST /v1/graphql` | `GraphQlQueryRequest`: `{ "query": string }`, where `query` is the bounded GraphQL adapter form with one root table field and arguments such as `tenant_id`, `where`, `match`, `near`, `limit`, `freshness`, and `explain`. Rust SDK callers can use `TraceDbClient::graphql_typed` or `graphql_request_typed`; TypeScript SDK callers can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers can use `TraceDB.graphql()` or `graphql_request({"query": query})`. | Same result shape as `POST /v1/query`: lean results by default, results plus `HybridExplain` when the GraphQL query sets `explain: true`. This is not GraphQL mutation support, subscription support, resolver runtime, GraphQL data-envelope execution, or full adapter parity. |
 | `POST /v1/explain` | Same query shape as `POST /v1/query`; the server forces explain mode. | `HybridExplain` only, including current access-path, candidate, counter, and timing fields. |
 
 Query responses include `Server-Timing` phase attribution for read, parse,

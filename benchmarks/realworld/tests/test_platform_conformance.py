@@ -359,10 +359,13 @@ class PlatformConformanceTests(unittest.TestCase):
             "mode": "graphql-http-conformance",
             "surface": "graphql",
             "steps": {
+                "graphql_schema": True,
                 "graphql_query": True,
                 "graphql_explain": True,
                 "invalid_graphql": True,
             },
+            "graphql_schema_tables": ["docs"],
+            "graphql_schema_tokens": ["type DocsRow"],
             "graphql_result_ids": ["intro"],
             "graphql_explain": True,
             "invalid_graphql_status": 400,
@@ -377,14 +380,14 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(surface["status"], "checked")
         self.assertTrue(surface["ok"])
         self.assertFalse(surface["complete"])
+        self.assertEqual(scenarios["schema_apply"]["status"], "passed")
         self.assertEqual(scenarios["query"]["status"], "passed")
         self.assertEqual(scenarios["explain"]["status"], "passed")
         self.assertEqual(scenarios["errors"]["status"], "passed")
         self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
-        self.assertEqual(scenarios["schema_apply"]["status"], "not_checked")
-        self.assertIn("/v1/graphql", " ".join(surface["evidence"]))
+        self.assertIn("/v1/graphql/schema", " ".join(surface["evidence"]))
 
-    def test_graphql_surface_is_http_backed_without_schema_or_resolver_claims(self) -> None:
+    def test_graphql_surface_is_http_backed_with_schema_export_without_resolver_claims(self) -> None:
         source = SCRIPT.read_text()
 
         for token in [
@@ -393,7 +396,8 @@ class PlatformConformanceTests(unittest.TestCase):
             "graphql_http_conformance_summary",
             "graphql-http-conformance",
             "/v1/graphql",
-            "not GraphQL schema generation",
+            "/v1/graphql/schema",
+            "not GraphQL resolver runtime",
         ]:
             self.assertIn(token, source)
 

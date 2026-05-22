@@ -134,11 +134,14 @@
     {
       "id": "graphql",
       "label": "GraphQL",
-      "status": "bounded_http_query_adapter_checked_partial_conformance_lane",
-      "role": "future schema-generated adapter into the same TraceQuery model; current code is a bounded HTTP query adapter with explicit not_checked reporting for scenarios it does not own",
+      "status": "generated_sdl_export_plus_bounded_http_query_adapter_checked_partial_conformance_lane",
+      "role": "future full adapter into the same TraceQuery model; current code is generated SDL export plus a bounded HTTP query adapter with explicit not_checked reporting for scenarios it does not own",
       "evidence": [
         "crates/tracedb-query/src/lib.rs",
         "crates/tracedb-server/src/lib.rs",
+        "graphql_schema_sdl_from_tables",
+        "GET /v1/graphql/schema",
+        "GraphQlSchemaResponse",
         "graphql_query_from_str",
         "POST /v1/graphql",
         "GraphQlQueryRequest",
@@ -149,10 +152,12 @@
         "TraceDbClient::graphql_typed",
         "query { <table>(tenant_id: \"...\", where: {...}, match: \"...\", near: [...], limit: n, freshness: ALLOW_DIRTY, explain: true) { ... } }",
         "invalid GraphQL adapter errors for mutation/subscription/fragment/alias/unknown argument/resolver semantics",
+        "cargo test -p tracedb-query graphql_schema_sdl_is_generated_from_table_schema --no-run",
+        "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_schema_exports_sdl_from_applied_table_schema --no-run",
         "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run",
         "scripts/platform_conformance.py --surface graphql",
-        "graphql reports query/explain/errors as passed and schema/write/admin/TraceQL/idempotency/snapshot scenarios as not_checked",
-        "not GraphQL schema generation or resolver runtime"
+        "graphql reports schema_apply/query/explain/errors as passed and write/admin/TraceQL/idempotency/snapshot scenarios as not_checked",
+        "not GraphQL mutation support, resolver runtime, GraphQL data-envelope execution, or full adapter parity"
       ]
     }
   ],

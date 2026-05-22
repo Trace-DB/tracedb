@@ -194,6 +194,13 @@ export interface GraphQlQueryRequest extends JsonObject {
   query?: string;
 }
 
+export interface GraphQlSchemaResponse extends JsonObject {
+  adapter?: string;
+  execution?: string;
+  schema?: string;
+  tables?: string[];
+}
+
 export interface HealthResponse extends JsonObject {
   catalog_databases?: number;
   engine_url?: string;
@@ -530,6 +537,12 @@ export class TraceDbClient {
   /** Run bounded GraphQL query. */
   async graphql(body: GraphQlQueryRequest, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
     return this.request<QueryResponse>("POST", "/v1/graphql", body, options);
+  }
+
+  // getGraphqlSchema: GET /v1/graphql/schema
+  /** Export bounded GraphQL schema. */
+  async graphqlSchema(options: TraceDbRequestOptions = {}): Promise<GraphQlSchemaResponse> {
+    return this.request<GraphQlSchemaResponse>("GET", "/v1/graphql/schema", undefined, options);
   }
 
   // postExplain: POST /v1/explain

@@ -5,7 +5,7 @@ tags:
   - docs
 status: stub
 type: repo-handoff
-updated: 2026-05-19
+updated: 2026-05-22
 ---
 
 # TraceDB Repo Docs
@@ -40,9 +40,10 @@ results and installs the Python SDK package before running the sync HTTP smoke
 for `python_sdk` scenario results. The `traceql_sqlish` lane now executes the
 bounded SQL-ish adapter through `/v1/traceql` and reports query, TraceQL string
 execution, explain, and error-envelope behavior against the same manifest.
-The `graphql` lane starts local HTTP, drives the bounded `POST /v1/graphql`
-adapter, and reports query, explain, and error-envelope behavior as checked;
-schema/write/admin scenarios remain explicit `not_checked` results.
+The `graphql` lane starts local HTTP, exports generated SDL through
+`GET /v1/graphql/schema`, drives the bounded `POST /v1/graphql` adapter, and
+reports schema apply, query, explain, and error-envelope behavior as checked;
+write/admin scenarios remain explicit `not_checked` results.
 The current HTTP direct, Rust SDK, TypeScript SDK, and Python SDK lanes cover
 all required v0 scenarios; unimplemented future lanes must keep explicit
 `not_checked` results until they reach parity. The SQL-ish adapter lane remains
@@ -52,14 +53,15 @@ The `traceql_sqlish` lane now has native HTTP execution evidence through
 `traceql_query_from_str` and compiles it into `HybridQuery`. The same route now
 accepts the bounded SQL-ish adapter form `EXPLAIN? SELECT * FROM <table> WHERE
 tenant_id = <value> [AND field = value]* [LIMIT n]`; broader SQL,
-PostgreSQL compatibility, GraphQL schema generation, GraphQL mutations,
-resolver runtime, and full GraphQL adapter parity remain unimplemented. The
-current GraphQL evidence is limited to bounded `graphql_query_from_str`
-compilation, `POST /v1/graphql` query/explain/error conformance, and the Rust
-SDK helper methods `TraceDbClient::graphql_typed` and
-`TraceDbAsyncClient::graphql_typed` plus the TypeScript public SDK
-`TraceDB.graphql()` helper and Python sync SDK `TraceDB.graphql()` helper over
-that same HTTP route.
+PostgreSQL compatibility, GraphQL mutations, subscriptions, resolver runtime,
+GraphQL data-envelope execution, and full GraphQL adapter parity remain
+unimplemented. The current GraphQL evidence is limited to generated
+`graphql_schema_sdl_from_tables` SDL export through `GET /v1/graphql/schema`,
+bounded `graphql_query_from_str` compilation, `POST /v1/graphql`
+query/explain/error conformance, and the Rust SDK helper methods
+`TraceDbClient::graphql_typed` and `TraceDbAsyncClient::graphql_typed` plus the
+TypeScript public SDK `TraceDB.graphql()` helper and Python sync SDK
+`TraceDB.graphql()` helper over that same HTTP route.
 
 Local product smoke:
 

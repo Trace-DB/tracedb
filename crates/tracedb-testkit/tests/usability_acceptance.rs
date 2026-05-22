@@ -814,6 +814,48 @@ fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
 }
 
 #[test]
+fn http_graphql_schema_exports_sdl_from_applied_table_schema() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let addr = start_http_test_server(temp.path().to_path_buf());
+
+    assert_http_contains(
+        addr,
+        "POST",
+        "/v1/schema/apply",
+        &serde_json::to_string(&schema()).unwrap(),
+        "\"epoch\":1",
+    );
+
+    let response = http_response(addr, "GET", "/v1/graphql/schema", "");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected GraphQL schema response: {response}"
+    );
+    let body = http_json_body(&response);
+    assert_eq!(body["adapter"], json!("bounded_graphql_query_adapter"));
+    assert_eq!(body["tables"], json!(["docs"]));
+    let sdl = body["schema"].as_str().expect("schema SDL string");
+    for token in [
+        "scalar TraceDBJSON",
+        "enum TraceDBFreshness",
+        "type Query",
+        "docs(",
+        "tenant_id: ID!",
+        "where: DocsWhere",
+        "type DocsRow",
+        "status: TraceDBJSON",
+        "body: String",
+        "embedding: [Float!]",
+    ] {
+        assert!(sdl.contains(token), "SDL missing {token}: {sdl}");
+    }
+    assert_eq!(
+        body["execution"],
+        json!("POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope")
+    );
+}
+
+#[test]
 fn http_server_rejects_oversized_content_length_before_body_read() {
     let temp = tempfile::tempdir().expect("tempdir");
     let addr = start_http_test_server(temp.path().to_path_buf());
@@ -1398,6 +1440,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         ("post", "/v1/query"),
         ("post", "/v1/traceql"),
         ("post", "/v1/graphql"),
+        ("get", "/v1/graphql/schema"),
         ("post", "/v1/explain"),
         ("post", "/v1/admin/compact"),
         ("post", "/v1/admin/snapshot"),
@@ -1491,6 +1534,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         "RecordDeleteRequest",
         "RecordPutBatchRequest",
         "HybridQuery",
+        "GraphQlSchemaResponse",
         "HybridScoreComponents",
         "HealthResponse",
         "ReadyResponse",
@@ -1749,6 +1793,7 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "graph_seed?: string | null;",
         "temporal_as_of?: number | null;",
         "export interface QueryResponse extends JsonObject",
+        "export interface GraphQlSchemaResponse extends JsonObject",
         "export interface SnapshotRequest extends JsonObject",
         "export interface RestoreResponse extends JsonObject",
         "name?: string;",
@@ -1797,6 +1842,7 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "getRecord",
         "scanRecords",
         "query",
+        "graphqlSchema",
         "explain",
         "compact",
         "snapshot",
@@ -1818,6 +1864,7 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         "async putRecord(body: RecordPutBody, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
         "async putBatch(body: RecordPutBatchRequest, options: TraceDbRequestOptions = {}): Promise<PutBatchResponse>",
         "async query(body: HybridQuery, options: TraceDbRequestOptions = {}): Promise<QueryResponse>",
+        "async graphqlSchema(options: TraceDbRequestOptions = {}): Promise<GraphQlSchemaResponse>",
         "async snapshot(body: SnapshotRequest, options: TraceDbRequestOptions = {}): Promise<SnapshotResponse>",
         "async listAdminJobs(options: TraceDbRequestOptions = {}): Promise<JobsResponse>",
         "private async request<TResponse extends JsonValue>",

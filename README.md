@@ -37,13 +37,15 @@ all required v0 scenarios. The SQL-ish lane is intentionally partial: it checks
 query, TraceQL string execution, explain, and error-envelope behavior, while
 schema/write/admin scenarios remain explicit `not_checked` results until that
 adapter surface owns more semantics.
-GraphQL has a bounded `graphql_query_from_str` compiler primitive in
-`tracedb-query` and a bounded `POST /v1/graphql` HTTP adapter that compiles the
-query string into the same `HybridQuery` path as `/v1/query`. The `graphql`
-conformance lane checks query, explain, and error-envelope behavior, while
-schema/write/admin scenarios remain explicit `not_checked` results. This is not
-GraphQL schema generation, mutation support, resolver runtime, or adapter
-parity. Rust SDK callers can use `TraceDbClient::graphql_typed` or
+GraphQL has a generated SDL export from applied `TableSchema` definitions
+through `GET /v1/graphql/schema`, plus a bounded `graphql_query_from_str`
+compiler primitive in `tracedb-query` and a bounded `POST /v1/graphql` HTTP
+adapter that compiles the query string into the same `HybridQuery` path as
+`/v1/query`. The `graphql` conformance lane checks schema export, query,
+explain, and error-envelope behavior, while write/admin scenarios remain
+explicit `not_checked` results. This is not GraphQL mutation support,
+subscription support, resolver runtime, GraphQL data-envelope execution, or
+full adapter parity. Rust SDK callers can use `TraceDbClient::graphql_typed` or
 `graphql_request_typed` with `GraphQlQueryRequest`, and TypeScript SDK callers
 can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers
 can use `TraceDB.graphql()` or `graphql_request({"query": query})` to exercise
@@ -526,16 +528,19 @@ through `TraceDbClient::traceql_typed`, the TypeScript SDK lane passes it
 through the public `TraceDB.traceql()` helper, and the Python SDK lane passes it
 through the sync `TraceDB.traceql()` helper. The dedicated `traceql_sqlish`
 lane checks the bounded SQL-ish adapter against the same scenario manifest as a
-partial surface. `POST /v1/graphql` now exposes a bounded GraphQL query adapter
-over the same `HybridQuery` model and the GraphQL conformance lane checks query,
-explain, and error behavior. The Rust SDK exposes this bounded HTTP adapter
-through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
-`GraphQlQueryRequest`; the TypeScript SDK exposes it through
-`TraceDB.graphql()` and `graphqlRequest({ query })`; the Python SDK exposes it
-through `TraceDB.graphql()` and `graphql_request({"query": query})`. This is
-TraceQL/query-adapter and bounded GraphQL query-adapter evidence only; SQL
-compatibility, PostgreSQL compatibility, GraphQL schema generation, mutation
-support, resolver runtime, and full adapter parity remain unimplemented.
+partial surface. `GET /v1/graphql/schema` now exports generated SDL from
+applied TraceDB table schema, and `POST /v1/graphql` exposes a bounded GraphQL
+query adapter over the same `HybridQuery` model. The GraphQL conformance lane
+checks schema export, query, explain, and error behavior. The Rust SDK exposes
+this bounded HTTP adapter through `TraceDbClient::graphql_typed`,
+`graphql_request_typed`, and `GraphQlQueryRequest`; the TypeScript SDK exposes
+it through `TraceDB.graphql()` and `graphqlRequest({ query })`; the Python SDK
+exposes it through `TraceDB.graphql()` and
+`graphql_request({"query": query})`. This is TraceQL/query-adapter, GraphQL SDL
+export, and bounded GraphQL query-adapter evidence only; SQL compatibility,
+PostgreSQL compatibility, GraphQL mutation support, subscription support,
+resolver runtime, GraphQL data-envelope execution, and full adapter parity
+remain unimplemented.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and

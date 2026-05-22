@@ -41,11 +41,13 @@ The initial executable conformance runner is `scripts/platform_conformance.py`.
   under `/v1/traceql` is not a SQL engine.
 - TraceDB is not PostgreSQL-compatible. Future SQL-ish work must compile into
   TraceDB's native query model instead of becoming a PostgreSQL emulation layer.
-- GraphQL has a checked bounded HTTP query adapter through `POST /v1/graphql`.
-  It proves query, explain, and error-envelope behavior only. Schema
-  generation, mutations, resolver runtime, and full adapter parity remain
-  unimplemented, and any future GraphQL surface must compile into the same
-  query model instead of creating a resolver-specific database model.
+- GraphQL has a generated SDL export through `GET /v1/graphql/schema` and a
+  checked bounded HTTP query adapter through `POST /v1/graphql`. It proves
+  schema export, query, explain, and error-envelope behavior only. Mutations,
+  subscriptions, resolver runtime, GraphQL data-envelope execution, and full
+  adapter parity remain unimplemented, and any future GraphQL execution surface
+  must compile into the same query model instead of creating a resolver-specific
+  database model.
 - Exported performance claims still require an external control and a number to
   beat. Internal TraceDB-only runs are development evidence only.
 
@@ -78,7 +80,7 @@ Every product surface must map to these contract components:
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; bounded SQL-ish `SELECT` adapter checked | Adapter into the same TraceQuery/query model, not SQL compatibility. |
-| GraphQL | `graphql` | Bounded `POST /v1/graphql` HTTP adapter checked for query, explain, and errors; other scenarios `not_checked` | Future schema-generated adapter into the same TraceQuery/query model. |
+| GraphQL | `graphql` | Generated SDL export plus bounded `POST /v1/graphql` HTTP adapter checked for schema apply, query, explain, and errors; other scenarios `not_checked` | Future full adapter into the same TraceQuery/query model. |
 
 Maintenance mode means a platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics.
 
@@ -140,15 +142,16 @@ canonical wire calls, and checks the bounded SQL-ish adapter through
 schema/write/admin scenarios remain explicit `not_checked` results. Future
 surfaces must report unimplemented scenarios as `not_checked` rather than
 silently treating them as success.
-The `graphql` lane starts the HTTP server, seeds minimal records through the
-canonical wire calls, and checks the bounded `POST /v1/graphql` adapter. It
-reports `query`, `explain`, and `errors` as passed, while schema/write/admin,
-TraceQL, idempotency, and snapshot/restore scenarios remain explicit
-`not_checked` results until GraphQL owns those semantics or a schema-generated
-adapter exists.
+The `graphql` lane starts the HTTP server, applies the canonical table schema,
+seeds minimal records through the canonical wire calls, checks the generated
+SDL export from `GET /v1/graphql/schema`, and checks the bounded
+`POST /v1/graphql` adapter. It reports `schema_apply`, `query`, `explain`, and
+`errors` as passed, while write/admin, TraceQL, idempotency, and
+snapshot/restore scenarios remain explicit `not_checked` results until GraphQL
+owns those semantics.
 
-Current verified checkpoint: Modal workspace run `ap-QApA07pKsIvNkhbQO71DXW`
-passed 20/20 commands in 116.915s. Its `platform-conformance-quick` command
+Current verified checkpoint: Modal workspace run `ap-wf0NxrT6Yq5IvNlmJy6OBW`
+passed 20/20 commands in 102.334s. Its `platform-conformance-quick` command
 reported `http_direct` 13/13 and `rust_sdk` 13/13, including
 `traceql_string_execution`; its `typescript-sdk-conformance` command reported
 `typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
@@ -158,14 +161,14 @@ installed Python SDK's bounded GraphQL result/explain calls through
 `TraceDB.graphql()`. Its `traceql-sqlish-conformance` command reported
 `traceql_sqlish` as `ok: true`, `complete: false`, with 4/13 scenarios passed
 and 9/13 intentionally `not_checked`. Its `graphql-http-conformance` command
-reported `graphql` as `ok: true`, `complete: false`, with query, explain, and
-errors passed and 10/13 scenarios intentionally `not_checked`. Its
+reported `graphql` as `ok: true`, `complete: false`, with schema apply, query,
+explain, and errors passed and 9/13 scenarios intentionally `not_checked`. Its
 `typescript-npm-public-http-smoke` command exercised the TypeScript public SDK
 through schema/write/read/query/admin flows plus native TraceQL and bounded
 GraphQL result/explain calls over real HTTP. Its
-`cargo test --workspace --all-targets` command included the Rust SDK
-`GraphQlQueryRequest`, sync `graphql_typed`, safe retry, and async
-`graphql_typed` helper coverage.
+`cargo test --workspace --all-targets` command included the generated GraphQL
+SDL unit test, HTTP GraphQL schema export test, Rust SDK `GraphQlQueryRequest`,
+sync `graphql_typed`, safe retry, and async `graphql_typed` helper coverage.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and
@@ -185,15 +188,16 @@ available.
 The TypeScript public SDK mirrors the same bounded GraphQL wire route through
 `TraceDB.graphql(query)` and `graphqlRequest({ query })` over the generated
 transport's `/v1/graphql` method. This is public SDK access to the bounded
-adapter, not GraphQL schema generation, mutation support, resolver runtime, or
-full GraphQL adapter parity.
+adapter, not GraphQL mutation support, resolver runtime, GraphQL data-envelope
+execution, or full GraphQL adapter parity.
 
 The Python sync SDK mirrors the same bounded GraphQL wire route through
 `TraceDB.graphql(query)` and `graphql_request({"query": query})` over
 `POST /v1/graphql`, reusing the same dictionary-shaped `GraphQlQueryRequest`
 and `QueryResponse` envelope as the raw HTTP contract. This is sync SDK access
-to the bounded adapter, not async Python support, GraphQL schema generation,
-mutation support, resolver runtime, or full GraphQL adapter parity.
+to the bounded adapter, not async Python support, GraphQL mutation support,
+resolver runtime, GraphQL data-envelope execution, or full GraphQL adapter
+parity.
 `TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
@@ -267,8 +271,7 @@ line-oriented string with `traceql_query_from_str`, accepts directives such as
 `EXPLAIN`, and compiles them into the existing `HybridQuery` model before using
 the same query execution and response shaping as `POST /v1/query`. This is
 native TraceQL evidence only. It is not SQL compatibility, PostgreSQL
-compatibility, GraphQL schema generation, resolver runtime, or a separate query
-engine.
+compatibility, GraphQL execution/runtime evidence, or a separate query engine.
 
 The same `/v1/traceql` parser now accepts a deliberately bounded SQL-ish form:
 `EXPLAIN? SELECT * FROM <table> WHERE tenant_id = <value> [AND field = value]*
@@ -278,8 +281,13 @@ shared explain flag. Unsupported SQL constructs such as `JOIN`, `GROUP`,
 `ORDER`, `UNION`, mutation DDL/DML, and PostgreSQL-specific behavior fail as
 `invalid SQL-ish` bad-request responses rather than implying compatibility.
 
-The query crate exposes the bounded GraphQL adapter compiler primitive:
-`graphql_query_from_str`. It accepts one root selection whose field name is the
+The query crate exposes `graphql_schema_sdl_from_tables` to generate SDL from
+applied `TableSchema` definitions and the bounded GraphQL adapter compiler
+primitive `graphql_query_from_str`. The HTTP server exposes the generated SDL
+through `GET /v1/graphql/schema` with `GraphQlSchemaResponse`, including the
+adapter marker, table names, and an execution caveat that `POST /v1/graphql`
+returns TraceDB's `QueryResponse` rather than a GraphQL data envelope.
+`graphql_query_from_str` accepts one root selection whose field name is the
 table, with arguments such as `tenant_id`, `where`/`filter`, `match`/`text`,
 `near`/`vector`, `limit`, `freshness`, and `explain`, then compiles directly
 into `HybridQuery`. The HTTP server exposes that path through
@@ -291,9 +299,9 @@ into `HybridQuery`. The HTTP server exposes that path through
 with `TraceDB.graphql()` and `graphql_request({"query": query})`. Mutations,
 subscriptions, fragments, aliases, unknown arguments, duplicate semantic
 arguments, and multiple root fields fail with `invalid GraphQL adapter` errors.
-This is bounded
-query/explain/error execution evidence only; TraceDB still has no GraphQL
-schema generator, mutation support, resolver runtime, or adapter parity.
+This is schema-generation plus bounded query/explain/error execution evidence
+only; TraceDB still has no GraphQL mutation support, subscription support,
+resolver runtime, GraphQL data-envelope execution, or full adapter parity.
 
 ## Surface Implementation Rules
 
@@ -308,9 +316,11 @@ schema generator, mutation support, resolver runtime, or adapter parity.
   compatibility or PostgreSQL compatibility. The current HTTP surface is
   `/v1/traceql`; the SQL-ish surface is limited to the checked bounded
   `SELECT` adapter until a broader TraceQL adapter is explicitly designed.
-- GraphQL must be schema-generated from TraceDB schema and compile into the same
-  query model. The current checked code is bounded `graphql_query_from_str`
-  execution through `POST /v1/graphql`; it should not own database semantics.
+- GraphQL schema export is now generated from TraceDB schema, and future
+  execution work must still compile into the same query model. The current
+  checked code is `graphql_schema_sdl_from_tables` plus bounded
+  `graphql_query_from_str` execution through `POST /v1/graphql`; it should not
+  own database semantics.
 
 ## Verification Ladder
 
@@ -318,7 +328,9 @@ Use the smallest ladder that proves the touched surface:
 
 ```bash
 cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_declares_sdk_conformance_harness -- --exact
+cargo test -p tracedb-query graphql_schema_sdl_is_generated_from_table_schema --no-run
 cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run
+cargo test -p tracedb-testkit --test usability_acceptance http_graphql_schema_exports_sdl_from_applied_table_schema --no-run
 cargo test -p tracedb-sdk --test http_client graphql_request_typed_posts_bounded_query_string --no-run
 cargo test -p tracedb-sdk --test http_client graphql_typed_retries_transient_read_failures_when_safe_retries_enabled --no-run
 python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-conformance.json

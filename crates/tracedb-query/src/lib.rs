@@ -3380,6 +3380,133 @@ pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
     })
 }
 
+/// Generates a bounded GraphQL adapter SDL view from TraceDB table schemas.
+/// This describes the adapter query shape only; execution still returns the
+/// canonical TraceDB `QueryResponse` envelope from `POST /v1/graphql`.
+pub fn graphql_schema_sdl_from_tables(schemas: &[TableSchema]) -> Result<String> {
+    let mut output = String::new();
+    output.push_str("scalar TraceDBJSON\n\n");
+    output.push_str("enum TraceDBFreshness {\n  STRICT\n  LAZY\n  ALLOW_DIRTY\n}\n\n");
+    output.push_str("type TraceDBScore {\n");
+    output.push_str("  vector: Float\n");
+    output.push_str("  lexical: Float\n");
+    output.push_str("  relational: Float\n");
+    output.push_str("  freshness_penalty: Float\n");
+    output.push_str("  final_score: Float!\n");
+    output.push_str("}\n\n");
+
+    output.push_str("type Query {\n");
+    if schemas.is_empty() {
+        output.push_str("  _empty: Boolean!\n");
+    }
+    for schema in schemas {
+        validate_graphql_schema_identifier(&schema.name, "table name")?;
+        let type_prefix = graphql_table_type_prefix(&schema.name);
+        output.push_str(&format!("  {}(\n", schema.name));
+        output.push_str("    tenant_id: ID!\n");
+        output.push_str("    tenant: ID\n");
+        output.push_str(&format!("    where: {type_prefix}Where\n"));
+        output.push_str(&format!("    filter: {type_prefix}Where\n"));
+        output.push_str("    match: String\n");
+        output.push_str("    text: String\n");
+        output.push_str("    near: [Float!]\n");
+        output.push_str("    vector: [Float!]\n");
+        output.push_str("    limit: Int\n");
+        output.push_str("    freshness: TraceDBFreshness\n");
+        output.push_str("    explain: Boolean\n");
+        output.push_str(&format!("  ): [{type_prefix}Row!]!\n"));
+    }
+    output.push_str("}\n");
+
+    for schema in schemas {
+        let type_prefix = graphql_table_type_prefix(&schema.name);
+        output.push('\n');
+        output.push_str(&format!("input {type_prefix}Where {{\n"));
+        let mut where_fields = BTreeSet::new();
+        for field in &schema.scalar_columns {
+            validate_graphql_schema_identifier(field, "scalar column")?;
+            where_fields.insert(field.as_str());
+        }
+        if where_fields.is_empty() {
+            output.push_str("  _empty: Boolean\n");
+        } else {
+            for field in where_fields {
+                output.push_str(&format!("  {field}: TraceDBJSON\n"));
+            }
+        }
+        output.push_str("}\n\n");
+        output.push_str(&format!("type {type_prefix}Row {{\n"));
+        output.push_str("  record_id: ID!\n");
+        output.push_str("  tenant_id: ID!\n");
+        output.push_str("  version_id: Int!\n");
+        output.push_str("  fields: TraceDBJSON!\n");
+        output.push_str("  score: TraceDBScore!\n");
+        let mut row_fields = BTreeSet::new();
+        push_graphql_row_field(
+            &mut output,
+            &mut row_fields,
+            &schema.primary_id_column,
+            "ID",
+        )?;
+        push_graphql_row_field(&mut output, &mut row_fields, &schema.tenant_id_column, "ID")?;
+        for field in &schema.scalar_columns {
+            push_graphql_row_field(&mut output, &mut row_fields, field, "TraceDBJSON")?;
+        }
+        for field in &schema.text_indexed_columns {
+            push_graphql_row_field(&mut output, &mut row_fields, field, "String")?;
+        }
+        for vector in &schema.vector_columns {
+            push_graphql_row_field(&mut output, &mut row_fields, &vector.name, "[Float!]")?;
+        }
+        output.push_str("}\n");
+    }
+
+    Ok(output)
+}
+
+fn validate_graphql_schema_identifier(name: &str, context: &str) -> Result<()> {
+    let valid = take_graphql_identifier(name).is_some_and(|(_, rest)| rest.trim().is_empty());
+    if valid && !name.starts_with("__") {
+        return Ok(());
+    }
+    Err(invalid_graphql_adapter(format!(
+        "{context} {name:?} cannot be exported as a GraphQL schema identifier"
+    )))
+}
+
+fn graphql_table_type_prefix(table: &str) -> String {
+    let mut output = String::new();
+    let mut capitalize_next = true;
+    for ch in table.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            output.push(ch.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            output.push(ch);
+        }
+    }
+    if output.is_empty() {
+        "TraceDBTable".to_string()
+    } else {
+        output
+    }
+}
+
+fn push_graphql_row_field(
+    output: &mut String,
+    seen: &mut BTreeSet<String>,
+    name: &str,
+    field_type: &str,
+) -> Result<()> {
+    validate_graphql_schema_identifier(name, "column")?;
+    if seen.insert(name.to_string()) {
+        output.push_str(&format!("  {name}: {field_type}\n"));
+    }
+    Ok(())
+}
+
 fn graphql_operation_body(input: &str) -> Result<&str> {
     let input = input.trim();
     if input.is_empty() {
@@ -4442,6 +4569,24 @@ mod tests {
                 matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("invalid GraphQL adapter"))
             );
         }
+    }
+
+    #[test]
+    fn graphql_schema_sdl_is_generated_from_table_schema() {
+        let sdl = graphql_schema_sdl_from_tables(&[schema()]).expect("graphql schema sdl");
+
+        assert!(sdl.contains("scalar TraceDBJSON"), "SDL: {sdl}");
+        assert!(sdl.contains("enum TraceDBFreshness"), "SDL: {sdl}");
+        assert!(sdl.contains("type TraceDBScore"), "SDL: {sdl}");
+        assert!(sdl.contains("type Query"), "SDL: {sdl}");
+        assert!(sdl.contains("docs("), "SDL: {sdl}");
+        assert!(sdl.contains("tenant_id: ID!"), "SDL: {sdl}");
+        assert!(sdl.contains("where: DocsWhere"), "SDL: {sdl}");
+        assert!(sdl.contains("type DocsRow"), "SDL: {sdl}");
+        assert!(sdl.contains("record_id: ID!"), "SDL: {sdl}");
+        assert!(sdl.contains("category: TraceDBJSON"), "SDL: {sdl}");
+        assert!(sdl.contains("body: String"), "SDL: {sdl}");
+        assert!(sdl.contains("embedding: [Float!]"), "SDL: {sdl}");
     }
 
     #[test]

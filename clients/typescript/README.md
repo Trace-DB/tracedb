@@ -23,7 +23,9 @@ TraceQL execution through `TraceDB.traceql(query)` and
 `TraceDB.traceqlRequest({ query })` over the generated `/v1/traceql` transport
 method, plus bounded GraphQL query execution through `TraceDB.graphql(query)`
 and `TraceDB.graphqlRequest({ query })` over the generated `/v1/graphql`
-transport method.
+transport method. The raw generated transport also exposes `graphqlSchema()`
+for `GET /v1/graphql/schema`; that route exports SDL generated from applied
+TraceDB table schema and is not a GraphQL resolver runtime.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
 schemas and uses them in method signatures. These aliases intentionally preserve

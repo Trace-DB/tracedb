@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracedb_query::{
-    graphql_query_from_str, traceql_query_from_str, HybridQuery, RecordDeleteRequest,
-    RecordGetRequest, RecordInput, RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest,
-    RecordScanRequest, TableSchema, TraceDb,
+    graphql_query_from_str, graphql_schema_sdl_from_tables, traceql_query_from_str, HybridQuery,
+    RecordDeleteRequest, RecordGetRequest, RecordInput, RecordPatchRequest, RecordPutBatchRequest,
+    RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
 };
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -401,6 +401,22 @@ fn handle_inner(
             let query = graphql_query_from_str(&request.query).map_err(to_io_error)?;
             let parse_ms = elapsed_ms(parse_start);
             query_response(&db, query, request_start, read_ms, parse_ms)?
+        }
+        ("GET", "/v1/graphql/schema") => {
+            let db = db.lock().unwrap();
+            let manifest = db.inspect_manifest().map_err(to_io_error)?;
+            let schema = graphql_schema_sdl_from_tables(&manifest.schemas).map_err(to_io_error)?;
+            let tables = manifest
+                .schemas
+                .iter()
+                .map(|schema| schema.name.clone())
+                .collect::<Vec<_>>();
+            ok(json!({
+                "adapter": "bounded_graphql_query_adapter",
+                "schema": schema,
+                "tables": tables,
+                "execution": "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope",
+            }))
         }
         ("POST", "/v1/explain") => {
             let parse_start = Instant::now();
