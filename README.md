@@ -105,8 +105,40 @@ PY
 
 Use `--skip-typescript` only when local Node tooling is unavailable; that is a
 reduced local evidence path because the TypeScript check/http/gateway smoke
-steps are skipped. To validate the failure receipt path without waiting for the
-full gate, use:
+steps are skipped. For the reduced fallback receipt, use:
+
+```bash
+cargo run -q -p tracedb-cli -- product-quickstart --skip-typescript
+```
+
+The receipt still writes `target/tracedb/product-quickstart.json`, preserves
+`report_file`, reports `typescript_enabled: false`, passes the five
+non-TypeScript local steps, and omits `typescript_check`,
+`typescript_http_smoke`, and `typescript_gateway_smoke`. Treat this as a
+reduced local evidence path for machines without Node tooling, not the full
+product gate.
+
+When local executable policy or machine resources block product verification,
+run the same reduced quickstart path on Modal as remote Linux product verification:
+
+```bash
+modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json
+```
+
+The Modal runner uploads the current checkout with `.git`, `target/`, local
+env files, benchmark reports, caches, and Node modules excluded, then runs
+`cargo fmt --all -- --check`, the focused quickstart receipt test, the docs
+contract test, and `product-quickstart --skip-typescript`. It validates
+`target/tracedb/product-quickstart.json` against stdout and confirms the
+reduced receipt still has `typescript_enabled: false`, five non-TypeScript
+steps, SQL as `not_implemented`, and managed-cloud/benchmark claims as
+`not_checked`. Use `--mode workspace` for the heavier remote lane that also
+runs the full CLI demo test file, usability acceptance test file, and
+`cargo test --workspace --all-targets`. This is remote Linux product verification;
+it does not replace a final macOS-local quickstart check when the question is
+whether this workstation can execute binaries.
+
+To validate the failure receipt path without waiting for the full gate, use:
 
 ```bash
 cargo run -q -p tracedb-cli -- product-quickstart --inject-failure embedded_demo

@@ -65,6 +65,13 @@ as the local quickstart receipt: it should report `ok: true`, `mode:
 "local-product-regression"`, `scope: "local_only"`, `human_summary.status:
 "passed"`, `claims.sql_module: "not_implemented"`,
 `claims.managed_cloud: "not_checked"`, and `claims.benchmark: "not_checked"`.
+`product-quickstart --skip-typescript` is the reduced fallback receipt for
+machines without Node tooling: it still writes
+`target/tracedb/product-quickstart.json`, keeps `report_file`, reports
+`typescript_enabled: false`, passes the five non-TypeScript local steps, and
+omits `typescript_check`, `typescript_http_smoke`, and
+`typescript_gateway_smoke`. Treat it as a reduced local evidence path, not the
+full product gate.
 `product-quickstart --inject-failure embedded_demo` is the quick failure receipt
 check: it exits nonzero, writes the same default report artifact, keeps
 `report_file`, reports `human_summary.status: "failed"`, and records

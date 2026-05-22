@@ -3,8 +3,12 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
+
+static PRODUCT_QUICKSTART_REPORT_LOCK: Mutex<()> = Mutex::new(());
+static PRODUCT_REGRESSION_SMOKE_LOCK: Mutex<()> = Mutex::new(());
 
 fn read_json_file(path: &Path) -> Value {
     let body =
@@ -116,6 +120,9 @@ fn http_demo_command_exercises_local_http_sdk_product_path() {
 
 #[test]
 fn product_regression_runs_local_product_gate() {
+    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
+        .lock()
+        .expect("lock product regression smoke path");
     let temp = tempfile::tempdir().expect("tempdir");
     let report_file = temp.path().join("reports/product-regression.json");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
@@ -181,6 +188,9 @@ fn product_regression_runs_local_product_gate() {
 
 #[test]
 fn product_quickstart_runs_product_gate_with_default_report_file() {
+    let _report_lock = PRODUCT_QUICKSTART_REPORT_LOCK
+        .lock()
+        .expect("lock product quickstart report path");
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("quickstart-data");
     let report_file = workspace_root().join("target/tracedb/product-quickstart.json");
@@ -221,6 +231,9 @@ fn product_quickstart_runs_product_gate_with_default_report_file() {
 
 #[test]
 fn product_quickstart_injected_failure_uses_default_report_file() {
+    let _report_lock = PRODUCT_QUICKSTART_REPORT_LOCK
+        .lock()
+        .expect("lock product quickstart report path");
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("quickstart-failure-data");
     let report_file = workspace_root().join("target/tracedb/product-quickstart.json");
@@ -268,6 +281,84 @@ fn product_quickstart_injected_failure_uses_default_report_file() {
         summary["steps"]["embedded_demo"]["error"],
         "injected product-regression failure"
     );
+}
+
+#[test]
+fn product_quickstart_skip_typescript_uses_default_report_file_and_marks_reduced_evidence() {
+    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
+        .lock()
+        .expect("lock product regression smoke path");
+    let _report_lock = PRODUCT_QUICKSTART_REPORT_LOCK
+        .lock()
+        .expect("lock product quickstart report path");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("quickstart-skip-typescript-data");
+    let report_file = workspace_root().join("target/tracedb/product-quickstart.json");
+    let _ = std::fs::remove_file(&report_file);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-quickstart")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--skip-typescript")
+        .output()
+        .expect("run tracedb product-quickstart without TypeScript tooling");
+
+    assert!(
+        output.status.success(),
+        "product-quickstart --skip-typescript failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-quickstart skip json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(report_summary, summary);
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
+    assert_eq!(summary["typescript_enabled"], false);
+    assert_eq!(summary["only_step"], Value::Null);
+    assert_eq!(summary["failure_injection"], Value::Null);
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    assert_eq!(summary["human_summary"]["status"], "passed");
+    assert_eq!(
+        summary["human_summary"]["message"],
+        "local product regression passed: 5/5 steps"
+    );
+    assert_eq!(summary["human_summary"]["steps_passed"], 5);
+    assert_eq!(summary["human_summary"]["steps_total"], 5);
+    assert_eq!(summary["human_summary"]["failed_step"], Value::Null);
+
+    let steps = summary["steps"]
+        .as_object()
+        .expect("product quickstart steps object");
+    assert_eq!(steps.len(), 5);
+    for step in [
+        "embedded_demo",
+        "embedded_verify",
+        "http_demo",
+        "local_doctor",
+        "rust_sdk_quickstart",
+    ] {
+        assert_eq!(
+            steps[step]["ok"], true,
+            "product-quickstart --skip-typescript step {step} should pass: {summary}"
+        );
+    }
+    for skipped_step in [
+        "typescript_check",
+        "typescript_http_smoke",
+        "typescript_gateway_smoke",
+    ] {
+        assert!(
+            !steps.contains_key(skipped_step),
+            "product-quickstart --skip-typescript should skip {skipped_step}: {summary}"
+        );
+    }
 }
 
 #[test]
@@ -761,6 +852,9 @@ fn product_regression_only_typescript_check_runs_single_gate_step() {
 
 #[test]
 fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
+    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
+        .lock()
+        .expect("lock product regression smoke path");
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("only-typescript-http-smoke");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
@@ -819,6 +913,9 @@ fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
 
 #[test]
 fn product_regression_only_typescript_gateway_smoke_runs_single_gate_step() {
+    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
+        .lock()
+        .expect("lock product regression smoke path");
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("only-typescript-gateway-smoke");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))

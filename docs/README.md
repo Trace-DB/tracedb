@@ -61,6 +61,29 @@ top-level `report_file` field when a report artifact is configured. Treat
 should report `ok: true`, `mode: "local-product-regression"`,
 `scope: "local_only"`, `human_summary.status: "passed"`, SQL as
 `not_implemented`, and managed-cloud/benchmark claims as `not_checked`.
+`product-quickstart --skip-typescript` is the reduced fallback receipt for
+machines without Node tooling: it still writes the same default report artifact,
+keeps `report_file`, reports `typescript_enabled: false`, passes the five
+non-TypeScript local steps, and omits `typescript_check`,
+`typescript_http_smoke`, and `typescript_gateway_smoke`. Treat it as a
+reduced local evidence path, not the full product gate.
+When local executable policy or machine resources block product verification,
+use Modal for remote Linux product verification:
+
+```bash
+modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json
+```
+
+The Modal lane uploads the current checkout without `.git`, `target/`, local
+env files, benchmark reports, caches, or Node modules, then runs
+`cargo fmt --all -- --check`, the focused quickstart receipt test, the docs
+contract test, and `product-quickstart --skip-typescript`. It validates the
+default quickstart receipt against stdout, including `report_file`,
+`typescript_enabled: false`, the five non-TypeScript steps, SQL as
+`not_implemented`, and managed-cloud/benchmark claims as `not_checked`.
+`--mode workspace` additionally runs the full CLI demo test file, usability
+acceptance test file, and `cargo test --workspace --all-targets`. This remains remote Linux product verification, not proof that the local Mac can execute the
+same binaries.
 `product-quickstart --inject-failure embedded_demo` is the quick failure receipt
 check: it exits nonzero, writes the same default report artifact, keeps
 `report_file`, reports `human_summary.status: "failed"`, and marks the injected

@@ -764,6 +764,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "--only",
         "--report-file",
         "report_file",
+        "typescript_enabled",
         "target/tracedb/product-quickstart.json",
         "embedded_demo",
         "embedded_verify",
@@ -789,6 +790,19 @@ fn local_product_regression_runner_declares_current_product_gate() {
     let docs_readme =
         std::fs::read_to_string(root.join("docs/README.md")).expect("read docs README");
     let api_doc = std::fs::read_to_string(root.join("docs/api/v1-http.md")).expect("read API doc");
+    for (name, markdown) in [
+        ("README", readme.as_str()),
+        ("docs README", docs_readme.as_str()),
+    ] {
+        assert!(
+            markdown.contains("modal run scripts/modal_product_verify.py --mode quickstart"),
+            "{name} should document the Modal product verification lane"
+        );
+        assert!(
+            markdown.contains("remote Linux product verification"),
+            "{name} should scope Modal as remote Linux product verification"
+        );
+    }
     for (name, markdown) in [
         ("README", readme),
         ("docs README", docs_readme),
@@ -833,6 +847,18 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("report_file"),
             "{name} should document the machine-readable report file field"
+        );
+        assert!(
+            markdown.contains("product-quickstart --skip-typescript"),
+            "{name} should document the reduced product quickstart fallback command"
+        );
+        assert!(
+            markdown.contains("typescript_enabled"),
+            "{name} should document the product quickstart TypeScript-enabled receipt field"
+        );
+        assert!(
+            markdown.contains("reduced local evidence path"),
+            "{name} should call out the skip-TypeScript fallback as reduced evidence"
         );
         assert!(
             markdown.contains("product-quickstart --inject-failure embedded_demo"),
