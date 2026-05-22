@@ -151,8 +151,8 @@ managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 Current platform conformance checkpoint: `scripts/platform_conformance.py` maps
 HTTP direct, Rust SDK, TypeScript SDK, and Python SDK into all 13 Platform
 Contract v0 scenario IDs, plus partial TraceQL/SQL-ish and GraphQL adapter
-lanes. Modal workspace run `ap-wf0NxrT6Yq5IvNlmJy6OBW` passed 20/20 commands in
-102.334s, including `platform-conformance-quick`,
+lanes. Modal workspace run `ap-tutj9wKpgEIIDS6zukrmPe` passed 20/20 commands in
+94.012s, including `platform-conformance-quick`,
 `traceql-sqlish-conformance`, `graphql-http-conformance`,
 `typescript-sdk-conformance`, `python-sdk-conformance`, Python unit/install
 smokes, TypeScript package/HTTP/gateway lanes, TypeScript and Python public SDK
@@ -161,7 +161,8 @@ GraphQL result/explain smoke coverage, and
 query, explain, and error behavior as passed with 9/13 scenarios intentionally
 `not_checked`, and the workspace tests included the generated GraphQL SDL unit
 test, HTTP GraphQL schema export test, Rust SDK `GraphQlQueryRequest`,
-sync/async `graphql_typed`, and GraphQL safe retry coverage. This is platform
+sync/async `graphql_typed`, generated schema helper, and GraphQL safe retry
+coverage; the Rust SDK `http_client` suite reported 49/49 passed. This is platform
 conformance evidence, not managed-cloud proof, SQL
 compatibility, full GraphQL adapter parity, or benchmark evidence.
 
@@ -403,9 +404,12 @@ compatibility remain unimplemented. `GET /v1/graphql/schema` now exports
 generated SDL from applied TraceDB table schema, and `POST /v1/graphql` exposes
 a bounded GraphQL query adapter over the same `HybridQuery` model. The GraphQL
 conformance lane checks schema export, query, explain, and error behavior while
-leaving write/admin scenarios `not_checked`. The Rust SDK exposes this bounded
-adapter through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
-`GraphQlQueryRequest`, and the TypeScript SDK exposes it through
+leaving write/admin scenarios `not_checked`. The Rust SDK exposes the generated
+schema route through `TraceDbClient::graphql_schema`,
+`TraceDbClient::graphql_schema_typed`, and
+`TraceDbAsyncClient::graphql_schema_typed`, then exposes the bounded adapter
+through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
+`GraphQlQueryRequest`. The TypeScript SDK exposes bounded execution through
 `TraceDB.graphql()` and `graphqlRequest({ query })`; the Python SDK exposes it
 through `TraceDB.graphql()` and `graphql_request({"query": query})`. GraphQL
 mutation support, subscription support, resolver runtime, GraphQL data-envelope

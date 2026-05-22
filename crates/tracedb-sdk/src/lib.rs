@@ -549,6 +549,14 @@ impl TraceDbClient {
         self.post_typed("/v1/graphql", request)
     }
 
+    pub fn graphql_schema(&self) -> TraceDbClientResult<Value> {
+        self.get_json("/v1/graphql/schema")
+    }
+
+    pub fn graphql_schema_typed(&self) -> TraceDbClientResult<GraphQlSchemaResponse> {
+        self.get_typed("/v1/graphql/schema")
+    }
+
     pub fn explain(&self, query: &HybridQuery) -> TraceDbClientResult<Value> {
         self.post_json("/v1/explain", query)
     }
@@ -1030,6 +1038,10 @@ impl TraceDbAsyncClient {
             .await
     }
 
+    pub async fn graphql_schema_typed(&self) -> TraceDbClientResult<GraphQlSchemaResponse> {
+        self.run(|client| client.graphql_schema_typed()).await
+    }
+
     pub async fn explain_typed(&self, query: &HybridQuery) -> TraceDbClientResult<HybridExplain> {
         let query = query.clone();
         self.run(move |client| client.explain_typed(&query)).await
@@ -1331,6 +1343,14 @@ impl GraphQlQueryRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GraphQlSchemaResponse {
+    pub adapter: String,
+    pub schema: String,
+    pub tables: Vec<String>,
+    pub execution_caveat: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CompactResponse {
     pub compacted: bool,
 }
@@ -1582,6 +1602,7 @@ fn is_retry_safe_request(method: &str, path: &str) -> bool {
             | ("POST", "/v1/query")
             | ("POST", "/v1/traceql")
             | ("POST", "/v1/graphql")
+            | ("GET", "/v1/graphql/schema")
             | ("POST", "/v1/explain")
     )
 }

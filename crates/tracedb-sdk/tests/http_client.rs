@@ -17,9 +17,9 @@ use tracedb_query::{
     TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
-    BranchesResponse, DatabasesResponse, ErrorResponse, GraphQlQueryRequest, HealthResponse,
-    JobsResponse, MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TableHandle,
-    TableRecordInput, TraceDb, TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig,
+    BranchesResponse, DatabasesResponse, ErrorResponse, GraphQlQueryRequest, GraphQlSchemaResponse,
+    HealthResponse, JobsResponse, MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest,
+    TableHandle, TableRecordInput, TraceDb, TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig,
     TraceDbClientError, TraceDbRequestOptions,
 };
 
@@ -168,6 +168,13 @@ fn capture_json_body_response_server(
 }
 
 fn capture_http_request_server() -> (String, std::thread::JoinHandle<String>) {
+    capture_http_request_response_server(r#"{"ok":true}"#)
+}
+
+fn capture_http_request_response_server(
+    response_body: impl Into<String>,
+) -> (String, std::thread::JoinHandle<String>) {
+    let response_body = response_body.into();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
@@ -192,11 +199,12 @@ fn capture_http_request_server() -> (String, std::thread::JoinHandle<String>) {
                 Err(error) => panic!("read request: {error}"),
             }
         }
-        stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
-            )
-            .unwrap();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
         String::from_utf8(request).expect("utf8 request")
     });
     (format!("http://{addr}"), handle)
@@ -702,6 +710,43 @@ fn graphql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
 }
 
 #[test]
+fn graphql_schema_typed_gets_generated_schema_response() {
+    let response_body = r#"{"adapter":"bounded_graphql","schema":"type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n","tables":["docs"],"execution_caveat":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope."}"#;
+    let (url, request) = capture_http_request_response_server(response_body);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response: GraphQlSchemaResponse = client
+        .graphql_schema_typed()
+        .expect("graphql schema typed response");
+    let request = request.join().expect("request");
+
+    assert_eq!(response.adapter, "bounded_graphql");
+    assert!(response.schema.contains("type Query"));
+    assert_eq!(response.tables, vec!["docs"]);
+    assert!(response.execution_caveat.contains("QueryResponse"));
+    assert!(request.starts_with("GET /v1/graphql/schema HTTP/1.1"));
+    assert!(request.contains("\r\nContent-Length: 0\r\n"));
+    assert!(!request.contains("\r\nContent-Type: application/json\r\n"));
+}
+
+#[test]
+fn graphql_schema_typed_retries_transient_read_failures_when_safe_retries_enabled() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 224\r\nConnection: close\r\n\r\n{\"adapter\":\"bounded_graphql\",\"schema\":\"type Query {\\n  docs(tenant_id: String!, limit: Int): [docs!]!\\n}\\n\",\"tables\":[\"docs\"],\"execution_caveat\":\"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope.\"}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+
+    let response = client
+        .graphql_schema_typed()
+        .expect("graphql schema safe retry");
+
+    assert_eq!(response.tables, vec!["docs"]);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn async_client_graphql_typed_posts_bounded_query_string() {
     let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
     let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(url, "dev-token"));
@@ -717,6 +762,20 @@ fn async_client_graphql_typed_posts_bounded_query_string() {
         body["query"],
         r#"query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }"#
     );
+}
+
+#[test]
+fn async_client_graphql_schema_typed_gets_generated_schema_response() {
+    let response_body = r#"{"adapter":"bounded_graphql","schema":"type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n","tables":["docs"],"execution_caveat":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope."}"#;
+    let (url, request) = capture_http_request_response_server(response_body);
+    let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = block_on(client.graphql_schema_typed()).expect("async graphql schema typed");
+    let request = request.join().expect("request");
+
+    assert_eq!(response.adapter, "bounded_graphql");
+    assert_eq!(response.tables, vec!["docs"]);
+    assert!(request.starts_with("GET /v1/graphql/schema HTTP/1.1"));
 }
 
 #[test]

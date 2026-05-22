@@ -45,11 +45,13 @@ adapter that compiles the query string into the same `HybridQuery` path as
 explain, and error-envelope behavior, while write/admin scenarios remain
 explicit `not_checked` results. This is not GraphQL mutation support,
 subscription support, resolver runtime, GraphQL data-envelope execution, or
-full adapter parity. Rust SDK callers can use `TraceDbClient::graphql_typed` or
-`graphql_request_typed` with `GraphQlQueryRequest`, and TypeScript SDK callers
-can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers
-can use `TraceDB.graphql()` or `graphql_request({"query": query})` to exercise
-the same bounded wire contract.
+full adapter parity. Rust SDK callers can use `TraceDbClient::graphql_schema`
+or `graphql_schema_typed` to inspect the generated SDL, then
+`TraceDbClient::graphql_typed` or `graphql_request_typed` with
+`GraphQlQueryRequest` to exercise the bounded query adapter. TypeScript SDK
+callers can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK
+callers can use `TraceDB.graphql()` or `graphql_request({"query": query})` to
+exercise the same bounded wire contract.
 
 ## Quickstart
 
@@ -350,9 +352,10 @@ The Rust SDK also exposes `TraceDbAsyncClient`, a minimal async facade over the
 same HTTP contract. It runs the existing transport on a background thread per
 request, preserving timeout, retry, routing metadata, and error behavior while
 making the current typed read, write, and admin helpers awaitable. Async typed
-write/admin helpers include schema apply, record put/batch/patch/delete,
-compact, snapshot, and restore, including the same option-aware idempotency
-helpers as the blocking client. This is not yet a runtime-native
+read/write/admin helpers include generated GraphQL schema export, schema apply,
+record put/batch/patch/delete, compact, snapshot, and restore, including the
+same option-aware idempotency helpers as the blocking client. This is not yet a
+runtime-native
 Tokio/async-std transport.
 The TypeScript client smoke runs with local Node type stripping:
 
@@ -532,10 +535,13 @@ partial surface. `GET /v1/graphql/schema` now exports generated SDL from
 applied TraceDB table schema, and `POST /v1/graphql` exposes a bounded GraphQL
 query adapter over the same `HybridQuery` model. The GraphQL conformance lane
 checks schema export, query, explain, and error behavior. The Rust SDK exposes
-this bounded HTTP adapter through `TraceDbClient::graphql_typed`,
-`graphql_request_typed`, and `GraphQlQueryRequest`; the TypeScript SDK exposes
-it through `TraceDB.graphql()` and `graphqlRequest({ query })`; the Python SDK
-exposes it through `TraceDB.graphql()` and
+the schema route through `TraceDbClient::graphql_schema`,
+`TraceDbClient::graphql_schema_typed`, and
+`TraceDbAsyncClient::graphql_schema_typed`, and it exposes the bounded HTTP
+adapter through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
+`GraphQlQueryRequest`; the TypeScript SDK exposes bounded execution through
+`TraceDB.graphql()` and `graphqlRequest({ query })`; the Python SDK exposes it
+through `TraceDB.graphql()` and
 `graphql_request({"query": query})`. This is TraceQL/query-adapter, GraphQL SDL
 export, and bounded GraphQL query-adapter evidence only; SQL compatibility,
 PostgreSQL compatibility, GraphQL mutation support, subscription support,
