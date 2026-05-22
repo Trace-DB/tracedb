@@ -1281,6 +1281,8 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
     for evidence in [
         "clients/python/install_smoke.py",
         "python3 clients/python/install_smoke.py",
+        "TraceDB.graphql",
+        "graphql_request",
     ] {
         assert!(
             python_evidence.contains(evidence),
@@ -1300,6 +1302,7 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         "--no-deps",
         "--target",
         "TraceDB.from_env",
+        "graphql_request",
         "python sdk install smoke ok",
     ] {
         assert!(

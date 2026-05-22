@@ -222,6 +222,20 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
             traceql_explain = db.traceql(f"{traceql_query}\nEXPLAIN")
             assert isinstance(traceql_explain.get("explain", {}).get("returned_count"), int)
 
+            graphql_query = (
+                'query { docs(tenant_id: "tenant-a", where: {status: "published"}, '
+                'match: "TraceDB Python", near: [1.0, 0.0, 0.0], freshness: STRICT, limit: 3) { record_id } }'
+            )
+            graphql = db.graphql(graphql_query)
+            graphql_results = graphql.get("results")
+            assert isinstance(graphql_results, list)
+            assert any(result.get("record_id") == "intro" for result in graphql_results)
+            graphql_explain = db.graphql(
+                'query { docs(tenant_id: "tenant-a", match: "TraceDB Python", '
+                'near: [1.0, 0.0, 0.0], freshness: STRICT, limit: 3, explain: true) { record_id } }'
+            )
+            assert isinstance(graphql_explain.get("explain", {}).get("returned_count"), int)
+
             deleted = docs.delete("ops", tombstone="python_sdk_smoke", idempotency_key=f"python-{run_id}-delete")
             assert deleted["deleted"] is True
             deleted_get = docs.get("ops")
@@ -274,6 +288,7 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                     "scan": True,
                     "query": True,
                     "traceql_string_execution": True,
+                    "graphql_query_execution": True,
                     "explain": True,
                     "delete": True,
                     "idempotency": True,
@@ -288,6 +303,8 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                 "records_scanned": scan["returned_count"],
                 "traceql_result_count": len(traceql_results),
                 "traceql_explain": True,
+                "graphql_result_count": len(graphql_results),
+                "graphql_explain": True,
                 "catalog_databases": len(databases.get("databases", [])),
                 "catalog_branches": len(branches.get("branches", [])),
                 "put_epoch": put_response["epoch"],

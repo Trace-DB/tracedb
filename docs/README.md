@@ -58,7 +58,8 @@ current GraphQL evidence is limited to bounded `graphql_query_from_str`
 compilation, `POST /v1/graphql` query/explain/error conformance, and the Rust
 SDK helper methods `TraceDbClient::graphql_typed` and
 `TraceDbAsyncClient::graphql_typed` plus the TypeScript public SDK
-`TraceDB.graphql()` helper over that same HTTP route.
+`TraceDB.graphql()` helper and Python sync SDK `TraceDB.graphql()` helper over
+that same HTTP route.
 
 Local product smoke:
 

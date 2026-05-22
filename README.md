@@ -45,8 +45,9 @@ schema/write/admin scenarios remain explicit `not_checked` results. This is not
 GraphQL schema generation, mutation support, resolver runtime, or adapter
 parity. Rust SDK callers can use `TraceDbClient::graphql_typed` or
 `graphql_request_typed` with `GraphQlQueryRequest`, and TypeScript SDK callers
-can use `TraceDB.graphql()` or `graphqlRequest({ query })` to exercise the
-same bounded wire contract.
+can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers
+can use `TraceDB.graphql()` or `graphql_request({"query": query})` to exercise
+the same bounded wire contract.
 
 ## Quickstart
 
@@ -530,7 +531,8 @@ over the same `HybridQuery` model and the GraphQL conformance lane checks query,
 explain, and error behavior. The Rust SDK exposes this bounded HTTP adapter
 through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
 `GraphQlQueryRequest`; the TypeScript SDK exposes it through
-`TraceDB.graphql()` and `graphqlRequest({ query })`. This is
+`TraceDB.graphql()` and `graphqlRequest({ query })`; the Python SDK exposes it
+through `TraceDB.graphql()` and `graphql_request({"query": query})`. This is
 TraceQL/query-adapter and bounded GraphQL query-adapter evidence only; SQL
 compatibility, PostgreSQL compatibility, GraphQL schema generation, mutation
 support, resolver runtime, and full adapter parity remain unimplemented.

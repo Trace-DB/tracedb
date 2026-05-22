@@ -131,9 +131,11 @@ installs a copied `clients/python` package into an isolated temporary pip
 `--target`, then runs `clients/python/http_smoke.py` with source-path imports
 disabled. It maps schema apply, put, batch, patch, get, scan, query, explain,
 TraceQL string execution, delete, idempotency, errors, and snapshot/restore
-into the same scenario IDs through the installed sync SDK. The `traceql_sqlish`
-lane starts the HTTP server, seeds minimal records through canonical wire calls,
-and checks the bounded SQL-ish adapter through `/v1/traceql`. It reports
+into the same scenario IDs through the installed sync SDK, and the smoke also
+checks bounded GraphQL result/explain calls through `TraceDB.graphql()`. The
+`traceql_sqlish` lane starts the HTTP server, seeds minimal records through
+canonical wire calls, and checks the bounded SQL-ish adapter through
+`/v1/traceql`. It reports
 `query`, `traceql_string_execution`, `explain`, and `errors` as passed, while
 schema/write/admin scenarios remain explicit `not_checked` results. Future
 surfaces must report unimplemented scenarios as `not_checked` rather than
@@ -145,13 +147,15 @@ TraceQL, idempotency, and snapshot/restore scenarios remain explicit
 `not_checked` results until GraphQL owns those semantics or a schema-generated
 adapter exists.
 
-Current verified checkpoint: Modal workspace run `ap-g8eqmR63BN3riT7NhNUHsn`
-passed 20/20 commands in 90.423s. Its `platform-conformance-quick` command
+Current verified checkpoint: Modal workspace run `ap-QApA07pKsIvNkhbQO71DXW`
+passed 20/20 commands in 116.915s. Its `platform-conformance-quick` command
 reported `http_direct` 13/13 and `rust_sdk` 13/13, including
 `traceql_string_execution`; its `typescript-sdk-conformance` command reported
 `typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
 `python_sdk` 13/13 with native TraceQL covered by installed-package smoke result
-and explain evidence. Its `traceql-sqlish-conformance` command reported
+and explain evidence. Its `python-sdk-conformance` command also exercised the
+installed Python SDK's bounded GraphQL result/explain calls through
+`TraceDB.graphql()`. Its `traceql-sqlish-conformance` command reported
 `traceql_sqlish` as `ok: true`, `complete: false`, with 4/13 scenarios passed
 and 9/13 intentionally `not_checked`. Its `graphql-http-conformance` command
 reported `graphql` as `ok: true`, `complete: false`, with query, explain, and
@@ -183,6 +187,13 @@ The TypeScript public SDK mirrors the same bounded GraphQL wire route through
 transport's `/v1/graphql` method. This is public SDK access to the bounded
 adapter, not GraphQL schema generation, mutation support, resolver runtime, or
 full GraphQL adapter parity.
+
+The Python sync SDK mirrors the same bounded GraphQL wire route through
+`TraceDB.graphql(query)` and `graphql_request({"query": query})` over
+`POST /v1/graphql`, reusing the same dictionary-shaped `GraphQlQueryRequest`
+and `QueryResponse` envelope as the raw HTTP contract. This is sync SDK access
+to the bounded adapter, not async Python support, GraphQL schema generation,
+mutation support, resolver runtime, or full GraphQL adapter parity.
 `TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
@@ -203,15 +214,14 @@ compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
 `TRACEDB_IDEMPOTENCY_RETRIES` so the TypeScript public SDK shares the same
 connection, routing, read-only retry, and keyed mutation/admin retry boundary as
 Rust. `safeRetries` only retries transient 5xx responses for health/ready, get,
-scan, query, native TraceQL, and explain. `idempotencyRetries` is default-off and retries
-transient 5xx responses for mutation/admin routes only when the request carries
-a caller-provided `Idempotency-Key`. The wrapper is fake-fetch,
+scan, query, native TraceQL, bounded GraphQL, and explain. `idempotencyRetries`
+is default-off and retries transient 5xx responses for mutation/admin routes
+only when the request carries a caller-provided `Idempotency-Key`. The wrapper is fake-fetch,
 build/pack, packed temp-consumer install, package-entry, and typecheck guarded
 and now has real local HTTP and gateway smokes through `npm run
 public-http-smoke` and `npm run gateway-smoke`.
-The
-public HTTP smoke now emits machine-readable
-idempotency, TraceQL result/explain, and error-envelope evidence for
+The public HTTP smoke now emits machine-readable idempotency, TraceQL
+result/explain, bounded GraphQL result/explain, and error-envelope evidence for
 `scripts/platform_conformance.py --surface typescript_sdk`; the generated
 transport remains available and remains the source of route methods.
 
@@ -224,12 +234,15 @@ stdlib-only SDK also exposes `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
 `TRACEDB_IDEMPOTENCY_RETRIES`. `safe_retries` only retries transient 5xx
-responses for health, ready, get, scan, query, native TraceQL, and explain.
+responses for health, ready, get, scan, query, native TraceQL, bounded GraphQL,
+and explain.
 `idempotency_retries` is default-off and retries transient 5xx responses for
 mutation/admin routes only when that request carries a caller-provided
 `Idempotency-Key`; unkeyed writes and 4xx/conflict responses are not retried.
 `TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
 TraceQL strings through the canonical `POST /v1/traceql` route.
+`TraceDB.graphql(query)` and `graphql_request({"query": query})` execute bounded
+GraphQL query-adapter strings through the canonical `POST /v1/graphql` route.
 The local package/unit lane is `python3 -m unittest discover -s
 clients/python/tests`; `python3 clients/python/install_smoke.py` prefers a
 temporary venv, installs `clients/python` with pip `--no-deps`, and runs a
@@ -274,9 +287,11 @@ into `HybridQuery`. The HTTP server exposes that path through
 `QueryResponse` shape as `/v1/query`. The Rust SDK mirrors that wire route with
 `GraphQlQueryRequest`, `TraceDbClient::graphql_typed`, and
 `TraceDbAsyncClient::graphql_typed`; the TypeScript SDK mirrors it with
-`TraceDB.graphql()` and `TraceDB.graphqlRequest()`. Mutations, subscriptions,
-fragments, aliases, unknown arguments, duplicate semantic arguments, and
-multiple root fields fail with `invalid GraphQL adapter` errors. This is bounded
+`TraceDB.graphql()` and `TraceDB.graphqlRequest()`; the Python SDK mirrors it
+with `TraceDB.graphql()` and `graphql_request({"query": query})`. Mutations,
+subscriptions, fragments, aliases, unknown arguments, duplicate semantic
+arguments, and multiple root fields fail with `invalid GraphQL adapter` errors.
+This is bounded
 query/explain/error execution evidence only; TraceDB still has no GraphQL
 schema generator, mutation support, resolver runtime, or adapter parity.
 

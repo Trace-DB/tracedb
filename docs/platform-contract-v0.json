@@ -86,7 +86,7 @@
     {
       "id": "python_sdk",
       "label": "Python SDK",
-      "status": "sync_http_smoked_from_installed_package_with_traceql_safe_and_idempotency_retries",
+      "status": "sync_http_smoked_from_installed_package_with_traceql_graphql_safe_and_idempotency_retries",
       "role": "sync-first AI/data/notebook SDK over the canonical HTTP contract",
       "evidence": [
         "clients/python/tracedb/client.py",
@@ -101,6 +101,8 @@
         "idempotency_retries",
         "TraceDB.traceql",
         "traceql_request",
+        "TraceDB.graphql",
+        "graphql_request",
         "python3 -m unittest discover -s clients/python/tests",
         "python3 clients/python/install_smoke.py",
         "installed package + clients/python/http_smoke.py",
@@ -142,6 +144,8 @@
         "GraphQlQueryRequest",
         "TraceDB.graphql",
         "TraceDB.graphqlRequest",
+        "TraceDB.graphql(query)",
+        "graphql_request({\"query\": query})",
         "TraceDbClient::graphql_typed",
         "query { <table>(tenant_id: \"...\", where: {...}, match: \"...\", near: [...], limit: n, freshness: ALLOW_DIRTY, explain: true) { ... } }",
         "invalid GraphQL adapter errors for mutation/subscription/fragment/alias/unknown argument/resolver semantics",

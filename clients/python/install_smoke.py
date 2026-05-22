@@ -122,6 +122,8 @@ def _write_consumer(consumer: Path) -> None:
             assert table.name == "docs"
             assert table.tenant_id == "tenant-a"
             assert table.scan_limit == 20
+            assert callable(db.graphql)
+            assert callable(db.graphql_request)
 
             try:
                 TraceDB.from_env(env={})

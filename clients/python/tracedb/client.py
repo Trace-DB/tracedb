@@ -217,6 +217,12 @@ class TraceDB:
     def traceql_request(self, request: JsonObject) -> JsonObject:
         return self.request_json("POST", "/v1/traceql", dict(request))
 
+    def graphql(self, query: str) -> JsonObject:
+        return self.graphql_request({"query": query})
+
+    def graphql_request(self, request: JsonObject) -> JsonObject:
+        return self.request_json("POST", "/v1/graphql", dict(request))
+
     def table(self, name: str) -> "TraceDBTable":
         return TraceDBTable(self, name)
 
@@ -485,6 +491,7 @@ def _is_retry_safe_request(method: str, path: str) -> bool:
         ("POST", "/v1/records/scan"),
         ("POST", "/v1/query"),
         ("POST", "/v1/traceql"),
+        ("POST", "/v1/graphql"),
         ("POST", "/v1/explain"),
     }
 
