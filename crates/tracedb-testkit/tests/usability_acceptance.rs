@@ -1039,6 +1039,48 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         );
     }
 
+    let python_surface = manifest["surfaces"]
+        .as_array()
+        .expect("surfaces array")
+        .iter()
+        .find(|surface| surface["id"] == json!("python_sdk"))
+        .expect("python_sdk surface");
+    let python_evidence = python_surface["evidence"]
+        .as_array()
+        .expect("python_sdk evidence array")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<BTreeSet<_>>();
+    for evidence in [
+        "clients/python/install_smoke.py",
+        "python3 clients/python/install_smoke.py",
+    ] {
+        assert!(
+            python_evidence.contains(evidence),
+            "python_sdk manifest evidence missing {evidence}"
+        );
+        assert!(
+            markdown.contains(evidence),
+            "Platform Contract v0 markdown missing Python install evidence {evidence}"
+        );
+    }
+    let python_install_smoke =
+        std::fs::read_to_string(root.join("clients/python/install_smoke.py"))
+            .expect("read Python install smoke");
+    for token in [
+        "venv.EnvBuilder",
+        "pip",
+        "--no-deps",
+        "--target",
+        "TraceDB.from_env",
+        "python sdk install smoke ok",
+    ] {
+        assert!(
+            python_install_smoke.contains(token),
+            "Python install smoke should contain {token}"
+        );
+    }
+
     let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
     let docs_readme =
         std::fs::read_to_string(root.join("docs/README.md")).expect("read docs README");

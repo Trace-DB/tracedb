@@ -73,7 +73,7 @@ Every product surface must map to these contract components:
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config | Hand-written `TraceDB` table/query wrapper over the generated transport. |
-| Python SDK | `python_sdk` | Sync HTTP smoked with package unit lane | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
+| Python SDK | `python_sdk` | Sync HTTP smoked with package install lane | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
 
@@ -168,8 +168,13 @@ table handles and a query builder with `insert`, `insert_batch`, `patch`, `get`,
 stdlib-only SDK also exposes `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS`. The local package/unit lane is `python3 -m unittest
-discover -s clients/python/tests`, and Modal workspace verification runs it
-before the Python conformance smoke. The stdlib-only smoke `python3
+discover -s clients/python/tests`; `python3 clients/python/install_smoke.py`
+prefers a temporary venv, installs `clients/python` with pip `--no-deps`, and
+runs a consumer from outside the repo to prove the installed `tracedb` package
+exports the public DX. When a remote image can run Python but lacks working
+`ensurepip`, the same smoke falls back to an isolated temporary pip `--target`
+install. Modal workspace verification runs both package lanes before the
+Python conformance smoke. The stdlib-only smoke `python3
 clients/python/http_smoke.py` starts a local
 `tracedb-server` and proves all required v0 contract scenarios through the
 Python surface. It is sync SDK contract evidence, not package publishing
@@ -202,6 +207,7 @@ cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_d
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 -m unittest discover -s clients/python/tests
+python3 clients/python/install_smoke.py
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 python3 scripts/generate_openapi_v1.py --check
 python3 scripts/generate_typescript_client.py --check

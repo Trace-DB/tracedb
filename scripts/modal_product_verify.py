@@ -177,6 +177,10 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 "argv": ["python3", "-m", "unittest", "discover", "-s", "clients/python/tests"],
             },
             {
+                "name": "python-sdk-install-smoke",
+                "argv": ["python3", "clients/python/install_smoke.py"],
+            },
+            {
                 "name": "python-platform-conformance-tests",
                 "argv": ["python3", "-m", "unittest", "benchmarks.realworld.tests.test_platform_conformance"],
             },

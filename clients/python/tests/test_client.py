@@ -78,6 +78,16 @@ class TraceDBClientTests(unittest.TestCase):
             pyproject["tool"]["setuptools"]["packages"],
         )
 
+    def test_install_smoke_declares_clean_venv_package_install(self) -> None:
+        smoke = (CLIENT_ROOT / "install_smoke.py").read_text()
+
+        self.assertIn("venv.EnvBuilder", smoke)
+        self.assertIn("pip", smoke)
+        self.assertIn("--no-deps", smoke)
+        self.assertIn("--target", smoke)
+        self.assertIn("TraceDB.from_env", smoke)
+        self.assertIn("python sdk install smoke ok", smoke)
+
 
 if __name__ == "__main__":
     unittest.main()

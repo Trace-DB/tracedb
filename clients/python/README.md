@@ -42,7 +42,15 @@ Run the local unit/package checks:
 
 ```bash
 python3 -m unittest discover -s clients/python/tests
+python3 clients/python/install_smoke.py
 ```
+
+`install_smoke.py` prefers a temporary venv, installs this directory as the
+`tracedb` package with pip `--no-deps`, and runs a consumer script from outside
+the repo so source-path imports cannot hide package drift. On remote images
+where Python can run tests but `ensurepip` is unavailable, it falls back to an
+isolated temporary pip `--target` install. It emits `python sdk install smoke
+ok`.
 
 Run the local HTTP smoke:
 

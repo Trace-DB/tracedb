@@ -901,6 +901,9 @@ fn product_regression_only_python_sdk_smoke_runs_single_gate_step() {
 
 #[test]
 fn product_regression_only_typescript_check_runs_single_gate_step() {
+    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
+        .lock()
+        .expect("lock product regression smoke path");
     let temp = tempfile::tempdir().expect("tempdir");
     let data_root = temp.path().join("only-typescript-check");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))

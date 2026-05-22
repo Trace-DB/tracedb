@@ -344,8 +344,12 @@ managed `database_id` / `branch_id` routing metadata injection,
 `Idempotency-Key` support, and parsed HTTP error envelopes. The env helper reads
 `TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
 `TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`; `python3 -m unittest discover -s
-clients/python/tests` now checks the local package shape and config helper, and
-Modal workspace verification runs that lane before Python conformance.
+clients/python/tests` now checks the local package shape and config helper.
+`python3 clients/python/install_smoke.py` prefers a temporary venv, installs
+`clients/python`, and runs a consumer from outside the repo so Python
+conformance cannot be masked by source-path imports; on images without working
+`ensurepip`, it falls back to an isolated temporary pip `--target` install.
+Modal workspace verification runs both package lanes before Python conformance.
 `python3 clients/python/http_smoke.py --summary-json
 /tmp/tracedb-python-sdk-smoke.json` starts a local `tracedb-server` and drives
 the Python surface through schema apply, put, batch ingest, patch, get, scan,

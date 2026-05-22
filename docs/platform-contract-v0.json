@@ -78,15 +78,17 @@
     {
       "id": "python_sdk",
       "label": "Python SDK",
-      "status": "sync_http_smoked_with_package_unit_lane",
+      "status": "sync_http_smoked_with_package_install_lane",
       "role": "sync-first AI/data/notebook SDK over the canonical HTTP contract",
       "evidence": [
         "clients/python/tracedb/client.py",
         "clients/python/pyproject.toml",
         "clients/python/tests/test_client.py",
+        "clients/python/install_smoke.py",
         "clients/python/http_smoke.py",
         "clients/python/README.md",
         "python3 -m unittest discover -s clients/python/tests",
+        "python3 clients/python/install_smoke.py",
         "scripts/platform_conformance.py --surface python_sdk"
       ]
     },

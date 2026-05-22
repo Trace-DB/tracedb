@@ -461,6 +461,7 @@ Run its local HTTP smoke with:
 
 ```bash
 python3 -m unittest discover -s clients/python/tests
+python3 clients/python/install_smoke.py
 python3 clients/python/http_smoke.py --summary-json /tmp/tracedb-python-sdk-smoke.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 ```
@@ -471,8 +472,12 @@ routing metadata injection, `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS`, `Idempotency-Key` support, and parsed HTTP error
 envelopes. The unit lane checks the local package shape and env config helper.
-The smoke starts a local `tracedb-server` and proves all required v0 contract
-scenarios for the Python surface. This is sync SDK contract evidence, not PyPI
+The install smoke prefers a temporary venv, installs `clients/python`, and runs
+a consumer from outside the repo so source-path imports cannot mask packaging
+drift; on images without working `ensurepip`, it falls back to an isolated
+temporary pip `--target` install. The HTTP smoke starts a local `tracedb-server`
+and proves all required v0 contract scenarios for the Python surface. This is
+sync SDK contract evidence, not PyPI
 readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
 support.
 
