@@ -22,9 +22,16 @@ Start with:
 
 - `README.md`
 - `docs/TraceDB.md`
+- `docs/platform-contract-v0.md`
+- `docs/platform-contract-v0.json`
 - `docs/api/v1-http.md`
 - `docs/api/v1-openapi.json`
 - `docs/Operations/Local Cloud.md`
+
+`docs/platform-contract-v0.md` is the DX-facing SDK/adaptor contract freeze
+draft. `docs/platform-contract-v0.json` is the machine-readable conformance
+manifest for HTTP direct, Rust SDK, TypeScript SDK, Python SDK, TraceQL/SQL-ish,
+and GraphQL parity work.
 
 Local product smoke:
 

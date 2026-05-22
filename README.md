@@ -10,6 +10,12 @@ Development vault:
 /Users/zgrogan/Repos/grogan-development-vault/10_Projects/TraceField Suite/TraceDB/
 ```
 
+The DX-facing platform contract starts at `docs/platform-contract-v0.md`, with
+the machine-readable conformance manifest in `docs/platform-contract-v0.json`.
+This is the checklist future SDKs and adapters must pass before TraceDB claims
+maintenance-mode parity across Rust, TypeScript, Python, TraceQL/SQL-ish, and
+GraphQL.
+
 ## Quickstart
 
 Run the local product demo from the repo root:

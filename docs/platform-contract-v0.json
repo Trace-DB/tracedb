@@ -1,0 +1,180 @@
+{
+  "contract": "tracedb-platform-contract-v0",
+  "version": "0.1.0-development",
+  "status": "contract-freeze-draft",
+  "updated": "2026-05-22",
+  "wire_contract": "docs/api/v1-http.md",
+  "openapi_contract": "docs/api/v1-openapi.json",
+  "sql_compatibility": "not_implemented",
+  "postgres_compatibility": "not_compatible",
+  "developer_model": [
+    "connection_config",
+    "database_branch_config",
+    "table_handles",
+    "schema_migrations",
+    "record_writes",
+    "batch_ingest",
+    "query_builder",
+    "traceql_string_execution",
+    "result_envelope",
+    "explain_provenance_freshness_jobs",
+    "errors_retries_idempotency",
+    "pagination_cursors",
+    "admin_compact_snapshot_restore"
+  ],
+  "surfaces": [
+    {
+      "id": "http_direct",
+      "label": "HTTP direct",
+      "status": "current",
+      "role": "canonical wire contract",
+      "evidence": [
+        "docs/api/v1-http.md",
+        "docs/api/v1-openapi.json",
+        "crates/tracedb-testkit/tests/usability_acceptance.rs"
+      ]
+    },
+    {
+      "id": "rust_sdk",
+      "label": "Rust SDK",
+      "status": "reference_candidate",
+      "role": "reference ergonomic SDK over the wire contract",
+      "evidence": [
+        "crates/tracedb-sdk",
+        "cargo run -p tracedb-sdk --example quickstart"
+      ]
+    },
+    {
+      "id": "typescript_sdk",
+      "label": "TypeScript SDK",
+      "status": "generated_transport_current",
+      "role": "transport artifact today, public platform SDK later",
+      "evidence": [
+        "clients/typescript/src/client.ts",
+        "clients/typescript/http-smoke.ts",
+        "clients/typescript/gateway-smoke.ts"
+      ]
+    },
+    {
+      "id": "python_sdk",
+      "label": "Python SDK",
+      "status": "planned",
+      "role": "AI/data/notebook ingestion SDK after the contract harness exists",
+      "evidence": []
+    },
+    {
+      "id": "traceql_sqlish",
+      "label": "TraceQL / SQL-ish",
+      "status": "parked",
+      "role": "future adapter into the same TraceQuery model",
+      "evidence": []
+    },
+    {
+      "id": "graphql",
+      "label": "GraphQL",
+      "status": "planned_after_contract",
+      "role": "future schema-generated adapter into the same TraceQuery model",
+      "evidence": []
+    }
+  ],
+  "conformance_scenarios": [
+    {
+      "id": "schema_apply",
+      "required": true,
+      "wire": "POST /v1/schema/apply",
+      "expected": "applies a TableSchema and returns an epoch"
+    },
+    {
+      "id": "put",
+      "required": true,
+      "wire": "POST /v1/records/put",
+      "expected": "writes or replaces one record and returns an epoch"
+    },
+    {
+      "id": "batch",
+      "required": true,
+      "wire": "POST /v1/records/put-batch",
+      "expected": "writes multiple records and returns record_count plus epoch"
+    },
+    {
+      "id": "patch",
+      "required": true,
+      "wire": "POST /v1/records/patch",
+      "expected": "patches selected record fields and preserves untouched fields"
+    },
+    {
+      "id": "get",
+      "required": true,
+      "wire": "POST /v1/records/get",
+      "expected": "returns RecordOutput or null"
+    },
+    {
+      "id": "scan",
+      "required": true,
+      "wire": "POST /v1/records/scan",
+      "expected": "returns records and returned_count; cursor metadata is future"
+    },
+    {
+      "id": "query",
+      "required": true,
+      "wire": "POST /v1/query",
+      "expected": "returns HybridQueryRow results with typed score components"
+    },
+    {
+      "id": "explain",
+      "required": true,
+      "wire": "POST /v1/explain",
+      "expected": "returns HybridExplain access paths, planner candidates, counters, and timings"
+    },
+    {
+      "id": "delete",
+      "required": true,
+      "wire": "POST /v1/records/delete",
+      "expected": "hides deleted records from get, scan, query, and explain materialization"
+    },
+    {
+      "id": "idempotency",
+      "required": true,
+      "wire": "Idempotency-Key on mutation and admin routes",
+      "expected": "same key plus same method/path/body replays the first successful response; body mismatch returns 409"
+    },
+    {
+      "id": "errors",
+      "required": true,
+      "wire": "current JSON error envelope",
+      "expected": "non-2xx responses preserve error string, optional code, status, method, path, and raw body"
+    },
+    {
+      "id": "snapshot_restore",
+      "required": true,
+      "wire": "POST /v1/admin/snapshot and POST /v1/admin/restore",
+      "expected": "creates a local snapshot, restores into a separate target, and preserves visible state"
+    }
+  ],
+  "future_scenarios": [
+    {
+      "id": "pagination_cursors",
+      "status": "future",
+      "reason": "scan currently emits records and returned_count with no cursor metadata"
+    },
+    {
+      "id": "durable_jobs",
+      "status": "future",
+      "reason": "admin jobs are visible as queue state, not a durable job API contract"
+    }
+  ],
+  "result_envelope": {
+    "success": "route-specific JSON response bodies defined by docs/api/v1-http.md and docs/api/v1-openapi.json",
+    "error": {
+      "wire": "{ \"error\": string, \"code\"?: string }",
+      "sdk_requirement": "SDKs must expose method, path, status when present, raw response body, parsed error string, and parsed optional code"
+    },
+    "explain": "HybridExplain is the shared provenance/freshness/planner explanation object for query and explain surfaces"
+  },
+  "retry_idempotency": {
+    "safe_retries": "health and read routes only",
+    "idempotency_retries": "mutation/admin routes only when the individual request carries a non-empty Idempotency-Key",
+    "durability": "local data-dir reopen for successful cache writes; not cross-replica and not crash-atomic exactly-once"
+  },
+  "maintenance_mode_definition": "A platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics."
+}

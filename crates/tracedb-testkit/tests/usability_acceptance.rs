@@ -904,6 +904,151 @@ fn local_product_regression_runner_declares_current_product_gate() {
 }
 
 #[test]
+fn platform_contract_v0_declares_sdk_conformance_harness() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let doc_path = root.join("docs/platform-contract-v0.md");
+    let manifest_path = root.join("docs/platform-contract-v0.json");
+    let markdown = std::fs::read_to_string(&doc_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", doc_path.display()));
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", manifest_path.display())),
+    )
+    .expect("parse Platform Contract v0 manifest");
+
+    assert_eq!(
+        manifest["contract"],
+        json!("tracedb-platform-contract-v0"),
+        "manifest should name the canonical platform contract"
+    );
+    assert_eq!(
+        manifest["status"],
+        json!("contract-freeze-draft"),
+        "manifest should be explicit that v0 is a freeze draft, not a managed SLA"
+    );
+    assert_eq!(
+        manifest["sql_compatibility"],
+        json!("not_implemented"),
+        "manifest must preserve the SQL status guard"
+    );
+
+    let model_components = manifest["developer_model"]
+        .as_array()
+        .expect("developer_model array")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<BTreeSet<_>>();
+    for component in [
+        "connection_config",
+        "database_branch_config",
+        "table_handles",
+        "schema_migrations",
+        "record_writes",
+        "batch_ingest",
+        "query_builder",
+        "traceql_string_execution",
+        "result_envelope",
+        "explain_provenance_freshness_jobs",
+        "errors_retries_idempotency",
+        "pagination_cursors",
+        "admin_compact_snapshot_restore",
+    ] {
+        assert!(
+            model_components.contains(component),
+            "Platform Contract v0 manifest missing developer model component {component}"
+        );
+        assert!(
+            markdown.contains(component),
+            "Platform Contract v0 markdown missing developer model component {component}"
+        );
+    }
+
+    let surface_ids = manifest["surfaces"]
+        .as_array()
+        .expect("surfaces array")
+        .iter()
+        .filter_map(|surface| surface["id"].as_str())
+        .collect::<BTreeSet<_>>();
+    for surface in [
+        "http_direct",
+        "rust_sdk",
+        "typescript_sdk",
+        "python_sdk",
+        "traceql_sqlish",
+        "graphql",
+    ] {
+        assert!(
+            surface_ids.contains(surface),
+            "Platform Contract v0 manifest missing conformance surface {surface}"
+        );
+        assert!(
+            markdown.contains(surface),
+            "Platform Contract v0 markdown missing conformance surface {surface}"
+        );
+    }
+
+    let scenario_ids = manifest["conformance_scenarios"]
+        .as_array()
+        .expect("conformance_scenarios array")
+        .iter()
+        .filter_map(|scenario| scenario["id"].as_str())
+        .collect::<BTreeSet<_>>();
+    for scenario in [
+        "schema_apply",
+        "put",
+        "batch",
+        "patch",
+        "get",
+        "scan",
+        "query",
+        "explain",
+        "delete",
+        "idempotency",
+        "errors",
+        "snapshot_restore",
+    ] {
+        assert!(
+            scenario_ids.contains(scenario),
+            "Platform Contract v0 manifest missing conformance scenario {scenario}"
+        );
+        assert!(
+            markdown.contains(scenario),
+            "Platform Contract v0 markdown missing conformance scenario {scenario}"
+        );
+    }
+
+    for boundary in [
+        "SQL compatibility is not implemented",
+        "not PostgreSQL-compatible",
+        "same behavior, same errors, same result shape",
+        "docs/api/v1-http.md",
+        "docs/api/v1-openapi.json",
+    ] {
+        assert!(
+            markdown.contains(boundary),
+            "Platform Contract v0 markdown missing boundary: {boundary}"
+        );
+    }
+
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
+    let docs_readme =
+        std::fs::read_to_string(root.join("docs/README.md")).expect("read docs README");
+    for (name, source) in [("README", readme), ("docs README", docs_readme)] {
+        assert!(
+            source.contains("docs/platform-contract-v0.md"),
+            "{name} should link to Platform Contract v0 markdown"
+        );
+        assert!(
+            source.contains("docs/platform-contract-v0.json"),
+            "{name} should link to Platform Contract v0 manifest"
+        );
+    }
+}
+
+#[test]
 fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

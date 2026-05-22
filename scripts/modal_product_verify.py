@@ -94,6 +94,21 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
             ],
         },
         {
+            "name": "platform-contract-doc-test",
+            "argv": [
+                "cargo",
+                "test",
+                "-p",
+                "tracedb-testkit",
+                "--test",
+                "usability_acceptance",
+                "platform_contract_v0_declares_sdk_conformance_harness",
+                "--",
+                "--exact",
+                "--nocapture",
+            ],
+        },
+        {
             "name": "product-quickstart-skip-typescript",
             "argv": [
                 "cargo",
