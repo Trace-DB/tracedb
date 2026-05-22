@@ -61,7 +61,8 @@ bounded `graphql_query_from_str` compilation, `POST /v1/graphql`
 query/explain/error conformance, the Rust SDK schema helper methods
 `TraceDbClient::graphql_schema_typed` and
 `TraceDbAsyncClient::graphql_schema_typed`, the TypeScript public SDK
-`TraceDB.graphqlSchema()` helper for generated SDL export, and the Rust SDK
+`TraceDB.graphqlSchema()` helper for generated SDL export, the Python sync SDK
+`TraceDB.graphql_schema()` helper for generated SDL export, and the Rust SDK
 execution helpers `TraceDbClient::graphql_typed` and
 `TraceDbAsyncClient::graphql_typed` plus the TypeScript public SDK
 `TraceDB.graphql()` helper and Python sync SDK `TraceDB.graphql()` helper over

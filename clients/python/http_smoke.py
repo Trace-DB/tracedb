@@ -119,6 +119,13 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
             assert metrics["service"] == "tracedb-engine"
 
             db.apply_schema(schema(), idempotency_key=f"python-{run_id}-schema")
+            graphql_schema = db.graphql_schema()
+            graphql_schema_tables = graphql_schema.get("tables")
+            graphql_schema_text = graphql_schema.get("schema")
+            assert graphql_schema.get("adapter") == "bounded_graphql_query_adapter"
+            assert isinstance(graphql_schema_tables, list) and "docs" in graphql_schema_tables
+            assert isinstance(graphql_schema_text, str) and "type DocsRow" in graphql_schema_text
+            assert "QueryResponse" in str(graphql_schema.get("execution"))
             docs = db.table("docs").tenant("tenant-a")
 
             put_response = docs.insert(
@@ -281,6 +288,7 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                     "catalog": True,
                     "metrics": True,
                     "schema_apply": True,
+                    "graphql_schema_export": True,
                     "put": True,
                     "batch_ingest": True,
                     "patch": True,
@@ -303,6 +311,11 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                 "records_scanned": scan["returned_count"],
                 "traceql_result_count": len(traceql_results),
                 "traceql_explain": True,
+                "graphql_schema_export": True,
+                "graphql_schema_tables": graphql_schema_tables,
+                "graphql_schema_tokens": [
+                    token for token in ["type DocsRow"] if token in graphql_schema_text
+                ],
                 "graphql_result_count": len(graphql_results),
                 "graphql_explain": True,
                 "catalog_databases": len(databases.get("databases", [])),

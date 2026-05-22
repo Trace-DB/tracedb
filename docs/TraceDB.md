@@ -151,23 +151,24 @@ managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 Current platform conformance checkpoint: `scripts/platform_conformance.py` maps
 HTTP direct, Rust SDK, TypeScript SDK, and Python SDK into all 13 Platform
 Contract v0 scenario IDs, plus partial TraceQL/SQL-ish and GraphQL adapter
-lanes. Modal workspace run `ap-RPGPKFDjFK13bpAOn4x9m0` passed 20/20 commands in
-93.2s, including `platform-conformance-quick`,
+lanes. Modal workspace run `ap-YBjqjv9hV5dHkVb2AgJSud` passed 20/20 commands in
+96.9s, including `platform-conformance-quick`,
 `traceql-sqlish-conformance`, `graphql-http-conformance`,
 `typescript-sdk-conformance`, `python-sdk-conformance`, Python unit/install
 smokes, TypeScript package/HTTP/gateway lanes, TypeScript public SDK GraphQL
-schema export evidence, TypeScript and Python public SDK GraphQL result/explain
-smoke coverage, and
+schema export evidence, Python public SDK GraphQL schema export evidence,
+TypeScript and Python public SDK GraphQL result/explain smoke coverage, and
 `cargo test --workspace --all-targets`. The GraphQL lane reported schema apply,
 query, explain, and error behavior as passed with 9/13 scenarios intentionally
 `not_checked`, and the workspace tests included the generated GraphQL SDL unit
 test, HTTP GraphQL schema export test, Rust SDK `GraphQlQueryRequest`,
 sync/async `graphql_typed`, generated schema helper, and GraphQL safe retry
 coverage; the TypeScript public SDK smoke now also checks
-`TraceDB.graphqlSchema()` against the generated SDL route. The Rust SDK
+`TraceDB.graphqlSchema()` against the generated SDL route, and the Python SDK
+smoke now checks `TraceDB.graphql_schema()` against the same route. The Rust SDK
 `http_client` suite reported 49/49 passed. This is platform conformance
-evidence, not managed-cloud proof, SQL
-compatibility, full GraphQL adapter parity, or benchmark evidence.
+evidence, not managed-cloud proof, SQL compatibility, full GraphQL adapter
+parity, or benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -414,10 +415,11 @@ schema route through `TraceDbClient::graphql_schema`,
 through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
 `GraphQlQueryRequest`. The TypeScript SDK exposes schema export through
 `TraceDB.graphqlSchema()` and bounded execution through `TraceDB.graphql()` and
-`graphqlRequest({ query })`; the Python SDK exposes bounded execution through
-`TraceDB.graphql()` and `graphql_request({"query": query})`. GraphQL
-mutation support, subscription support, resolver runtime, GraphQL data-envelope
-execution, and full adapter parity remain unimplemented.
+`graphqlRequest({ query })`; the Python SDK exposes schema export through
+`TraceDB.graphql_schema()` and bounded execution through `TraceDB.graphql()`
+and `graphql_request({"query": query})`. GraphQL mutation support, subscription
+support, resolver runtime, GraphQL data-envelope execution, and full adapter
+parity remain unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

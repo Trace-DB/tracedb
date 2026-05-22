@@ -51,6 +51,7 @@ or `graphql_schema_typed` to inspect the generated SDL, then
 `GraphQlQueryRequest` to exercise the bounded query adapter. TypeScript SDK
 callers can use `TraceDB.graphqlSchema()` to inspect the generated SDL, then
 `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers can use
+`TraceDB.graphql_schema()` to inspect the generated SDL, then
 `TraceDB.graphql()` or `graphql_request({"query": query})` to exercise the same
 bounded wire contract.
 
@@ -542,10 +543,10 @@ the schema route through `TraceDbClient::graphql_schema`,
 adapter through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
 `GraphQlQueryRequest`; the TypeScript SDK exposes schema export through
 `TraceDB.graphqlSchema()` and bounded execution through `TraceDB.graphql()` and
-`graphqlRequest({ query })`; the Python SDK exposes bounded execution through
-`TraceDB.graphql()` and
-`graphql_request({"query": query})`. This is TraceQL/query-adapter, GraphQL SDL
-export, and bounded GraphQL query-adapter evidence only; SQL compatibility,
+`graphqlRequest({ query })`; the Python SDK exposes schema export through
+`TraceDB.graphql_schema()` and bounded execution through `TraceDB.graphql()`
+and `graphql_request({"query": query})`. This is TraceQL/query-adapter,
+GraphQL SDL export, and bounded GraphQL query-adapter evidence only; SQL compatibility,
 PostgreSQL compatibility, GraphQL mutation support, subscription support,
 resolver runtime, GraphQL data-envelope execution, and full adapter parity
 remain unimplemented.

@@ -183,6 +183,64 @@ class TraceDBClientTests(unittest.TestCase):
             },
         )
 
+    def test_graphql_schema_gets_canonical_route_without_body(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090")
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse(
+                '{"adapter":"bounded_graphql_query_adapter","tables":["docs"],'
+                '"schema":"type DocsRow { record_id: String! }",'
+                '"execution":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope"}'
+            )
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = db.graphql_schema()
+
+        self.assertEqual(
+            response,
+            {
+                "adapter": "bounded_graphql_query_adapter",
+                "tables": ["docs"],
+                "schema": "type DocsRow { record_id: String! }",
+                "execution": "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope",
+            },
+        )
+        self.assertEqual(len(captured), 1)
+        request = captured[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.full_url, "http://127.0.0.1:8090/v1/graphql/schema")
+        self.assertIsNone(request.data)
+
+    def test_graphql_schema_safe_retries_retry_read_only_5xx_then_return_json(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/graphql/schema",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch(
+            "urllib.request.urlopen",
+            side_effect=[
+                retry_error,
+                _FakeResponse('{"adapter":"bounded_graphql_query_adapter","tables":["docs"],"schema":"type DocsRow"}'),
+            ],
+        ) as urlopen:
+            self.assertEqual(
+                db.graphql_schema(),
+                {
+                    "adapter": "bounded_graphql_query_adapter",
+                    "tables": ["docs"],
+                    "schema": "type DocsRow",
+                },
+            )
+
+        self.assertEqual(urlopen.call_count, 2)
+
     def test_graphql_safe_retries_retry_read_only_5xx_then_return_json(self) -> None:
         db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
         retry_error = urllib.error.HTTPError(
@@ -297,6 +355,7 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertIn("--no-deps", smoke)
         self.assertIn("--target", smoke)
         self.assertIn("TraceDB.from_env", smoke)
+        self.assertIn("db.graphql_schema", smoke)
         self.assertIn("db.graphql", smoke)
         self.assertIn("db.graphql_request", smoke)
         self.assertIn("TRACEDB_IDEMPOTENCY_RETRIES", smoke)

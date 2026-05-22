@@ -35,6 +35,8 @@ MATCH body "TraceDB"
 LIMIT 20
 """)
 
+graphql_schema = db.graphql_schema()
+
 graphql_rows = db.graphql(
     'query { docs(tenant_id: "tenant-a", match: "TraceDB", limit: 20) { record_id } }'
 )
@@ -52,11 +54,13 @@ method, path, status, response body, parsed `error`, and optional `code`, and
 supports caller-provided `Idempotency-Key` values on mutation/admin calls.
 `TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
 TraceQL strings through `POST /v1/traceql`.
+`TraceDB.graphql_schema()` reads generated SDL from `GET /v1/graphql/schema`.
 `TraceDB.graphql(query)` and `graphql_request({"query": query})` execute bounded
 GraphQL query-adapter strings through `POST /v1/graphql`.
 `safe_retries` retries transient HTTP 5xx responses only for read-only routes:
-health, ready, get, scan, query, native TraceQL, bounded GraphQL, and explain.
-It does not retry writes or admin mutations. `idempotency_retries` is
+health, ready, GraphQL schema export, get, scan, query, native TraceQL,
+bounded GraphQL, and explain. It does not retry writes or admin mutations.
+`idempotency_retries` is
 default-off and retries transient HTTP 5xx responses for mutation/admin routes
 only when that request carries a caller-provided `Idempotency-Key`; unkeyed
 writes and 4xx/conflict responses are not retried.
@@ -83,8 +87,9 @@ python3 clients/python/http_smoke.py
 
 The smoke starts a local `tracedb-server` and drives schema apply, single put,
 batch ingest, patch, get, scan, query, TraceQL string execution, explain,
-bounded GraphQL result/explain, delete, idempotency replay and conflict, error
-envelope parsing, compact, snapshot, restore, and admin jobs. It emits
+GraphQL schema export, bounded GraphQL result/explain, delete, idempotency
+replay and conflict, error envelope parsing, compact, snapshot, restore, and
+admin jobs. It emits
 `python sdk http smoke ok`.
 
 This is sync Python SDK product-path evidence. The package metadata is local
