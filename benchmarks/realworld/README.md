@@ -240,6 +240,15 @@ BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
 `runner suite` always writes `suite-gate.json`. The gate statuses are `usable`,
 `degraded`, `blocked`, and `claim-ready`. Release-style specs only become
 `claim-ready` when required external controls produce a number to beat.
+Pass `--suite-baseline-json <prior-suite.json>` to compare the current TraceDB
+scenario metrics against a previous suite artifact. The gate records
+`regressions` for p95 latency, transaction ingest, storage, and admin metrics
+that exceed `--regression-tolerance-pct` or
+`--regression-tolerance-absolute`. Specs with
+`performance_regression_policy: rolling_regression_blocking` block on those
+regressions; PR-oriented warning policies degrade instead of blocking. This
+keeps performance gates tied to same-suite artifact deltas rather than a single
+noisy run.
 
 Unsupported SQL and GraphQL coverage is reported as explicit
 `unsupported_coverage` in the gate. It must not be counted as passing behavior.
@@ -491,6 +500,7 @@ The `soak_railway` and `release_100k` Modal presets now also pass
 `--railway-require-runbook-verification`; provide
 `--railway-runbook-verification-json` or those lanes block before child scenario
 execution. For Modal remote runs, local evidence inputs passed through
+`--suite-baseline-json`,
 `--railway-persistence-pre-manifest-json`, `--railway-operation-receipt-json`,
 `--railway-backup-receipt-json`, and `--railway-runbook-verification-json` are
 copied into `benchmarks/realworld/.modal-input-artifacts/<run-id>/` before the

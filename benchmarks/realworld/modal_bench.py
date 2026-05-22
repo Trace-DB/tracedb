@@ -33,6 +33,11 @@ MODAL_INPUT_ARTIFACTS_DIR = ".modal-input-artifacts"
 DEFAULT_MAX_RECORDS = 1000
 MODAL_INPUT_ARTIFACT_FIELDS = (
     (
+        "suite_baseline_json",
+        "suite_baseline",
+        "suite-baseline.json",
+    ),
+    (
         "railway_persistence_pre_manifest_json",
         "railway_persistence_pre_manifest",
         "railway-persistence-pre-manifest.json",
@@ -212,6 +217,9 @@ class ModalSmokeConfig:
     surface: str = "sdk"
     scenarios: str = "sdk_cli_surface"
     suite_spec: str = ""
+    suite_baseline_json: str = ""
+    regression_tolerance_pct: float = 15.0
+    regression_tolerance_absolute: float = 0.0
     suite_preflight_only: bool = False
     railway_config_from_env: bool = False
     railway_health_check: bool = False
@@ -515,6 +523,12 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         command.append("--preflight-only")
     if config.suite_spec:
         command.extend(["--suite-spec", config.suite_spec])
+    if config.suite_baseline_json:
+        command.extend(["--suite-baseline-json", config.suite_baseline_json])
+        command.extend(["--regression-tolerance-pct", str(config.regression_tolerance_pct)])
+        command.extend(
+            ["--regression-tolerance-absolute", str(config.regression_tolerance_absolute)]
+        )
     if config.railway_config_from_env:
         command.append("--railway-config-from-env")
     if config.railway_health_check:
@@ -1592,6 +1606,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenarios", default="sdk_cli_surface")
     parser.add_argument("--suite-spec", default="")
     parser.add_argument("--suite-preset", choices=sorted(SUITE_PRESETS), default="")
+    parser.add_argument("--suite-baseline-json", default="")
+    parser.add_argument("--regression-tolerance-pct", type=float, default=15.0)
+    parser.add_argument("--regression-tolerance-absolute", type=float, default=0.0)
     parser.add_argument("--suite-preflight-only", action="store_true")
     parser.add_argument("--railway-config-from-env", action="store_true")
     parser.add_argument("--railway-health-check", action="store_true")
@@ -1663,6 +1680,9 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         surface=str(preset.get("surface", args.surface)),
         scenarios=str(preset.get("scenarios", args.scenarios)),
         suite_spec=args.suite_spec or str(preset.get("suite_spec", "")),
+        suite_baseline_json=args.suite_baseline_json,
+        regression_tolerance_pct=args.regression_tolerance_pct,
+        regression_tolerance_absolute=args.regression_tolerance_absolute,
         suite_preflight_only=args.suite_preflight_only
         or bool(preset.get("suite_preflight_only", False)),
         railway_config_from_env=args.railway_config_from_env
@@ -2091,6 +2111,9 @@ if modal is not None:
         scenarios: str = "sdk_cli_surface",
         suite_spec: str = "",
         suite_preset: str = "",
+        suite_baseline_json: str = "",
+        regression_tolerance_pct: float = 15.0,
+        regression_tolerance_absolute: float = 0.0,
         suite_preflight_only: bool = False,
         railway_config_from_env: bool = False,
         railway_health_check: bool = False,
@@ -2146,6 +2169,9 @@ if modal is not None:
             scenarios=scenarios,
             suite_spec=suite_spec,
             suite_preset=suite_preset,
+            suite_baseline_json=suite_baseline_json,
+            regression_tolerance_pct=regression_tolerance_pct,
+            regression_tolerance_absolute=regression_tolerance_absolute,
             suite_preflight_only=suite_preflight_only,
             railway_config_from_env=railway_config_from_env,
             railway_health_check=railway_health_check,

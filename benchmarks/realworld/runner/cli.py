@@ -94,6 +94,23 @@ def main(argv: list[str] | None = None) -> int:
     suite.add_argument("--scenarios", default="all")
     suite.add_argument("--suite-spec", default="")
     suite.add_argument(
+        "--suite-baseline-json",
+        default="",
+        help="Existing suite.json to compare for same-suite performance regressions.",
+    )
+    suite.add_argument(
+        "--regression-tolerance-pct",
+        type=float,
+        default=15.0,
+        help="Allowed relative TraceDB metric regression before recording a gate regression.",
+    )
+    suite.add_argument(
+        "--regression-tolerance-absolute",
+        type=float,
+        default=0.0,
+        help="Allowed absolute TraceDB metric regression before recording a gate regression.",
+    )
+    suite.add_argument(
         "--railway-config-from-env",
         action="store_true",
         help="Write railway-manifest.json from Railway env vars and feed it into suite-gate.json.",
@@ -832,6 +849,9 @@ def _write_suite_outputs(
         artifact_paths["railway_artifacts_json"] = "railway-artifacts.json"
     if railway_runbook_verification is not None:
         artifact_paths["railway_runbook_verification_json"] = "railway-runbook-verification.json"
+    regression_baseline = _load_suite_baseline(args, lab_root)
+    if regression_baseline is not None:
+        artifact_paths["suite_baseline_json"] = args.suite_baseline_json
     write_suite_json(suite_report, suite_dir / "suite.json")
     write_suite_markdown(suite_report, suite_dir / "suite.md")
     suite_gate = build_suite_gate(
@@ -841,6 +861,9 @@ def _write_suite_outputs(
         railway_manifest=railway_manifest,
         railway_runbook_verification=railway_runbook_verification,
         railway_runbook_verification_required=args.railway_require_runbook_verification,
+        regression_baseline=regression_baseline,
+        regression_tolerance_pct=args.regression_tolerance_pct,
+        regression_tolerance_absolute=args.regression_tolerance_absolute,
     )
     write_suite_gate_json(suite_gate, suite_dir / "suite-gate.json")
     if railway_manifest is not None:
@@ -1095,6 +1118,19 @@ def _load_or_write_railway_runbook_verification(
     if not isinstance(payload, dict):
         raise ValueError("--railway-runbook-verification-json must contain a JSON object")
     write_json(payload, suite_dir / "railway-runbook-verification.json")
+    return payload
+
+
+def _load_suite_baseline(
+    args: argparse.Namespace,
+    lab_root: Path,
+) -> dict[str, Any] | None:
+    if not args.suite_baseline_json:
+        return None
+    path = _resolve_path(lab_root, args.suite_baseline_json)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("--suite-baseline-json must contain a JSON object")
     return payload
 
 

@@ -236,6 +236,56 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(gate["suite_spec"], "platform_pr")
         self.assertEqual(gate["artifact_paths"]["suite_json"], "suite.json")
 
+    def test_suite_command_accepts_baseline_json_and_records_gate_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            baseline = Path(temp_dir) / "baseline-suite.json"
+            baseline.write_text(
+                json.dumps({"suite_id": "baseline", "scenarios": []}) + "\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["BENCH_DISABLE_ENV_FILE"] = "1"
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--preflight-only",
+                    "--suite-spec",
+                    "suites/platform_pr.json",
+                    "--suite-baseline-json",
+                    str(baseline),
+                    "--run-id",
+                    "suite-baseline-metadata-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--openrouter-mode",
+                    "off",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            gate = json.loads(
+                (reports / "suite-baseline-metadata-test" / "suite-gate.json").read_text()
+            )
+
+        self.assertEqual(gate["claim_status"]["performance_regression_baseline"], "provided")
+        self.assertEqual(gate["artifact_paths"]["suite_baseline_json"], str(baseline))
+        self.assertEqual(gate["regressions"], [])
+
     def test_railway_config_from_env_writes_manifest_and_feeds_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             reports = Path(temp_dir) / "reports"

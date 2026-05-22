@@ -35,6 +35,33 @@ def minimal_report(*, failure_count: int = 0, control_status: str = "internal_on
     }
 
 
+def report_with_tracedb_metrics(
+    *,
+    query_latency_p95_ms: float,
+    storage_bytes: float = 1000.0,
+    control_status: str = "internal_only_smoke",
+) -> dict:
+    report = minimal_report(control_status=control_status)
+    report["scenarios"] = [
+        {
+            "id": "search_rag_6",
+            "baselines": [
+                {
+                    "name": "TraceDB",
+                    "available": True,
+                    "metrics": {
+                        "query_latency_p95_ms": query_latency_p95_ms,
+                        "storage_bytes": storage_bytes,
+                        "failure_count": 0,
+                    },
+                    "notes": [],
+                }
+            ],
+        }
+    ]
+    return report
+
+
 class SuiteGateTests(unittest.TestCase):
     def test_platform_pr_suite_spec_defines_contract_and_unsupported_coverage(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
@@ -75,6 +102,47 @@ class SuiteGateTests(unittest.TestCase):
 
         self.assertEqual(gate["status"], "blocked")
         self.assertTrue(any("failure_count=2" in item for item in gate["blocking_failures"]))
+
+    def test_gate_blocks_rolling_regression_when_policy_is_blocking(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "platform_push_10k.json")
+
+        gate = build_suite_gate(
+            report_with_tracedb_metrics(query_latency_p95_ms=12.5, storage_bytes=1000.0),
+            spec,
+            artifact_paths={"suite_json": "suite.json", "suite_md": "suite.md"},
+            regression_baseline=report_with_tracedb_metrics(
+                query_latency_p95_ms=10.0,
+                storage_bytes=1000.0,
+            ),
+            regression_tolerance_pct=10.0,
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(len(gate["regressions"]), 1)
+        self.assertEqual(gate["regressions"][0]["metric"], "query_latency_p95_ms")
+        self.assertEqual(gate["regressions"][0]["previous"], 10.0)
+        self.assertEqual(gate["regressions"][0]["current"], 12.5)
+        self.assertTrue(gate["regressions"][0]["blocking"])
+        self.assertTrue(
+            any("performance regression" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
+    def test_gate_warns_regression_when_pr_policy_is_warning_until_baseline(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
+
+        gate = build_suite_gate(
+            report_with_tracedb_metrics(query_latency_p95_ms=12.5),
+            spec,
+            artifact_paths={"suite_json": "suite.json", "suite_md": "suite.md"},
+            regression_baseline=report_with_tracedb_metrics(query_latency_p95_ms=10.0),
+            regression_tolerance_pct=10.0,
+        )
+
+        self.assertEqual(gate["status"], "degraded")
+        self.assertEqual(gate["blocking_failures"], [])
+        self.assertEqual(len(gate["regressions"]), 1)
+        self.assertFalse(gate["regressions"][0]["blocking"])
 
     def test_release_gate_requires_external_controls_before_claim_ready(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "release_100k.json")

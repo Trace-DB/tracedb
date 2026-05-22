@@ -272,6 +272,47 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(staged_config, config)
             self.assertEqual(staged_artifacts, [])
 
+    def test_stage_modal_input_artifacts_copies_suite_baseline_for_remote(self) -> None:
+        from modal_bench import (
+            ModalSmokeConfig,
+            build_suite_command,
+            stage_modal_input_artifacts,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            lab_root = root / "benchmarks" / "realworld"
+            lab_root.mkdir(parents=True)
+            baseline = root / "reports" / "baseline-suite.json"
+            baseline.parent.mkdir(parents=True)
+            baseline.write_text('{"suite_id":"baseline"}\n', encoding="utf-8")
+            config = ModalSmokeConfig(
+                run_id="push-10k",
+                suite_baseline_json=str(baseline),
+                regression_tolerance_pct=12.5,
+                regression_tolerance_absolute=2.0,
+            )
+
+            staged_config, staged_artifacts = stage_modal_input_artifacts(
+                config,
+                lab_root=lab_root,
+                remote_lab_root=Path("/workspace/TraceDB/benchmarks/realworld"),
+            )
+
+            remote_path = (
+                "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
+                "push-10k/suite-baseline.json"
+            )
+            self.assertEqual(staged_config.suite_baseline_json, remote_path)
+            self.assertEqual(staged_artifacts[0]["kind"], "suite_baseline")
+            command = build_suite_command(staged_config)
+            self.assertEqual(command[command.index("--suite-baseline-json") + 1], remote_path)
+            self.assertEqual(command[command.index("--regression-tolerance-pct") + 1], "12.5")
+            self.assertEqual(
+                command[command.index("--regression-tolerance-absolute") + 1],
+                "2.0",
+            )
+
     def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
         from modal_bench import build_suite_command, _parse_args
 

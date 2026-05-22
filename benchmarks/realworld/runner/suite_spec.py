@@ -5,6 +5,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+REGRESSION_METRICS = (
+    "query_latency_p95_ms",
+    "latency_p95_ms",
+    "ingest_transaction_total_latency_ms",
+    "storage_bytes",
+    "storage_bytes_after_workload",
+    "admin_latency_p95_ms",
+)
+BLOCKING_REGRESSION_POLICIES = {"rolling_regression_blocking"}
+WARNING_REGRESSION_POLICIES = {
+    "rolling_regression_warning_until_baseline",
+    "warning_without_external_control",
+}
+
 
 @dataclass(frozen=True)
 class SuiteSpec:
@@ -126,10 +140,26 @@ def build_suite_gate(
     railway_manifest: dict[str, Any] | None = None,
     railway_runbook_verification: dict[str, Any] | None = None,
     railway_runbook_verification_required: bool = False,
+    regression_baseline: dict[str, Any] | None = None,
+    regression_tolerance_pct: float = 15.0,
+    regression_tolerance_absolute: float = 0.0,
 ) -> dict[str, Any]:
     blocking_failures: list[str] = []
     warnings: list[str] = []
-    regressions: list[dict[str, Any]] = []
+    regression_policy = str(
+        spec.blocking_rules.get("performance_regression_policy", "not_configured")
+    )
+    regressions = _compare_trace_regressions(
+        report,
+        regression_baseline,
+        policy=regression_policy,
+        tolerance_pct=regression_tolerance_pct,
+        tolerance_absolute=regression_tolerance_absolute,
+    )
+    if any(regression["blocking"] for regression in regressions):
+        blocking_failures.append(
+            f"performance regression exceeded policy={regression_policy}"
+        )
 
     failure_count = int(report.get("summary", {}).get("failure_count", 0) or 0)
     if failure_count:
@@ -243,6 +273,10 @@ def build_suite_gate(
             "railway_persistence": railway_persistence,
             "railway_backup": railway_backup,
             "railway_runbook_verification": railway_runbook_verification_status,
+            "performance_regression_policy": regression_policy,
+            "performance_regression_baseline": "provided"
+            if regression_baseline is not None
+            else "not_provided",
             "unsupported_coverage": spec.unsupported_coverage,
         },
         "artifact_paths": artifact_paths,
@@ -259,6 +293,71 @@ def _external_control_available(report: dict[str, Any]) -> bool:
         return True
     ledger = report.get("control_ledger", {})
     return bool(ledger.get("available_external_controls"))
+
+
+def _compare_trace_regressions(
+    report: dict[str, Any],
+    baseline_report: dict[str, Any] | None,
+    *,
+    policy: str,
+    tolerance_pct: float,
+    tolerance_absolute: float,
+) -> list[dict[str, Any]]:
+    if baseline_report is None or policy == "not_configured":
+        return []
+    baseline_points = _trace_metric_points(baseline_report)
+    current_points = _trace_metric_points(report)
+    blocking = policy in BLOCKING_REGRESSION_POLICIES
+    if policy not in BLOCKING_REGRESSION_POLICIES | WARNING_REGRESSION_POLICIES:
+        blocking = False
+    regressions: list[dict[str, Any]] = []
+    for key, previous in baseline_points.items():
+        current = current_points.get(key)
+        if current is None or previous <= 0:
+            continue
+        allowed_delta = max(previous * (tolerance_pct / 100.0), tolerance_absolute)
+        delta = current - previous
+        if delta <= allowed_delta:
+            continue
+        scenario_id, baseline_name, metric = key
+        regressions.append(
+            {
+                "scenario_id": scenario_id,
+                "baseline": baseline_name,
+                "metric": metric,
+                "previous": round(previous, 6),
+                "current": round(current, 6),
+                "delta": round(delta, 6),
+                "regression_pct": round(((current - previous) / previous) * 100.0, 3),
+                "allowed_pct": round(tolerance_pct, 3),
+                "allowed_absolute": round(tolerance_absolute, 6),
+                "policy": policy,
+                "blocking": blocking,
+            }
+        )
+    return regressions
+
+
+def _trace_metric_points(report: dict[str, Any]) -> dict[tuple[str, str, str], float]:
+    points: dict[tuple[str, str, str], float] = {}
+    for scenario in report.get("scenarios", []):
+        scenario_id = str(scenario.get("id") or scenario.get("scenario_id") or "unknown")
+        for baseline in scenario.get("baselines", []):
+            if not baseline.get("available", False):
+                continue
+            baseline_name = str(baseline.get("name", "unknown"))
+            if baseline_name.lower() not in {"tracedb", "trace_db", "trace-db"}:
+                continue
+            metrics = baseline.get("metrics", {})
+            if not isinstance(metrics, dict):
+                continue
+            for metric in REGRESSION_METRICS:
+                value = metrics.get(metric)
+                if isinstance(value, bool):
+                    continue
+                if isinstance(value, (int, float)):
+                    points[(scenario_id, baseline_name, metric)] = float(value)
+    return points
 
 
 def _railway_services(
