@@ -85,9 +85,13 @@ node --experimental-strip-types clients/typescript/smoke.ts
   table handles, single and batch inserts, patch, get, scan, delete,
   health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
   routing metadata injection, `Idempotency-Key` support, read-only
-  `safe_retries` / `TRACEDB_SAFE_RETRIES`, parsed HTTP error envelopes, and
-  query-builder chaining through `where`, `match_text`, `near`,
-  `with_options`, `limit`, `all`, and `explain_plan`. It is covered by
+  `safe_retries` / `TRACEDB_SAFE_RETRIES`, `idempotency_retries` /
+  `TRACEDB_IDEMPOTENCY_RETRIES`, parsed HTTP error envelopes, and query-builder
+  chaining through `where`, `match_text`, `near`, `with_options`, `limit`,
+  `all`, and `explain_plan`. `idempotency_retries` retries transient 5xx
+  responses for mutation/admin routes only when that request carries a
+  caller-provided `Idempotency-Key`; unkeyed writes and 4xx/conflict responses
+  are not retried. It is covered by
   `python3 clients/python/http_smoke.py` and
   `python3 scripts/platform_conformance.py --surface python_sdk`; the
   conformance lane installs the package into an isolated temporary pip
@@ -229,10 +233,10 @@ error-envelope helpers. This is current-envelope ergonomics, not a broader RFC
 | `POST /v1/records/delete` | `RecordDeleteRequest`: `table`, `tenant_id`, `id`, and optional `tombstone`. | `{ "deleted": true, "epoch": number }`. |
 
 Write routes allocate epochs and mutate TraceDB state. They accept optional
-`Idempotency-Key` for local data-dir-backed replay. The SDK only retries writes when
-`TraceDbClientConfig::with_idempotency_retries` is enabled and the individual
-request includes an `Idempotency-Key`; `safe_retries` alone never retries
-mutating writes.
+`Idempotency-Key` for local data-dir-backed replay. SDK idempotency retry
+options are default-off and only retry writes when the individual request
+includes an `Idempotency-Key`; `safe_retries` alone never retries mutating
+writes.
 
 ## Reads And Retrieval
 
@@ -262,10 +266,9 @@ They accept optional `Idempotency-Key` for local data-dir-backed replay. Replay
 survives a clean engine reopen from the same data directory, but the contract is
 not cross-replica or crash-atomic exactly-once, and filesystem cache-write
 failures are logged without rolling back the original successful operation. The
-SDK only retries admin requests when
-`TraceDbClientConfig::with_idempotency_retries` is enabled and the individual
-request includes an `Idempotency-Key`; `safe_retries` alone never retries admin
-requests.
+SDK idempotency retry options are default-off and only retry admin requests
+when the individual request includes an `Idempotency-Key`; `safe_retries` alone
+never retries admin requests.
 
 The Rust SDK provides typed `SnapshotRequest`, `SnapshotResponse`,
 `RestoreRequest`, and `RestoreResponse` wrappers plus raw/typed snapshot and

@@ -30,9 +30,9 @@ rows = (
 
 `TraceDB.from_env()` reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and
-`TRACEDB_SAFE_RETRIES`. Explicit keyword arguments override matching
-environment values. Direct construction with `TraceDB(url, token="dev-token")`
-remains supported.
+`TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES`. Explicit keyword
+arguments override matching environment values. Direct construction with
+`TraceDB(url, token="dev-token")` remains supported.
 
 The client uses only the Python standard library today. It preserves the raw
 HTTP escape hatch with `request_json(...)`, exposes `TraceDBHTTPError` with
@@ -40,7 +40,10 @@ method, path, status, response body, parsed `error`, and optional `code`, and
 supports caller-provided `Idempotency-Key` values on mutation/admin calls.
 `safe_retries` retries transient HTTP 5xx responses only for read-only routes:
 health, ready, get, scan, query, and explain. It does not retry writes or admin
-mutations.
+mutations. `idempotency_retries` is default-off and retries transient HTTP 5xx
+responses for mutation/admin routes only when that request carries a
+caller-provided `Idempotency-Key`; unkeyed writes and 4xx/conflict responses are
+not retried.
 
 Run the local unit/package checks:
 

@@ -349,9 +349,13 @@ handles and a query builder with `insert`, `insert_batch`, `patch`, `get`,
 `all`, and `explain_plan`, plus health/catalog/metrics/admin helpers,
 managed `database_id` / `branch_id` routing metadata injection,
 `Idempotency-Key` support, parsed HTTP error envelopes, and read-only
-`safe_retries` for health, ready, get, scan, query, and explain. The env helper
-reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
-`TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and `TRACEDB_SAFE_RETRIES`;
+`safe_retries` for health, ready, get, scan, query, and explain.
+`idempotency_retries` is default-off and retries transient 5xx responses for
+mutation/admin routes only when that request carries a caller-provided
+`Idempotency-Key`; unkeyed writes and 4xx/conflict responses are not retried.
+The env helper reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
+`TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`,
+`TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES`;
 `python3 -m unittest discover -s clients/python/tests` now checks the local
 package shape and config helper.
 `python3 clients/python/install_smoke.py` prefers a temporary venv, installs

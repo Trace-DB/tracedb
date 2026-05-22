@@ -45,12 +45,19 @@ class TraceDB:
     branch_id: str | None = None
     timeout: float = 5.0
     safe_retries: int = 0
+    idempotency_retries: int = 0
 
     def __post_init__(self) -> None:
         if not self.url or not self.url.strip():
             raise TraceDBRequestError("CONFIG", "url", "TraceDB requires a non-empty url")
         if self.safe_retries < 0:
             raise TraceDBRequestError("CONFIG", "safe_retries", "safe_retries must be greater than or equal to 0")
+        if self.idempotency_retries < 0:
+            raise TraceDBRequestError(
+                "CONFIG",
+                "idempotency_retries",
+                "idempotency_retries must be greater than or equal to 0",
+            )
         object.__setattr__(self, "url", self.url.rstrip("/"))
 
     @classmethod
@@ -63,6 +70,7 @@ class TraceDB:
         branch_id: str | None = None,
         timeout: float | None = None,
         safe_retries: int | None = None,
+        idempotency_retries: int | None = None,
         env: Mapping[str, str] | None = None,
     ) -> "TraceDB":
         source = os.environ if env is None else env
@@ -95,6 +103,14 @@ class TraceDB:
             if safe_retries is not None
             else _parse_optional_nonnegative_int("TRACEDB_SAFE_RETRIES", source.get("TRACEDB_SAFE_RETRIES"))
         )
+        resolved_idempotency_retries = (
+            idempotency_retries
+            if idempotency_retries is not None
+            else _parse_optional_nonnegative_int(
+                "TRACEDB_IDEMPOTENCY_RETRIES",
+                source.get("TRACEDB_IDEMPOTENCY_RETRIES"),
+            )
+        )
 
         kwargs: dict[str, Any] = {
             "url": resolved_url,
@@ -106,6 +122,8 @@ class TraceDB:
             kwargs["timeout"] = resolved_timeout
         if resolved_safe_retries is not None:
             kwargs["safe_retries"] = resolved_safe_retries
+        if resolved_idempotency_retries is not None:
+            kwargs["idempotency_retries"] = resolved_idempotency_retries
         return cls(**kwargs)
 
     def request_json(
@@ -135,7 +153,7 @@ class TraceDB:
             headers=headers,
             method=method,
         )
-        attempts = _attempt_count(method, path, self.safe_retries)
+        attempts = _attempt_count(method, path, self.safe_retries, self.idempotency_retries, idempotency_key)
         for attempt in range(attempts):
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -435,14 +453,22 @@ def _parse_optional_nonnegative_int(variable: str, value: str | None) -> int | N
     return parsed
 
 
-def _attempt_count(method: str, path: str, safe_retries: int) -> int:
+def _attempt_count(
+    method: str,
+    path: str,
+    safe_retries: int,
+    idempotency_retries: int,
+    idempotency_key: str | None,
+) -> int:
     if _is_retry_safe_request(method, path):
         return safe_retries + 1
+    if _is_idempotent_retry_request(method, path) and idempotency_key:
+        return idempotency_retries + 1
     return 1
 
 
 def _should_retry_http_error(method: str, path: str, status: int, attempt: int, attempts: int) -> bool:
-    return _is_retry_safe_request(method, path) and status >= 500 and attempt + 1 < attempts
+    return status >= 500 and attempt + 1 < attempts
 
 
 def _is_retry_safe_request(method: str, path: str) -> bool:
@@ -453,6 +479,20 @@ def _is_retry_safe_request(method: str, path: str) -> bool:
         ("POST", "/v1/records/scan"),
         ("POST", "/v1/query"),
         ("POST", "/v1/explain"),
+    }
+
+
+def _is_idempotent_retry_request(method: str, path: str) -> bool:
+    return (method, path.split("?", 1)[0]) in {
+        ("POST", "/v1/schema/apply"),
+        ("POST", "/v1/insert"),
+        ("POST", "/v1/records/put"),
+        ("POST", "/v1/records/put-batch"),
+        ("POST", "/v1/records/patch"),
+        ("POST", "/v1/records/delete"),
+        ("POST", "/v1/admin/compact"),
+        ("POST", "/v1/admin/snapshot"),
+        ("POST", "/v1/admin/restore"),
     }
 
 

@@ -108,8 +108,9 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
         base_url = f"http://{bind}"
         process = start_server(data_dir, bind)
         try:
-            db = TraceDB(base_url, token="dev-token", safe_retries=1)
+            db = TraceDB(base_url, token="dev-token", safe_retries=1, idempotency_retries=1)
             assert db.safe_retries == 1
+            assert db.idempotency_retries == 1
             wait_for_ready(db, process)
             assert db.health()["ok"] is True
             databases = db.list_databases()
@@ -241,6 +242,7 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                 "server_url": base_url,
                 "sdk_surface": "python_sync",
                 "safe_retries": db.safe_retries,
+                "idempotency_retries": db.idempotency_retries,
                 "steps": {
                     "ready": True,
                     "health": True,

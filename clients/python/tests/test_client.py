@@ -25,6 +25,7 @@ class TraceDBClientTests(unittest.TestCase):
                 "TRACEDB_BRANCH_ID": "db_local:main",
                 "TRACEDB_TIMEOUT_MS": "2500",
                 "TRACEDB_SAFE_RETRIES": "2",
+                "TRACEDB_IDEMPOTENCY_RETRIES": "1",
             }
         )
 
@@ -34,6 +35,7 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertEqual(db.branch_id, "db_local:main")
         self.assertEqual(db.timeout, 2.5)
         self.assertEqual(db.safe_retries, 2)
+        self.assertEqual(db.idempotency_retries, 1)
 
     def test_from_env_allows_explicit_overrides(self) -> None:
         db = TraceDB.from_env(
@@ -79,6 +81,15 @@ class TraceDBClientTests(unittest.TestCase):
                 }
             )
 
+    def test_from_env_rejects_invalid_idempotency_retries(self) -> None:
+        with self.assertRaisesRegex(TraceDBRequestError, "TRACEDB_IDEMPOTENCY_RETRIES"):
+            TraceDB.from_env(
+                env={
+                    "TRACEDB_URL": "http://127.0.0.1:8090",
+                    "TRACEDB_IDEMPOTENCY_RETRIES": "-1",
+                }
+            )
+
     def test_safe_retries_retry_read_only_5xx_then_return_json(self) -> None:
         db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
         retry_error = urllib.error.HTTPError(
@@ -110,6 +121,62 @@ class TraceDBClientTests(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 1)
 
+    def test_idempotency_retries_retry_keyed_mutation_5xx_then_return_json(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", idempotency_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/records/put",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch("urllib.request.urlopen", side_effect=[retry_error, _FakeResponse('{"epoch":9}')]) as urlopen:
+            response = db.table("docs").tenant("tenant-a").insert(
+                "intro",
+                {"body": "hello"},
+                idempotency_key="python-insert-1",
+            )
+
+        self.assertEqual(response, {"epoch": 9})
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_idempotency_retries_skip_unkeyed_mutation_5xx(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", idempotency_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/records/put",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch("urllib.request.urlopen", side_effect=retry_error) as urlopen:
+            with self.assertRaisesRegex(TraceDBHTTPError, "HTTP 503"):
+                db.table("docs").tenant("tenant-a").insert("intro", {"body": "hello"})
+
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_idempotency_retries_do_not_retry_conflicts_or_4xx(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", idempotency_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/records/put",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(b'{"error":"idempotency conflict","code":"conflict"}'),
+        )
+
+        with mock.patch("urllib.request.urlopen", side_effect=retry_error) as urlopen:
+            with self.assertRaisesRegex(TraceDBHTTPError, "HTTP 409"):
+                db.table("docs").tenant("tenant-a").insert(
+                    "intro",
+                    {"body": "hello"},
+                    idempotency_key="python-insert-1",
+                )
+
+        self.assertEqual(urlopen.call_count, 1)
+
     def test_pyproject_declares_stdlib_package_boundary(self) -> None:
         pyproject = tomllib.loads((CLIENT_ROOT / "pyproject.toml").read_text())
         project = pyproject["project"]
@@ -131,6 +198,8 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertIn("--no-deps", smoke)
         self.assertIn("--target", smoke)
         self.assertIn("TraceDB.from_env", smoke)
+        self.assertIn("TRACEDB_IDEMPOTENCY_RETRIES", smoke)
+        self.assertIn("idempotency_retries", smoke)
         self.assertIn("python sdk install smoke ok", smoke)
 
 
