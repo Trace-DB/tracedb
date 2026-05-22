@@ -1617,6 +1617,7 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     let package_json = root.join("clients/typescript/package.json");
     let package_lock_json = root.join("clients/typescript/package-lock.json");
     let tsconfig_json = root.join("clients/typescript/tsconfig.json");
+    let tsconfig_build_json = root.join("clients/typescript/tsconfig.build.json");
 
     let package: Value = serde_json::from_str(
         &std::fs::read_to_string(&package_json)
@@ -1632,21 +1633,25 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     assert_eq!(package["type"], json!("module"));
     assert_eq!(package["license"], json!("MIT"));
     assert_eq!(package["sideEffects"], json!(false));
-    assert_eq!(package["types"], json!("./src/index.ts"));
-    assert_eq!(
-        package["files"],
-        json!(["src/index.ts", "src/sdk.ts", "src/client.ts", "README.md"])
-    );
+    assert_eq!(package["main"], json!("./dist/index.js"));
+    assert_eq!(package["types"], json!("./dist/index.d.ts"));
+    assert_eq!(package["files"], json!(["dist", "README.md"]));
     assert_eq!(package["publishConfig"]["access"], json!("public"));
-    assert_eq!(package["exports"]["."]["types"], json!("./src/index.ts"));
-    assert_eq!(package["exports"]["."]["default"], json!("./src/index.ts"));
+    assert_eq!(package["exports"]["."]["types"], json!("./dist/index.d.ts"));
+    assert_eq!(package["exports"]["."]["default"], json!("./dist/index.js"));
     assert_eq!(
         package["exports"]["./transport"]["types"],
-        json!("./src/client.ts")
+        json!("./dist/client.d.ts")
     );
     assert_eq!(
         package["exports"]["./transport"]["default"],
-        json!("./src/client.ts")
+        json!("./dist/client.js")
+    );
+    assert_eq!(
+        package["scripts"]["build"],
+        json!(
+            "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/rewrite-declaration-imports.mjs"
+        )
     );
     assert_eq!(
         package["scripts"]["typecheck"],
@@ -1662,7 +1667,13 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     );
     assert_eq!(
         package["scripts"]["package-smoke"],
-        json!("node --experimental-strip-types package-entry-smoke.ts")
+        json!(
+            "node --experimental-strip-types package-entry-smoke.ts && node --experimental-strip-types build-package-smoke.ts"
+        )
+    );
+    assert_eq!(
+        package["scripts"]["pack-dry-run"],
+        json!("npm pack --dry-run --json")
     );
     assert_eq!(
         package["scripts"]["http-smoke"],
@@ -1683,7 +1694,7 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     assert_eq!(
         package["scripts"]["check"],
         json!(
-            "npm run typecheck && npm run smoke && npm run public-smoke && npm run package-smoke"
+            "npm run typecheck && npm run smoke && npm run public-smoke && npm run build && npm run package-smoke && npm run pack-dry-run"
         )
     );
     assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));
@@ -1731,12 +1742,37 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
             "src/sdk.ts",
             "smoke.ts",
             "public-sdk-smoke.ts",
-            "package-entry-smoke.ts",
             "http-smoke.ts",
             "public-http-smoke.ts",
             "quickstart.ts",
             "gateway-smoke.ts"
         ])
+    );
+
+    let tsconfig_build: Value = serde_json::from_str(
+        &std::fs::read_to_string(&tsconfig_build_json)
+            .unwrap_or_else(|error| panic!("read {}: {error}", tsconfig_build_json.display())),
+    )
+    .expect("parse TypeScript client tsconfig.build.json");
+    assert_eq!(tsconfig_build["extends"], json!("./tsconfig.json"));
+    assert_eq!(
+        tsconfig_build["compilerOptions"]["allowImportingTsExtensions"],
+        json!(false)
+    );
+    assert_eq!(
+        tsconfig_build["compilerOptions"]["declaration"],
+        json!(true)
+    );
+    assert_eq!(tsconfig_build["compilerOptions"]["noEmit"], json!(false));
+    assert_eq!(tsconfig_build["compilerOptions"]["outDir"], json!("./dist"));
+    assert_eq!(tsconfig_build["compilerOptions"]["rootDir"], json!("./src"));
+    assert_eq!(
+        tsconfig_build["compilerOptions"]["rewriteRelativeImportExtensions"],
+        json!(true)
+    );
+    assert_eq!(
+        tsconfig_build["include"],
+        json!(["src/index.ts", "src/client.ts", "src/sdk.ts"])
     );
 
     let public_sdk = std::fs::read_to_string(root.join("clients/typescript/src/sdk.ts"))
@@ -1759,6 +1795,37 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         assert!(
             public_sdk.contains(token),
             "TypeScript public SDK wrapper should include {token}"
+        );
+    }
+
+    let build_smoke =
+        std::fs::read_to_string(root.join("clients/typescript/build-package-smoke.ts"))
+            .expect("read TypeScript build package smoke");
+    for token in [
+        "dist/index.js",
+        "dist/index.d.ts",
+        "dist/client.js",
+        "dist/client.d.ts",
+        "dist/sdk.js",
+        "dist/sdk.d.ts",
+        "@tracedb/sdk",
+        "@tracedb/sdk/transport",
+        "typescript build package smoke ok",
+    ] {
+        assert!(
+            build_smoke.contains(token),
+            "TypeScript build package smoke should include {token}"
+        );
+    }
+
+    let rewrite_declarations = std::fs::read_to_string(
+        root.join("clients/typescript/scripts/rewrite-declaration-imports.mjs"),
+    )
+    .expect("read TypeScript declaration rewrite script");
+    for token in [".ts\\\"", ".js\\\"", "dist"] {
+        assert!(
+            rewrite_declarations.contains(token),
+            "TypeScript declaration rewrite script should include {token}"
         );
     }
 
@@ -1894,6 +1961,9 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         "npm run typecheck",
         "npm run smoke",
         "npm run public-smoke",
+        "npm run build",
+        "npm run package-smoke",
+        "npm run pack-dry-run",
         "npm run http-smoke",
         "npm run public-http-smoke",
         "npm run quickstart",
@@ -1909,6 +1979,8 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         "HybridScoreComponents",
         "TraceDB",
         "insertBatch",
+        "dist/index.js",
+        "dist/index.d.ts",
         "not a package publishing pipeline",
     ] {
         assert!(

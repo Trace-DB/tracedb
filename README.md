@@ -211,7 +211,8 @@ Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud checks,
 benchmark controls, or SQL compatibility checks.
 `--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
 which currently performs the package typecheck plus dependency-free
-generated-client, public SDK, and package-entry smokes. It emits the normal one-step
+generated-client, public SDK, package build, package-entry smoke, and pack
+dry-run checks. It emits the normal one-step
 `local-product-regression` JSON summary with `only_step: "typescript_check"`.
 This is TypeScript package boundary evidence only; it does not run `http_demo`,
 local `doctor http`, the Rust SDK quickstart, TypeScript HTTP smoke,
@@ -381,11 +382,13 @@ npm ci
 npm run check
 ```
 
-The package is named `@tracedb/sdk`, exports `.` from `src/index.ts`, exports
-the generated transport as `@tracedb/sdk/transport`, and includes a
-`package-smoke` script that imports both paths through the package `exports`
-map. This is source-package metadata and smoke coverage, not evidence of an npm
-release or a build/publish pipeline.
+The package is named `@tracedb/sdk`, builds `.` from `src/index.ts` into
+`dist/index.js` / `dist/index.d.ts`, exports the generated transport as
+`@tracedb/sdk/transport` from `dist/client.js` / `dist/client.d.ts`, and
+includes `package-smoke` plus `pack-dry-run` scripts that import both paths
+through the package `exports` map and verify tarball contents without
+publishing. This is local build/pack boundary evidence, not evidence of an npm
+release or publication pipeline.
 
 Run the generated TypeScript client against a real local HTTP server with:
 
@@ -511,8 +514,9 @@ server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
   SDK, not a strict runtime validator, and not a broader SDK compatibility
   claim. Its current runtime smoke uses Node's experimental TypeScript strip
   support. The `clients/typescript` package now declares `@tracedb/sdk` package
-  metadata and exports the generated transport as `@tracedb/sdk/transport`, but
-  this is not evidence of an npm release or build/publish pipeline. It rejects
+  metadata, builds JS/declaration outputs into `dist`, and exports the generated
+  transport as `@tracedb/sdk/transport`, but this is not evidence of an npm
+  release or publication pipeline. It rejects
   empty or CR/LF-containing `idempotencyKey` request options before `fetchImpl`
   is called. `TraceDbHttpError` preserves the raw response
   body and exposes parsed `responseJson`, `errorResponse`, `responseError`, and

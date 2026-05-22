@@ -11,12 +11,14 @@ now exposes `@tracedb/sdk` as the public SDK entrypoint and
 package-ready metadata and smoke coverage, not evidence that the package has
 been published to npm and not a managed-cloud SDK promise.
 
-The public package entrypoint is `src/index.ts`, which re-exports the wrapper in
-`src/sdk.ts`. That wrapper intentionally uses the generated `TraceDbClient` as
-its transport layer instead of duplicating HTTP routes. Current public DX starts
-with `new TraceDB({ url, token })` or `TraceDB.fromEnv()`, table handles, record
-writes, batch ingest, patch, scan/get/delete, admin compact/snapshot/restore,
-and a query builder that compiles to the canonical `HybridQuery` body.
+The source public entrypoint is `src/index.ts`, which re-exports the wrapper in
+`src/sdk.ts`; `npm run build` emits the package entrypoint at `dist/index.js`
+with declarations at `dist/index.d.ts`. That wrapper intentionally uses the
+generated `TraceDbClient` as its transport layer instead of duplicating HTTP
+routes. Current public DX starts with `new TraceDB({ url, token })` or
+`TraceDB.fromEnv()`, table handles, record writes, batch ingest, patch,
+scan/get/delete, admin compact/snapshot/restore, and a query builder that
+compiles to the canonical `HybridQuery` body.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
 schemas and uses them in method signatures. These aliases intentionally preserve
@@ -82,11 +84,13 @@ publishing readiness or managed-cloud proof.
 The package entry smoke imports from `@tracedb/sdk` and
 `@tracedb/sdk/transport` through the package `exports` map and verifies the
 public SDK entrypoint, generated transport subpath, representative type exports,
-and config error shape:
+config error shape, emitted JS files, and emitted declarations:
 
 ```bash
 cd clients/typescript
+npm run build
 npm run package-smoke
+npm run pack-dry-run
 ```
 
 Run the real local HTTP smoke from the TypeScript package directory:
@@ -200,8 +204,9 @@ server.
 `--skip-typescript` is for the full product gate and non-TypeScript selectors;
 a TypeScript `--only` selector conflicts with --skip-typescript.
 `--only typescript_check` runs only `npm run check`, which currently performs
-the package typecheck plus dependency-free generated-client, public SDK, and
-package-entry smokes. It does not run `http-smoke`, `gateway-smoke`,
+the package typecheck plus dependency-free generated-client, public SDK,
+package build, package-entry smoke, and pack dry-run checks. It does not run
+`http-smoke`, `gateway-smoke`,
 `http_demo`, local `doctor http`, the Rust SDK quickstart, managed-cloud checks,
 benchmark controls, or SQL compatibility checks.
 `--only typescript_http_smoke` runs only `npm run public-http-smoke`, which
@@ -227,7 +232,9 @@ npm ci
 npm run typecheck
 npm run smoke
 npm run public-smoke
+npm run build
 npm run package-smoke
+npm run pack-dry-run
 npm run http-smoke
 npm run public-http-smoke
 npm run quickstart
@@ -236,11 +243,12 @@ npm run check
 ```
 
 The package is named `@tracedb/sdk`, exposes `.` as the public SDK and
-`./transport` as the generated transport subpath, declares `types`, `files`,
-and public npm publish metadata, and remains source-distribution oriented for
-now with `.ts` entrypoints exercised through Node's experimental TypeScript
-strip support. This is package-ready metadata plus smoke coverage, not a
-published npm artifact or a build/publish pipeline.
+`./transport` as the generated transport subpath, declares `main`, `types`,
+`files`, and public npm publish metadata, and emits `dist/index.js`,
+`dist/index.d.ts`, `dist/sdk.js`, `dist/sdk.d.ts`, `dist/client.js`, and
+`dist/client.d.ts`. `npm run pack-dry-run` proves the tarball contents without
+publishing. This is package-ready metadata plus local build/pack smoke coverage,
+not a published npm artifact or a release pipeline.
 
 ## Local Usage
 

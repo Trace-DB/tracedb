@@ -64,8 +64,10 @@ node --experimental-strip-types clients/typescript/smoke.ts
   rows, score components, access-path explain entries, planner candidates, and
   timing entries. Its local runtime smoke uses
   Node's experimental TypeScript strip support. The `clients/typescript`
-  package exposes `@tracedb/sdk` from `src/index.ts` and checks that entrypoint
-  with `npm run package-smoke`. It rejects empty or CR/LF-containing
+  package builds `@tracedb/sdk` from `src/index.ts` into `dist/index.js` and
+  `dist/index.d.ts`, exposes `@tracedb/sdk/transport` from `dist/client.js` and
+  `dist/client.d.ts`, and checks those entrypoints with `npm run package-smoke`
+  plus `npm run pack-dry-run`. It rejects empty or CR/LF-containing
   `idempotencyKey` request options before `fetchImpl` is called.
 - The TypeScript public SDK wrapper under `clients/typescript/src/sdk.ts` is the
   first hand-written platform SDK layer over that generated transport. It
@@ -347,8 +349,9 @@ evidence only, not full product gate coverage, not `http_demo`, not local
 proof, not benchmark evidence, and not SQL compatibility.
 `product-regression --only typescript_check` runs only `npm run check` in
 `clients/typescript`, which currently performs the package typecheck plus
-dependency-free generated-client, public SDK, and package-entry smokes, and
-emits one-step `local-product-regression` JSON with
+dependency-free generated-client, public SDK, package build, package-entry
+smoke, and pack dry-run checks, and emits one-step `local-product-regression`
+JSON with
 `only_step: "typescript_check"`. This is TypeScript package boundary evidence
 only, not full product gate coverage, not
 `http_demo`, not local `doctor http`, not Rust SDK quickstart, not TypeScript

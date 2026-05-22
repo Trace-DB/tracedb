@@ -16,7 +16,6 @@
     "src/sdk.ts",
     "smoke.ts",
     "public-sdk-smoke.ts",
-    "package-entry-smoke.ts",
     "http-smoke.ts",
     "public-http-smoke.ts",
     "quickstart.ts",

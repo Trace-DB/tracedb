@@ -50,7 +50,7 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "package_ready_public_wrapper_conformance_checked",
+      "status": "built_package_entrypoint_conformance_checked",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/package.json",
@@ -63,9 +63,14 @@
         "clients/typescript/gateway-smoke.ts",
         "scripts/platform_conformance.py --surface typescript_sdk",
         "clients/typescript/src/index.ts",
+        "clients/typescript/tsconfig.build.json",
+        "clients/typescript/dist/index.js",
+        "clients/typescript/dist/index.d.ts",
         "@tracedb/sdk",
         "@tracedb/sdk/transport",
-        "clients/typescript/package-entry-smoke.ts"
+        "clients/typescript/package-entry-smoke.ts",
+        "clients/typescript/build-package-smoke.ts",
+        "npm pack --dry-run --json"
       ]
     },
     {

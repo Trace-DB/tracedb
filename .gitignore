@@ -13,4 +13,5 @@ benchmarks/realworld/run-data/
 benchmarks/realworld/report-bundles/
 benchmarks/realworld/.env.local
 clients/typescript/node_modules/
+clients/typescript/dist/
 benchmarks/realworld/data/external/

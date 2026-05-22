@@ -117,7 +117,8 @@ diagnostics, not Rust SDK quickstart evidence, not TypeScript smoke, not
 managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 `--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
 which currently performs the package typecheck plus dependency-free
-generated-client, public SDK, and package-entry smokes, and emits one-step
+generated-client, public SDK, package build, package-entry smoke, and pack
+dry-run checks, and emits one-step
 `local-product-regression` JSON with `only_step: "typescript_check"`. This is
 TypeScript package boundary evidence only, not full product gate coverage, not
 `http_demo`, not local `doctor http` diagnostics, not Rust SDK quickstart
@@ -303,10 +304,12 @@ are preserved when present. It rejects empty or CR/LF-containing
 `idempotencyKey` request options before `fetchImpl` as `TraceDbRequestError`.
 `cd clients/typescript && npm ci && npm run check` installs the locked package
 tooling, typechecks `@tracedb/sdk`, and runs generated-client, public SDK, and
-package-entry smokes. The package now exposes `@tracedb/sdk` from
-`src/index.ts` and `@tracedb/sdk/transport` from `src/client.ts`; this is
-package-ready metadata and smoke coverage, not an npm release or build/publish
-pipeline. `cd clients/typescript && npm run http-smoke` starts a local
+package build/entrypoint smokes. The package now exposes `@tracedb/sdk` from
+`dist/index.js` / `dist/index.d.ts` and `@tracedb/sdk/transport` from
+`dist/client.js` / `dist/client.d.ts`; `npm run pack-dry-run` proves tarball
+contents without publishing. This is package-ready build/pack boundary
+coverage, not an npm release or publication pipeline. `cd clients/typescript &&
+npm run http-smoke` starts a local
 `tracedb-server` child process and drives the
 generated TypeScript transport over real HTTP routes; `npm run public-http-smoke`
 drives the public `TraceDB` wrapper over the same generated transport through
