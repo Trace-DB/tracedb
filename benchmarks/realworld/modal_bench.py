@@ -146,6 +146,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_snapshot_restore_check": True,
         "railway_verify_restored_marker": True,
         "railway_restart_redeploy_plan": True,
+        "railway_runbook_verification_required": True,
     },
     "soak_railway": {
         "suite_spec": "benchmarks/realworld/suites/soak_railway.json",
@@ -162,6 +163,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_snapshot_restore_check": True,
         "railway_verify_restored_marker": True,
         "railway_restart_redeploy_plan": True,
+        "railway_runbook_verification_required": True,
     },
     "manual_1m": {
         "suite_spec": "benchmarks/realworld/suites/manual_1m.json",
@@ -203,6 +205,8 @@ class ModalSmokeConfig:
     railway_persistence_pre_manifest_json: str = ""
     railway_operation_receipt_json: str = ""
     railway_backup_receipt_json: str = ""
+    railway_runbook_verification_json: str = ""
+    railway_runbook_verification_required: bool = False
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
     tracedb_ingest_mode: str = "per_record"
@@ -532,6 +536,15 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         command.extend(["--railway-operation-receipt-json", config.railway_operation_receipt_json])
     if config.railway_backup_receipt_json:
         command.extend(["--railway-backup-receipt-json", config.railway_backup_receipt_json])
+    if config.railway_runbook_verification_json:
+        command.extend(
+            [
+                "--railway-runbook-verification-json",
+                config.railway_runbook_verification_json,
+            ]
+        )
+    if config.railway_runbook_verification_required:
+        command.append("--railway-require-runbook-verification")
     command.extend(["--scenarios", config.scenarios])
     if config.embedding_dimensions is not None:
         command.extend(["--embedding-dimensions", str(config.embedding_dimensions)])
@@ -1486,6 +1499,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--railway-persistence-pre-manifest-json", default="")
     parser.add_argument("--railway-operation-receipt-json", default="")
     parser.add_argument("--railway-backup-receipt-json", default="")
+    parser.add_argument("--railway-runbook-verification-json", default="")
+    parser.add_argument("--railway-require-runbook-verification", action="store_true")
     parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
     parser.add_argument("--openrouter-cap", default="moderate")
     parser.add_argument(
@@ -1562,6 +1577,9 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         railway_persistence_pre_manifest_json=args.railway_persistence_pre_manifest_json,
         railway_operation_receipt_json=args.railway_operation_receipt_json,
         railway_backup_receipt_json=args.railway_backup_receipt_json,
+        railway_runbook_verification_json=args.railway_runbook_verification_json,
+        railway_runbook_verification_required=args.railway_require_runbook_verification
+        or bool(preset.get("railway_runbook_verification_required", False)),
         openrouter_mode=args.openrouter_mode,
         openrouter_cap=args.openrouter_cap,
         tracedb_ingest_mode=str(

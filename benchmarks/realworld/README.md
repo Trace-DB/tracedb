@@ -423,6 +423,26 @@ then reports `complete` or `blocked` with `missing_steps`, `failed_steps`, and
 `stale_steps`. It is proof-of-artifacts only: it never creates backups,
 restarts services, redeploys code, or turns plan-only evidence into persistence
 proof.
+Feed a completed verification artifact into a suite gate with
+`--railway-runbook-verification-json`. Add
+`--railway-require-runbook-verification` when the lane must stop before child
+scenario execution unless that artifact reports `status: complete`:
+
+```bash
+BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
+  --suite-spec suites/soak_railway.json \
+  --run-id soak-railway-verified-preflight \
+  --reports-dir reports \
+  --railway-config-from-env \
+  --railway-backup-receipt-json reports/soak-railway-operator-check/railway-backup-receipt.json \
+  --railway-runbook-verification-json reports/soak-railway-operator-check/railway-runbook-verification.json \
+  --railway-require-runbook-verification \
+  --openrouter-mode off \
+  --target tracedb \
+  --surface sdk \
+  --scenarios sdk_cli_surface
+```
+
 Use `--preflight-only` when the goal is to validate configured Railway evidence
 before starting expensive scenarios. The command writes the normal
 `suite.json`, `suite.md`, `suite-gate.json`, optional `railway-manifest.json`,
@@ -467,6 +487,10 @@ while also carrying an explicit operator plan for the next persistence gate.
 passes it through to the runner as `--preflight-only`; use it when the receipt
 artifact path is available inside the Modal container and you want the scheduled
 job to validate evidence artifacts before launching the heavy suite work.
+The `soak_railway` and `release_100k` Modal presets now also pass
+`--railway-require-runbook-verification`; provide
+`--railway-runbook-verification-json` inside the Modal container or those lanes
+block before child scenario execution.
 When a Railway manifest is present, `runner suite` also writes
 `railway-artifacts.json` and records it in `suite-gate.json` as
 `artifact_paths.railway_artifacts_json`. That file indexes the suite artifacts

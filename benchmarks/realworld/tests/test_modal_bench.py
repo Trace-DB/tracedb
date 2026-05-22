@@ -151,6 +151,38 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-snapshot-restore-check", command)
         self.assertIn("--railway-restart-redeploy-plan", command)
 
+    def test_soak_preset_requires_runbook_verification_before_execution(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(["--suite-preset", "soak_railway", "--run-id", "soak-test"])
+        command = build_suite_command(config)
+
+        self.assertTrue(config.railway_runbook_verification_required)
+        self.assertIn("--railway-require-runbook-verification", command)
+
+    def test_release_preset_passes_runbook_verification_artifact(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(
+            [
+                "--suite-preset",
+                "release_100k",
+                "--railway-runbook-verification-json",
+                "/tmp/runbook-verification.json",
+                "--run-id",
+                "release-test",
+            ]
+        )
+        command = build_suite_command(config)
+
+        self.assertTrue(config.railway_runbook_verification_required)
+        self.assertEqual(
+            config.railway_runbook_verification_json,
+            "/tmp/runbook-verification.json",
+        )
+        self.assertIn("--railway-require-runbook-verification", command)
+        self.assertIn("--railway-runbook-verification-json", command)
+
     def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
         from modal_bench import build_suite_command, _parse_args
 

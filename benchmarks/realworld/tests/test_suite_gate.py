@@ -527,6 +527,56 @@ class SuiteGateTests(unittest.TestCase):
             gate["blocking_failures"],
         )
 
+    def test_railway_runbook_verification_blocks_when_required_and_missing(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "soak_railway.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "backup_verdict": {"status": "passed"},
+            },
+            railway_runbook_verification_required=True,
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_runbook_verification"], "not_checked")
+        self.assertTrue(
+            any("runbook verification" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
+    def test_railway_runbook_verification_complete_records_claim_status(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "soak_railway.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+                "railway_runbook_verification_json": "railway-runbook-verification.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "backup_verdict": {"status": "passed"},
+            },
+            railway_runbook_verification={"status": "complete", "complete_steps": ["preflight_gate"]},
+            railway_runbook_verification_required=True,
+        )
+
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["claim_status"]["railway_runbook_verification"], "complete")
+
     def test_gate_json_writer_persists_stable_artifact(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
         gate = build_suite_gate(

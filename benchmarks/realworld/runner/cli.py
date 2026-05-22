@@ -177,6 +177,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Operator-provided Railway backup/restore-validation receipt JSON for backup gates.",
     )
     suite.add_argument(
+        "--railway-runbook-verification-json",
+        default="",
+        help="Existing railway-runbook-verify JSON artifact to feed into suite-gate.json.",
+    )
+    suite.add_argument(
+        "--railway-require-runbook-verification",
+        action="store_true",
+        help="Block before child scenario execution unless runbook verification status is complete.",
+    )
+    suite.add_argument(
         "--preflight-only",
         action="store_true",
         help=(
@@ -737,9 +747,14 @@ def run_suite(args: argparse.Namespace) -> int:
         controls=parse_csv(args.target),
         records=args.records,
     )
+    runbook_verification = _load_or_write_railway_runbook_verification(args, lab_root, suite_dir)
+    pre_execution_blocked = _railway_runbook_verification_blocks_execution(
+        args,
+        runbook_verification,
+    )
     child_reports = []
     exit_code = 0
-    if not args.preflight_only:
+    if not args.preflight_only and not pre_execution_blocked:
         for spec in specs:
             child_args = copy(args)
             child_args.run_id = f"{suite_id}-{spec.scenario_id}"
@@ -776,6 +791,13 @@ def run_suite(args: argparse.Namespace) -> int:
             "scenario_execution": "skipped",
             "selected_scenarios": [spec.scenario_id for spec in specs],
         }
+    elif pre_execution_blocked:
+        suite_report["preflight"] = {
+            "status": "blocked",
+            "scenario_execution": "skipped",
+            "selected_scenarios": [spec.scenario_id for spec in specs],
+            "blocking_reason": "railway_runbook_verification",
+        }
     return _write_suite_outputs(
         args=args,
         lab_root=lab_root,
@@ -784,6 +806,7 @@ def run_suite(args: argparse.Namespace) -> int:
         suite_report=suite_report,
         gate_spec=gate_spec,
         exit_code=exit_code,
+        railway_runbook_verification=runbook_verification,
     )
 
 
@@ -796,6 +819,7 @@ def _write_suite_outputs(
     suite_report: dict[str, Any],
     gate_spec: Any,
     exit_code: int,
+    railway_runbook_verification: dict[str, Any] | None = None,
 ) -> int:
     railway_manifest = _load_or_write_railway_manifest(args, lab_root, suite_dir, suite_id)
     artifact_paths = {
@@ -806,6 +830,8 @@ def _write_suite_outputs(
     if railway_manifest is not None:
         artifact_paths["railway_manifest_json"] = "railway-manifest.json"
         artifact_paths["railway_artifacts_json"] = "railway-artifacts.json"
+    if railway_runbook_verification is not None:
+        artifact_paths["railway_runbook_verification_json"] = "railway-runbook-verification.json"
     write_suite_json(suite_report, suite_dir / "suite.json")
     write_suite_markdown(suite_report, suite_dir / "suite.md")
     suite_gate = build_suite_gate(
@@ -813,6 +839,8 @@ def _write_suite_outputs(
         gate_spec,
         artifact_paths=artifact_paths,
         railway_manifest=railway_manifest,
+        railway_runbook_verification=railway_runbook_verification,
+        railway_runbook_verification_required=args.railway_require_runbook_verification,
     )
     write_suite_gate_json(suite_gate, suite_dir / "suite-gate.json")
     if railway_manifest is not None:
@@ -1053,6 +1081,31 @@ def _load_or_write_railway_manifest(
 def _write_railway_manifest(manifest: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _load_or_write_railway_runbook_verification(
+    args: argparse.Namespace,
+    lab_root: Path,
+    suite_dir: Path,
+) -> dict[str, Any] | None:
+    if not args.railway_runbook_verification_json:
+        return None
+    path = _resolve_path(lab_root, args.railway_runbook_verification_json)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("--railway-runbook-verification-json must contain a JSON object")
+    write_json(payload, suite_dir / "railway-runbook-verification.json")
+    return payload
+
+
+def _railway_runbook_verification_blocks_execution(
+    args: argparse.Namespace,
+    verification: dict[str, Any] | None,
+) -> bool:
+    status = str((verification or {}).get("status") or "not_checked")
+    if status not in {"not_checked", "complete"}:
+        return True
+    return bool(args.railway_require_runbook_verification and status != "complete")
 
 
 def _load_json_if_configured(root: Path, value: str) -> dict[str, Any]:

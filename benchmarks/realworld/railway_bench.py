@@ -178,6 +178,10 @@ def build_railway_artifact_manifest(
             "restart_redeploy": claim_status.get("railway_restart_redeploy", "not_checked"),
             "persistence": claim_status.get("railway_persistence", "not_checked"),
             "backup": claim_status.get("railway_backup", "not_checked"),
+            "runbook_verification": claim_status.get(
+                "railway_runbook_verification",
+                "not_checked",
+            ),
         },
         "open_proof_gaps": _artifact_proof_gaps(claim_status),
         "claim_boundary": "artifact_manifest_indexes_suite_outputs_not_backup_snapshot_restore_proof",
@@ -1570,6 +1574,9 @@ def _artifact_proof_gaps(claim_status: Mapping[str, Any]) -> list[str]:
     backup_status = claim_status.get("railway_backup", "not_checked")
     if backup_status != "passed":
         gaps.append("backup_validation_not_checked")
+    runbook_status = claim_status.get("railway_runbook_verification", "not_checked")
+    if runbook_status != "complete":
+        gaps.append("runbook_verification_not_complete")
     return gaps
 
 

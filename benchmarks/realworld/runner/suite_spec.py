@@ -124,6 +124,8 @@ def build_suite_gate(
     *,
     artifact_paths: dict[str, str],
     railway_manifest: dict[str, Any] | None = None,
+    railway_runbook_verification: dict[str, Any] | None = None,
+    railway_runbook_verification_required: bool = False,
 ) -> dict[str, Any]:
     blocking_failures: list[str] = []
     warnings: list[str] = []
@@ -186,6 +188,19 @@ def build_suite_gate(
         blocking_failures.append(
             f"suite requires Railway backup validation evidence, status={railway_backup}"
         )
+    railway_runbook_verification_status = _railway_runbook_verification_status(
+        railway_runbook_verification
+    )
+    if railway_runbook_verification_status not in {"not_checked", "complete"}:
+        blocking_failures.append(
+            "Railway runbook verification failed with "
+            f"status={railway_runbook_verification_status}"
+        )
+    elif railway_runbook_verification_required and railway_runbook_verification_status != "complete":
+        blocking_failures.append(
+            "suite requires complete Railway runbook verification evidence, "
+            f"status={railway_runbook_verification_status}"
+        )
 
     if control_status == "external_control_unavailable" and not spec.requires_external_controls:
         warnings.append("external controls were requested but unavailable")
@@ -227,6 +242,7 @@ def build_suite_gate(
             "railway_restart_redeploy": railway_restart_redeploy,
             "railway_persistence": railway_persistence,
             "railway_backup": railway_backup,
+            "railway_runbook_verification": railway_runbook_verification_status,
             "unsupported_coverage": spec.unsupported_coverage,
         },
         "artifact_paths": artifact_paths,
@@ -345,6 +361,15 @@ def _railway_backup_status(railway_manifest: dict[str, Any] | None) -> str:
     if not isinstance(backup_verdict, dict):
         return "not_checked"
     status = backup_verdict.get("status")
+    return str(status) if status else "unknown"
+
+
+def _railway_runbook_verification_status(
+    railway_runbook_verification: dict[str, Any] | None,
+) -> str:
+    if not railway_runbook_verification:
+        return "not_checked"
+    status = railway_runbook_verification.get("status")
     return str(status) if status else "unknown"
 
 

@@ -1215,6 +1215,198 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(artifacts["railway_claim_status"]["backup"], "passed")
         self.assertFalse((reports / "railway-preflight-backup-sdk_cli_surface").exists())
 
+    def test_required_runbook_verification_blocks_before_child_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            receipt_path = Path(temp_dir) / "backup-receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "railway_backup_receipt",
+                        "status": "passed",
+                        "confirmed": True,
+                        "backup_created": True,
+                        "restore_validated": True,
+                        "service_id": "service_tracedb",
+                        "backup_id": "backup_123",
+                        "restore_validation_method": "restored marker smoke",
+                    }
+                )
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-runbook-required",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/soak_railway.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-backup-receipt-json",
+                    str(receipt_path),
+                    "--railway-require-runbook-verification",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 1, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-runbook-required"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            suite = json.loads((suite_dir / "suite.json").read_text())
+
+        self.assertEqual(suite["summary"]["scenario_count"], 0)
+        self.assertEqual(suite["preflight"]["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_backup"], "passed")
+        self.assertEqual(gate["claim_status"]["railway_runbook_verification"], "not_checked")
+        self.assertTrue(
+            any("runbook verification" in failure for failure in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+        self.assertFalse((reports / "railway-runbook-required-sdk_cli_surface").exists())
+
+    def test_required_runbook_verification_artifact_allows_preflight_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            receipt_path = Path(temp_dir) / "backup-receipt.json"
+            verification_path = Path(temp_dir) / "railway-runbook-verification.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "railway_backup_receipt",
+                        "status": "passed",
+                        "confirmed": True,
+                        "backup_created": True,
+                        "restore_validated": True,
+                        "service_id": "service_tracedb",
+                        "backup_id": "backup_123",
+                        "restore_validation_method": "restored marker smoke",
+                    }
+                )
+            )
+            verification_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "railway_runbook_verification",
+                        "status": "complete",
+                        "complete_steps": [
+                            "preflight_gate",
+                            "backup_receipt",
+                            "pre_operation_marker",
+                            "operation_receipt",
+                            "post_operation_marker",
+                        ],
+                        "missing_steps": [],
+                        "failed_steps": [],
+                        "stale_steps": [],
+                    }
+                )
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--preflight-only",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-runbook-complete",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/soak_railway.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-backup-receipt-json",
+                    str(receipt_path),
+                    "--railway-runbook-verification-json",
+                    str(verification_path),
+                    "--railway-require-runbook-verification",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-runbook-complete"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            copied_verification = json.loads(
+                (suite_dir / "railway-runbook-verification.json").read_text()
+            )
+
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["claim_status"]["railway_runbook_verification"], "complete")
+        self.assertEqual(
+            gate["artifact_paths"]["railway_runbook_verification_json"],
+            "railway-runbook-verification.json",
+        )
+        self.assertEqual(copied_verification["status"], "complete")
+
     def test_railway_persistence_verdict_combines_pre_manifest_receipt_and_postcheck(self) -> None:
         with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:
             marker = {
