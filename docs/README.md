@@ -32,6 +32,9 @@ Start with:
 draft. `docs/platform-contract-v0.json` is the machine-readable conformance
 manifest for HTTP direct, Rust SDK, TypeScript SDK, Python SDK, TraceQL/SQL-ish,
 and GraphQL parity work.
+`scripts/platform_conformance.py` is the first executable harness over that
+manifest. It currently runs `http_direct` through raw HTTP requests and maps
+the existing Rust SDK quickstart product path into `rust_sdk` scenario results.
 
 Local product smoke:
 

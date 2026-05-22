@@ -31,6 +31,7 @@ MCP is optional glue later. It does not drive this architecture.
 The companion machine-readable manifest is `docs/platform-contract-v0.json`.
 The current wire contract is `docs/api/v1-http.md`; the current generated route
 artifact is `docs/api/v1-openapi.json`.
+The initial executable conformance runner is `scripts/platform_conformance.py`.
 
 ## Boundaries
 
@@ -102,6 +103,17 @@ and must not invent surface-specific semantics.
 Future harness lanes: `pagination_cursors` and `durable_jobs`. These stay out
 of the v0 pass/fail contract until the engine exposes concrete behavior.
 
+Run the current executable lanes with:
+
+```bash
+python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
+```
+
+The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`.
+The `rust_sdk` lane maps the existing Rust SDK quickstart product path into the
+same manifest scenario IDs. Scenarios that are not yet exercised by a surface
+are reported as `not_checked` rather than silently treated as success.
+
 ## Surface Implementation Rules
 
 - HTTP direct remains the source of wire truth.
@@ -122,6 +134,7 @@ Use the smallest ladder that proves the touched surface:
 
 ```bash
 cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_declares_sdk_conformance_harness -- --exact
+python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/generate_openapi_v1.py --check
 python3 scripts/generate_typescript_client.py --check
 cargo run -p tracedb-cli -- product-quickstart --skip-typescript

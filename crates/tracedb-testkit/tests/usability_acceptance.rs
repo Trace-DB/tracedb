@@ -1026,6 +1026,7 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         "same behavior, same errors, same result shape",
         "docs/api/v1-http.md",
         "docs/api/v1-openapi.json",
+        "scripts/platform_conformance.py",
     ] {
         assert!(
             markdown.contains(boundary),
@@ -1044,6 +1045,10 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         assert!(
             source.contains("docs/platform-contract-v0.json"),
             "{name} should link to Platform Contract v0 manifest"
+        );
+        assert!(
+            source.contains("scripts/platform_conformance.py"),
+            "{name} should link to the Platform Contract v0 conformance runner"
         );
     }
 }

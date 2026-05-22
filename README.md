@@ -16,6 +16,17 @@ This is the checklist future SDKs and adapters must pass before TraceDB claims
 maintenance-mode parity across Rust, TypeScript, Python, TraceQL/SQL-ish, and
 GraphQL.
 
+Run the initial executable contract harness with:
+
+```bash
+python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
+```
+
+It reads `docs/platform-contract-v0.json`, drives a raw HTTP `http_direct` lane
+against `tracedb-server`, reuses the Rust SDK quickstart product path for the
+`rust_sdk` lane, and emits one JSON report with explicit `not_checked`
+scenarios where a surface is not yet complete.
+
 ## Quickstart
 
 Run the local product demo from the repo root:

@@ -109,6 +109,19 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
             ],
         },
         {
+            "name": "platform-conformance-quick",
+            "argv": [
+                "python3",
+                "scripts/platform_conformance.py",
+                "--surface",
+                "http_direct",
+                "--surface",
+                "rust_sdk",
+                "--summary-json",
+                "/tmp/tracedb-platform-conformance.json",
+            ],
+        },
+        {
             "name": "product-quickstart-skip-typescript",
             "argv": [
                 "cargo",

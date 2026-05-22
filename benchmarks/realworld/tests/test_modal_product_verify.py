@@ -39,6 +39,7 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "quickstart-receipt-test",
                 "quickstart-doc-contract-test",
                 "platform-contract-doc-test",
+                "platform-conformance-quick",
                 "product-quickstart-skip-typescript",
             ],
         )
