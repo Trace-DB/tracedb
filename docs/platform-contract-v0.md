@@ -71,7 +71,7 @@ Every product surface must map to these contract components:
 | Surface | ID | Current status | Contract role |
 | --- | --- | --- | --- |
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
-| Rust SDK | `rust_sdk` | Reference candidate | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
+| Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper started | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked with package unit lane | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
@@ -126,6 +126,11 @@ insert, batch insert, get, scan, and delete calls and build query requests with
 `where_eq`, `match_text`, `near`, `with_explain`, `limit`, and `all()`. These
 helpers compile into the existing `RecordInput`, `RecordPutBatchRequest`, record
 request, and `HybridQuery` models; the raw HTTP methods remain available.
+`TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
+`TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
+`TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
+`TRACEDB_IDEMPOTENCY_RETRIES` so Rust callers can share the same connection and
+routing config boundary as the other SDK lanes.
 
 The TypeScript package now starts the public SDK layer in
 `clients/typescript/src/sdk.ts`. `new TraceDB({ url, token })` wraps the

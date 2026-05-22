@@ -55,6 +55,55 @@ fn record(id: &str, tenant: &str, body: &str, embedding: [f32; 3]) -> RecordInpu
     }
 }
 
+#[test]
+fn client_config_from_env_vars_builds_endpoint_routing_and_retry_config() {
+    let config = TraceDbClientConfig::from_env_vars([
+        ("TRACEDB_URL", "http://127.0.0.1:8090/"),
+        ("TRACEDB_TOKEN", "dev-token"),
+        ("TRACEDB_DATABASE_ID", "db_local"),
+        ("TRACEDB_BRANCH_ID", "db_local:main"),
+        ("TRACEDB_TIMEOUT_MS", "2500"),
+        ("TRACEDB_SAFE_RETRIES", "2"),
+        ("TRACEDB_IDEMPOTENCY_RETRIES", "1"),
+    ])
+    .expect("config from env vars");
+
+    assert_eq!(config.url, "http://127.0.0.1:8090/");
+    assert_eq!(config.token, "dev-token");
+    assert_eq!(config.database_id.as_deref(), Some("db_local"));
+    assert_eq!(config.branch_id.as_deref(), Some("db_local:main"));
+    assert_eq!(config.request_timeout_ms, 2500);
+    assert_eq!(config.safe_retries, 2);
+    assert_eq!(config.idempotency_retries, 1);
+}
+
+#[test]
+fn client_config_from_env_vars_rejects_missing_url() {
+    let error = TraceDbClientConfig::from_env_vars([("TRACEDB_TOKEN", "dev-token")])
+        .expect_err("missing url should fail");
+
+    assert!(matches!(
+        error,
+        TraceDbClientError::InvalidConfig { ref variable, .. } if variable == "TRACEDB_URL"
+    ));
+    assert!(error.to_string().contains("TRACEDB_URL"));
+}
+
+#[test]
+fn client_config_from_env_vars_rejects_invalid_timeout() {
+    let error = TraceDbClientConfig::from_env_vars([
+        ("TRACEDB_URL", "http://127.0.0.1:8090"),
+        ("TRACEDB_TIMEOUT_MS", "0"),
+    ])
+    .expect_err("zero timeout should fail");
+
+    assert!(matches!(
+        error,
+        TraceDbClientError::InvalidConfig { ref variable, .. } if variable == "TRACEDB_TIMEOUT_MS"
+    ));
+    assert!(error.to_string().contains("greater than 0"));
+}
+
 fn query(explain: bool) -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),

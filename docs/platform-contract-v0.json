@@ -37,10 +37,11 @@
     {
       "id": "rust_sdk",
       "label": "Rust SDK",
-      "status": "reference_candidate",
+      "status": "reference_candidate_with_env_config",
       "role": "reference ergonomic SDK over the wire contract",
       "evidence": [
         "crates/tracedb-sdk",
+        "TraceDbClientConfig::from_env",
         "cargo run -p tracedb-sdk --example quickstart"
       ]
     },

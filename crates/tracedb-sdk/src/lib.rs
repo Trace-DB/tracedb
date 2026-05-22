@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -27,6 +28,10 @@ pub type TraceDbClientResult<T> = std::result::Result<T, TraceDbClientError>;
 #[derive(Debug)]
 pub enum TraceDbClientError {
     InvalidUrl(String),
+    InvalidConfig {
+        variable: String,
+        message: String,
+    },
     InvalidRequest {
         method: String,
         path: String,
@@ -56,6 +61,9 @@ impl Display for TraceDbClientError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidUrl(url) => write!(f, "invalid TraceDB URL {url}"),
+            Self::InvalidConfig { variable, message } => {
+                write!(f, "invalid TraceDB SDK config for {variable}: {message}")
+            }
             Self::InvalidRequest {
                 method,
                 path,
@@ -103,6 +111,7 @@ impl Error for TraceDbClientError {
             Self::Io(error) => Some(error),
             Self::Json(error) => Some(error),
             Self::InvalidUrl(_)
+            | Self::InvalidConfig { .. }
             | Self::InvalidRequest { .. }
             | Self::Timeout { .. }
             | Self::InvalidResponse { .. }
@@ -177,6 +186,60 @@ impl TraceDbClientConfig {
             safe_retries: 0,
             idempotency_retries: 0,
         }
+    }
+
+    pub fn from_env() -> TraceDbClientResult<Self> {
+        Self::from_env_vars(env::vars())
+    }
+
+    pub fn from_env_vars<K, V, I>(vars: I) -> TraceDbClientResult<Self>
+    where
+        K: Into<String>,
+        V: Into<String>,
+        I: IntoIterator<Item = (K, V)>,
+    {
+        let mut url = None;
+        let mut token = None;
+        let mut database_id = None;
+        let mut branch_id = None;
+        let mut timeout_ms = None;
+        let mut safe_retries = None;
+        let mut idempotency_retries = None;
+
+        for (key, value) in vars {
+            let key = key.into();
+            let value = value.into();
+            match key.as_str() {
+                "TRACEDB_URL" => url = Some(value),
+                "TRACEDB_TOKEN" => token = Some(value),
+                "TRACEDB_DATABASE_ID" => database_id = Some(value),
+                "TRACEDB_BRANCH_ID" => branch_id = Some(value),
+                "TRACEDB_TIMEOUT_MS" => timeout_ms = Some(value),
+                "TRACEDB_SAFE_RETRIES" => safe_retries = Some(value),
+                "TRACEDB_IDEMPOTENCY_RETRIES" => idempotency_retries = Some(value),
+                _ => {}
+            }
+        }
+
+        let url = required_env("TRACEDB_URL", url)?;
+        let mut config = Self::managed(url, token.unwrap_or_default());
+        if let Some(database_id) = optional_env("TRACEDB_DATABASE_ID", database_id)? {
+            config = config.with_database(database_id);
+        }
+        if let Some(branch_id) = optional_env("TRACEDB_BRANCH_ID", branch_id)? {
+            config = config.with_branch(branch_id);
+        }
+        if let Some(timeout_ms) = optional_positive_u64_env("TRACEDB_TIMEOUT_MS", timeout_ms)? {
+            config.request_timeout_ms = timeout_ms;
+        }
+        if let Some(retries) = optional_u8_env("TRACEDB_SAFE_RETRIES", safe_retries)? {
+            config.safe_retries = retries;
+        }
+        if let Some(retries) = optional_u8_env("TRACEDB_IDEMPOTENCY_RETRIES", idempotency_retries)?
+        {
+            config.idempotency_retries = retries;
+        }
+        Ok(config)
     }
 
     pub fn with_database(mut self, database_id: impl Into<String>) -> Self {
@@ -1320,6 +1383,62 @@ fn default_request_timeout_ms() -> u64 {
 
 fn timeout_ms(timeout: Duration) -> u64 {
     timeout.as_millis().clamp(1, u64::MAX as u128) as u64
+}
+
+fn required_env(variable: &str, value: Option<String>) -> TraceDbClientResult<String> {
+    match value {
+        Some(value) if !value.trim().is_empty() => Ok(value),
+        _ => Err(TraceDbClientError::InvalidConfig {
+            variable: variable.to_string(),
+            message: format!("{variable} is required"),
+        }),
+    }
+}
+
+fn optional_env(variable: &str, value: Option<String>) -> TraceDbClientResult<Option<String>> {
+    match value {
+        Some(value) if value.trim().is_empty() => Err(TraceDbClientError::InvalidConfig {
+            variable: variable.to_string(),
+            message: format!("{variable} must not be empty when set"),
+        }),
+        Some(value) => Ok(Some(value)),
+        None => Ok(None),
+    }
+}
+
+fn optional_positive_u64_env(
+    variable: &str,
+    value: Option<String>,
+) -> TraceDbClientResult<Option<u64>> {
+    let Some(value) = optional_env(variable, value)? else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| TraceDbClientError::InvalidConfig {
+            variable: variable.to_string(),
+            message: format!("{variable} must be a positive integer"),
+        })?;
+    if parsed == 0 {
+        return Err(TraceDbClientError::InvalidConfig {
+            variable: variable.to_string(),
+            message: format!("{variable} must be greater than 0"),
+        });
+    }
+    Ok(Some(parsed))
+}
+
+fn optional_u8_env(variable: &str, value: Option<String>) -> TraceDbClientResult<Option<u8>> {
+    let Some(value) = optional_env(variable, value)? else {
+        return Ok(None);
+    };
+    value
+        .parse::<u8>()
+        .map(Some)
+        .map_err(|_| TraceDbClientError::InvalidConfig {
+            variable: variable.to_string(),
+            message: format!("{variable} must be an integer from 0 to 255"),
+        })
 }
 
 fn idempotency_key_header(

@@ -292,6 +292,12 @@ their query builder supports `where_eq`, `match_text`, `near`, `with_explain`,
 `limit`, and `all()`. The table helpers post the canonical record/batch wire
 shapes, the builder posts the canonical `HybridQuery` wire shape, and both paths
 are covered by request-shape and real loopback-server SDK tests.
+Rust SDK connection config can also be built directly from environment
+variables with `TraceDbClientConfig::from_env()`. It reads `TRACEDB_URL`,
+optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
+`TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
+`TRACEDB_IDEMPOTENCY_RETRIES`; tests use `TraceDbClientConfig::from_env_vars`
+to prove the same parser without mutating process environment.
 Bounded safe retries are available for SDK health/read routes only. Callers can
 manually attach `Idempotency-Key` per write/admin request with
 `TraceDbRequestOptions`; `TraceDbClientConfig::with_idempotency_retries` can then
