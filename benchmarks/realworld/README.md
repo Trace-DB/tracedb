@@ -210,6 +210,48 @@ Reports keep both concepts visible with `ingest_transaction_count`,
 and `batch_transaction_*` metrics. The control ledger now includes
 `ingest_transaction_total_ms` as the batch/transaction number to beat.
 
+## Suite Specs and Gate Artifact
+
+Named suite specs live in `benchmarks/realworld/suites/`:
+
+- `platform_pr.json` - fast 128-record PR/push lane, with 1000 records listed
+  as the next scale step.
+- `platform_push_10k.json` - 10k lane for Modal/Railway product readiness and
+  core controls.
+- `railway_stateful.json` - persistent TraceDB Railway volume/restart/redeploy
+  lane.
+- `release_100k.json` - release lane that requires external controls before
+  `claim-ready`.
+- `soak_railway.json` - scheduled repeated Railway-volume lane.
+- `manual_1m.json` - explicit opt-in cliff-finding lane.
+
+Run a spec locally with:
+
+```bash
+cd benchmarks/realworld
+BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
+  --suite-spec suites/platform_pr.json \
+  --openrouter-mode off \
+  --target tracedb \
+  --surface sdk \
+  --scenarios sdk_cli_surface
+```
+
+`runner suite` always writes `suite-gate.json`. The gate statuses are `usable`,
+`degraded`, `blocked`, and `claim-ready`. Release-style specs only become
+`claim-ready` when required external controls produce a number to beat.
+
+Unsupported SQL and GraphQL coverage is reported as explicit
+`unsupported_coverage` in the gate. It must not be counted as passing behavior.
+
+Modal presets map to the same specs:
+
+```bash
+modal run benchmarks/realworld/modal_bench.py \
+  --suite-preset platform_pr \
+  --run-id modal-platform-pr-<commit>
+```
+
 ## Railway-Targeted Run
 
 When local disk is constrained, deploy TraceDB to Railway and keep this Mac as
@@ -226,6 +268,25 @@ benchmarks/realworld/scripts/run_railway_target.sh
 This defaults to the TraceDB HTTP falsification scenario against the remote URL.
 Use `SCENARIOS=all TARGET=all` only when the competitor services are also
 reachable through the `BENCH_*` environment variables.
+
+Railway stateful suite runs expect a dedicated Railway project/environment and
+least-privilege credentials:
+
+- `RAILWAY_API_TOKEN` or `RAILWAY_TOKEN`
+- `RAILWAY_PROJECT_ID`
+- `RAILWAY_ENVIRONMENT_ID`
+- `TRACEDB_RAILWAY_SERVICE_ID`
+- `TRACEDB_RAILWAY_PRIVATE_URL`
+- `TRACEDB_RAILWAY_VOLUME_PATH`, usually `/data/tracedb`
+- Optional control service IDs: `POSTGRES_RAILWAY_SERVICE_ID`,
+  `PGVECTOR_RAILWAY_SERVICE_ID`, `MONGODB_RAILWAY_SERVICE_ID`,
+  `QDRANT_RAILWAY_SERVICE_ID`, and `OPENSEARCH_RAILWAY_SERVICE_ID`
+
+`railway_bench.py` validates this config, redacts tokens, and produces a
+manifest for suite gates. It does not create services or volumes yet. Backups,
+usage limits, SSH key setup, restart/redeploy execution, and restore validation
+remain required before the `railway_stateful`, `soak_railway`, or `release_100k`
+specs should be treated as full Railway product proof.
 
 ## Modal CPU/RAM Smoke
 
@@ -472,18 +533,19 @@ per-baseline `query_results` with query IDs, expected IDs, top-k actual IDs,
 exact recall, same-file recall, nDCG, and MRR for adapters that expose query
 result lists.
 
-Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`, and
-`manifest.json`. The manifest records the run config, seed, Modal app name,
-resource class, redacted benchmark environment, and git commit/dirty state. Use
-`--summary-json` for clean local per-run evidence instead of scraping Modal
-logs, and use `--bundle-output` when the full tarball must survive the remote
-Modal container. The saved summary records `exported_bundle_path` and
-`exported_bundle_sha256`; transient returned bundle bytes are stripped before
-summary JSON is written. `--bundle-output` is guarded by
-`--bundle-export-max-mb` (default `64`) because this path returns the bundle
+Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`,
+`suite-gate.json`, and `manifest.json`. The manifest records the run config,
+seed, Modal app name, resource class, redacted benchmark environment, and git
+commit/dirty state. Use `--summary-json` for clean local per-run evidence
+instead of scraping Modal logs, and use `--bundle-output` when the full tarball
+must survive the remote Modal container. The saved summary records
+`exported_bundle_path` and `exported_bundle_sha256`; transient returned bundle
+bytes are stripped before summary JSON is written. `--bundle-output` is guarded
+by `--bundle-export-max-mb` (default `64`) because this path returns the bundle
 through the Modal function result; use a durable object store or Modal Volume
-for larger archives. By default this lane reports `control_status=internal_only_smoke`;
-it is development evidence, not a product benchmark claim.
+for larger archives. By default this lane reports
+`control_status=internal_only_smoke`; it is development evidence, not a product
+benchmark claim.
 
 ## Reports
 

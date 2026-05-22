@@ -97,6 +97,66 @@ MODAL_IGNORE_PATTERNS = [
     "benchmarks/realworld/reports/**",
     "benchmarks/realworld/report-bundles/**",
 ]
+SUITE_PRESETS: dict[str, dict[str, Any]] = {
+    "platform_pr": {
+        "suite_spec": "benchmarks/realworld/suites/platform_pr.json",
+        "records": 128,
+        "target": "tracedb",
+        "surface": "sdk,cli,http,curl",
+        "scenarios": "sdk_cli_surface,http_falsification",
+        "tracedb_ingest_mode": "batch",
+    },
+    "platform_push_10k": {
+        "suite_spec": "benchmarks/realworld/suites/platform_push_10k.json",
+        "records": 10000,
+        "target": "tracedb,postgres,pgvector,mongodb,qdrant,opensearch",
+        "surface": "sdk,cli,http,curl",
+        "scenarios": "sdk_cli_surface,http_falsification,search_rag_6",
+        "tracedb_ingest_mode": "batch",
+        "allow_large": True,
+        "allow_external_controls": True,
+    },
+    "railway_stateful": {
+        "suite_spec": "benchmarks/realworld/suites/railway_stateful.json",
+        "records": 1000,
+        "target": "tracedb",
+        "surface": "http,curl",
+        "scenarios": "http_falsification",
+        "tracedb_ingest_mode": "batch",
+    },
+    "release_100k": {
+        "suite_spec": "benchmarks/realworld/suites/release_100k.json",
+        "records": 100000,
+        "target": "tracedb,postgres,pgvector,mongodb,qdrant,opensearch",
+        "surface": "sdk,cli,http,curl",
+        "scenarios": "sdk_cli_surface,http_falsification,search_rag_6",
+        "tracedb_ingest_mode": "batch",
+        "allow_large": True,
+        "allow_external_controls": True,
+        "require_services": True,
+    },
+    "soak_railway": {
+        "suite_spec": "benchmarks/realworld/suites/soak_railway.json",
+        "records": 10000,
+        "target": "tracedb,postgres,pgvector",
+        "surface": "http,curl",
+        "scenarios": "http_falsification,search_rag_6",
+        "tracedb_ingest_mode": "batch",
+        "allow_large": True,
+        "allow_external_controls": True,
+    },
+    "manual_1m": {
+        "suite_spec": "benchmarks/realworld/suites/manual_1m.json",
+        "records": 1000000,
+        "target": "tracedb,pgvector,qdrant,opensearch",
+        "surface": "http,curl",
+        "scenarios": "http_falsification,search_rag_6",
+        "tracedb_ingest_mode": "batch",
+        "allow_large": True,
+        "allow_external_controls": True,
+        "require_services": True,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -108,6 +168,7 @@ class ModalSmokeConfig:
     target: str = "tracedb"
     surface: str = "sdk"
     scenarios: str = "sdk_cli_surface"
+    suite_spec: str = ""
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
     tracedb_ingest_mode: str = "per_record"
@@ -388,9 +449,10 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         config.run_id,
         "--reports-dir",
         config.reports_dir,
-        "--scenarios",
-        config.scenarios,
     ]
+    if config.suite_spec:
+        command.extend(["--suite-spec", config.suite_spec])
+    command.extend(["--scenarios", config.scenarios])
     if config.embedding_dimensions is not None:
         command.extend(["--embedding-dimensions", str(config.embedding_dimensions)])
     if config.require_services:
@@ -608,11 +670,17 @@ def bundle_report_artifacts(
 
 def extract_control_summary(bundle_path: Path, run_id: str) -> dict[str, Any]:
     suite_member = f"{run_id}/suite.json"
+    suite_gate_member = f"{run_id}/suite-gate.json"
     with tarfile.open(bundle_path, "r:gz") as archive:
         extracted = archive.extractfile(suite_member)
         if extracted is None:
             raise FileNotFoundError(f"{suite_member} not found in {bundle_path}")
         suite = json.loads(extracted.read().decode("utf-8"))
+        try:
+            gate_file = archive.extractfile(suite_gate_member)
+        except KeyError:
+            gate_file = None
+        suite_gate = json.loads(gate_file.read().decode("utf-8")) if gate_file else {}
     ledger = suite.get("control_ledger", {})
     scenario_baselines, scenario_datasets = extract_scenario_metrics(suite)
     return {
@@ -632,6 +700,11 @@ def extract_control_summary(bundle_path: Path, run_id: str) -> dict[str, Any]:
         "scenario_baselines": scenario_baselines,
         "scenario_datasets": scenario_datasets,
         "suite_json": suite_member,
+        "suite_gate_json": suite_gate_member if suite_gate else None,
+        "suite_gate_status": suite_gate.get("status"),
+        "blocking_failures": suite_gate.get("blocking_failures", []),
+        "warnings": suite_gate.get("warnings", []),
+        "claim_status": suite_gate.get("claim_status", {}),
         "bundle_path": str(bundle_path),
     }
 
@@ -1315,6 +1388,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target", default="tracedb")
     parser.add_argument("--surface", default="sdk")
     parser.add_argument("--scenarios", default="sdk_cli_surface")
+    parser.add_argument("--suite-spec", default="")
+    parser.add_argument("--suite-preset", choices=sorted(SUITE_PRESETS), default="")
     parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
     parser.add_argument("--openrouter-cap", default="moderate")
     parser.add_argument(
@@ -1359,22 +1434,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
+    preset = SUITE_PRESETS.get(args.suite_preset, {})
     return ModalSmokeConfig(
         run_id=args.run_id,
-        records=args.records,
-        dataset=args.dataset,
-        target=args.target,
-        surface=args.surface,
-        scenarios=args.scenarios,
+        records=int(preset.get("records", args.records)),
+        dataset=str(preset.get("dataset", args.dataset)),
+        target=str(preset.get("target", args.target)),
+        surface=str(preset.get("surface", args.surface)),
+        scenarios=str(preset.get("scenarios", args.scenarios)),
+        suite_spec=args.suite_spec or str(preset.get("suite_spec", "")),
         openrouter_mode=args.openrouter_mode,
         openrouter_cap=args.openrouter_cap,
-        tracedb_ingest_mode=args.tracedb_ingest_mode,
+        tracedb_ingest_mode=str(
+            preset.get("tracedb_ingest_mode", args.tracedb_ingest_mode)
+        ),
         seed=args.seed,
         min_free_mb=args.min_free_mb,
-        allow_large=args.allow_large,
-        allow_external_controls=args.allow_external_controls,
+        allow_large=args.allow_large or bool(preset.get("allow_large", False)),
+        allow_external_controls=args.allow_external_controls
+        or bool(preset.get("allow_external_controls", False)),
         allow_provider=args.allow_provider,
-        require_services=args.require_services,
+        require_services=args.require_services or bool(preset.get("require_services", False)),
         tracedb_engine_control=args.tracedb_engine_control,
         postgres_control=args.postgres_control,
         pgvector_control=args.pgvector_control,

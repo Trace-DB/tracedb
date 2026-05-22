@@ -117,6 +117,22 @@ class ModalBenchTests(unittest.TestCase):
         default_command = build_suite_command(ModalSmokeConfig())
         self.assertNotIn("--require-services", default_command)
 
+    def test_platform_pr_preset_wires_suite_spec_and_batch_ingest(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(["--suite-preset", "platform_pr", "--run-id", "platform-pr-test"])
+        command = build_suite_command(config)
+
+        self.assertEqual(config.suite_spec, "benchmarks/realworld/suites/platform_pr.json")
+        self.assertEqual(config.records, 128)
+        self.assertEqual(config.scenarios, "sdk_cli_surface,http_falsification")
+        self.assertEqual(config.tracedb_ingest_mode, "batch")
+        self.assertIn("--suite-spec", command)
+        self.assertEqual(
+            command[command.index("--suite-spec") + 1],
+            "benchmarks/realworld/suites/platform_pr.json",
+        )
+
     def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 

@@ -21,6 +21,12 @@ from .openrouter import (
 from .report import build_report, write_json, write_markdown
 from .scaling import run_inprocess_scaling_compare, run_tracedb_scaling
 from .suite import build_suite_report, selected_scenarios, write_suite_json, write_suite_markdown
+from .suite_spec import (
+    build_suite_gate,
+    default_suite_spec,
+    load_suite_spec,
+    write_suite_gate_json,
+)
 from .types import RunConfig
 
 
@@ -43,7 +49,9 @@ def main(argv: list[str] | None = None) -> int:
 
     suite = subcommands.add_parser("suite", help="run a scenario suite and aggregate reports")
     add_benchmark_args(suite)
+    suite.set_defaults(records=None)
     suite.add_argument("--scenarios", default="all")
+    suite.add_argument("--suite-spec", default="")
 
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
     chat_demo.add_argument("--data-dir", default="")
@@ -341,7 +349,23 @@ def run_suite(args: argparse.Namespace) -> int:
     suite_id = args.run_id or new_run_id("suite")
     suite_dir = reports_dir / suite_id
     suite_dir.mkdir(parents=True, exist_ok=True)
-    specs = selected_scenarios(args.scenarios)
+    explicit_suite_spec = (
+        load_suite_spec(_resolve_suite_spec_path(lab_root, args.suite_spec))
+        if args.suite_spec
+        else None
+    )
+    if args.records is None:
+        args.records = explicit_suite_spec.default_records if explicit_suite_spec else 1000
+    scenarios_value = args.scenarios
+    if explicit_suite_spec is not None and scenarios_value == "all":
+        scenarios_value = ",".join(explicit_suite_spec.scenarios)
+    specs = selected_scenarios(scenarios_value)
+    gate_spec = explicit_suite_spec or default_suite_spec(
+        scenarios=[spec.scenario_id for spec in specs],
+        surfaces=parse_csv(args.surface),
+        controls=parse_csv(args.target),
+        records=args.records,
+    )
     child_reports = []
     exit_code = 0
     for spec in specs:
@@ -376,8 +400,21 @@ def run_suite(args: argparse.Namespace) -> int:
     )
     write_suite_json(suite_report, suite_dir / "suite.json")
     write_suite_markdown(suite_report, suite_dir / "suite.md")
+    suite_gate = build_suite_gate(
+        suite_report,
+        gate_spec,
+        artifact_paths={
+            "suite_json": "suite.json",
+            "suite_md": "suite.md",
+            "suite_gate_json": "suite-gate.json",
+        },
+    )
+    write_suite_gate_json(suite_gate, suite_dir / "suite-gate.json")
+    if suite_gate["blocking_failures"]:
+        exit_code = 1
     print(f"wrote {suite_dir / 'suite.json'}")
     print(f"wrote {suite_dir / 'suite.md'}")
+    print(f"wrote {suite_dir / 'suite-gate.json'}")
     return exit_code
 
 
@@ -496,3 +533,14 @@ def parse_csv(value: str) -> list[str]:
 def _resolve_path(root: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else root / path
+
+
+def _resolve_suite_spec_path(root: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    lab_candidate = root / path
+    if lab_candidate.exists():
+        return lab_candidate
+    repo_candidate = root.parent.parent / path
+    return repo_candidate if repo_candidate.exists() else lab_candidate

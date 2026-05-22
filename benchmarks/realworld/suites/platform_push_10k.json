@@ -1,0 +1,33 @@
+{
+  "id": "platform_push_10k",
+  "label": "Platform Push 10k",
+  "description": "Moderate Modal/Railway platform-readiness lane for correctness, bounded regressions, and core controls at 10k records.",
+  "default_records": 10000,
+  "record_counts": [10000],
+  "dataset": "generated",
+  "scenarios": ["sdk_cli_surface", "http_falsification", "search_rag_6"],
+  "surfaces": ["http_direct", "rust_sdk", "typescript_sdk", "python_sdk", "traceql_sqlish"],
+  "adapters": ["http", "sdk", "traceql"],
+  "controls": ["tracedb", "postgres", "pgvector"],
+  "blocking_rules": {
+    "correctness": true,
+    "sdk_parity": true,
+    "supported_api_parity": true,
+    "tenant_isolation": true,
+    "tombstones": true,
+    "error_envelopes": true,
+    "hard_failures": true,
+    "require_external_controls": false,
+    "performance_regression_policy": "rolling_regression_blocking"
+  },
+  "railway": {
+    "required": false,
+    "services": ["tracedb"]
+  },
+  "unsupported_coverage": {
+    "sql_compatibility": "unsupported",
+    "graphql_mutations": "unsupported",
+    "graphql_subscriptions": "unsupported",
+    "sql_postgres_wire_protocol": "unsupported"
+  }
+}

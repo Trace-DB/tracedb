@@ -1,0 +1,42 @@
+{
+  "id": "release_100k",
+  "label": "Release 100k",
+  "description": "Release-candidate benchmark lane requiring external controls before any product benchmark claim.",
+  "default_records": 100000,
+  "record_counts": [100000],
+  "dataset": "generated_hybrid",
+  "scenarios": ["sdk_cli_surface", "http_falsification", "search_rag_6"],
+  "surfaces": [
+    "http_direct",
+    "rust_sdk",
+    "typescript_sdk",
+    "python_sdk",
+    "traceql_sqlish",
+    "graphql"
+  ],
+  "adapters": ["http", "sdk", "traceql"],
+  "controls": ["tracedb", "postgres", "pgvector", "mongodb", "qdrant", "opensearch"],
+  "blocking_rules": {
+    "correctness": true,
+    "sdk_parity": true,
+    "supported_api_parity": true,
+    "tenant_isolation": true,
+    "tombstones": true,
+    "error_envelopes": true,
+    "hard_failures": true,
+    "require_external_controls": true,
+    "performance_regression_policy": "rolling_regression_blocking"
+  },
+  "railway": {
+    "required": true,
+    "services": ["tracedb", "postgres", "pgvector", "mongodb", "qdrant", "opensearch"],
+    "volume_required": true,
+    "backup_required": true
+  },
+  "unsupported_coverage": {
+    "sql_compatibility": "unsupported",
+    "graphql_mutations": "unsupported",
+    "graphql_subscriptions": "unsupported",
+    "sql_postgres_wire_protocol": "unsupported"
+  }
+}

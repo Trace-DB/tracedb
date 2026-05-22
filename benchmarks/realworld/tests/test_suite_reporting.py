@@ -56,9 +56,12 @@ class SuiteReportingTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
             suite_json = reports / "suite-test" / "suite.json"
             suite_md = reports / "suite-test" / "suite.md"
+            suite_gate = reports / "suite-test" / "suite-gate.json"
             self.assertTrue(suite_json.exists())
             self.assertTrue(suite_md.exists())
+            self.assertTrue(suite_gate.exists())
             payload = json.loads(suite_json.read_text())
+            gate = json.loads(suite_gate.read_text())
             markdown = suite_md.read_text()
 
         self.assertEqual(payload["suite_id"], "suite-test")
@@ -86,6 +89,58 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertIn("Side-by-side Search/RAG 6 database comparison", markdown)
         self.assertIn("TraceDB result: available", markdown)
         self.assertNotIn("TraceDB was not requested", markdown)
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["artifact_paths"]["suite_json"], "suite.json")
+
+    def test_suite_spec_command_writes_gate_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env["BENCH_DISABLE_ENV_FILE"] = "1"
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "suite-spec-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/platform_pr.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_json = reports / "suite-spec-test" / "suite.json"
+            suite_gate = reports / "suite-spec-test" / "suite-gate.json"
+            self.assertTrue(suite_json.exists())
+            self.assertTrue(suite_gate.exists())
+            payload = json.loads(suite_json.read_text())
+            gate = json.loads(suite_gate.read_text())
+
+        self.assertEqual(payload["records"], 128)
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["suite_spec"], "platform_pr")
+        self.assertEqual(gate["artifact_paths"]["suite_json"], "suite.json")
 
     def test_suite_report_marks_unavailable_external_controls(self) -> None:
         child_report = {

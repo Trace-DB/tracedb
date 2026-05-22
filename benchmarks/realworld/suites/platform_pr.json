@@ -1,0 +1,40 @@
+{
+  "id": "platform_pr",
+  "label": "Platform PR",
+  "description": "Fast platform-readiness gate for push and pull-request checks over TraceDB DX-core surfaces.",
+  "default_records": 128,
+  "record_counts": [128, 1000],
+  "dataset": "generated",
+  "scenarios": ["sdk_cli_surface", "http_falsification"],
+  "surfaces": [
+    "http_direct",
+    "rust_sdk",
+    "typescript_sdk",
+    "python_sdk",
+    "traceql_sqlish",
+    "graphql"
+  ],
+  "adapters": ["http", "sdk", "traceql"],
+  "controls": ["tracedb"],
+  "blocking_rules": {
+    "correctness": true,
+    "sdk_parity": true,
+    "supported_api_parity": true,
+    "tenant_isolation": true,
+    "tombstones": true,
+    "error_envelopes": true,
+    "hard_failures": true,
+    "require_external_controls": false,
+    "performance_regression_policy": "rolling_regression_warning_until_baseline"
+  },
+  "railway": {
+    "required": false,
+    "services": []
+  },
+  "unsupported_coverage": {
+    "sql_compatibility": "unsupported",
+    "graphql_mutations": "unsupported",
+    "graphql_subscriptions": "unsupported",
+    "sql_postgres_wire_protocol": "unsupported"
+  }
+}

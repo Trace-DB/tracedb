@@ -1,0 +1,36 @@
+{
+  "id": "railway_stateful",
+  "label": "Railway Stateful",
+  "description": "Persistent TraceDB product-realism lane for Railway volume survival, restart/redeploy behavior, snapshot, and restore.",
+  "default_records": 1000,
+  "record_counts": [128, 1000, 10000],
+  "dataset": "generated",
+  "scenarios": ["http_falsification"],
+  "surfaces": ["http_direct", "python_sdk", "typescript_sdk", "rust_sdk"],
+  "adapters": ["http", "sdk"],
+  "controls": ["tracedb"],
+  "blocking_rules": {
+    "correctness": true,
+    "durability": true,
+    "tenant_isolation": true,
+    "tombstones": true,
+    "snapshot_restore": true,
+    "restart_redeploy": true,
+    "hard_failures": true,
+    "require_external_controls": false,
+    "performance_regression_policy": "warning_without_external_control"
+  },
+  "railway": {
+    "required": true,
+    "services": ["tracedb"],
+    "volume_required": true,
+    "restart_required": true,
+    "redeploy_required": true
+  },
+  "unsupported_coverage": {
+    "sql_compatibility": "unsupported",
+    "graphql_mutations": "unsupported",
+    "graphql_subscriptions": "unsupported",
+    "sql_postgres_wire_protocol": "unsupported"
+  }
+}
