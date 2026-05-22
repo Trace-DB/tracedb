@@ -17,8 +17,8 @@ use tracedb_query::{
 };
 use tracedb_sdk::{
     BranchesResponse, DatabasesResponse, ErrorResponse, HealthResponse, JobsResponse,
-    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TableRecordInput,
-    TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
+    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TableHandle, TableRecordInput,
+    TraceDb, TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
     TraceDbRequestOptions,
 };
 
@@ -812,6 +812,39 @@ fn admin_snapshot_retries_5xx_with_idempotency_key_when_enabled() {
     assert!(response.snapshot);
     assert_eq!(response.target, "/tmp/tracedb-snapshot");
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn trace_db_connect_exposes_reference_table_query_entrypoint() {
+    let invalid = TraceDb::connect(TraceDbClientConfig::managed("not-a-url", "dev-token"))
+        .expect_err("connect should reject invalid urls before requests");
+    assert!(matches!(invalid, TraceDbClientError::InvalidUrl(_)));
+
+    let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
+    let db = TraceDb::connect(TraceDbClientConfig::managed(url, "dev-token"))
+        .expect("reference SDK connect");
+
+    let messages: TableHandle = db.table("docs").tenant("tenant-a");
+    let response = messages
+        .query()
+        .where_eq("status", "published")
+        .match_text("body", "rust reference sdk")
+        .near("embedding", vec![1.0, 0.0, 0.0])
+        .with_explain()
+        .limit(20)
+        .all()
+        .expect("table query");
+    let body = request_body.join().expect("request body");
+
+    assert!(response.results.is_empty());
+    assert_eq!(body["table"], "docs");
+    assert_eq!(body["tenant_id"], "tenant-a");
+    assert_eq!(body["scalar_eq"]["status"], "published");
+    assert_eq!(body["text"], "rust reference sdk");
+    assert_eq!(body["vector"], json!([1.0, 0.0, 0.0]));
+    assert_eq!(body["top_k"], 20);
+    assert_eq!(body["freshness"], "Strict");
+    assert_eq!(body["explain"], true);
 }
 
 #[test]

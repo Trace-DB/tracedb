@@ -302,9 +302,16 @@ pub struct TraceDbClient {
     pub config: TraceDbClientConfig,
 }
 
+pub type TraceDb = TraceDbClient;
+
 impl TraceDbClient {
     pub fn new(config: TraceDbClientConfig) -> Self {
         Self { config }
+    }
+
+    pub fn connect(config: TraceDbClientConfig) -> TraceDbClientResult<Self> {
+        HttpTarget::parse(&config.url)?;
+        Ok(Self::new(config))
     }
 
     pub fn ready(&self) -> TraceDbClientResult<Value> {
@@ -676,7 +683,7 @@ impl TraceDbClient {
         parse_response(method, &request_path, &response)
     }
 
-    pub fn table(&self, table: impl Into<String>) -> QueryBuilder {
+    pub fn table(&self, table: impl Into<String>) -> TableHandle {
         QueryBuilder {
             client_config: Some(self.config.clone()),
             table: table.into(),
@@ -1606,6 +1613,8 @@ pub struct QueryBuilder {
     explain: bool,
 }
 
+pub type TableHandle = QueryBuilder;
+
 impl QueryBuilder {
     pub fn tenant(mut self, tenant_id: impl Into<String>) -> Self {
         self.tenant_id = Some(tenant_id.into());
@@ -1642,6 +1651,10 @@ impl QueryBuilder {
     pub fn with_explain(mut self) -> Self {
         self.explain = true;
         self
+    }
+
+    pub fn query(&self) -> Self {
+        self.clone()
     }
 
     pub fn without_explain(mut self) -> Self {

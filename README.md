@@ -288,12 +288,13 @@ instead of replacing the running server. The example uses typed SDK convenience
 methods over the current HTTP response shapes and accepts a configurable SDK
 request timeout; the original raw `serde_json::Value` methods remain available.
 The blocking SDK now also exposes a first ergonomic table/query layer through
-`TraceDbClient::table("docs").tenant("tenant-a")`: table handles can
-`insert`, `insert_batch`, `get_record`, `scan_typed`, and `delete_record`, and
-their query builder supports `where_eq`, `match_text`, `near`, `with_explain`,
-`limit`, and `all()`. The table helpers post the canonical record/batch wire
-shapes, the builder posts the canonical `HybridQuery` wire shape, and both paths
-are covered by request-shape and real loopback-server SDK tests.
+`TraceDb::connect(config)?` and `db.table("docs").tenant("tenant-a")`.
+`TableHandle` values can `insert`, `insert_batch`, `get_record`, `scan_typed`,
+and `delete_record`, then enter the query builder with `query()` or the direct
+chaining helpers `where_eq`, `match_text`, `near`, `with_explain`, `limit`, and
+`all()`. The table helpers post the canonical record/batch wire shapes, the
+builder posts the canonical `HybridQuery` wire shape, and both paths are covered
+by request-shape and real loopback-server SDK tests.
 Rust SDK connection config can also be built directly from environment
 variables with `TraceDbClientConfig::from_env()`. It reads `TRACEDB_URL`,
 optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
