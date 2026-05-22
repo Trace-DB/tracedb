@@ -140,18 +140,19 @@ request, and `HybridQuery` models; the raw HTTP methods remain available.
 routing config boundary as the other SDK lanes.
 
 The TypeScript package now starts the public SDK layer in
-`clients/typescript/src/sdk.ts`. `new TraceDB({ url, token })` or
-`TraceDB.fromEnv()` wraps the generated `TraceDbClient` transport and exposes
-table handles with
+`clients/typescript/src/index.ts` and `clients/typescript/src/sdk.ts`.
+`@tracedb/sdk` exposes `TraceDB`; `@tracedb/sdk/transport` exposes the generated
+`TraceDbClient` transport subpath. `new TraceDB({ url, token })` or
+`TraceDB.fromEnv()` wraps that transport and exposes table handles with
 `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
 compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
 and `explainPlan`. `TraceDB.fromEnv()` reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS` so the TypeScript public SDK shares the same connection and
-routing config boundary as Rust and Python. The wrapper is fake-fetch/typecheck
-guarded and now has real local HTTP and gateway smokes through
-`npm run public-http-smoke` and `npm run gateway-smoke`. The public HTTP smoke
-now emits machine-readable
+routing config boundary as Rust and Python. The wrapper is fake-fetch,
+package-entry, and typecheck guarded and now has real local HTTP and gateway
+smokes through `npm run public-http-smoke` and `npm run gateway-smoke`. The
+public HTTP smoke now emits machine-readable
 idempotency and error-envelope evidence for `scripts/platform_conformance.py
 --surface typescript_sdk`; the generated transport remains available and
 remains the source of route methods.

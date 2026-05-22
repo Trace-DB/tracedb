@@ -116,13 +116,13 @@ not embedded demo/verify, not `http_demo`, not local `doctor http`
 diagnostics, not Rust SDK quickstart evidence, not TypeScript smoke, not
 managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 `--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
-which currently performs the private package typecheck plus dependency-free
-generated-client smoke, and emits one-step `local-product-regression` JSON with
-`only_step: "typescript_check"`. This is generated TypeScript check evidence
-only, not full product gate coverage, not `http_demo`, not local
-`doctor http` diagnostics, not Rust SDK quickstart evidence, not TypeScript
-HTTP smoke, not TypeScript gateway smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility.
+which currently performs the package typecheck plus dependency-free
+generated-client, public SDK, and package-entry smokes, and emits one-step
+`local-product-regression` JSON with `only_step: "typescript_check"`. This is
+TypeScript package boundary evidence only, not full product gate coverage, not
+`http_demo`, not local `doctor http` diagnostics, not Rust SDK quickstart
+evidence, not TypeScript HTTP smoke, not TypeScript gateway smoke, not
+managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 `--only typescript_http_smoke` runs only `(cd clients/typescript && npm run
 public-http-smoke)`, which starts its own local `tracedb-server` child process
 and exercises the public TypeScript SDK wrapper over the generated transport,
@@ -301,10 +301,13 @@ HTTP error shape, including parsed `{ "error": string, "code"?: string }`
 envelopes on `TraceDbHttpError`. Stable machine-readable error `code` values
 are preserved when present. It rejects empty or CR/LF-containing
 `idempotencyKey` request options before `fetchImpl` as `TraceDbRequestError`.
-`cd clients/typescript && npm ci && npm run check` installs the locked private
-tooling and typechecks the generated artifact plus smoke scripts. The package is
-private and does not declare publishing fields. `cd clients/typescript && npm
-run http-smoke` starts a local `tracedb-server` child process and drives the
+`cd clients/typescript && npm ci && npm run check` installs the locked package
+tooling, typechecks `@tracedb/sdk`, and runs generated-client, public SDK, and
+package-entry smokes. The package now exposes `@tracedb/sdk` from
+`src/index.ts` and `@tracedb/sdk/transport` from `src/client.ts`; this is
+package-ready metadata and smoke coverage, not an npm release or build/publish
+pipeline. `cd clients/typescript && npm run http-smoke` starts a local
+`tracedb-server` child process and drives the
 generated TypeScript transport over real HTTP routes; `npm run public-http-smoke`
 drives the public `TraceDB` wrapper over the same generated transport through
 ready, health, catalog, metrics, schema apply, insert, batch ingest, patch, get,

@@ -53,19 +53,20 @@ node --experimental-strip-types clients/typescript/smoke.ts
   admin helpers without blocking the first Future poll on socket I/O; it is not
   yet a runtime-native Tokio/async-std transport.
 - The TypeScript client under `clients/typescript/src/client.ts` is a generated
-  dependency-free `fetch` client artifact for this API surface. It is not a
-  published npm package, not a managed-cloud SDK promise, and not a SQL
-  compatibility claim. It includes OpenAPI-derived schema aliases and typed
+  dependency-free `fetch` client artifact for this API surface. It is exposed as
+  `@tracedb/sdk/transport` by the package-ready TypeScript SDK metadata, but it
+  remains the transport layer rather than the public product API. This is not an
+  npm release, not a managed-cloud SDK promise, and not a SQL compatibility
+  claim. It includes OpenAPI-derived schema aliases and typed
   method signatures while keeping known fields optional and unknown JSON fields
   allowed. Runtime validation remains server-side. Scan/query/explain response
   aliases expose current server fields, including record scan counts, query
   rows, score components, access-path explain entries, planner candidates, and
   timing entries. Its local runtime smoke uses
-  Node's experimental TypeScript strip support. The private package under
-  `clients/typescript` exists only for local typechecking plus fake-fetch and
-  real local HTTP smoke validation; it does not declare package publishing
-  fields. It rejects empty or CR/LF-containing `idempotencyKey` request options
-  before `fetchImpl` is called.
+  Node's experimental TypeScript strip support. The `clients/typescript`
+  package exposes `@tracedb/sdk` from `src/index.ts` and checks that entrypoint
+  with `npm run package-smoke`. It rejects empty or CR/LF-containing
+  `idempotencyKey` request options before `fetchImpl` is called.
 - The TypeScript public SDK wrapper under `clients/typescript/src/sdk.ts` is the
   first hand-written platform SDK layer over that generated transport. It
   exposes `TraceDB`, table handles, single and batch inserts, patch,
@@ -345,10 +346,11 @@ evidence only, not full product gate coverage, not `http_demo`, not local
 `doctor http`, not Rust SDK quickstart, not TypeScript smoke, not managed-cloud
 proof, not benchmark evidence, and not SQL compatibility.
 `product-regression --only typescript_check` runs only `npm run check` in
-`clients/typescript`, which currently performs the private package typecheck
-plus dependency-free generated-client smoke, and emits one-step
-`local-product-regression` JSON with `only_step: "typescript_check"`. This is
-generated TypeScript check evidence only, not full product gate coverage, not
+`clients/typescript`, which currently performs the package typecheck plus
+dependency-free generated-client, public SDK, and package-entry smokes, and
+emits one-step `local-product-regression` JSON with
+`only_step: "typescript_check"`. This is TypeScript package boundary evidence
+only, not full product gate coverage, not
 `http_demo`, not local `doctor http`, not Rust SDK quickstart, not TypeScript
 HTTP smoke, not TypeScript gateway smoke, not managed-cloud proof, not
 benchmark evidence, and not SQL compatibility.

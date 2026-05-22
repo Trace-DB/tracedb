@@ -1,20 +1,22 @@
 # TraceDB TypeScript Client And SDK
 
-This directory contains a generated, dependency-free TypeScript `fetch` client
-for the current TraceDB v1 HTTP API plus a hand-written public SDK wrapper over
-that transport.
+This directory contains the package-ready TraceDB public TypeScript SDK plus a
+generated, dependency-free TypeScript `fetch` transport for the current TraceDB
+v1 HTTP API.
 
-It is generated from `docs/api/v1-openapi.json` and is checked in so product
-smokes and examples can import a stable artifact without waiting for a package
-publishing pipeline. It is not a managed-cloud SDK promise and not a published
-npm package contract.
+The transport is generated from `docs/api/v1-openapi.json` and is checked in so
+product smokes and examples can import a stable artifact. The package metadata
+now exposes `@tracedb/sdk` as the public SDK entrypoint and
+`@tracedb/sdk/transport` as the raw generated transport subpath. This is
+package-ready metadata and smoke coverage, not evidence that the package has
+been published to npm and not a managed-cloud SDK promise.
 
-The public wrapper lives in `src/sdk.ts`. It intentionally uses the generated
-`TraceDbClient` as its transport layer instead of duplicating HTTP routes.
-Current public DX starts with `new TraceDB({ url, token })` or
-`TraceDB.fromEnv()`, table handles, record writes, batch ingest, patch,
-scan/get/delete, admin compact/snapshot/restore, and a query builder that
-compiles to the canonical `HybridQuery` body.
+The public package entrypoint is `src/index.ts`, which re-exports the wrapper in
+`src/sdk.ts`. That wrapper intentionally uses the generated `TraceDbClient` as
+its transport layer instead of duplicating HTTP routes. Current public DX starts
+with `new TraceDB({ url, token })` or `TraceDB.fromEnv()`, table handles, record
+writes, batch ingest, patch, scan/get/delete, admin compact/snapshot/restore,
+and a query builder that compiles to the canonical `HybridQuery` body.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
 schemas and uses them in method signatures. These aliases intentionally preserve
@@ -64,8 +66,7 @@ scan/query/explain response aliases typecheck.
 It also typechecks the read-only product response aliases for health,
 readiness, database catalog, branch catalog, public-safe metrics, and admin
 jobs.
-This is runtime smoke coverage for the checked artifact, not a package
-publishing pipeline.
+This is runtime smoke coverage for the checked artifact, not a package publishing pipeline.
 
 The public SDK smoke imports `src/sdk.ts` and verifies the first table/query
 wrapper layer against a fake transport. It checks `TraceDB.fromEnv()` for
@@ -77,6 +78,16 @@ compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
 missing-tenant validation raises `TraceDbRequestError` before `fetchImpl` is
 called. This is public-DX smoke coverage over the generated transport, not
 publishing readiness or managed-cloud proof.
+
+The package entry smoke imports from `@tracedb/sdk` and
+`@tracedb/sdk/transport` through the package `exports` map and verifies the
+public SDK entrypoint, generated transport subpath, representative type exports,
+and config error shape:
+
+```bash
+cd clients/typescript
+npm run package-smoke
+```
 
 Run the real local HTTP smoke from the TypeScript package directory:
 
@@ -189,10 +200,10 @@ server.
 `--skip-typescript` is for the full product gate and non-TypeScript selectors;
 a TypeScript `--only` selector conflicts with --skip-typescript.
 `--only typescript_check` runs only `npm run check`, which currently performs
-the private package typecheck plus dependency-free generated-client and public
-SDK smokes. It does not run `http-smoke`, `gateway-smoke`, `http_demo`, local
-`doctor http`, the Rust SDK quickstart, managed-cloud checks, benchmark
-controls, or SQL compatibility checks.
+the package typecheck plus dependency-free generated-client, public SDK, and
+package-entry smokes. It does not run `http-smoke`, `gateway-smoke`,
+`http_demo`, local `doctor http`, the Rust SDK quickstart, managed-cloud checks,
+benchmark controls, or SQL compatibility checks.
 `--only typescript_http_smoke` runs only `npm run public-http-smoke`, which
 starts its own local `tracedb-server` child process and exercises the public
 TypeScript SDK wrapper over the generated transport. It does not run embedded demo/verify,
@@ -208,7 +219,7 @@ local `doctor http`, the Rust SDK
 quickstart, `typescript_check`, `http-smoke`, managed-cloud checks, benchmark
 controls, or SQL compatibility checks.
 
-Install the local private package tooling and run the typecheck boundary:
+Install the local package tooling and run the package boundary:
 
 ```bash
 cd clients/typescript
@@ -216,6 +227,7 @@ npm ci
 npm run typecheck
 npm run smoke
 npm run public-smoke
+npm run package-smoke
 npm run http-smoke
 npm run public-http-smoke
 npm run quickstart
@@ -223,15 +235,17 @@ npm run gateway-smoke
 npm run check
 ```
 
-The package is marked `private: true` and exists to typecheck the generated
-artifact plus smoke scripts. This is not a package publishing pipeline. It
-deliberately does not declare package publishing fields such as `exports`,
-`main`, `types`, `files`, or `publishConfig`.
+The package is named `@tracedb/sdk`, exposes `.` as the public SDK and
+`./transport` as the generated transport subpath, declares `types`, `files`,
+and public npm publish metadata, and remains source-distribution oriented for
+now with `.ts` entrypoints exercised through Node's experimental TypeScript
+strip support. This is package-ready metadata plus smoke coverage, not a
+published npm artifact or a build/publish pipeline.
 
 ## Local Usage
 
 ```ts
-import { TraceDB, type TableSchema } from "./src/sdk";
+import { TraceDB, type TableSchema } from "@tracedb/sdk";
 
 const db = new TraceDB({
   url: "http://127.0.0.1:8090",
@@ -271,7 +285,7 @@ console.log(result.results);
 The generated transport remains available for raw route access:
 
 ```ts
-import { TraceDbClient } from "./src/client";
+import { TraceDbClient } from "@tracedb/sdk/transport";
 ```
 
 ## Managed-Routing Metadata

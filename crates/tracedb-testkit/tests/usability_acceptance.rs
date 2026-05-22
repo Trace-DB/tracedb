@@ -1609,7 +1609,7 @@ fn generated_typescript_client_smoke_executes_in_node_runtime() {
 }
 
 #[test]
-fn typescript_client_package_declares_private_typecheck_boundary() {
+fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -1623,8 +1623,31 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
             .unwrap_or_else(|error| panic!("read {}: {error}", package_json.display())),
     )
     .expect("parse TypeScript client package.json");
-    assert_eq!(package["private"], json!(true));
+    assert_eq!(package["name"], json!("@tracedb/sdk"));
+    assert_eq!(
+        package["description"],
+        json!("TraceDB public TypeScript SDK over the generated HTTP transport.")
+    );
+    assert_eq!(package["private"], json!(false));
     assert_eq!(package["type"], json!("module"));
+    assert_eq!(package["license"], json!("MIT"));
+    assert_eq!(package["sideEffects"], json!(false));
+    assert_eq!(package["types"], json!("./src/index.ts"));
+    assert_eq!(
+        package["files"],
+        json!(["src/index.ts", "src/sdk.ts", "src/client.ts", "README.md"])
+    );
+    assert_eq!(package["publishConfig"]["access"], json!("public"));
+    assert_eq!(package["exports"]["."]["types"], json!("./src/index.ts"));
+    assert_eq!(package["exports"]["."]["default"], json!("./src/index.ts"));
+    assert_eq!(
+        package["exports"]["./transport"]["types"],
+        json!("./src/client.ts")
+    );
+    assert_eq!(
+        package["exports"]["./transport"]["default"],
+        json!("./src/client.ts")
+    );
     assert_eq!(
         package["scripts"]["typecheck"],
         json!("tsc --noEmit -p tsconfig.json")
@@ -1636,6 +1659,10 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
     assert_eq!(
         package["scripts"]["public-smoke"],
         json!("node --experimental-strip-types public-sdk-smoke.ts")
+    );
+    assert_eq!(
+        package["scripts"]["package-smoke"],
+        json!("node --experimental-strip-types package-entry-smoke.ts")
     );
     assert_eq!(
         package["scripts"]["http-smoke"],
@@ -1655,18 +1682,12 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
     );
     assert_eq!(
         package["scripts"]["check"],
-        json!("npm run typecheck && npm run smoke && npm run public-smoke")
+        json!(
+            "npm run typecheck && npm run smoke && npm run public-smoke && npm run package-smoke"
+        )
     );
     assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));
     assert_eq!(package["devDependencies"]["@types/node"], json!("25.9.0"));
-    assert!(
-        package.get("exports").is_none(),
-        "private TypeScript package should not expose publishing exports"
-    );
-    assert!(
-        package.get("publishConfig").is_none(),
-        "private TypeScript package should not declare publish config"
-    );
 
     let package_lock: Value = serde_json::from_str(
         &std::fs::read_to_string(&package_lock_json)
@@ -1674,6 +1695,9 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
     )
     .expect("parse TypeScript client package-lock.json");
     assert_eq!(package_lock["lockfileVersion"], json!(3));
+    assert_eq!(package_lock["name"], json!("@tracedb/sdk"));
+    assert_eq!(package_lock["packages"][""]["name"], json!("@tracedb/sdk"));
+    assert_eq!(package_lock["packages"][""]["license"], json!("MIT"));
     assert_eq!(
         package_lock["packages"][""]["devDependencies"]["typescript"],
         json!("6.0.3")
@@ -1702,10 +1726,12 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
     assert_eq!(
         tsconfig["include"],
         json!([
+            "src/index.ts",
             "src/client.ts",
             "src/sdk.ts",
             "smoke.ts",
             "public-sdk-smoke.ts",
+            "package-entry-smoke.ts",
             "http-smoke.ts",
             "public-http-smoke.ts",
             "quickstart.ts",

@@ -210,10 +210,10 @@ it does not run embedded demo/verify, `http_demo`, local `doctor http`, the
 Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud checks,
 benchmark controls, or SQL compatibility checks.
 `--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
-which currently performs the private package typecheck plus dependency-free
-generated-client smoke. It emits the normal one-step
+which currently performs the package typecheck plus dependency-free
+generated-client, public SDK, and package-entry smokes. It emits the normal one-step
 `local-product-regression` JSON summary with `only_step: "typescript_check"`.
-This is generated TypeScript check evidence only; it does not run `http_demo`,
+This is TypeScript package boundary evidence only; it does not run `http_demo`,
 local `doctor http`, the Rust SDK quickstart, TypeScript HTTP smoke,
 TypeScript gateway smoke, managed-cloud checks, benchmark controls, or SQL
 compatibility checks.
@@ -372,14 +372,20 @@ that `python3 scripts/platform_conformance.py --surface typescript_sdk` maps
 onto the Platform Contract v0 scenario IDs. It is TypeScript public-DX parity
 evidence, not a published npm package claim.
 
-The generated TypeScript client also has a private local package boundary for
-typechecking the artifact and smoke script:
+The TypeScript SDK now has package-ready metadata for the public SDK entrypoint
+while keeping the generated client as the transport subpath:
 
 ```bash
 cd clients/typescript
 npm ci
 npm run check
 ```
+
+The package is named `@tracedb/sdk`, exports `.` from `src/index.ts`, exports
+the generated transport as `@tracedb/sdk/transport`, and includes a
+`package-smoke` script that imports both paths through the package `exports`
+map. This is source-package metadata and smoke coverage, not evidence of an npm
+release or a build/publish pipeline.
 
 Run the generated TypeScript client against a real local HTTP server with:
 
@@ -501,14 +507,14 @@ server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
   artifact for the current HTTP API. It now includes OpenAPI-derived schema
   aliases and typed method signatures, including concrete health, readiness,
   catalog, metrics, and admin-jobs response aliases, while preserving the API's
-  permissive additional-properties boundary. It is not a published npm package,
-  not a hand-maintained managed SDK, not a strict runtime validator, and not a
-  broader SDK compatibility claim. Its current runtime smoke uses Node's
-  experimental TypeScript strip support. The private package under
-  `clients/typescript` exists only for local typechecking plus fake-fetch and
-  real local HTTP smoke validation; it does not declare package publishing
-  fields. It rejects empty or CR/LF-containing `idempotencyKey` request options
-  before `fetchImpl` is called. `TraceDbHttpError` preserves the raw response
+  permissive additional-properties boundary. It is not a hand-maintained managed
+  SDK, not a strict runtime validator, and not a broader SDK compatibility
+  claim. Its current runtime smoke uses Node's experimental TypeScript strip
+  support. The `clients/typescript` package now declares `@tracedb/sdk` package
+  metadata and exports the generated transport as `@tracedb/sdk/transport`, but
+  this is not evidence of an npm release or build/publish pipeline. It rejects
+  empty or CR/LF-containing `idempotencyKey` request options before `fetchImpl`
+  is called. `TraceDbHttpError` preserves the raw response
   body and exposes parsed `responseJson`, `errorResponse`, `responseError`, and
   `responseCode` when the server or gateway returns the current JSON error
   envelope; stable machine-readable error `code` is preserved when present.

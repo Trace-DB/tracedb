@@ -1,17 +1,41 @@
 {
-  "name": "@tracedb/generated-typescript-client",
+  "name": "@tracedb/sdk",
   "version": "0.1.0-development",
-  "private": true,
+  "description": "TraceDB public TypeScript SDK over the generated HTTP transport.",
+  "private": false,
   "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "types": "./src/index.ts",
+  "files": [
+    "src/index.ts",
+    "src/sdk.ts",
+    "src/client.ts",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./transport": {
+      "types": "./src/client.ts",
+      "default": "./src/client.ts"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --experimental-strip-types smoke.ts",
     "public-smoke": "node --experimental-strip-types public-sdk-smoke.ts",
+    "package-smoke": "node --experimental-strip-types package-entry-smoke.ts",
     "http-smoke": "node --experimental-strip-types http-smoke.ts",
     "public-http-smoke": "node --experimental-strip-types public-http-smoke.ts",
     "quickstart": "node --experimental-strip-types quickstart.ts",
     "gateway-smoke": "node --experimental-strip-types gateway-smoke.ts",
-    "check": "npm run typecheck && npm run smoke && npm run public-smoke"
+    "check": "npm run typecheck && npm run smoke && npm run public-smoke && npm run package-smoke"
   },
   "devDependencies": {
     "@types/node": "25.9.0",
