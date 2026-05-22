@@ -390,6 +390,26 @@ python3 -m runner railway-backup-receipt \
 
 The helper only writes the receipt artifact. It does not create Railway backups,
 restore Railway volumes, or mutate services.
+Use `--preflight-only` when the goal is to validate configured Railway evidence
+before starting expensive scenarios. The command writes the normal
+`suite.json`, `suite.md`, `suite-gate.json`, optional `railway-manifest.json`,
+and optional `railway-artifacts.json`, but skips child scenario execution. For
+backup-required lanes such as `soak_railway` and `release_100k`, a missing or
+failed `--railway-backup-receipt-json` exits blocked before any benchmark child
+run is created:
+
+```bash
+BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
+  --preflight-only \
+  --suite-spec suites/soak_railway.json \
+  --railway-config-from-env \
+  --railway-backup-receipt-json reports/railway-backup-receipt.json \
+  --openrouter-mode off \
+  --target tracedb \
+  --surface sdk \
+  --scenarios sdk_cli_surface
+```
+
 `--railway-restart-redeploy-plan` adds a non-mutating `operation_plan` to the
 manifest and reports `railway_restart_redeploy: plan_only` in the gate. The plan
 lists safe preflight commands such as `railway status --json`,
@@ -410,7 +430,10 @@ snapshot/restore route check, or cannot read the marker from the restored target
 while also carrying an explicit operator plan for the next persistence gate.
 `soak_railway` and `release_100k` also require a passed backup receipt; without
 `--railway-backup-receipt-json`, their gates stay blocked on
-`railway_backup: not_checked`.
+`railway_backup: not_checked`. Modal also accepts `--suite-preflight-only` and
+passes it through to the runner as `--preflight-only`; use it when the receipt
+artifact path is available inside the Modal container and you want the scheduled
+job to validate evidence artifacts before launching the heavy suite work.
 When a Railway manifest is present, `runner suite` also writes
 `railway-artifacts.json` and records it in `suite-gate.json` as
 `artifact_paths.railway_artifacts_json`. That file indexes the suite artifacts

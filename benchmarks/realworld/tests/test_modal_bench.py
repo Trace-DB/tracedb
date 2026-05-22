@@ -258,6 +258,26 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(config.railway_backup_receipt_json, "/tmp/backup-receipt.json")
         self.assertIn("--railway-backup-receipt-json", command)
 
+    def test_suite_preflight_only_passes_runner_flag(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(
+            [
+                "--suite-preset",
+                "soak_railway",
+                "--suite-preflight-only",
+                "--railway-backup-receipt-json",
+                "/tmp/backup-receipt.json",
+                "--run-id",
+                "railway-preflight-test",
+            ]
+        )
+        command = build_suite_command(config)
+
+        self.assertTrue(config.suite_preflight_only)
+        self.assertIn("--preflight-only", command)
+        self.assertIn("--railway-backup-receipt-json", command)
+
     def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 

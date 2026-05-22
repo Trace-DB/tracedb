@@ -187,6 +187,7 @@ class ModalSmokeConfig:
     surface: str = "sdk"
     scenarios: str = "sdk_cli_surface"
     suite_spec: str = ""
+    suite_preflight_only: bool = False
     railway_config_from_env: bool = False
     railway_health_check: bool = False
     railway_health_timeout_seconds: float = 5.0
@@ -483,6 +484,8 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         "--reports-dir",
         config.reports_dir,
     ]
+    if config.suite_preflight_only:
+        command.append("--preflight-only")
     if config.suite_spec:
         command.extend(["--suite-spec", config.suite_spec])
     if config.railway_config_from_env:
@@ -1467,6 +1470,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenarios", default="sdk_cli_surface")
     parser.add_argument("--suite-spec", default="")
     parser.add_argument("--suite-preset", choices=sorted(SUITE_PRESETS), default="")
+    parser.add_argument("--suite-preflight-only", action="store_true")
     parser.add_argument("--railway-config-from-env", action="store_true")
     parser.add_argument("--railway-health-check", action="store_true")
     parser.add_argument("--railway-health-timeout-seconds", type=float, default=5.0)
@@ -1535,6 +1539,8 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         surface=str(preset.get("surface", args.surface)),
         scenarios=str(preset.get("scenarios", args.scenarios)),
         suite_spec=args.suite_spec or str(preset.get("suite_spec", "")),
+        suite_preflight_only=args.suite_preflight_only
+        or bool(preset.get("suite_preflight_only", False)),
         railway_config_from_env=args.railway_config_from_env
         or bool(preset.get("railway_config_from_env", False)),
         railway_health_check=args.railway_health_check

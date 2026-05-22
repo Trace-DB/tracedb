@@ -168,6 +168,14 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Operator-provided Railway backup/restore-validation receipt JSON for backup gates.",
     )
+    suite.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help=(
+            "Write suite/gate/Railway evidence artifacts without running child benchmark "
+            "scenarios. Intended for cheap scheduled-lane receipt validation before heavy work."
+        ),
+    )
 
     railway_receipt = subcommands.add_parser(
         "railway-receipt",
@@ -626,28 +634,29 @@ def run_suite(args: argparse.Namespace) -> int:
     )
     child_reports = []
     exit_code = 0
-    for spec in specs:
-        child_args = copy(args)
-        child_args.run_id = f"{suite_id}-{spec.scenario_id}"
-        child_args.target = spec.target if args.target == "all" else args.target
-        child_args.surface = spec.surface if args.surface == "sdk,cli,http,curl" else args.surface
-        child_args.output_json = str(suite_dir / f"{spec.scenario_id}.json")
-        child_args.output_md = str(suite_dir / f"{spec.scenario_id}.md")
-        try:
-            report, child_exit = execute_benchmark(child_args, run_id=child_args.run_id)
-        except OpenRouterError as error:
-            print(str(error), file=sys.stderr)
-            return 1
-        exit_code = max(exit_code, child_exit)
-        if args.require_services and report["summary"]["unavailable_count"]:
-            exit_code = 1
-        child_reports.append(
-            {
-                "spec": spec,
-                "report": report,
-                "artifact_dir": str(reports_dir / child_args.run_id),
-            }
-        )
+    if not args.preflight_only:
+        for spec in specs:
+            child_args = copy(args)
+            child_args.run_id = f"{suite_id}-{spec.scenario_id}"
+            child_args.target = spec.target if args.target == "all" else args.target
+            child_args.surface = spec.surface if args.surface == "sdk,cli,http,curl" else args.surface
+            child_args.output_json = str(suite_dir / f"{spec.scenario_id}.json")
+            child_args.output_md = str(suite_dir / f"{spec.scenario_id}.md")
+            try:
+                report, child_exit = execute_benchmark(child_args, run_id=child_args.run_id)
+            except OpenRouterError as error:
+                print(str(error), file=sys.stderr)
+                return 1
+            exit_code = max(exit_code, child_exit)
+            if args.require_services and report["summary"]["unavailable_count"]:
+                exit_code = 1
+            child_reports.append(
+                {
+                    "spec": spec,
+                    "report": report,
+                    "artifact_dir": str(reports_dir / child_args.run_id),
+                }
+            )
 
     suite_report = build_suite_report(
         suite_id=suite_id,
@@ -656,6 +665,33 @@ def run_suite(args: argparse.Namespace) -> int:
         records=args.records,
         reports=child_reports,
     )
+    if args.preflight_only:
+        suite_report["preflight"] = {
+            "status": "metadata_only",
+            "scenario_execution": "skipped",
+            "selected_scenarios": [spec.scenario_id for spec in specs],
+        }
+    return _write_suite_outputs(
+        args=args,
+        lab_root=lab_root,
+        suite_dir=suite_dir,
+        suite_id=suite_id,
+        suite_report=suite_report,
+        gate_spec=gate_spec,
+        exit_code=exit_code,
+    )
+
+
+def _write_suite_outputs(
+    *,
+    args: argparse.Namespace,
+    lab_root: Path,
+    suite_dir: Path,
+    suite_id: str,
+    suite_report: dict[str, Any],
+    gate_spec: Any,
+    exit_code: int,
+) -> int:
     railway_manifest = _load_or_write_railway_manifest(args, lab_root, suite_dir, suite_id)
     artifact_paths = {
         "suite_json": "suite.json",
