@@ -52,6 +52,7 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertIn("typescript_sdk", module.contract_surface_ids(manifest))
         self.assertIn("python_sdk", module.contract_surface_ids(manifest))
         self.assertIn("traceql_sqlish", module.contract_surface_ids(manifest))
+        self.assertIn("graphql", module.contract_surface_ids(manifest))
 
     def test_python_sdk_sync_package_declares_contract_surface(self) -> None:
         package_root = ROOT / "clients" / "python"
@@ -347,6 +348,41 @@ class PlatformConformanceTests(unittest.TestCase):
             "map_traceql_sqlish_summary",
             "traceql_sqlish_conformance_summary",
             "invalid SQL-ish",
+        ]:
+            self.assertIn(token, source)
+
+    def test_graphql_surface_reports_compiler_only_not_checked_lane(self) -> None:
+        module = load_module()
+        manifest = module.load_contract(ROOT / "docs" / "platform-contract-v0.json")
+        compiler_summary = {
+            "ok": True,
+            "mode": "graphql-compiler-conformance",
+            "surface": "graphql",
+            "compiler": "graphql_query_from_str",
+            "status": "compiler_checked",
+        }
+
+        surface = module.map_graphql_compiler_summary(manifest, compiler_summary)
+        scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
+
+        self.assertEqual(surface["surface"], "graphql")
+        self.assertEqual(surface["status"], "compiler_checked")
+        self.assertTrue(surface["ok"])
+        self.assertFalse(surface["complete"])
+        self.assertIn("graphql_query_from_str", " ".join(surface["evidence"]))
+        for scenario in module.contract_scenario_ids(manifest):
+            self.assertEqual(scenarios[scenario]["status"], "not_checked")
+            self.assertIn("compiler primitive", scenarios[scenario]["reason"])
+
+    def test_graphql_surface_is_explicit_in_runner_without_endpoint_claims(self) -> None:
+        source = SCRIPT.read_text()
+
+        for token in [
+            "run_graphql_surface",
+            "map_graphql_compiler_summary",
+            "graphql-compiler-conformance",
+            "GraphQL compiler primitive",
+            "not GraphQL HTTP support",
         ]:
             self.assertIn(token, source)
 

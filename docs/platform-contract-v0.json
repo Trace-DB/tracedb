@@ -129,14 +129,16 @@
     {
       "id": "graphql",
       "label": "GraphQL",
-      "status": "bounded_compiler_primitive_checked_no_http_or_conformance_lane",
-      "role": "future schema-generated adapter into the same TraceQuery model; current code is a parser/compiler primitive only",
+      "status": "bounded_compiler_primitive_checked_not_checked_conformance_lane",
+      "role": "future schema-generated adapter into the same TraceQuery model; current code is a parser/compiler primitive with explicit not_checked conformance reporting",
       "evidence": [
         "crates/tracedb-query/src/lib.rs",
         "graphql_query_from_str",
         "query { <table>(tenant_id: \"...\", where: {...}, match: \"...\", near: [...], limit: n, freshness: ALLOW_DIRTY, explain: true) { ... } }",
         "invalid GraphQL adapter errors for mutation/subscription/fragment/alias/unknown argument/resolver semantics",
-        "cargo test -p tracedb-query graphql_query --no-run"
+        "cargo test -p tracedb-query graphql_query --no-run",
+        "scripts/platform_conformance.py --surface graphql",
+        "graphql reports all current v0 scenarios as not_checked until HTTP/schema/resolver behavior exists"
       ]
     }
   ],

@@ -77,7 +77,7 @@ Every product surface must map to these contract components:
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; bounded SQL-ish `SELECT` adapter checked | Adapter into the same TraceQuery/query model, not SQL compatibility. |
-| GraphQL | `graphql` | Bounded compiler primitive checked; no HTTP route or conformance lane yet | Future schema-generated adapter into the same TraceQuery/query model. |
+| GraphQL | `graphql` | Bounded compiler primitive checked; explicit conformance lane reports all scenarios `not_checked` | Future schema-generated adapter into the same TraceQuery/query model. |
 
 Maintenance mode means a platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics.
 
@@ -113,6 +113,7 @@ python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface traceql_sqlish --summary-json /tmp/tracedb-traceql-sqlish-conformance.json
+python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-compiler-conformance.json
 ```
 
 The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`
@@ -136,6 +137,9 @@ and checks the bounded SQL-ish adapter through `/v1/traceql`. It reports
 schema/write/admin scenarios remain explicit `not_checked` results. Future
 surfaces must report unimplemented scenarios as `not_checked` rather than
 silently treating them as success.
+The `graphql` lane runs the compiler no-run check for `graphql_query_from_str`
+and then reports every current v0 scenario as `not_checked` until TraceDB has
+GraphQL HTTP, schema generation, resolver runtime, and adapter parity behavior.
 
 Current verified checkpoint: Modal workspace run `ap-r5VNV1krG3Tck6ZcPTxoxf`
 passed 19/19 commands in 89.373s. Its `platform-conformance-quick` command reported
@@ -247,8 +251,10 @@ name is the table, with arguments such as `tenant_id`, `where`/`filter`,
 compiles directly into `HybridQuery`. Mutations, subscriptions, fragments,
 aliases, unknown arguments, duplicate semantic arguments, and multiple root
 fields fail with `invalid GraphQL adapter` errors. This is parser/compiler
-evidence only; TraceDB still has no GraphQL HTTP endpoint, schema generator,
-resolver runtime, or GraphQL conformance harness lane.
+evidence only; TraceDB still has no GraphQL HTTP endpoint, schema generator, or
+resolver runtime. The conformance runner has an explicit `graphql` lane, but it
+reports all current v0 scenarios as `not_checked` rather than treating the
+compiler primitive as adapter parity.
 
 ## Surface Implementation Rules
 
@@ -274,6 +280,7 @@ Use the smallest ladder that proves the touched surface:
 ```bash
 cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_declares_sdk_conformance_harness -- --exact
 cargo test -p tracedb-query graphql_query --no-run
+python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-compiler-conformance.json
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 -m unittest discover -s clients/python/tests

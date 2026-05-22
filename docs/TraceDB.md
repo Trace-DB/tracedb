@@ -397,7 +397,8 @@ leaving schema/write/admin scenarios `not_checked`. This is
 TraceQL/query-adapter execution evidence only; SQL compatibility, PostgreSQL
 compatibility, and GraphQL HTTP support remain unimplemented. The current
 GraphQL evidence is limited to the bounded `graphql_query_from_str` compiler
-primitive in `tracedb-query`.
+primitive in `tracedb-query` plus an explicit conformance lane that reports all
+current v0 scenarios as `not_checked`.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

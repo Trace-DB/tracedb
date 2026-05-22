@@ -40,6 +40,8 @@ results and installs the Python SDK package before running the sync HTTP smoke
 for `python_sdk` scenario results. The `traceql_sqlish` lane now executes the
 bounded SQL-ish adapter through `/v1/traceql` and reports query, TraceQL string
 execution, explain, and error-envelope behavior against the same manifest.
+The `graphql` lane runs only the bounded compiler check and reports all current
+v0 scenarios as `not_checked`.
 The current HTTP direct, Rust SDK, TypeScript SDK, and Python SDK lanes cover
 all required v0 scenarios; unimplemented future lanes must keep explicit
 `not_checked` results until they reach parity. The SQL-ish adapter lane remains
@@ -51,7 +53,7 @@ accepts the bounded SQL-ish adapter form `EXPLAIN? SELECT * FROM <table> WHERE
 tenant_id = <value> [AND field = value]* [LIMIT n]`; broader SQL,
 PostgreSQL compatibility, and GraphQL HTTP support remain unimplemented. The
 current GraphQL evidence is limited to the bounded `graphql_query_from_str`
-compiler primitive in `tracedb-query`.
+compiler primitive plus the explicit `not_checked` conformance lane.
 
 Local product smoke:
 

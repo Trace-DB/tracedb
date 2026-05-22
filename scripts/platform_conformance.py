@@ -24,6 +24,11 @@ TRACEQL_SQLISH_NOT_CHECKED_REASON = (
     "SQL-ish adapter surface only proves query/explain/error behavior; "
     "schema/write/admin scenarios remain HTTP/SDK surfaces"
 )
+GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE = "GraphQL compiler primitive graphql_query_from_str"
+GRAPHQL_COMPILER_NOT_CHECKED_REASON = (
+    "GraphQL compiler primitive exists, but this is not GraphQL HTTP support, "
+    "schema generation, a resolver runtime, or scenario parity"
+)
 SERVER_READY_TIMEOUT_SECONDS = 120.0
 
 
@@ -1076,6 +1081,50 @@ def map_traceql_sqlish_summary(
     )
 
 
+def graphql_compiler_conformance_summary() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "mode": "graphql-compiler-conformance",
+        "surface": "graphql",
+        "compiler": "graphql_query_from_str",
+        "status": "compiler_checked",
+    }
+
+
+def map_graphql_compiler_summary(
+    manifest: dict[str, Any],
+    compiler_summary: dict[str, Any],
+) -> dict[str, Any]:
+    if compiler_summary.get("ok") is not True:
+        return finalize_surface(
+            "graphql",
+            "failed",
+            [
+                failed(
+                    scenario_id,
+                    RuntimeError("GraphQL compiler primitive check failed"),
+                )
+                for scenario_id in contract_scenario_ids(manifest)
+            ],
+            evidence=[GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE],
+        )
+
+    scenarios = [
+        not_checked(scenario_id, GRAPHQL_COMPILER_NOT_CHECKED_REASON)
+        for scenario_id in contract_scenario_ids(manifest)
+    ]
+    return finalize_surface(
+        "graphql",
+        "compiler_checked",
+        scenarios,
+        evidence=[
+            GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE,
+            "cargo test -p tracedb-query graphql_query --no-run",
+            "GraphQL scenarios remain not_checked until HTTP/schema/resolver behavior exists",
+        ],
+    )
+
+
 def run_rust_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="tracedb-rust-sdk-conformance-") as temp_dir:
         command = run_command(
@@ -1328,6 +1377,40 @@ def run_traceql_sqlish_surface(manifest: dict[str, Any], repo_root: Path) -> dic
     return map_traceql_sqlish_summary(manifest, smoke_summary)
 
 
+def run_graphql_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    command = run_command(
+        ["cargo", "test", "-p", "tracedb-query", "graphql_query", "--no-run"],
+        repo_root,
+    )
+    if not command["ok"]:
+        return finalize_surface(
+            "graphql",
+            "failed",
+            [
+                scenario_result(
+                    scenario_id,
+                    "failed",
+                    reason=(
+                        "GraphQL compiler primitive no-run compile failed: "
+                        f"stdout={command['stdout'][-12_000:]} stderr={command['stderr_tail']}"
+                    ),
+                )
+                for scenario_id in contract_scenario_ids(manifest)
+            ],
+            evidence=[
+                GRAPHQL_COMPILER_CONFORMANCE_EVIDENCE,
+                json.dumps({"command": command["argv"], "returncode": command["returncode"]}),
+            ],
+        )
+    surface = map_graphql_compiler_summary(manifest, graphql_compiler_conformance_summary())
+    surface["command"] = {
+        "argv": command["argv"],
+        "duration_s": command["duration_s"],
+        "returncode": command["returncode"],
+    }
+    return surface
+
+
 def build_report(manifest: dict[str, Any], surfaces: list[dict[str, Any]]) -> dict[str, Any]:
     totals = {
         "surfaces": len(surfaces),
@@ -1375,6 +1458,8 @@ def run_selected_surfaces(
             surfaces.append(run_python_sdk_surface(manifest, repo_root))
         elif surface_id == "traceql_sqlish":
             surfaces.append(run_traceql_sqlish_surface(manifest, repo_root))
+        elif surface_id == "graphql":
+            surfaces.append(run_graphql_surface(manifest, repo_root))
         else:
             surfaces.append(
                 empty_surface_report(

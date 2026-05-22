@@ -153,6 +153,17 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 ],
             },
             {
+                "name": "graphql-compiler-conformance",
+                "argv": [
+                    "python3",
+                    "scripts/platform_conformance.py",
+                    "--surface",
+                    "graphql",
+                    "--summary-json",
+                    "/tmp/tracedb-graphql-compiler-conformance.json",
+                ],
+            },
+            {
                 "name": "typescript-npm-ci",
                 "argv": ["npm", "ci"],
                 "cwd": "clients/typescript",

@@ -23,6 +23,7 @@ python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
 python3 scripts/platform_conformance.py --surface traceql_sqlish --summary-json /tmp/tracedb-traceql-sqlish-conformance.json
+python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-compiler-conformance.json
 ```
 
 It reads `docs/platform-contract-v0.json`, drives a raw HTTP `http_direct` lane
@@ -38,7 +39,8 @@ schema/write/admin scenarios remain explicit `not_checked` results until that
 adapter surface owns more semantics.
 GraphQL has a bounded `graphql_query_from_str` compiler primitive in
 `tracedb-query`, but there is still no GraphQL HTTP endpoint, schema generator,
-resolver runtime, or conformance lane.
+or resolver runtime. The `graphql` conformance lane is explicit and reports all
+current v0 scenarios as `not_checked` until that behavior exists.
 
 ## Quickstart
 
