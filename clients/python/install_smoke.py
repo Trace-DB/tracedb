@@ -106,6 +106,7 @@ def _write_consumer(consumer: Path) -> None:
                     "TRACEDB_DATABASE_ID": "db_local",
                     "TRACEDB_BRANCH_ID": "db_local:main",
                     "TRACEDB_TIMEOUT_MS": "2500",
+                    "TRACEDB_SAFE_RETRIES": "2",
                 }
             )
             assert db.url == "http://127.0.0.1:8090"
@@ -113,6 +114,7 @@ def _write_consumer(consumer: Path) -> None:
             assert db.database_id == "db_local"
             assert db.branch_id == "db_local:main"
             assert db.timeout == 2.5
+            assert db.safe_retries == 2
 
             table = db.table("docs").tenant("tenant-a").limit(20)
             assert table.name == "docs"

@@ -83,8 +83,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
   lane over this API surface. It is stdlib-only for now and exposes `TraceDB`,
   table handles, single and batch inserts, patch, get, scan, delete,
   health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
-  routing metadata injection, `Idempotency-Key` support, parsed HTTP error
-  envelopes, and query-builder chaining through `where`, `match_text`, `near`,
+  routing metadata injection, `Idempotency-Key` support, read-only
+  `safe_retries` / `TRACEDB_SAFE_RETRIES`, parsed HTTP error envelopes, and
+  query-builder chaining through `where`, `match_text`, `near`,
   `with_options`, `limit`, `all`, and `explain_plan`. It is covered by
   `python3 clients/python/http_smoke.py` and
   `python3 scripts/platform_conformance.py --surface python_sdk`; the

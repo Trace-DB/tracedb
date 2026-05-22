@@ -44,10 +44,13 @@ class TraceDB:
     database_id: str | None = None
     branch_id: str | None = None
     timeout: float = 5.0
+    safe_retries: int = 0
 
     def __post_init__(self) -> None:
         if not self.url or not self.url.strip():
             raise TraceDBRequestError("CONFIG", "url", "TraceDB requires a non-empty url")
+        if self.safe_retries < 0:
+            raise TraceDBRequestError("CONFIG", "safe_retries", "safe_retries must be greater than or equal to 0")
         object.__setattr__(self, "url", self.url.rstrip("/"))
 
     @classmethod
@@ -59,6 +62,7 @@ class TraceDB:
         database_id: str | None = None,
         branch_id: str | None = None,
         timeout: float | None = None,
+        safe_retries: int | None = None,
         env: Mapping[str, str] | None = None,
     ) -> "TraceDB":
         source = os.environ if env is None else env
@@ -86,6 +90,12 @@ class TraceDB:
                 "TRACEDB_TIMEOUT_MS must be greater than 0",
             )
 
+        resolved_safe_retries = (
+            safe_retries
+            if safe_retries is not None
+            else _parse_optional_nonnegative_int("TRACEDB_SAFE_RETRIES", source.get("TRACEDB_SAFE_RETRIES"))
+        )
+
         kwargs: dict[str, Any] = {
             "url": resolved_url,
             "token": token if token is not None else source.get("TRACEDB_TOKEN"),
@@ -94,6 +104,8 @@ class TraceDB:
         }
         if resolved_timeout is not None:
             kwargs["timeout"] = resolved_timeout
+        if resolved_safe_retries is not None:
+            kwargs["safe_retries"] = resolved_safe_retries
         return cls(**kwargs)
 
     def request_json(
@@ -123,18 +135,23 @@ class TraceDB:
             headers=headers,
             method=method,
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                payload = response.read().decode("utf-8")
-        except urllib.error.HTTPError as error:
-            payload = error.read().decode("utf-8")
-            raise TraceDBHTTPError(method, path, error.code, payload) from error
-        if not payload:
-            return {}
-        parsed = _loads_json(payload)
-        if not isinstance(parsed, dict):
-            raise TraceDBRequestError(method, path, f"expected JSON object response, got {payload!r}")
-        return parsed
+        attempts = _attempt_count(method, path, self.safe_retries)
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    payload = response.read().decode("utf-8")
+            except urllib.error.HTTPError as error:
+                if _should_retry_http_error(method, path, error.code, attempt, attempts):
+                    continue
+                payload = error.read().decode("utf-8")
+                raise TraceDBHTTPError(method, path, error.code, payload) from error
+            if not payload:
+                return {}
+            parsed = _loads_json(payload)
+            if not isinstance(parsed, dict):
+                raise TraceDBRequestError(method, path, f"expected JSON object response, got {payload!r}")
+            return parsed
+        raise TraceDBRequestError(method, path, "request retry loop exhausted without a response")
 
     def ready(self) -> JsonObject:
         return self.request_json("GET", "/v1/ready")
@@ -404,6 +421,39 @@ def _validate_idempotency_key(method: str, path: str, key: str) -> None:
         raise TraceDBRequestError(method, path, "idempotency key cannot be empty")
     if "\r" in key or "\n" in key:
         raise TraceDBRequestError(method, path, "idempotency key cannot contain CR/LF")
+
+
+def _parse_optional_nonnegative_int(variable: str, value: str | None) -> int | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise TraceDBRequestError("CONFIG", variable, f"{variable} must be a non-negative integer") from error
+    if parsed < 0:
+        raise TraceDBRequestError("CONFIG", variable, f"{variable} must be a non-negative integer")
+    return parsed
+
+
+def _attempt_count(method: str, path: str, safe_retries: int) -> int:
+    if _is_retry_safe_request(method, path):
+        return safe_retries + 1
+    return 1
+
+
+def _should_retry_http_error(method: str, path: str, status: int, attempt: int, attempts: int) -> bool:
+    return _is_retry_safe_request(method, path) and status >= 500 and attempt + 1 < attempts
+
+
+def _is_retry_safe_request(method: str, path: str) -> bool:
+    return (method, path.split("?", 1)[0]) in {
+        ("GET", "/v1/health"),
+        ("GET", "/v1/ready"),
+        ("POST", "/v1/records/get"),
+        ("POST", "/v1/records/scan"),
+        ("POST", "/v1/query"),
+        ("POST", "/v1/explain"),
+    }
 
 
 def _normalize_freshness(freshness: str) -> str:

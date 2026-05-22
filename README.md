@@ -471,8 +471,11 @@ The client is stdlib-only for now, exposes table handles, a query builder,
 health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
 routing metadata injection, `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
-`TRACEDB_TIMEOUT_MS`, `Idempotency-Key` support, and parsed HTTP error
-envelopes. The unit lane checks the local package shape and env config helper.
+`TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, `Idempotency-Key` support, and
+parsed HTTP error envelopes. `safe_retries` retries transient HTTP 5xx
+responses only for health/read routes: health, ready, get, scan, query, and
+explain. It does not retry writes or admin mutations. The unit lane checks the
+local package shape and env config helper.
 The install smoke prefers a temporary venv, installs `clients/python`, and runs
 a consumer from outside the repo so source-path imports cannot mask packaging
 drift; on images without working `ensurepip`, it falls back to an isolated

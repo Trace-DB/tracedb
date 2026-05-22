@@ -70,6 +70,8 @@ class PlatformConformanceTests(unittest.TestCase):
             "Idempotency-Key",
             "database_id",
             "branch_id",
+            "safe_retries",
+            "TRACEDB_SAFE_RETRIES",
         ]:
             self.assertIn(token, client_source)
 

@@ -341,10 +341,12 @@ handles and a query builder with `insert`, `insert_batch`, `patch`, `get`,
 `scan`, `delete`, `where`, `match_text`, `near`, `with_options`, `limit`,
 `all`, and `explain_plan`, plus health/catalog/metrics/admin helpers,
 managed `database_id` / `branch_id` routing metadata injection,
-`Idempotency-Key` support, and parsed HTTP error envelopes. The env helper reads
-`TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
-`TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`; `python3 -m unittest discover -s
-clients/python/tests` now checks the local package shape and config helper.
+`Idempotency-Key` support, parsed HTTP error envelopes, and read-only
+`safe_retries` for health, ready, get, scan, query, and explain. The env helper
+reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
+`TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and `TRACEDB_SAFE_RETRIES`;
+`python3 -m unittest discover -s clients/python/tests` now checks the local
+package shape and config helper.
 `python3 clients/python/install_smoke.py` prefers a temporary venv, installs
 `clients/python`, and runs a consumer from outside the repo so packaging drift
 is visible; on images without working `ensurepip`, it falls back to an isolated

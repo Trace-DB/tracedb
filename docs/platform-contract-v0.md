@@ -73,7 +73,7 @@ Every product surface must map to these contract components:
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config | Hand-written `TraceDB` table/query wrapper over the generated transport. |
-| Python SDK | `python_sdk` | Sync HTTP smoked from installed package | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
+| Python SDK | `python_sdk` | Sync HTTP smoked from installed package with read-only safe retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
 
