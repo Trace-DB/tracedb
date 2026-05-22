@@ -401,6 +401,71 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "passed")
         self.assertEqual(gate["status"], "usable")
 
+    def test_railway_restart_redeploy_plan_writes_manifest_and_gate_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-plan-suite-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/railway_stateful.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-restart-redeploy-plan",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-plan-suite-test"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+
+        self.assertEqual(manifest["operation_plan"]["status"], "plan_only")
+        self.assertFalse(manifest["operation_plan"]["execution"]["executed"])
+        self.assertEqual(
+            gate["claim_status"]["railway_restart_redeploy"],
+            "plan_only",
+        )
+        self.assertEqual(gate["status"], "usable")
+        self.assertNotIn("railway-token-secret", repr(manifest))
+
     def test_suite_report_marks_unavailable_external_controls(self) -> None:
         child_report = {
             "summary": {

@@ -32,6 +32,7 @@ from .types import RunConfig
 try:
     from railway_bench import (
         build_railway_manifest,
+        build_railway_operation_plan,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_stateful_smoke,
@@ -39,6 +40,7 @@ try:
 except ImportError:  # pragma: no cover - package import path used by unit discovery.
     from ..railway_bench import (
         build_railway_manifest,
+        build_railway_operation_plan,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_stateful_smoke,
@@ -98,6 +100,11 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=5.0,
         help="Per-request timeout for --railway-stateful-smoke.",
+    )
+    suite.add_argument(
+        "--railway-restart-redeploy-plan",
+        action="store_true",
+        help="Record a non-mutating Railway restart/redeploy readiness plan in railway-manifest.json.",
     )
 
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
@@ -625,11 +632,17 @@ def _load_or_write_railway_manifest(
             if args.railway_stateful_smoke
             else None
         )
+        operation_plan = (
+            build_railway_operation_plan(config, suite_id=suite_id)
+            if args.railway_restart_redeploy_plan
+            else None
+        )
         manifest = build_railway_manifest(
             config,
             suite_id=suite_id,
             endpoint_health=endpoint_health,
             stateful_smoke=stateful_smoke,
+            operation_plan=operation_plan,
         )
         _write_railway_manifest(manifest, suite_dir / "railway-manifest.json")
         return manifest

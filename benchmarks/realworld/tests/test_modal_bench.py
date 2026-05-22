@@ -143,9 +143,11 @@ class ModalBenchTests(unittest.TestCase):
         self.assertTrue(config.railway_config_from_env)
         self.assertTrue(config.railway_health_check)
         self.assertTrue(config.railway_stateful_smoke)
+        self.assertTrue(config.railway_restart_redeploy_plan)
         self.assertIn("--railway-config-from-env", command)
         self.assertIn("--railway-health-check", command)
         self.assertIn("--railway-stateful-smoke", command)
+        self.assertIn("--railway-restart-redeploy-plan", command)
 
     def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
         from modal_bench import build_suite_command, _parse_args
@@ -164,6 +166,15 @@ class ModalBenchTests(unittest.TestCase):
 
         self.assertTrue(config.railway_stateful_smoke)
         self.assertIn("--railway-stateful-smoke", command)
+
+    def test_railway_restart_redeploy_plan_can_be_enabled_without_preset(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(["--railway-restart-redeploy-plan", "--run-id", "railway-plan-test"])
+        command = build_suite_command(config)
+
+        self.assertTrue(config.railway_restart_redeploy_plan)
+        self.assertIn("--railway-restart-redeploy-plan", command)
 
     def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env

@@ -71,6 +71,7 @@ def build_railway_manifest(
     suite_id: str,
     endpoint_health: Mapping[str, Any] | None = None,
     stateful_smoke: Mapping[str, Any] | None = None,
+    operation_plan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = validate_railway_config(config)
     services = []
@@ -111,7 +112,86 @@ def build_railway_manifest(
         manifest["endpoint_health"] = dict(endpoint_health)
     if stateful_smoke is not None:
         manifest["stateful_smoke"] = dict(stateful_smoke)
+    if operation_plan is not None:
+        manifest["operation_plan"] = dict(operation_plan)
     return manifest
+
+
+def build_railway_operation_plan(
+    config: Mapping[str, Any],
+    *,
+    suite_id: str,
+) -> dict[str, Any]:
+    validation = validate_railway_config(config)
+    service_id = str(config.get("tracedb_service_id", ""))
+    operation_status = "manual_required" if validation["ok"] else "blocked_by_missing_config"
+    redeploy_command = f'railway up --detach -m "TraceDB benchmark redeploy {_safe_token(suite_id)}"'
+    preflight = [
+        {
+            "name": "cli_context",
+            "command": "railway status --json",
+            "mutates": False,
+            "required": True,
+        },
+        {
+            "name": "service_inventory",
+            "command": "railway service status --all --json",
+            "mutates": False,
+            "required": True,
+        },
+    ]
+    if service_id:
+        preflight.append(
+            {
+                "name": "recent_service_logs",
+                "command": f"railway logs --service {service_id} --lines 200 --json",
+                "mutates": False,
+                "required": False,
+            }
+        )
+    return {
+        "kind": "railway_restart_redeploy_plan",
+        "suite_id": suite_id,
+        "status": "plan_only" if validation["ok"] else "missing_config",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "missing": validation["missing"],
+        "warnings": validation["warnings"],
+        "service": {
+            "project_id": config.get("project_id", ""),
+            "environment_id": config.get("environment_id", ""),
+            "service_id": service_id,
+            "volume_mount_path": config.get("tracedb_volume_mount_path", ""),
+        },
+        "execution": {
+            "executed": False,
+            "execute_by_default": False,
+            "requires_explicit_operator": True,
+        },
+        "preflight": preflight,
+        "operations": {
+            "restart": {
+                "status": operation_status,
+                "mutates": True,
+                "execute_by_default": False,
+                "command": "resolve restart command against the installed Railway CLI/API before execution",
+                "notes": [
+                    "restart command syntax is intentionally not inferred by the benchmark harness",
+                    "capture health and marker smoke before and after restart",
+                ],
+            },
+            "redeploy": {
+                "status": operation_status,
+                "mutates": True,
+                "execute_by_default": False,
+                "command": redeploy_command,
+                "notes": [
+                    "requires linked Railway project/environment/service context",
+                    "capture health and marker smoke before and after redeploy",
+                ],
+            },
+        },
+        "claim_boundary": "plan_only_not_executed_no_restart_redeploy_or_persistence_proof",
+    }
 
 
 def run_railway_endpoint_health(

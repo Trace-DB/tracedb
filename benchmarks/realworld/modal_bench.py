@@ -126,6 +126,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_config_from_env": True,
         "railway_health_check": True,
         "railway_stateful_smoke": True,
+        "railway_restart_redeploy_plan": True,
     },
     "release_100k": {
         "suite_spec": "benchmarks/realworld/suites/release_100k.json",
@@ -140,6 +141,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_config_from_env": True,
         "railway_health_check": True,
         "railway_stateful_smoke": True,
+        "railway_restart_redeploy_plan": True,
     },
     "soak_railway": {
         "suite_spec": "benchmarks/realworld/suites/soak_railway.json",
@@ -153,6 +155,7 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "railway_config_from_env": True,
         "railway_health_check": True,
         "railway_stateful_smoke": True,
+        "railway_restart_redeploy_plan": True,
     },
     "manual_1m": {
         "suite_spec": "benchmarks/realworld/suites/manual_1m.json",
@@ -183,6 +186,7 @@ class ModalSmokeConfig:
     railway_health_timeout_seconds: float = 5.0
     railway_stateful_smoke: bool = False
     railway_stateful_smoke_timeout_seconds: float = 5.0
+    railway_restart_redeploy_plan: bool = False
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
     tracedb_ingest_mode: str = "per_record"
@@ -481,6 +485,8 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
                 str(config.railway_stateful_smoke_timeout_seconds),
             ]
         )
+    if config.railway_restart_redeploy_plan:
+        command.append("--railway-restart-redeploy-plan")
     command.extend(["--scenarios", config.scenarios])
     if config.embedding_dimensions is not None:
         command.extend(["--embedding-dimensions", str(config.embedding_dimensions)])
@@ -1424,6 +1430,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--railway-health-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--railway-stateful-smoke", action="store_true")
     parser.add_argument("--railway-stateful-smoke-timeout-seconds", type=float, default=5.0)
+    parser.add_argument("--railway-restart-redeploy-plan", action="store_true")
     parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
     parser.add_argument("--openrouter-cap", default="moderate")
     parser.add_argument(
@@ -1485,6 +1492,8 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         railway_stateful_smoke=args.railway_stateful_smoke
         or bool(preset.get("railway_stateful_smoke", False)),
         railway_stateful_smoke_timeout_seconds=args.railway_stateful_smoke_timeout_seconds,
+        railway_restart_redeploy_plan=args.railway_restart_redeploy_plan
+        or bool(preset.get("railway_restart_redeploy_plan", False)),
         openrouter_mode=args.openrouter_mode,
         openrouter_cap=args.openrouter_cap,
         tracedb_ingest_mode=str(

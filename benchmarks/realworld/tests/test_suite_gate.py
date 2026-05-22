@@ -272,6 +272,72 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(gate["status"], "usable")
         self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "passed")
 
+    def test_railway_operation_plan_is_recorded_without_claiming_restart_proof(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [
+                    {
+                        "role": "tracedb",
+                        "service_id": "service_tracedb",
+                        "configured": True,
+                    }
+                ],
+                "operation_plan": {
+                    "status": "plan_only",
+                    "execution": {"executed": False},
+                    "claim_boundary": "plan_only_not_executed_no_restart_redeploy_or_persistence_proof",
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(gate["claim_status"]["railway_restart_redeploy"], "plan_only")
+
+    def test_railway_operation_execution_failure_blocks_when_manifest_includes_it(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [
+                    {
+                        "role": "tracedb",
+                        "service_id": "service_tracedb",
+                        "configured": True,
+                    }
+                ],
+                "operation_plan": {
+                    "status": "failed",
+                    "execution": {"executed": True},
+                    "errors": ["restart command failed"],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_restart_redeploy"], "failed")
+        self.assertTrue(
+            any("restart/redeploy" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
     def test_gate_json_writer_persists_stable_artifact(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "platform_pr.json")
         gate = build_suite_gate(

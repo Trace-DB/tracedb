@@ -157,6 +157,11 @@ def build_suite_gate(
         blocking_failures.append(
             f"Railway stateful smoke failed with status={railway_stateful_smoke}"
         )
+    railway_restart_redeploy = _railway_restart_redeploy_status(railway_manifest)
+    if _railway_restart_redeploy_failed(railway_manifest, railway_restart_redeploy):
+        blocking_failures.append(
+            f"Railway restart/redeploy check failed with status={railway_restart_redeploy}"
+        )
 
     if control_status == "external_control_unavailable" and not spec.requires_external_controls:
         warnings.append("external controls were requested but unavailable")
@@ -193,6 +198,7 @@ def build_suite_gate(
             "external_control_available": external_control_available,
             "railway_endpoint_health": railway_endpoint_health,
             "railway_stateful_smoke": railway_stateful_smoke,
+            "railway_restart_redeploy": railway_restart_redeploy,
             "unsupported_coverage": spec.unsupported_coverage,
         },
         "artifact_paths": artifact_paths,
@@ -246,6 +252,29 @@ def _railway_stateful_smoke_status(railway_manifest: dict[str, Any] | None) -> s
         return "not_checked"
     status = stateful_smoke.get("status")
     return str(status) if status else "unknown"
+
+
+def _railway_restart_redeploy_status(railway_manifest: dict[str, Any] | None) -> str:
+    if not railway_manifest:
+        return "not_checked"
+    operation_plan = railway_manifest.get("operation_plan")
+    if not isinstance(operation_plan, dict):
+        return "not_checked"
+    status = operation_plan.get("status")
+    return str(status) if status else "unknown"
+
+
+def _railway_restart_redeploy_failed(
+    railway_manifest: dict[str, Any] | None, status: str
+) -> bool:
+    if status == "not_checked":
+        return False
+    operation_plan = (railway_manifest or {}).get("operation_plan")
+    execution = operation_plan.get("execution", {}) if isinstance(operation_plan, dict) else {}
+    executed = bool(execution.get("executed")) if isinstance(execution, dict) else False
+    if executed and status not in {"passed", "completed"}:
+        return True
+    return status not in {"plan_only", "missing_config", "passed", "completed"}
 
 
 def _dict(payload: dict[str, Any], key: str, source: str) -> dict[str, Any]:

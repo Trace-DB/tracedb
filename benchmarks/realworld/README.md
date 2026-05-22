@@ -296,6 +296,7 @@ BENCH_DISABLE_ENV_FILE=1 python3 -m runner suite \
   --railway-config-from-env \
   --railway-health-check \
   --railway-stateful-smoke \
+  --railway-restart-redeploy-plan \
   --openrouter-mode off \
   --target tracedb \
   --surface sdk \
@@ -312,14 +313,22 @@ one marker record through `POST /v1/records/put`, reads it back through
 gate if the requested marker is not visible. This proves live write/read
 behavior for the current endpoint only: it still does not create services,
 restart services, redeploy images, or prove volume survival across a restart.
-Backups, usage limits, SSH key setup, restart/redeploy execution, and restore
-validation remain required before the `railway_stateful`, `soak_railway`, or
-`release_100k` specs should be treated as full Railway product proof.
+`--railway-restart-redeploy-plan` adds a non-mutating `operation_plan` to the
+manifest and reports `railway_restart_redeploy: plan_only` in the gate. The plan
+lists safe preflight commands such as `railway status --json`,
+`railway service status --all --json`, and service logs, plus guarded operator
+hints for restart/redeploy. It does not execute Railway mutations and must not
+be counted as persistence proof. Backups, usage limits, SSH key setup,
+restart/redeploy execution, and restore validation remain required before the
+`railway_stateful`, `soak_railway`, or `release_100k` specs should be treated as
+full Railway product proof.
 
 The Modal `railway_stateful`, `soak_railway`, and `release_100k` presets pass
 `--railway-config-from-env`, `--railway-health-check`, and
-`--railway-stateful-smoke`, so scheduled or remote Railway lanes fail fast when
-the persistent lab is not reachable or cannot accept a marker write/read.
+`--railway-stateful-smoke`, and `--railway-restart-redeploy-plan`, so scheduled
+or remote Railway lanes fail fast when the persistent lab is not reachable or
+cannot accept a marker write/read while also carrying an explicit operator plan
+for the next persistence gate.
 
 ## Modal CPU/RAM Smoke
 

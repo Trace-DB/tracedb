@@ -13,6 +13,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from railway_bench import (
+    build_railway_operation_plan,
     build_railway_manifest,
     load_railway_config,
     redact_env,
@@ -331,6 +332,62 @@ class RailwayBenchTests(unittest.TestCase):
         )
 
         self.assertEqual(manifest["stateful_smoke"], stateful_smoke)
+
+    def test_operation_plan_records_restart_redeploy_readiness_without_leaking_token(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+
+        plan = build_railway_operation_plan(config, suite_id="railway-test")
+
+        self.assertEqual(plan["status"], "plan_only")
+        self.assertFalse(plan["execution"]["executed"])
+        self.assertEqual(plan["service"]["service_id"], "service_tracedb")
+        self.assertIn("restart", plan["operations"])
+        self.assertIn("redeploy", plan["operations"])
+        self.assertIn("railway status --json", [step["command"] for step in plan["preflight"]])
+        self.assertTrue(any("railway service status" in step["command"] for step in plan["preflight"]))
+        self.assertTrue(any("railway logs --service service_tracedb" in step["command"] for step in plan["preflight"]))
+        self.assertIn("plan_only_not_executed", plan["claim_boundary"])
+        self.assertNotIn("railway-token-secret", repr(plan))
+
+    def test_operation_plan_marks_missing_config_without_blocking_on_live_mutation(self) -> None:
+        config = load_railway_config({"RAILWAY_API_TOKEN": "railway-token-secret"})
+
+        plan = build_railway_operation_plan(config, suite_id="railway-test")
+
+        self.assertEqual(plan["status"], "missing_config")
+        self.assertFalse(plan["execution"]["executed"])
+        self.assertIn("RAILWAY_PROJECT_ID", plan["missing"])
+        self.assertIn("TRACEDB_RAILWAY_SERVICE_ID", plan["missing"])
+
+    def test_manifest_can_include_operation_plan(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+        operation_plan = build_railway_operation_plan(config, suite_id="railway-test")
+
+        manifest = build_railway_manifest(
+            config,
+            suite_id="railway-test",
+            operation_plan=operation_plan,
+        )
+
+        self.assertEqual(manifest["operation_plan"], operation_plan)
 
 
 if __name__ == "__main__":
