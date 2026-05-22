@@ -151,8 +151,9 @@ and `explainPlan`. `TraceDB.fromEnv()` reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS` so the TypeScript public SDK shares the same connection and
 routing config boundary as Rust and Python. The wrapper is fake-fetch,
-build/pack, package-entry, and typecheck guarded and now has real local HTTP and
-gateway smokes through `npm run public-http-smoke` and `npm run gateway-smoke`.
+build/pack, packed temp-consumer install, package-entry, and typecheck guarded
+and now has real local HTTP and gateway smokes through `npm run
+public-http-smoke` and `npm run gateway-smoke`.
 The
 public HTTP smoke now emits machine-readable
 idempotency and error-envelope evidence for `scripts/platform_conformance.py

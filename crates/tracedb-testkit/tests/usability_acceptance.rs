@@ -1676,6 +1676,10 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         json!("npm pack --dry-run --json")
     );
     assert_eq!(
+        package["scripts"]["consumer-smoke"],
+        json!("node scripts/packed-consumer-smoke.mjs")
+    );
+    assert_eq!(
         package["scripts"]["http-smoke"],
         json!("node --experimental-strip-types http-smoke.ts")
     );
@@ -1694,7 +1698,7 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     assert_eq!(
         package["scripts"]["check"],
         json!(
-            "npm run typecheck && npm run smoke && npm run public-smoke && npm run build && npm run package-smoke && npm run pack-dry-run"
+            "npm run typecheck && npm run smoke && npm run public-smoke && npm run build && npm run package-smoke && npm run pack-dry-run && npm run consumer-smoke"
         )
     );
     assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));
@@ -1826,6 +1830,27 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         assert!(
             rewrite_declarations.contains(token),
             "TypeScript declaration rewrite script should include {token}"
+        );
+    }
+
+    let consumer_smoke =
+        std::fs::read_to_string(root.join("clients/typescript/scripts/packed-consumer-smoke.mjs"))
+            .expect("read TypeScript packed consumer smoke");
+    for token in [
+        "mkdtempSync",
+        "npm",
+        "pack",
+        "--pack-destination",
+        "npm",
+        "install",
+        "@tracedb/sdk",
+        "@tracedb/sdk/transport",
+        "node_modules/@tracedb/sdk/dist/index.js",
+        "typescript packed consumer smoke ok",
+    ] {
+        assert!(
+            consumer_smoke.contains(token),
+            "TypeScript packed consumer smoke should include {token}"
         );
     }
 
@@ -1964,6 +1989,7 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         "npm run build",
         "npm run package-smoke",
         "npm run pack-dry-run",
+        "npm run consumer-smoke",
         "npm run http-smoke",
         "npm run public-http-smoke",
         "npm run quickstart",

@@ -67,8 +67,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
   package builds `@tracedb/sdk` from `src/index.ts` into `dist/index.js` and
   `dist/index.d.ts`, exposes `@tracedb/sdk/transport` from `dist/client.js` and
   `dist/client.d.ts`, and checks those entrypoints with `npm run package-smoke`
-  plus `npm run pack-dry-run`. It rejects empty or CR/LF-containing
-  `idempotencyKey` request options before `fetchImpl` is called.
+  plus `npm run pack-dry-run` and `npm run consumer-smoke`. It rejects empty or
+  CR/LF-containing `idempotencyKey` request options before `fetchImpl` is
+  called.
 - The TypeScript public SDK wrapper under `clients/typescript/src/sdk.ts` is the
   first hand-written platform SDK layer over that generated transport. It
   exposes `TraceDB`, table handles, single and batch inserts, patch,

@@ -32,11 +32,12 @@
     "public-smoke": "node --experimental-strip-types public-sdk-smoke.ts",
     "package-smoke": "node --experimental-strip-types package-entry-smoke.ts && node --experimental-strip-types build-package-smoke.ts",
     "pack-dry-run": "npm pack --dry-run --json",
+    "consumer-smoke": "node scripts/packed-consumer-smoke.mjs",
     "http-smoke": "node --experimental-strip-types http-smoke.ts",
     "public-http-smoke": "node --experimental-strip-types public-http-smoke.ts",
     "quickstart": "node --experimental-strip-types quickstart.ts",
     "gateway-smoke": "node --experimental-strip-types gateway-smoke.ts",
-    "check": "npm run typecheck && npm run smoke && npm run public-smoke && npm run build && npm run package-smoke && npm run pack-dry-run"
+    "check": "npm run typecheck && npm run smoke && npm run public-smoke && npm run build && npm run package-smoke && npm run pack-dry-run && npm run consumer-smoke"
   },
   "devDependencies": {
     "@types/node": "25.9.0",

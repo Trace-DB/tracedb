@@ -84,13 +84,15 @@ publishing readiness or managed-cloud proof.
 The package entry smoke imports from `@tracedb/sdk` and
 `@tracedb/sdk/transport` through the package `exports` map and verifies the
 public SDK entrypoint, generated transport subpath, representative type exports,
-config error shape, emitted JS files, and emitted declarations:
+config error shape, emitted JS files, emitted declarations, dry-run package
+contents, and clean temp-project tarball installation:
 
 ```bash
 cd clients/typescript
 npm run build
 npm run package-smoke
 npm run pack-dry-run
+npm run consumer-smoke
 ```
 
 Run the real local HTTP smoke from the TypeScript package directory:
@@ -205,8 +207,8 @@ server.
 a TypeScript `--only` selector conflicts with --skip-typescript.
 `--only typescript_check` runs only `npm run check`, which currently performs
 the package typecheck plus dependency-free generated-client, public SDK,
-package build, package-entry smoke, and pack dry-run checks. It does not run
-`http-smoke`, `gateway-smoke`,
+package build, package-entry smoke, pack dry-run, and packed temp-consumer
+install checks. It does not run `http-smoke`, `gateway-smoke`,
 `http_demo`, local `doctor http`, the Rust SDK quickstart, managed-cloud checks,
 benchmark controls, or SQL compatibility checks.
 `--only typescript_http_smoke` runs only `npm run public-http-smoke`, which
@@ -235,6 +237,7 @@ npm run public-smoke
 npm run build
 npm run package-smoke
 npm run pack-dry-run
+npm run consumer-smoke
 npm run http-smoke
 npm run public-http-smoke
 npm run quickstart
@@ -247,8 +250,11 @@ The package is named `@tracedb/sdk`, exposes `.` as the public SDK and
 `files`, and public npm publish metadata, and emits `dist/index.js`,
 `dist/index.d.ts`, `dist/sdk.js`, `dist/sdk.d.ts`, `dist/client.js`, and
 `dist/client.d.ts`. `npm run pack-dry-run` proves the tarball contents without
-publishing. This is package-ready metadata plus local build/pack smoke coverage,
-not a published npm artifact or a release pipeline.
+publishing, and `npm run consumer-smoke` packs into a temporary directory,
+installs that tarball into a clean temporary project, and imports
+`@tracedb/sdk` plus `@tracedb/sdk/transport` from the installed package. This is
+package-ready metadata plus local build/pack/install smoke coverage, not a
+published npm artifact or a release pipeline.
 
 ## Local Usage
 

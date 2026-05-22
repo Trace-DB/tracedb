@@ -385,10 +385,12 @@ npm run check
 The package is named `@tracedb/sdk`, builds `.` from `src/index.ts` into
 `dist/index.js` / `dist/index.d.ts`, exports the generated transport as
 `@tracedb/sdk/transport` from `dist/client.js` / `dist/client.d.ts`, and
-includes `package-smoke` plus `pack-dry-run` scripts that import both paths
-through the package `exports` map and verify tarball contents without
-publishing. This is local build/pack boundary evidence, not evidence of an npm
-release or publication pipeline.
+includes `package-smoke`, `pack-dry-run`, and `consumer-smoke` scripts that
+import both paths through the package `exports` map, verify tarball contents,
+install the packed tarball into a clean temporary project, and import both
+entrypoints from that installed package without publishing. This is local
+build/pack/install boundary evidence, not evidence of an npm release or
+publication pipeline.
 
 Run the generated TypeScript client against a real local HTTP server with:
 

@@ -307,9 +307,10 @@ tooling, typechecks `@tracedb/sdk`, and runs generated-client, public SDK, and
 package build/entrypoint smokes. The package now exposes `@tracedb/sdk` from
 `dist/index.js` / `dist/index.d.ts` and `@tracedb/sdk/transport` from
 `dist/client.js` / `dist/client.d.ts`; `npm run pack-dry-run` proves tarball
-contents without publishing. This is package-ready build/pack boundary
-coverage, not an npm release or publication pipeline. `cd clients/typescript &&
-npm run http-smoke` starts a local
+contents without publishing, and `npm run consumer-smoke` installs the packed
+tarball into a clean temporary project and imports both package entrypoints.
+This is package-ready build/pack/install boundary coverage, not an npm release
+or publication pipeline. `cd clients/typescript && npm run http-smoke` starts a local
 `tracedb-server` child process and drives the
 generated TypeScript transport over real HTTP routes; `npm run public-http-smoke`
 drives the public `TraceDB` wrapper over the same generated transport through

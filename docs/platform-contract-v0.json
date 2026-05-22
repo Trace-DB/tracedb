@@ -50,7 +50,7 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "built_package_entrypoint_conformance_checked",
+      "status": "packed_consumer_entrypoint_conformance_checked",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/package.json",
@@ -70,7 +70,9 @@
         "@tracedb/sdk/transport",
         "clients/typescript/package-entry-smoke.ts",
         "clients/typescript/build-package-smoke.ts",
-        "npm pack --dry-run --json"
+        "npm pack --dry-run --json",
+        "clients/typescript/scripts/packed-consumer-smoke.mjs",
+        "npm run consumer-smoke"
       ]
     },
     {
