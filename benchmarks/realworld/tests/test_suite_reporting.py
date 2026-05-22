@@ -15,7 +15,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from runner.suite import SCENARIOS, build_suite_report, write_suite_markdown
-from railway_bench import validate_railway_operation_receipt
+from railway_bench import validate_railway_backup_receipt, validate_railway_operation_receipt
 
 
 class ReadyHandler(BaseHTTPRequestHandler):
@@ -725,6 +725,149 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertEqual(receipt["service_id"], "service_tracedb")
         self.assertEqual(receipt["suite_id"], "railway-receipt-suite-test")
         self.assertNotIn("railway-token-secret", repr(receipt))
+
+    def test_railway_backup_receipt_command_writes_valid_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            receipt_path = Path(temp_dir) / "backup-receipt.json"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "railway-backup-receipt",
+                    "--status",
+                    "passed",
+                    "--suite-id",
+                    "railway-backup-suite-test",
+                    "--backup-id",
+                    "backup_123",
+                    "--confirm-created",
+                    "--restore-validated",
+                    "--restore-validation-method",
+                    "restored marker smoke",
+                    "--operator",
+                    "benchmark-operator",
+                    "--note",
+                    "managed backup restored and checked",
+                    "--output-json",
+                    str(receipt_path),
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            receipt = json.loads(receipt_path.read_text())
+            validation = validate_railway_backup_receipt(
+                receipt,
+                expected_service_id="service_tracedb",
+            )
+
+        self.assertTrue(validation["ok"], validation)
+        self.assertEqual(receipt["kind"], "railway_backup_receipt")
+        self.assertEqual(receipt["backup_id"], "backup_123")
+        self.assertTrue(receipt["backup_created"])
+        self.assertTrue(receipt["restore_validated"])
+        self.assertEqual(receipt["suite_id"], "railway-backup-suite-test")
+        self.assertNotIn("railway-token-secret", repr(receipt))
+
+    def test_railway_backup_receipt_writes_manifest_and_gate_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            receipt_path = Path(temp_dir) / "backup-receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "railway_backup_receipt",
+                        "status": "passed",
+                        "confirmed": True,
+                        "backup_created": True,
+                        "restore_validated": True,
+                        "service_id": "service_tracedb",
+                        "backup_id": "backup_123",
+                        "restore_validation_method": "restored marker smoke",
+                    }
+                )
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-backup-suite-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/soak_railway.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-backup-receipt-json",
+                    str(receipt_path),
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            suite_dir = reports / "railway-backup-suite-test"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+            artifacts = json.loads((suite_dir / "railway-artifacts.json").read_text())
+
+        self.assertEqual(manifest["backup_verdict"]["status"], "passed")
+        self.assertEqual(gate["claim_status"]["railway_backup"], "passed")
+        self.assertEqual(gate["status"], "usable")
+        self.assertEqual(artifacts["railway_claim_status"]["backup"], "passed")
+        self.assertNotIn("railway-token-secret", repr(manifest))
 
     def test_railway_persistence_verdict_combines_pre_manifest_receipt_and_postcheck(self) -> None:
         with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:

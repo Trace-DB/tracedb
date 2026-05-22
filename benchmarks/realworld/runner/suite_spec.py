@@ -177,6 +177,15 @@ def build_suite_gate(
         blocking_failures.append(
             f"Railway persistence verdict failed with status={railway_persistence}"
         )
+    railway_backup = _railway_backup_status(railway_manifest)
+    if railway_backup not in {"not_checked", "passed"}:
+        blocking_failures.append(
+            f"Railway backup verdict failed with status={railway_backup}"
+        )
+    if spec.railway.get("backup_required") and railway_backup != "passed":
+        blocking_failures.append(
+            f"suite requires Railway backup validation evidence, status={railway_backup}"
+        )
 
     if control_status == "external_control_unavailable" and not spec.requires_external_controls:
         warnings.append("external controls were requested but unavailable")
@@ -217,6 +226,7 @@ def build_suite_gate(
             "railway_restored_read": railway_restored_read,
             "railway_restart_redeploy": railway_restart_redeploy,
             "railway_persistence": railway_persistence,
+            "railway_backup": railway_backup,
             "unsupported_coverage": spec.unsupported_coverage,
         },
         "artifact_paths": artifact_paths,
@@ -325,6 +335,16 @@ def _railway_persistence_status(railway_manifest: dict[str, Any] | None) -> str:
     if not isinstance(persistence_verdict, dict):
         return "not_checked"
     status = persistence_verdict.get("status")
+    return str(status) if status else "unknown"
+
+
+def _railway_backup_status(railway_manifest: dict[str, Any] | None) -> str:
+    if not railway_manifest:
+        return "not_checked"
+    backup_verdict = railway_manifest.get("backup_verdict")
+    if not isinstance(backup_verdict, dict):
+        return "not_checked"
+    status = backup_verdict.get("status")
     return str(status) if status else "unknown"
 
 

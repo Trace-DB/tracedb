@@ -366,15 +366,39 @@ python3 -m runner railway-receipt \
 
 The helper only writes the receipt artifact. It does not call Railway, restart
 services, or redeploy code.
+For specs that declare `railway.backup_required`, add
+`--railway-backup-receipt-json <receipt>` to write `backup_verdict` into
+`railway-manifest.json` and `railway_backup` into `suite-gate.json`. The backup
+receipt is deliberately strict so a generic note cannot become backup/DR proof:
+it must include `kind: railway_backup_receipt`, successful `status`,
+`confirmed: true`, `backup_created: true`, `restore_validated: true`, the
+TraceDB Railway `service_id`, a `backup_id`, and a non-empty
+`restore_validation_method`. Generate the receipt after the operator validates
+the managed backup and restore drill:
+
+```bash
+python3 -m runner railway-backup-receipt \
+  --status passed \
+  --suite-id <suite-id> \
+  --backup-id <railway-backup-or-snapshot-id> \
+  --confirm-created \
+  --restore-validated \
+  --restore-validation-method "restored marker smoke" \
+  --operator <operator-name> \
+  --output-json reports/railway-backup-receipt.json
+```
+
+The helper only writes the receipt artifact. It does not create Railway backups,
+restore Railway volumes, or mutate services.
 `--railway-restart-redeploy-plan` adds a non-mutating `operation_plan` to the
 manifest and reports `railway_restart_redeploy: plan_only` in the gate. The plan
 lists safe preflight commands such as `railway status --json`,
 `railway service status --all --json`, and service logs, plus guarded operator
 hints for restart/redeploy. It does not execute Railway mutations and must not
-be counted as persistence proof. Backups, usage limits, SSH key setup,
-restart/redeploy execution, and restore validation remain required before the
-`railway_stateful`, `soak_railway`, or `release_100k` specs should be treated as
-full Railway product proof.
+be counted as persistence proof. Usage limits, SSH key setup,
+restart/redeploy execution, and live service promotion of restored targets
+remain required before the `railway_stateful`, `soak_railway`, or
+`release_100k` specs should be treated as full Railway product proof.
 
 The Modal `railway_stateful`, `soak_railway`, and `release_100k` presets pass
 `--railway-config-from-env`, `--railway-health-check`, and
@@ -384,6 +408,9 @@ scheduled or remote Railway lanes fail fast when the persistent lab is not
 reachable, cannot accept a marker write/read, cannot execute the admin
 snapshot/restore route check, or cannot read the marker from the restored target
 while also carrying an explicit operator plan for the next persistence gate.
+`soak_railway` and `release_100k` also require a passed backup receipt; without
+`--railway-backup-receipt-json`, their gates stay blocked on
+`railway_backup: not_checked`.
 When a Railway manifest is present, `runner suite` also writes
 `railway-artifacts.json` and records it in `suite-gate.json` as
 `artifact_paths.railway_artifacts_json`. That file indexes the suite artifacts
@@ -393,6 +420,8 @@ backup or live recovery proof; when snapshot/restore passes, the artifact
 manifest still marks that proof as admin-route-only rather than managed
 backup/DR. When restored-read verification is not requested or does not pass,
 the artifact manifest keeps `restored_read_not_checked` as an open proof gap.
+When backup evidence is missing or failed, it keeps
+`backup_validation_not_checked` as an open proof gap.
 
 ## Modal CPU/RAM Smoke
 

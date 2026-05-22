@@ -93,6 +93,7 @@ def build_railway_manifest(
     snapshot_restore: Mapping[str, Any] | None = None,
     operation_plan: Mapping[str, Any] | None = None,
     persistence_verdict: Mapping[str, Any] | None = None,
+    backup_verdict: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = validate_railway_config(config)
     services = []
@@ -139,6 +140,8 @@ def build_railway_manifest(
         manifest["operation_plan"] = dict(operation_plan)
     if persistence_verdict is not None:
         manifest["persistence_verdict"] = dict(persistence_verdict)
+    if backup_verdict is not None:
+        manifest["backup_verdict"] = dict(backup_verdict)
     return manifest
 
 
@@ -172,6 +175,7 @@ def build_railway_artifact_manifest(
             "restored_read": claim_status.get("railway_restored_read", "not_checked"),
             "restart_redeploy": claim_status.get("railway_restart_redeploy", "not_checked"),
             "persistence": claim_status.get("railway_persistence", "not_checked"),
+            "backup": claim_status.get("railway_backup", "not_checked"),
         },
         "open_proof_gaps": _artifact_proof_gaps(claim_status),
         "claim_boundary": "artifact_manifest_indexes_suite_outputs_not_backup_snapshot_restore_proof",
@@ -268,6 +272,168 @@ def build_railway_operation_receipt(
     if extra:
         receipt["extra"] = _redact_sensitive(extra)
     return _redact_sensitive(receipt)
+
+
+def validate_railway_backup_receipt(
+    backup_receipt: Mapping[str, Any],
+    *,
+    expected_service_id: str = "",
+) -> dict[str, Any]:
+    receipt = _dict_value(backup_receipt)
+    redacted_receipt = _redact_sensitive(receipt)
+    required = [
+        "kind",
+        "status",
+        "confirmed",
+        "backup_created",
+        "restore_validated",
+        "service_id",
+        "backup_id",
+        "restore_validation_method",
+    ]
+    missing = []
+    for key in required:
+        value = receipt.get(key)
+        if key not in receipt or value is None or value == "":
+            missing.append(key)
+
+    errors = []
+    warnings = []
+    kind = str(receipt.get("kind", ""))
+    if kind and kind != "railway_backup_receipt":
+        errors.append("kind must be railway_backup_receipt")
+
+    status = str(receipt.get("status", "")).lower()
+    if status and status not in RAILWAY_OPERATION_SUCCESS_STATUSES | RAILWAY_OPERATION_FAILURE_STATUSES:
+        errors.append("status must be a known backup receipt status")
+
+    if "confirmed" in receipt and receipt.get("confirmed") is not True:
+        errors.append("confirmed must be true for operator-approved backup evidence")
+    if "backup_created" in receipt and receipt.get("backup_created") is not True:
+        errors.append("backup_created must be true for backup evidence")
+    if "restore_validated" in receipt and receipt.get("restore_validated") is not True:
+        errors.append("restore_validated must be true for backup/DR evidence")
+
+    method = str(receipt.get("restore_validation_method", ""))
+    if "restore_validated" in receipt and receipt.get("restore_validated") is True and not method:
+        errors.append("restore_validation_method is required when restore_validated is true")
+
+    service_id = str(receipt.get("service_id", ""))
+    if expected_service_id and service_id and service_id != expected_service_id:
+        errors.append("service_id does not match the TraceDB Railway service")
+    if not expected_service_id:
+        errors.append("expected TraceDB service_id is required for backup receipt matching")
+
+    ok = not missing and not errors
+    return {
+        "ok": ok,
+        "status": "valid" if ok else "invalid",
+        "missing": missing,
+        "errors": errors,
+        "warnings": warnings,
+        "receipt": redacted_receipt,
+    }
+
+
+def build_railway_backup_receipt(
+    config: Mapping[str, Any],
+    *,
+    suite_id: str,
+    status: str,
+    backup_id: str,
+    confirmed: bool,
+    backup_created: bool,
+    restore_validated: bool,
+    restore_validation_method: str = "",
+    operator: str = "",
+    notes: list[str] | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    validation = validate_railway_config(config)
+    receipt = {
+        "kind": "railway_backup_receipt",
+        "suite_id": suite_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": str(status).lower(),
+        "confirmed": bool(confirmed),
+        "backup_created": bool(backup_created),
+        "restore_validated": bool(restore_validated),
+        "restore_validation_method": restore_validation_method,
+        "project_id": config.get("project_id", ""),
+        "environment_id": config.get("environment_id", ""),
+        "service_id": config.get("tracedb_service_id", ""),
+        "volume_mount_path": config.get("tracedb_volume_mount_path", ""),
+        "backup_id": backup_id,
+        "operator": operator,
+        "notes": list(notes or []),
+        "config_validation": {
+            "ok": validation["ok"],
+            "missing": validation["missing"],
+            "warnings": validation["warnings"],
+        },
+        "claim_boundary": "operator_reported_backup_receipt_only_not_railway_backup_execution",
+    }
+    if extra:
+        receipt["extra"] = _redact_sensitive(extra)
+    return _redact_sensitive(receipt)
+
+
+def build_railway_backup_verdict(
+    railway_manifest: Mapping[str, Any],
+    backup_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    expected_service_id = _tracedb_service_id(railway_manifest)
+    receipt = _dict_value(backup_receipt)
+    receipt_validation = validate_railway_backup_receipt(
+        receipt,
+        expected_service_id=expected_service_id,
+    )
+    redacted_receipt = receipt_validation["receipt"]
+    checks = {
+        "receipt_valid": receipt_validation["ok"],
+        "backup_created": receipt.get("backup_created") is True,
+        "backup_confirmed": receipt.get("confirmed") is True,
+        "restore_validated": receipt.get("restore_validated") is True,
+        "backup_succeeded": str(receipt.get("status", "")).lower()
+        in RAILWAY_OPERATION_SUCCESS_STATUSES,
+    }
+    errors = []
+    if not checks["receipt_valid"]:
+        errors.extend(receipt_validation["errors"])
+        errors.extend(f"missing backup receipt field: {field}" for field in receipt_validation["missing"])
+    if not checks["backup_created"]:
+        errors.append("backup receipt does not show a created backup")
+    if not checks["backup_confirmed"]:
+        errors.append("backup receipt does not show explicit operator confirmation")
+    if not checks["restore_validated"]:
+        errors.append("backup receipt does not show restore validation")
+    if not checks["backup_succeeded"]:
+        errors.append("backup receipt status is not successful")
+
+    return {
+        "kind": "railway_backup_verdict",
+        "status": "passed" if not errors else "failed",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "backup": {
+            "backup_id": redacted_receipt.get("backup_id", ""),
+            "status": redacted_receipt.get("status", ""),
+            "service_id": redacted_receipt.get("service_id", ""),
+            "confirmed": receipt.get("confirmed") is True,
+            "backup_created": receipt.get("backup_created") is True,
+            "restore_validated": receipt.get("restore_validated") is True,
+            "restore_validation_method": redacted_receipt.get("restore_validation_method", ""),
+            "validation": {
+                "status": receipt_validation["status"],
+                "missing": receipt_validation["missing"],
+                "errors": receipt_validation["errors"],
+                "warnings": receipt_validation["warnings"],
+            },
+            "receipt": redacted_receipt,
+        },
+        "checks": checks,
+        "errors": errors,
+        "claim_boundary": "backup_verdict_from_operator_receipt_not_raw_performance_claim",
+    }
 
 
 def build_railway_persistence_verdict(
@@ -812,7 +978,9 @@ def _artifact_proof_gaps(claim_status: Mapping[str, Any]) -> list[str]:
     restored_read_status = claim_status.get("railway_restored_read", "not_checked")
     if restored_read_status != "passed":
         gaps.append("restored_read_not_checked")
-    gaps.append("backup_validation_not_checked")
+    backup_status = claim_status.get("railway_backup", "not_checked")
+    if backup_status != "passed":
+        gaps.append("backup_validation_not_checked")
     return gaps
 
 

@@ -91,14 +91,32 @@ class SuiteGateTests(unittest.TestCase):
             blocked["blocking_failures"],
         )
 
-        claim_ready = build_suite_gate(
+        missing_backup = build_suite_gate(
             minimal_report(control_status="external_control_available"),
             spec,
             artifact_paths={"suite_json": "suite.json", "suite_md": "suite.md"},
             railway_manifest={"status": "configured", "services": []},
         )
+        self.assertEqual(missing_backup["status"], "blocked")
+        self.assertEqual(missing_backup["claim_status"]["railway_backup"], "not_checked")
+        self.assertTrue(
+            any("backup" in item for item in missing_backup["blocking_failures"]),
+            missing_backup["blocking_failures"],
+        )
+
+        claim_ready = build_suite_gate(
+            minimal_report(control_status="external_control_available"),
+            spec,
+            artifact_paths={"suite_json": "suite.json", "suite_md": "suite.md"},
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "backup_verdict": {"status": "passed"},
+            },
+        )
         self.assertEqual(claim_ready["status"], "claim-ready")
         self.assertEqual(claim_ready["claim_status"]["performance_claim"], "claim_ready")
+        self.assertEqual(claim_ready["claim_status"]["railway_backup"], "passed")
 
     def test_railway_stateful_gate_requires_configured_manifest(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
@@ -478,6 +496,34 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(gate["claim_status"]["railway_persistence"], "failed")
         self.assertTrue(
             any("persistence" in item for item in gate["blocking_failures"]),
+            gate["blocking_failures"],
+        )
+
+    def test_railway_backup_verdict_failure_blocks_when_required(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "soak_railway.json")
+
+        gate = build_suite_gate(
+            minimal_report(),
+            spec,
+            artifact_paths={
+                "suite_json": "suite.json",
+                "suite_md": "suite.md",
+                "railway_manifest_json": "railway-manifest.json",
+            },
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "backup_verdict": {
+                    "status": "failed",
+                    "errors": ["backup restore validation is missing"],
+                },
+            },
+        )
+
+        self.assertEqual(gate["status"], "blocked")
+        self.assertEqual(gate["claim_status"]["railway_backup"], "failed")
+        self.assertTrue(
+            any("backup" in item for item in gate["blocking_failures"]),
             gate["blocking_failures"],
         )
 

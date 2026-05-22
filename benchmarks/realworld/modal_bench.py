@@ -201,6 +201,7 @@ class ModalSmokeConfig:
     railway_restart_redeploy_plan: bool = False
     railway_persistence_pre_manifest_json: str = ""
     railway_operation_receipt_json: str = ""
+    railway_backup_receipt_json: str = ""
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
     tracedb_ingest_mode: str = "per_record"
@@ -526,6 +527,8 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         )
     if config.railway_operation_receipt_json:
         command.extend(["--railway-operation-receipt-json", config.railway_operation_receipt_json])
+    if config.railway_backup_receipt_json:
+        command.extend(["--railway-backup-receipt-json", config.railway_backup_receipt_json])
     command.extend(["--scenarios", config.scenarios])
     if config.embedding_dimensions is not None:
         command.extend(["--embedding-dimensions", str(config.embedding_dimensions)])
@@ -1478,6 +1481,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--railway-restart-redeploy-plan", action="store_true")
     parser.add_argument("--railway-persistence-pre-manifest-json", default="")
     parser.add_argument("--railway-operation-receipt-json", default="")
+    parser.add_argument("--railway-backup-receipt-json", default="")
     parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
     parser.add_argument("--openrouter-cap", default="moderate")
     parser.add_argument(
@@ -1551,6 +1555,7 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         or bool(preset.get("railway_restart_redeploy_plan", False)),
         railway_persistence_pre_manifest_json=args.railway_persistence_pre_manifest_json,
         railway_operation_receipt_json=args.railway_operation_receipt_json,
+        railway_backup_receipt_json=args.railway_backup_receipt_json,
         openrouter_mode=args.openrouter_mode,
         openrouter_cap=args.openrouter_cap,
         tracedb_ingest_mode=str(

@@ -242,6 +242,22 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-persistence-pre-manifest-json", command)
         self.assertIn("--railway-operation-receipt-json", command)
 
+    def test_railway_backup_receipt_can_be_enabled_without_preset(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(
+            [
+                "--railway-backup-receipt-json",
+                "/tmp/backup-receipt.json",
+                "--run-id",
+                "railway-backup-test",
+            ]
+        )
+        command = build_suite_command(config)
+
+        self.assertEqual(config.railway_backup_receipt_json, "/tmp/backup-receipt.json")
+        self.assertIn("--railway-backup-receipt-json", command)
+
     def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 

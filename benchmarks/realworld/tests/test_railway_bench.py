@@ -15,6 +15,8 @@ sys.path.insert(0, str(LAB_ROOT))
 
 from railway_bench import (
     build_railway_artifact_manifest,
+    build_railway_backup_receipt,
+    build_railway_backup_verdict,
     build_railway_operation_receipt,
     build_railway_operation_plan,
     build_railway_manifest,
@@ -24,6 +26,7 @@ from railway_bench import (
     run_railway_endpoint_health,
     run_railway_snapshot_restore_check,
     run_railway_stateful_smoke,
+    validate_railway_backup_receipt,
     validate_railway_config,
     validate_railway_operation_receipt,
 )
@@ -682,6 +685,135 @@ class RailwayBenchTests(unittest.TestCase):
         self.assertIn("receipt_only", receipt["claim_boundary"])
         self.assertTrue(validation["ok"], validation)
         self.assertNotIn("railway-token-secret", repr(receipt))
+
+    def test_backup_receipt_validation_accepts_confirmed_restore_validation(self) -> None:
+        receipt = {
+            "kind": "railway_backup_receipt",
+            "status": "passed",
+            "confirmed": True,
+            "backup_created": True,
+            "restore_validated": True,
+            "service_id": "service_tracedb",
+            "backup_id": "backup_123",
+            "restore_validation_method": "restored marker smoke",
+            "RAILWAY_API_TOKEN": "railway-token-secret",
+        }
+
+        result = validate_railway_backup_receipt(
+            receipt,
+            expected_service_id="service_tracedb",
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["status"], "valid")
+        self.assertEqual(result["receipt"]["RAILWAY_API_TOKEN"], "<redacted>")
+        self.assertNotIn("railway-token-secret", repr(result))
+
+    def test_backup_receipt_validation_rejects_unconfirmed_unvalidated_backup(self) -> None:
+        receipt = {
+            "kind": "railway_backup_receipt",
+            "status": "passed",
+            "confirmed": False,
+            "backup_created": True,
+            "restore_validated": False,
+            "service_id": "service_other",
+            "backup_id": "",
+            "restore_validation_method": "",
+        }
+
+        result = validate_railway_backup_receipt(
+            receipt,
+            expected_service_id="service_tracedb",
+        )
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status"], "invalid")
+        self.assertTrue(any("confirmed" in error for error in result["errors"]))
+        self.assertTrue(any("restore_validated" in error for error in result["errors"]))
+        self.assertTrue(any("service_id" in error for error in result["errors"]))
+
+    def test_backup_receipt_builder_emits_valid_redacted_receipt(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+
+        receipt = build_railway_backup_receipt(
+            config,
+            suite_id="railway-backup-test",
+            status="passed",
+            backup_id="backup_123",
+            confirmed=True,
+            backup_created=True,
+            restore_validated=True,
+            restore_validation_method="restored marker smoke",
+            operator="benchmark-operator",
+            notes=["backup policy checked"],
+            extra={"RAILWAY_API_TOKEN": "railway-token-secret"},
+        )
+        validation = validate_railway_backup_receipt(
+            receipt,
+            expected_service_id="service_tracedb",
+        )
+
+        self.assertEqual(receipt["kind"], "railway_backup_receipt")
+        self.assertEqual(receipt["backup_id"], "backup_123")
+        self.assertTrue(receipt["confirmed"])
+        self.assertTrue(receipt["backup_created"])
+        self.assertTrue(receipt["restore_validated"])
+        self.assertIn("receipt_only", receipt["claim_boundary"])
+        self.assertTrue(validation["ok"], validation)
+        self.assertNotIn("railway-token-secret", repr(receipt))
+
+    def test_backup_verdict_passes_for_confirmed_backup_receipt(self) -> None:
+        manifest = {
+            "status": "configured",
+            "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+        }
+        receipt = {
+            "kind": "railway_backup_receipt",
+            "status": "passed",
+            "confirmed": True,
+            "backup_created": True,
+            "restore_validated": True,
+            "service_id": "service_tracedb",
+            "backup_id": "backup_123",
+            "restore_validation_method": "restored marker smoke",
+        }
+
+        verdict = build_railway_backup_verdict(manifest, receipt)
+
+        self.assertEqual(verdict["status"], "passed")
+        self.assertEqual(verdict["backup"]["backup_id"], "backup_123")
+        self.assertEqual(verdict["backup"]["validation"]["status"], "valid")
+        self.assertEqual(verdict["errors"], [])
+
+    def test_backup_verdict_fails_without_restore_validation(self) -> None:
+        manifest = {
+            "status": "configured",
+            "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+        }
+        receipt = {
+            "kind": "railway_backup_receipt",
+            "status": "passed",
+            "confirmed": True,
+            "backup_created": True,
+            "restore_validated": False,
+            "service_id": "service_tracedb",
+            "backup_id": "backup_123",
+            "restore_validation_method": "",
+        }
+
+        verdict = build_railway_backup_verdict(manifest, receipt)
+
+        self.assertEqual(verdict["status"], "failed")
+        self.assertTrue(any("restore" in error for error in verdict["errors"]))
 
     def test_artifact_manifest_records_suite_files_without_leaking_contents(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -32,6 +32,8 @@ from .types import RunConfig
 try:
     from railway_bench import (
         build_railway_artifact_manifest,
+        build_railway_backup_receipt,
+        build_railway_backup_verdict,
         build_railway_manifest,
         build_railway_operation_receipt,
         build_railway_operation_plan,
@@ -40,11 +42,14 @@ try:
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
         run_railway_stateful_smoke,
+        validate_railway_backup_receipt,
         validate_railway_operation_receipt,
     )
 except ImportError:  # pragma: no cover - package import path used by unit discovery.
     from ..railway_bench import (
         build_railway_artifact_manifest,
+        build_railway_backup_receipt,
+        build_railway_backup_verdict,
         build_railway_manifest,
         build_railway_operation_receipt,
         build_railway_operation_plan,
@@ -53,6 +58,7 @@ except ImportError:  # pragma: no cover - package import path used by unit disco
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
         run_railway_stateful_smoke,
+        validate_railway_backup_receipt,
         validate_railway_operation_receipt,
     )
 
@@ -157,6 +163,11 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Operator-provided restart/redeploy receipt JSON for persistence verdict evaluation.",
     )
+    suite.add_argument(
+        "--railway-backup-receipt-json",
+        default="",
+        help="Operator-provided Railway backup/restore-validation receipt JSON for backup gates.",
+    )
 
     railway_receipt = subcommands.add_parser(
         "railway-receipt",
@@ -193,6 +204,46 @@ def main(argv: list[str] | None = None) -> int:
     railway_receipt.add_argument("--command", dest="operation_command", default="")
     railway_receipt.add_argument("--deployment-id", default="")
     railway_receipt.add_argument("--note", action="append", default=[])
+
+    railway_backup_receipt = subcommands.add_parser(
+        "railway-backup-receipt",
+        help="write a non-mutating operator receipt for Railway backup/restore validation",
+    )
+    railway_backup_receipt.add_argument(
+        "--status",
+        default="passed",
+        choices=[
+            "passed",
+            "completed",
+            "succeeded",
+            "success",
+            "ok",
+            "blocked",
+            "cancelled",
+            "canceled",
+            "error",
+            "failed",
+            "failure",
+            "timeout",
+            "timed_out",
+        ],
+    )
+    railway_backup_receipt.add_argument("--suite-id", default="")
+    railway_backup_receipt.add_argument("--backup-id", required=True)
+    railway_backup_receipt.add_argument("--output-json", default="reports/railway-backup-receipt.json")
+    railway_backup_receipt.add_argument(
+        "--confirm-created",
+        action="store_true",
+        help="Set backup_created=true and confirmed=true after checking the Railway backup.",
+    )
+    railway_backup_receipt.add_argument(
+        "--restore-validated",
+        action="store_true",
+        help="Set restore_validated=true after validating a restored copy or restore drill.",
+    )
+    railway_backup_receipt.add_argument("--restore-validation-method", default="")
+    railway_backup_receipt.add_argument("--operator", default="")
+    railway_backup_receipt.add_argument("--note", action="append", default=[])
 
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
     chat_demo.add_argument("--data-dir", default="")
@@ -236,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_suite(args)
     if args.command == "railway-receipt":
         return run_railway_receipt(args)
+    if args.command == "railway-backup-receipt":
+        return run_railway_backup_receipt(args)
     if args.command == "chat-demo":
         return run_chat_demo(args)
     if args.command == "tracedb-scaling":
@@ -338,6 +391,37 @@ def run_railway_receipt(args: argparse.Namespace) -> int:
             print(error, file=sys.stderr)
         for missing in validation["missing"]:
             print(f"missing receipt field: {missing}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_railway_backup_receipt(args: argparse.Namespace) -> int:
+    lab_root = Path.cwd()
+    config = load_railway_config()
+    receipt = build_railway_backup_receipt(
+        config,
+        suite_id=args.suite_id,
+        status=args.status,
+        backup_id=args.backup_id,
+        confirmed=args.confirm_created,
+        backup_created=args.confirm_created,
+        restore_validated=args.restore_validated,
+        restore_validation_method=args.restore_validation_method,
+        operator=args.operator,
+        notes=args.note,
+    )
+    validation = validate_railway_backup_receipt(
+        receipt,
+        expected_service_id=str(config.get("tracedb_service_id", "")),
+    )
+    output_path = _resolve_path(lab_root, args.output_json)
+    write_json(receipt, output_path)
+    print(f"wrote {output_path}")
+    if not validation["ok"]:
+        for error in validation["errors"]:
+            print(error, file=sys.stderr)
+        for missing in validation["missing"]:
+            print(f"missing backup receipt field: {missing}", file=sys.stderr)
         return 1
     return 0
 
@@ -808,6 +892,12 @@ def _load_or_write_railway_manifest(
                 pre_manifest,
                 manifest,
                 operation_receipt,
+            )
+        if args.railway_backup_receipt_json:
+            backup_receipt = _load_json_if_configured(lab_root, args.railway_backup_receipt_json)
+            manifest["backup_verdict"] = build_railway_backup_verdict(
+                manifest,
+                backup_receipt,
             )
         _write_railway_manifest(manifest, suite_dir / "railway-manifest.json")
         return manifest
