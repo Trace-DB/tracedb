@@ -16,6 +16,7 @@
     "smoke.ts",
     "public-sdk-smoke.ts",
     "http-smoke.ts",
+    "public-http-smoke.ts",
     "quickstart.ts",
     "gateway-smoke.ts"
   ]

@@ -126,10 +126,11 @@ request, and `HybridQuery` models; the raw HTTP methods remain available.
 The TypeScript package now starts the public SDK layer in
 `clients/typescript/src/sdk.ts`. `new TraceDB({ url, token })` wraps the
 generated `TraceDbClient` transport and exposes table handles with
-`insert`, `insertBatch`, `get`, `scan`, `delete`, `where`, `match`, `near`,
-`with`, `limit`, and `all`. This first wrapper is fake-fetch/typecheck guarded;
-the generated transport remains available and remains the source of route
-methods.
+`insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
+compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
+and `explainPlan`. The wrapper is fake-fetch/typecheck guarded and now has a
+real local HTTP smoke through `npm run public-http-smoke`; the generated
+transport remains available and remains the source of route methods.
 
 ## Surface Implementation Rules
 

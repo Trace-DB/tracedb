@@ -1243,7 +1243,8 @@ fn run_product_regression(
         return finish_product_regression(config, local_server_url, steps);
     }
     if config.only_step.as_deref() == Some("typescript_http_smoke") {
-        let command = product_regression_typescript_command(&workspace, &["run", "http-smoke"]);
+        let command =
+            product_regression_typescript_command(&workspace, &["run", "public-http-smoke"]);
         let step =
             run_product_regression_step_or_injected(&config, "typescript_http_smoke", command);
         steps.insert("typescript_http_smoke".to_string(), step);
@@ -1323,7 +1324,7 @@ fn run_product_regression(
     if !config.skip_typescript {
         for (name, args) in [
             ("typescript_check", ["run", "check"]),
-            ("typescript_http_smoke", ["run", "http-smoke"]),
+            ("typescript_http_smoke", ["run", "public-http-smoke"]),
             ("typescript_gateway_smoke", ["run", "gateway-smoke"]),
         ] {
             let command = product_regression_typescript_command(&workspace, &args);

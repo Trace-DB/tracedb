@@ -113,14 +113,15 @@ only, not full product gate coverage, not `http_demo`, not local
 HTTP smoke, not TypeScript gateway smoke, not managed-cloud proof, not
 benchmark evidence, and not SQL compatibility.
 `--only typescript_http_smoke` runs only `(cd clients/typescript && npm run
-http-smoke)`, which starts its own local `tracedb-server` child process and
-exercises the generated TypeScript client HTTP product path, and emits one-step
-`local-product-regression` JSON with `only_step: "typescript_http_smoke"`.
-This is local generated TypeScript HTTP smoke evidence only, not full product
+public-http-smoke)`, which starts its own local `tracedb-server` child process
+and exercises the public TypeScript SDK wrapper over the generated transport,
+and emits one-step `local-product-regression` JSON with `only_step:
+"typescript_http_smoke"`. This is local public TypeScript SDK HTTP smoke evidence only, not full product
 gate coverage, not embedded demo/verify, not `http_demo`, not local
 `doctor http` diagnostics, not Rust SDK quickstart evidence, not
-`typescript_check`, not TypeScript gateway smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility.
+`typescript_check`, not generated-transport `http-smoke`, not TypeScript gateway
+smoke, not managed-cloud proof, not benchmark evidence, and not SQL
+compatibility.
 `--only typescript_gateway_smoke` runs only `(cd clients/typescript && npm run
 gateway-smoke)`, which starts a local engine plus gateway-mode
 `tracedb-server`, requires bearer auth, checks missing-token and bad-branch
@@ -251,11 +252,13 @@ is not a published npm package, not a hand-maintained managed SDK, not a strict
 runtime validator, and not a SQL compatibility claim.
 The TypeScript package now also starts the public platform SDK layer at
 `clients/typescript/src/sdk.ts`. `TraceDB` wraps the generated `TraceDbClient`
-transport and exposes table handles for single insert, batch insert, get, scan,
-delete, and query-builder chaining through `where({ tenant_id })`, `match`,
-`near`, `with`, `limit`, and `all`. `npm run public-smoke` verifies this wrapper
-with a fake transport and missing-tenant request validation; it is public-DX
-smoke evidence, not npm publishing readiness or managed-cloud proof.
+transport and exposes table handles for single insert, batch insert, patch, get,
+scan, delete, admin compact/snapshot/restore/jobs, and query-builder chaining
+through `where({ tenant_id })`, `match`, `near`, `with`, `limit`, `all`, and
+`explainPlan`. `npm run public-smoke` verifies this wrapper with a fake
+transport and missing-tenant request validation; `npm run public-http-smoke`
+verifies it against a real local `tracedb-server`. This is public-DX smoke
+evidence, not npm publishing readiness or managed-cloud proof.
 `node --experimental-strip-types clients/typescript/smoke.ts` verifies the
 artifact imports and executes in the local Node runtime with fake-fetch coverage
 for representative generated aliases, GET no-body behavior, POST routing
@@ -267,11 +270,12 @@ are preserved when present. It rejects empty or CR/LF-containing
 `cd clients/typescript && npm ci && npm run check` installs the locked private
 tooling and typechecks the generated artifact plus smoke scripts. The package is
 private and does not declare publishing fields. `cd clients/typescript && npm
-run http-smoke` starts a local `tracedb-server` child process with an isolated
-temporary data directory and drives the generated TypeScript client over real
-HTTP routes for ready, health, catalog, metrics, schema apply, direct put, batch
-ingest, get, scan, query, explain, delete, compact, snapshot, restore, and admin
-jobs. `TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run
+run http-smoke` starts a local `tracedb-server` child process and drives the
+generated TypeScript transport over real HTTP routes; `npm run public-http-smoke`
+drives the public `TraceDB` wrapper over the same generated transport through
+ready, health, catalog, metrics, schema apply, insert, batch ingest, patch, get,
+scan, query, explain, delete, compact, snapshot, restore, and admin jobs.
+`TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run
 quickstart` runs the generated TypeScript client against an existing HTTP
 endpoint through readiness, health, catalog, metrics, schema apply, batch ingest,
 patch, patched visibility, scan, query, explain, delete, and admin jobs.

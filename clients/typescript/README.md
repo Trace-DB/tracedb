@@ -12,8 +12,8 @@ npm package contract.
 The public wrapper lives in `src/sdk.ts`. It intentionally uses the generated
 `TraceDbClient` as its transport layer instead of duplicating HTTP routes.
 Current public DX starts with `new TraceDB({ url, token })`, table handles,
-record writes, batch ingest, scan/get/delete, and a query builder that compiles
-to the canonical `HybridQuery` body.
+record writes, batch ingest, patch, scan/get/delete, admin compact/snapshot/
+restore, and a query builder that compiles to the canonical `HybridQuery` body.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
 schemas and uses them in method signatures. These aliases intentionally preserve
@@ -68,10 +68,11 @@ publishing pipeline.
 
 The public SDK smoke imports `src/sdk.ts` and verifies the first table/query
 wrapper layer against a fake transport. It checks `TraceDB`, table-scoped
-`insert`, `insertBatch`, `get`, `scan`, `delete`, and query-builder chaining via
-`where({ tenant_id })`, `match`, `near`, `with`, `limit`, and `all`. It also
-checks missing-tenant validation raises `TraceDbRequestError` before `fetchImpl`
-is called. This is public-DX smoke coverage over the generated transport, not
+`insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
+compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
+`match`, `near`, `with`, `limit`, `all`, and `explainPlan`. It also checks
+missing-tenant validation raises `TraceDbRequestError` before `fetchImpl` is
+called. This is public-DX smoke coverage over the generated transport, not
 publishing readiness or managed-cloud proof.
 
 Run the real local HTTP smoke from the TypeScript package directory:
@@ -88,6 +89,22 @@ scan, query, explain, delete, compact, snapshot, restore, and admin jobs. It
 emits a JSON summary and `typescript client http smoke ok`. This is local
 loopback product evidence for the generated artifact, not a package publishing
 pipeline, managed-cloud health, or benchmark evidence.
+
+Run the public SDK wrapper against a real local HTTP server:
+
+```bash
+cd clients/typescript
+npm run public-http-smoke
+```
+
+The public HTTP smoke starts a local `tracedb-server` child process with an
+isolated temporary data directory, waits for readiness, then drives `TraceDB`
+and table handles through health, catalog, metrics, schema apply, insert, batch
+ingest, patch, get, scan, query, explain, delete, compact, snapshot, restore,
+and admin jobs. It emits a JSON summary and `typescript public sdk http smoke
+ok`. This is local loopback product evidence for the public wrapper over the
+generated transport, not package publishing readiness, managed-cloud health, or
+benchmark evidence.
 
 Run the endpoint quickstart against an existing local or managed-style HTTP
 endpoint:
@@ -134,7 +151,7 @@ cargo run -p tracedb-cli -- product-regression
 cargo run -p tracedb-cli -- product-quickstart
 ```
 
-That gate runs `npm run check`, `npm run http-smoke`, and
+That gate runs `npm run check`, `npm run public-http-smoke`, and
 `npm run gateway-smoke` as local product regression evidence only. It does not
 claim package publishing readiness, SQL compatibility, managed-cloud proof, or
 benchmark results. Test-only `--inject-failure STEP` can validate failed-step
@@ -163,11 +180,11 @@ the private package typecheck plus dependency-free generated-client and public
 SDK smokes. It does not run `http-smoke`, `gateway-smoke`, `http_demo`, local
 `doctor http`, the Rust SDK quickstart, managed-cloud checks, benchmark
 controls, or SQL compatibility checks.
-`--only typescript_http_smoke` runs only `npm run http-smoke`, which starts its
-own local `tracedb-server` child process and exercises the generated
-TypeScript client HTTP product path. It does not run embedded demo/verify,
+`--only typescript_http_smoke` runs only `npm run public-http-smoke`, which
+starts its own local `tracedb-server` child process and exercises the public
+TypeScript SDK wrapper over the generated transport. It does not run embedded demo/verify,
 `http_demo`, local `doctor http`, the Rust SDK quickstart, `typescript_check`,
-`gateway-smoke`, managed-cloud checks, benchmark controls, or SQL
+generated-transport `http-smoke`, `gateway-smoke`, managed-cloud checks, benchmark controls, or SQL
 compatibility checks.
 `--only typescript_gateway_smoke` runs only `npm run gateway-smoke`, which
 starts a local engine plus gateway-mode server, requires bearer auth, checks
@@ -187,6 +204,7 @@ npm run typecheck
 npm run smoke
 npm run public-smoke
 npm run http-smoke
+npm run public-http-smoke
 npm run quickstart
 npm run gateway-smoke
 npm run check

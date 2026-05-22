@@ -53,6 +53,7 @@
         "clients/typescript/src/client.ts",
         "clients/typescript/src/sdk.ts",
         "clients/typescript/public-sdk-smoke.ts",
+        "clients/typescript/public-http-smoke.ts",
         "clients/typescript/http-smoke.ts",
         "clients/typescript/gateway-smoke.ts"
       ]

@@ -32,6 +32,9 @@ const db = new TraceDB({
     if (input.endsWith("/v1/query")) {
       return okJson({ results: [{ record_id: "intro", tenant_id: "tenant-a" }] });
     }
+    if (input.endsWith("/v1/explain")) {
+      return okJson({ returned_count: 2 });
+    }
     if (input.endsWith("/v1/records/scan")) {
       return okJson({ records: [], returned_count: 2 });
     }
@@ -41,8 +44,23 @@ const db = new TraceDB({
     if (input.endsWith("/v1/records/delete")) {
       return okJson({ deleted: true, epoch: 4 });
     }
+    if (input.endsWith("/v1/records/patch")) {
+      return okJson({ epoch: 5 });
+    }
     if (input.endsWith("/v1/records/put-batch")) {
       return okJson({ epoch: 3, record_count: 2 });
+    }
+    if (input.endsWith("/v1/admin/compact")) {
+      return okJson({ compacted: true });
+    }
+    if (input.endsWith("/v1/admin/snapshot")) {
+      return okJson({ snapshot: true, target: "/tmp/snapshot" });
+    }
+    if (input.endsWith("/v1/admin/restore")) {
+      return okJson({ restored: true, target: "/tmp/restore" });
+    }
+    if (input.endsWith("/v1/admin/jobs")) {
+      return okJson({ jobs: [{ queue: "tracedb.snapshot.create" }] });
     }
     return okJson({ epoch: 2 });
   },
@@ -79,6 +97,14 @@ assert.equal(batchBody.records[0].fields.id, "batch-a");
 assert.equal(batchBody.records[0].fields.tenant, "tenant-a");
 assert.equal(batchBody.records[1].fields.tenant, "explicit-tenant");
 
+const patch = await db.table("docs").tenant("tenant-a").patch("batch-a", { status: "reviewed" });
+assert.equal(patch.epoch, 5);
+const patchBody = JSON.parse(calls[2].init.body ?? "{}");
+assert.equal(patchBody.table, "docs");
+assert.equal(patchBody.tenant_id, "tenant-a");
+assert.equal(patchBody.id, "batch-a");
+assert.deepEqual(patchBody.fields, { status: "reviewed" });
+
 const query = await db
   .table("docs")
   .where({ tenant_id: "tenant-a", status: "published" })
@@ -88,7 +114,7 @@ const query = await db
   .limit(20)
   .all();
 assert.equal(query.results?.[0]?.record_id, "intro");
-const queryBody = JSON.parse(calls[2].init.body ?? "{}");
+const queryBody = JSON.parse(calls[3].init.body ?? "{}");
 assert.equal(queryBody.table, "docs");
 assert.equal(queryBody.tenant_id, "tenant-a");
 assert.deepEqual(queryBody.scalar_eq, { status: "published" });
@@ -98,12 +124,32 @@ assert.equal(queryBody.freshness, "Lazy");
 assert.equal(queryBody.explain, true);
 assert.equal(queryBody.top_k, 20);
 
+const explain = await db
+  .table("docs")
+  .where({ tenant_id: "tenant-a", status: "published" })
+  .match("body", "rust sdk")
+  .near("embedding", [1, 0, 0])
+  .limit(20)
+  .explainPlan();
+assert.equal(explain.returned_count, 2);
+const explainBody = JSON.parse(calls[4].init.body ?? "{}");
+assert.equal(explainBody.table, "docs");
+assert.equal(explainBody.tenant_id, "tenant-a");
+
 await db.table("docs").tenant("tenant-a").get("intro");
 await db.table("docs").tenant("tenant-a").limit(5).scan();
 await db.table("docs").tenant("tenant-a").delete("intro", {
   idempotencyKey: "ts-public-delete-1",
   tombstone: "public_sdk_smoke",
 });
+await db.compact({ idempotencyKey: "ts-public-compact-1" });
+await db.snapshot({ target: "/tmp/snapshot" }, { idempotencyKey: "ts-public-snapshot-1" });
+await db.restore(
+  { source: "/tmp/snapshot", target: "/tmp/restore" },
+  { idempotencyKey: "ts-public-restore-1" },
+);
+const jobs = await db.listAdminJobs();
+assert.equal(jobs.jobs?.[0]?.queue, "tracedb.snapshot.create");
 
 const callCount = calls.length;
 await assert.rejects(

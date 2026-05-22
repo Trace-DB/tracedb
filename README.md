@@ -203,12 +203,12 @@ local `doctor http`, the Rust SDK quickstart, TypeScript HTTP smoke,
 TypeScript gateway smoke, managed-cloud checks, benchmark controls, or SQL
 compatibility checks.
 `--only typescript_http_smoke` runs only
-`(cd clients/typescript && npm run http-smoke)`, which starts its own local
-`tracedb-server` child process and exercises the generated TypeScript client
-HTTP product path through ready, catalog, schema apply, batch ingest, get,
+`(cd clients/typescript && npm run public-http-smoke)`, which starts its own
+local `tracedb-server` child process and exercises the public TypeScript SDK
+wrapper through ready, catalog, schema apply, insert, batch ingest, patch, get,
 scan, query, explain, delete, compact, snapshot, restore, and jobs. It emits
 the normal one-step `local-product-regression` JSON summary with `only_step:
-"typescript_http_smoke"`. This is local generated TypeScript HTTP smoke
+"typescript_http_smoke"`. This is local public TypeScript SDK HTTP smoke
 evidence only; it does not run embedded demo/verify, `http_demo`, local
 `doctor http`, the Rust SDK quickstart, `typescript_check`, TypeScript gateway
 smoke, managed-cloud checks, benchmark controls, or SQL compatibility checks.
@@ -337,8 +337,10 @@ const result = await db
 
 The wrapper lives in `clients/typescript/src/sdk.ts`, uses the generated
 `TraceDbClient` as its transport, and is covered by `npm run public-smoke`.
-It is the start of TypeScript public-DX parity, not a published npm package
-claim.
+`npm run public-http-smoke` starts a local server and drives the public wrapper
+through schema apply, insert, batch ingest, patch, get, scan, query, explain,
+delete, compact, snapshot, restore, and jobs. It is the start of TypeScript
+public-DX parity, not a published npm package claim.
 
 The generated TypeScript client also has a private local package boundary for
 typechecking the artifact and smoke script:
@@ -354,13 +356,14 @@ Run the generated TypeScript client against a real local HTTP server with:
 ```bash
 cd clients/typescript
 npm run http-smoke
+npm run public-http-smoke
 ```
 
-This starts a loopback `tracedb-server` child process with an isolated temporary
-data directory and drives the generated client through ready, schema apply,
-direct put, batch ingest, get, scan, query, explain, delete, compact, snapshot,
-restore, and admin jobs. It is local product-path evidence for the generated
-transport artifact, not managed-cloud health or package publishing evidence.
+`http-smoke` drives the generated transport artifact. `public-http-smoke` drives
+the public `TraceDB` wrapper over that same generated transport. Both start a
+loopback `tracedb-server` child process with isolated temporary data and remain
+local product-path evidence, not managed-cloud health or package publishing
+evidence.
 
 Run the generated TypeScript endpoint quickstart against an existing HTTP
 endpoint with:

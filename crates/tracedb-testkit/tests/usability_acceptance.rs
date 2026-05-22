@@ -1637,6 +1637,10 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         json!("node --experimental-strip-types http-smoke.ts")
     );
     assert_eq!(
+        package["scripts"]["public-http-smoke"],
+        json!("node --experimental-strip-types public-http-smoke.ts")
+    );
+    assert_eq!(
         package["scripts"]["quickstart"],
         json!("node --experimental-strip-types quickstart.ts")
     );
@@ -1698,6 +1702,7 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
             "smoke.ts",
             "public-sdk-smoke.ts",
             "http-smoke.ts",
+            "public-http-smoke.ts",
             "quickstart.ts",
             "gateway-smoke.ts"
         ])
@@ -1710,6 +1715,12 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "table(name: string): TraceDBTable",
         "export class TraceDBTable",
         "insertBatch",
+        "patch",
+        "explainPlan",
+        "compact",
+        "snapshot",
+        "restore",
+        "listAdminJobs",
         "RecordPutBatchRequest",
         "where({ tenant_id })",
         "TraceDbClient",
@@ -1727,6 +1738,11 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "new TraceDB",
         ".table(\"docs\")",
         ".insertBatch",
+        ".patch",
+        ".explainPlan",
+        "db.compact",
+        "db.snapshot",
+        "db.restore",
         ".where({ tenant_id",
         ".match(\"body\"",
         ".near(\"embedding\"",
@@ -1736,6 +1752,32 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         assert!(
             public_smoke.contains(token),
             "TypeScript public SDK smoke should include {token}"
+        );
+    }
+
+    let public_http_smoke =
+        std::fs::read_to_string(root.join("clients/typescript/public-http-smoke.ts"))
+            .expect("read TypeScript public SDK HTTP smoke");
+    for token in [
+        "typescript public sdk http smoke ok",
+        "new TraceDB",
+        "await db.applySchema",
+        "await docs.insert",
+        "await docs.insertBatch",
+        "await docs.patch",
+        "await docs.get",
+        "await docs.limit(10).scan",
+        ".explainPlan()",
+        "await db.compact",
+        "await db.snapshot",
+        "await db.restore",
+        "local-http-typescript-public-sdk-smoke",
+        "sdk_surface: \"public\"",
+        "sql_module: \"not_implemented\"",
+    ] {
+        assert!(
+            public_http_smoke.contains(token),
+            "TypeScript public SDK HTTP smoke should include {token}"
         );
     }
 
@@ -1813,6 +1855,7 @@ fn typescript_client_package_declares_private_typecheck_boundary() {
         "npm run smoke",
         "npm run public-smoke",
         "npm run http-smoke",
+        "npm run public-http-smoke",
         "npm run quickstart",
         "npm run gateway-smoke",
         "TRACEDB_URL",

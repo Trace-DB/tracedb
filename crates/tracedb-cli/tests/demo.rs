@@ -895,7 +895,7 @@ fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
     assert_eq!(summary["steps"]["typescript_http_smoke"]["ok"], true);
     assert_eq!(
         summary["steps"]["typescript_http_smoke"]["command"],
-        "npm run http-smoke"
+        "npm run public-http-smoke"
     );
     assert!(
         summary["steps"]["typescript_http_smoke"]["cwd"]
@@ -905,9 +905,14 @@ fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
     );
     let smoke_summary = &summary["steps"]["typescript_http_smoke"]["summary"];
     assert_eq!(smoke_summary["ok"], true);
-    assert_eq!(smoke_summary["mode"], "local-http-typescript-smoke");
+    assert_eq!(
+        smoke_summary["mode"],
+        "local-http-typescript-public-sdk-smoke"
+    );
+    assert_eq!(smoke_summary["sdk_surface"], "public");
     assert_eq!(smoke_summary["steps"]["schema_apply"], true);
     assert_eq!(smoke_summary["steps"]["batch_ingest"], true);
+    assert_eq!(smoke_summary["steps"]["patch"], true);
     assert_eq!(smoke_summary["steps"]["query"], true);
     assert_eq!(smoke_summary["steps"]["explain"], true);
     assert_eq!(smoke_summary["steps"]["delete"], true);

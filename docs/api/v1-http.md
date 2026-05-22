@@ -67,11 +67,13 @@ node --experimental-strip-types clients/typescript/smoke.ts
   before `fetchImpl` is called.
 - The TypeScript public SDK wrapper under `clients/typescript/src/sdk.ts` is the
   first hand-written platform SDK layer over that generated transport. It
-  exposes `TraceDB`, table handles, single and batch inserts, scan/get/delete,
-  and query-builder chaining through `where({ tenant_id })`, `match`, `near`,
-  `with`, `limit`, and `all`. It is smoke-tested with fake fetch through
-  `npm run public-smoke`; real HTTP and gateway smokes still run through the
-  generated transport examples until the wrapper is promoted through those lanes.
+  exposes `TraceDB`, table handles, single and batch inserts, patch,
+  scan/get/delete, admin compact/snapshot/restore/jobs, and query-builder
+  chaining through `where({ tenant_id })`, `match`, `near`, `with`, `limit`,
+  `all`, and `explainPlan`. It is smoke-tested with fake fetch through
+  `npm run public-smoke` and with real local HTTP through
+  `npm run public-http-smoke`; gateway smoke still runs through the generated
+  endpoint quickstart until the wrapper is promoted through that lane.
 - SDK safe retries apply only to health/read routes that do not mutate TraceDB
   data state: `GET /v1/health`, `GET /v1/ready`, `POST /v1/records/get`,
   `POST /v1/records/scan`, `POST /v1/query`, and `POST /v1/explain`.
@@ -323,14 +325,15 @@ generated TypeScript check evidence only, not full product gate coverage, not
 HTTP smoke, not TypeScript gateway smoke, not managed-cloud proof, not
 benchmark evidence, and not SQL compatibility.
 `product-regression --only typescript_http_smoke` runs only `npm run
-http-smoke` in `clients/typescript`, which starts its own local
-`tracedb-server` child process and exercises the generated TypeScript client
-HTTP product path, and emits one-step `local-product-regression` JSON with
-`only_step: "typescript_http_smoke"`. This is local generated TypeScript HTTP
+public-http-smoke` in `clients/typescript`, which starts its own local
+`tracedb-server` child process and exercises the public TypeScript SDK wrapper
+over the generated transport, and emits one-step `local-product-regression` JSON
+with `only_step: "typescript_http_smoke"`. This is local public TypeScript SDK HTTP
 smoke evidence only, not full product gate coverage, not embedded demo/verify,
 not `http_demo`, not local `doctor http`, not Rust SDK quickstart, not
-`typescript_check`, not TypeScript gateway smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility.
+`typescript_check`, not generated-transport `http-smoke`, not TypeScript gateway
+smoke, not managed-cloud proof, not benchmark evidence, and not SQL
+compatibility.
 `product-regression --only typescript_gateway_smoke` runs only `npm run
 gateway-smoke` in `clients/typescript`, which starts a local engine plus
 gateway-mode `tracedb-server`, requires bearer auth, checks missing-token and
@@ -408,12 +411,14 @@ The generated TypeScript client has its own local HTTP smoke:
 ```bash
 cd clients/typescript
 npm run http-smoke
+npm run public-http-smoke
 ```
 
-That smoke starts `tracedb-server` with an isolated temporary data directory and
-uses the generated client against real HTTP routes for ready, health, catalog,
-metrics, schema apply, direct put, batch ingest, get, scan, query, explain,
-delete, compact, snapshot, restore, and admin jobs.
+`http-smoke` starts `tracedb-server` with an isolated temporary data directory
+and uses the generated client against real HTTP routes. `public-http-smoke`
+starts the same kind of local server and uses the public `TraceDB` wrapper for
+schema apply, insert, batch ingest, patch, get, scan, query, explain, delete,
+compact, snapshot, restore, and admin jobs.
 
 It also has an endpoint quickstart for an already-running local or
 managed-style HTTP endpoint:

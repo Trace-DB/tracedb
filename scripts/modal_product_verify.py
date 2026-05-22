@@ -151,6 +151,11 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 "cwd": "clients/typescript",
             },
             {
+                "name": "typescript-npm-public-http-smoke",
+                "argv": ["npm", "run", "public-http-smoke"],
+                "cwd": "clients/typescript",
+            },
+            {
                 "name": "tracedb-cli-demo-tests",
                 "argv": [
                     "cargo",

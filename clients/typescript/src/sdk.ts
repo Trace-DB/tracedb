@@ -1,17 +1,30 @@
 import {
   TraceDbClient,
   TraceDbRequestError,
+  type BranchesResponse,
+  type CompactResponse,
+  type DatabasesResponse,
   type DeleteResponse,
   type EpochResponse,
   type GetRecordResponse,
+  type HealthResponse,
+  type HybridExplain,
   type HybridQuery,
   type JsonObject,
   type JsonValue,
+  type JobsResponse,
+  type MetricsResponse,
   type PutBatchResponse,
   type QueryResponse,
   type RecordInput,
+  type RecordPatchRequest,
   type RecordPutBatchRequest,
   type RecordScanOutput,
+  type ReadyResponse,
+  type RestoreRequest,
+  type RestoreResponse,
+  type SnapshotRequest,
+  type SnapshotResponse,
   type TableSchema,
   type TraceDbClientConfig,
   type TraceDbFetch,
@@ -21,6 +34,9 @@ import {
 
 export { TraceDbClient, TraceDbHttpError, TraceDbRequestError } from "./client.ts";
 export type {
+  BranchesResponse,
+  CompactResponse,
+  DatabasesResponse,
   DeleteResponse,
   EpochResponse,
   GetRecordResponse,
@@ -30,13 +46,20 @@ export type {
   HybridQueryRow,
   JsonObject,
   JsonValue,
+  JobsResponse,
+  MetricsResponse,
   PutBatchResponse,
   QueryResponse,
   ReadyResponse,
   RecordInput,
   RecordOutput,
+  RecordPatchRequest,
   RecordPutBatchRequest,
   RecordScanOutput,
+  RestoreRequest,
+  RestoreResponse,
+  SnapshotRequest,
+  SnapshotResponse,
   TableSchema,
   TraceDbFetch,
   TraceDbFetchInit,
@@ -95,6 +118,40 @@ export class TraceDB {
     return this.transport.applySchema(schema, options);
   }
 
+  async listDatabases(options: TraceDbRequestOptions = {}): Promise<DatabasesResponse> {
+    return this.transport.listDatabases(options);
+  }
+
+  async listBranches(options: TraceDbRequestOptions = {}): Promise<BranchesResponse> {
+    return this.transport.listBranches(options);
+  }
+
+  async publicSafeMetrics(options: TraceDbRequestOptions = {}): Promise<MetricsResponse> {
+    return this.transport.publicSafeMetrics(options);
+  }
+
+  async compact(options: TraceDbRequestOptions = {}): Promise<CompactResponse> {
+    return this.transport.compact({}, options);
+  }
+
+  async snapshot(
+    request: SnapshotRequest,
+    options: TraceDbRequestOptions = {},
+  ): Promise<SnapshotResponse> {
+    return this.transport.snapshot(request, options);
+  }
+
+  async restore(
+    request: RestoreRequest,
+    options: TraceDbRequestOptions = {},
+  ): Promise<RestoreResponse> {
+    return this.transport.restore(request, options);
+  }
+
+  async listAdminJobs(options: TraceDbRequestOptions = {}): Promise<JobsResponse> {
+    return this.transport.listAdminJobs(options);
+  }
+
   table(name: string): TraceDBTable {
     return new TraceDBTable(this.transport, name);
   }
@@ -138,6 +195,20 @@ export class TraceDBTable {
       records: records.map((record) => this.recordInputWithTenant(record.id, record.fields, tenantId)),
     };
     return this.transport.putBatch(request, options);
+  }
+
+  async patch(
+    id: string,
+    fields: JsonObject,
+    options: TraceDbRequestOptions = {},
+  ): Promise<EpochResponse> {
+    const request: RecordPatchRequest = {
+      table: this.name,
+      tenant_id: this.requiredTenantId("POST", "/v1/records/patch"),
+      id,
+      fields: { ...fields },
+    };
+    return this.transport.patchRecord(request, options);
   }
 
   async get(id: string, options: TraceDbRequestOptions = {}): Promise<GetRecordResponse> {
@@ -308,19 +379,11 @@ export class TraceDBQueryBuilder {
   }
 
   async all(options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
-    const path = "/v1/query";
-    const tenantId = this.requiredTenantId("POST", path);
-    const query: HybridQuery = {
-      table: this.tableName,
-      tenant_id: tenantId,
-      scalar_eq: this.scalarEq,
-      text: this.textQuery,
-      vector: this.vectorQuery,
-      top_k: this.topK,
-      freshness: this.freshness,
-      explain: this.explain,
-    };
-    return this.transport.query(query, options);
+    return this.transport.query(this.toHybridQuery("/v1/query"), options);
+  }
+
+  async explainPlan(options: TraceDbRequestOptions = {}): Promise<HybridExplain> {
+    return this.transport.explain(this.toHybridQuery("/v1/explain"), options);
   }
 
   private copy(overrides: {
@@ -350,6 +413,20 @@ export class TraceDBQueryBuilder {
       return this.tenantId;
     }
     throw new TraceDbRequestError(method, path, "query execution requires tenant(...) or where({ tenant_id })");
+  }
+
+  private toHybridQuery(path: "/v1/query" | "/v1/explain"): HybridQuery {
+    const tenantId = this.requiredTenantId("POST", path);
+    return {
+      table: this.tableName,
+      tenant_id: tenantId,
+      scalar_eq: this.scalarEq,
+      text: this.textQuery,
+      vector: this.vectorQuery,
+      top_k: this.topK,
+      freshness: this.freshness,
+      explain: this.explain,
+    };
   }
 }
 
