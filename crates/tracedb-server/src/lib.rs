@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracedb_query::{
-    HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput, RecordPatchRequest,
-    RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
+    traceql_query_from_str, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
+    RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema,
+    TraceDb,
 };
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -50,6 +51,11 @@ struct DurableIdempotencyEntry {
     key: String,
     body: String,
     response: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TraceQlQueryRequest {
+    query: String,
 }
 
 #[derive(Debug)]
@@ -374,38 +380,15 @@ fn handle_inner(
         ("POST", "/v1/query") => {
             let parse_start = Instant::now();
             let query: HybridQuery = serde_json::from_str(body).map_err(to_io_error)?;
-            let include_explain = query.explain;
             let parse_ms = elapsed_ms(parse_start);
-            let lock_start = Instant::now();
-            let guard = db.lock().unwrap();
-            let lock_wait_ms = elapsed_ms(lock_start);
-            let engine_start = Instant::now();
-            let timed_output = guard.query_with_timing(query).map_err(to_io_error)?;
-            let engine_ms = elapsed_ms(engine_start);
-            let query_timing = timed_output.timing;
-            drop(guard);
-            let output = timed_output.output;
-            let response_shape_start = Instant::now();
-            let value = if include_explain {
-                serde_json::to_value(output).map_err(to_io_error)?
-            } else {
-                json!({ "results": output.results })
-            };
-            let response_shape_ms = elapsed_ms(response_shape_start);
-            ok_timed(
-                value,
-                request_start,
-                response_shape_ms,
-                &[
-                    ("read", read_ms),
-                    ("parse", parse_ms),
-                    ("lock_wait", lock_wait_ms),
-                    ("engine", engine_ms),
-                    ("engine_core", query_timing.engine_core_ms),
-                    ("explain_build", query_timing.explain_build_ms),
-                    ("materialize", query_timing.materialize_ms),
-                ],
-            )
+            query_response(&db, query, request_start, read_ms, parse_ms)?
+        }
+        ("POST", "/v1/traceql") => {
+            let parse_start = Instant::now();
+            let request: TraceQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
+            let query = traceql_query_from_str(&request.query).map_err(to_io_error)?;
+            let parse_ms = elapsed_ms(parse_start);
+            query_response(&db, query, request_start, read_ms, parse_ms)?
         }
         ("POST", "/v1/explain") => {
             let parse_start = Instant::now();
@@ -523,6 +506,46 @@ fn parse_record_put_body(body: &str) -> std::io::Result<RecordInput> {
     } else {
         serde_json::from_value(value).map_err(to_io_error)
     }
+}
+
+fn query_response(
+    db: &Arc<Mutex<TraceDb>>,
+    query: HybridQuery,
+    request_start: Instant,
+    read_ms: f64,
+    parse_ms: f64,
+) -> std::io::Result<String> {
+    let include_explain = query.explain;
+    let lock_start = Instant::now();
+    let guard = db.lock().unwrap();
+    let lock_wait_ms = elapsed_ms(lock_start);
+    let engine_start = Instant::now();
+    let timed_output = guard.query_with_timing(query).map_err(to_io_error)?;
+    let engine_ms = elapsed_ms(engine_start);
+    let query_timing = timed_output.timing;
+    drop(guard);
+    let output = timed_output.output;
+    let response_shape_start = Instant::now();
+    let value = if include_explain {
+        serde_json::to_value(output).map_err(to_io_error)?
+    } else {
+        json!({ "results": output.results })
+    };
+    let response_shape_ms = elapsed_ms(response_shape_start);
+    Ok(ok_timed(
+        value,
+        request_start,
+        response_shape_ms,
+        &[
+            ("read", read_ms),
+            ("parse", parse_ms),
+            ("lock_wait", lock_wait_ms),
+            ("engine", engine_ms),
+            ("engine_core", query_timing.engine_core_ms),
+            ("explain_build", query_timing.explain_build_ms),
+            ("materialize", query_timing.materialize_ms),
+        ],
+    ))
 }
 
 fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {

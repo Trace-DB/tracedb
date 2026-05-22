@@ -105,12 +105,18 @@
     {
       "id": "traceql_sqlish",
       "label": "TraceQL / SQL-ish",
-      "status": "native_traceql_parser_checked_sqlish_and_http_execution_parked",
+      "status": "native_traceql_http_execution_checked_sqlish_parked",
       "role": "future adapter into the same TraceQuery model",
       "evidence": [
         "crates/tracedb-query/src/lib.rs",
+        "crates/tracedb-server/src/lib.rs",
+        "crates/tracedb-testkit/tests/usability_acceptance.rs",
+        "docs/api/v1-http.md",
+        "docs/api/v1-openapi.json",
+        "POST /v1/traceql",
         "traceql_query_from_str",
-        "cargo test -p tracedb-query traceql_query_string --no-run"
+        "cargo test -p tracedb-query traceql_query_string --no-run",
+        "cargo test -p tracedb-testkit --test usability_acceptance http_traceql_endpoint_executes_native_query_string_through_hybrid_query --no-run"
       ]
     },
     {

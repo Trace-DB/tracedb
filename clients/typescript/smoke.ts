@@ -27,6 +27,7 @@ import {
   type SnapshotResponse,
   type TableSchema,
   type TraceDbFetchInit,
+  type TraceQlQueryRequest,
 } from "./src/client.ts";
 
 type FetchCall = {
@@ -228,6 +229,13 @@ await client.publicSafeMetrics();
 assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/metrics/public-safe");
 await client.listAdminJobs();
 assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/admin/jobs");
+const traceqlBody: TraceQlQueryRequest = { query: "FROM docs\nTENANT tenant-a\nLIMIT 5" };
+const traceqlResponse: QueryResponse = await client.traceql(traceqlBody);
+assert.equal(traceqlResponse.ok, true);
+assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/traceql");
+const traceqlRequest = JSON.parse(calls[calls.length - 1]?.init.body ?? "{}");
+assert.equal(traceqlRequest.query, traceqlBody.query);
+assert.equal(traceqlRequest.database_id, "db-default");
 
 const failingClient = new TraceDbClient({
   baseUrl: "http://127.0.0.1:8090",

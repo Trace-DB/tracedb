@@ -403,6 +403,10 @@ export interface TableSchema extends JsonObject {
   text_indexed_columns?: string[];
   vector_columns?: JsonObject[];
 }
+
+export interface TraceQlQueryRequest extends JsonObject {
+  query?: string;
+}
 export class TraceDbClient {
   private readonly baseUrl: string;
   private readonly token?: string;
@@ -510,6 +514,12 @@ export class TraceDbClient {
   /** Run hybrid query. */
   async query(body: HybridQuery, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
     return this.request<QueryResponse>("POST", "/v1/query", body, options);
+  }
+
+  // postTraceql: POST /v1/traceql
+  /** Run native TraceQL query. */
+  async traceql(body: TraceQlQueryRequest, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+    return this.request<QueryResponse>("POST", "/v1/traceql", body, options);
   }
 
   // postExplain: POST /v1/explain

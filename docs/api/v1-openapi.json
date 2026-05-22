@@ -927,6 +927,16 @@
           }
         },
         "type": "object"
+      },
+      "TraceQlQueryRequest": {
+        "additionalProperties": true,
+        "description": "Native TraceQL query request.",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -3094,6 +3104,112 @@
         "x-tracedb-mutates-state": true,
         "x-tracedb-sdk-idempotency-retry-supported": true,
         "x-tracedb-sdk-safe-retry": false
+      }
+    },
+    "/v1/traceql": {
+      "post": {
+        "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
+        "operationId": "postTraceql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceQlQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            },
+            "description": "Successful TraceDB response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request or validation failure."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized gateway request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Route not found."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway rate limit exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Engine or gateway failure."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway upstream failure."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable."
+          }
+        },
+        "summary": "Run native TraceQL query",
+        "tags": [
+          "query"
+        ],
+        "x-tracedb-idempotency-key-supported": false,
+        "x-tracedb-mutates-state": false,
+        "x-tracedb-sdk-idempotency-retry-supported": false,
+        "x-tracedb-sdk-safe-retry": true
       }
     }
   },

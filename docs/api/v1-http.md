@@ -245,6 +245,7 @@ writes.
 | `POST /v1/records/get` | `RecordGetRequest`: `table`, `tenant_id`, and `id`. | `{ "record": RecordOutput \| null }`. |
 | `POST /v1/records/scan` | `RecordScanRequest`: `table`, `tenant_id`, and optional `limit`. | `RecordScanOutput` with `records: RecordOutput[]` and `returned_count`. No cursor metadata is emitted today. |
 | `POST /v1/query` | `HybridQuery`: `table`, `tenant_id`, optional `text`, optional `vector`, optional `scalar_eq`, optional `graph_seed`, optional `temporal_as_of`, `top_k`, `freshness`, and `explain`. | With `explain: false`, returns `{ "results": HybridQueryRow[] }`; with `explain: true`, returns results plus `HybridExplain` metadata. |
+| `POST /v1/traceql` | `TraceQlQueryRequest`: `{ "query": string }`, where `query` is native line-oriented TraceQL that compiles into `HybridQuery`. | Same result shape as `POST /v1/query`: lean results without `EXPLAIN`, results plus `HybridExplain` when the TraceQL string includes `EXPLAIN`. This is not SQL or PostgreSQL compatibility. |
 | `POST /v1/explain` | Same query shape as `POST /v1/query`; the server forces explain mode. | `HybridExplain` only, including current access-path, candidate, counter, and timing fields. |
 
 Query responses include `Server-Timing` phase attribution for read, parse,
