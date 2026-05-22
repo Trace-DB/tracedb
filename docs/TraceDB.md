@@ -20,6 +20,16 @@ Canonical TraceDB architecture, strategy, benchmark, implementation, operations,
 
 This repo-local file is intentionally a stub so code, tests, and handoff paths do not depend on the vault checkout.
 
+## Durability Semantics
+
+`docs/durability-semantics-v0.md` is the current local-first durability
+boundary. It documents WAL commit frames, manifest and checkpoint checksums,
+torn-tail recovery, hard corruption failures, snapshot/restore copy semantics,
+write/WAL lock-file behavior, and the local HTTP idempotency cache. It also
+states the non-guarantees: no managed-cloud backup/DR, no cross-replica
+idempotency, no crash-atomic exactly-once semantics, and no multi-process active
+writer claim for one data directory.
+
 ## Local Product Smoke
 
 Run from the repo root:

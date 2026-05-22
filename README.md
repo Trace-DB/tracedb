@@ -16,6 +16,12 @@ This is the checklist future SDKs and adapters must pass before TraceDB claims
 maintenance-mode parity across Rust, TypeScript, Python, TraceQL/SQL-ish, and
 GraphQL.
 
+The current local durability boundary is `docs/durability-semantics-v0.md`.
+It states the WAL, manifest, checkpoint, snapshot/restore, lock-file, and
+HTTP idempotency semantics for the local-first engine, including the current
+non-guarantees around cross-replica idempotency, crash-atomic exactly-once, and
+managed-cloud backup/DR.
+
 Run the initial executable contract harness with:
 
 ```bash
@@ -91,7 +97,8 @@ Rust SDK over HTTP through ready, schema apply, batch ingest, scan, query,
 explain, delete, compact, snapshot, and restore, then emits a JSON summary. It
 uses keyed SDK write/admin retries for its mutation/admin steps and still
 reports `sql_module: not_implemented`. This is local product-path evidence, not
-managed-cloud deployment or backup/DR evidence.
+managed-cloud deployment or backup/DR evidence; see
+`docs/durability-semantics-v0.md` for the precise local durability boundary.
 
 Run the consolidated local product regression gate:
 

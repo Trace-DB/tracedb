@@ -31,6 +31,7 @@ MCP is optional glue later. It does not drive this architecture.
 The companion machine-readable manifest is `docs/platform-contract-v0.json`.
 The current wire contract is `docs/api/v1-http.md`; the current generated route
 artifact is `docs/api/v1-openapi.json`.
+The local durability boundary is `docs/durability-semantics-v0.md`.
 The initial executable conformance runner is `scripts/platform_conformance.py`.
 
 ## Boundaries
@@ -50,6 +51,9 @@ The initial executable conformance runner is `scripts/platform_conformance.py`.
   database model.
 - Exported performance claims still require an external control and a number to
   beat. Internal TraceDB-only runs are development evidence only.
+- Local WAL/checkpoint/snapshot behavior is governed by
+  `docs/durability-semantics-v0.md`; it is not a managed-cloud SLA, not
+  cross-replica idempotency, and not crash-atomic exactly-once semantics.
 
 ## Developer Model
 

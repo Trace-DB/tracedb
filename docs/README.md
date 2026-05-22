@@ -24,6 +24,7 @@ Start with:
 - `docs/TraceDB.md`
 - `docs/platform-contract-v0.md`
 - `docs/platform-contract-v0.json`
+- `docs/durability-semantics-v0.md`
 - `docs/api/v1-http.md`
 - `docs/api/v1-openapi.json`
 - `docs/Operations/Local Cloud.md`
@@ -31,7 +32,9 @@ Start with:
 `docs/platform-contract-v0.md` is the DX-facing SDK/adaptor contract freeze
 draft. `docs/platform-contract-v0.json` is the machine-readable conformance
 manifest for HTTP direct, Rust SDK, TypeScript SDK, Python SDK, TraceQL/SQL-ish,
-and GraphQL parity work.
+and GraphQL parity work. `docs/durability-semantics-v0.md` is the local-first
+engine durability boundary for WAL, manifest, checkpoint, snapshot/restore,
+lock-file, and HTTP idempotency semantics.
 `scripts/platform_conformance.py` is the first executable harness over that
 manifest. It currently runs `http_direct` through raw HTTP requests and maps
 the existing Rust SDK quickstart product path into `rust_sdk` scenario results.

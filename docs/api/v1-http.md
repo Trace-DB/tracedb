@@ -110,7 +110,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - The idempotency cache is local-engine-only and scoped to the same data
   directory. It survives a clean engine reopen from that data directory, but it
   is not cross-replica, not crash-atomic exactly-once, and not a managed-cloud
-  exactly-once guarantee.
+  exactly-once guarantee. The full local WAL, manifest, checkpoint,
+  snapshot/restore, lock-file, and idempotency boundary is documented in
+  `docs/durability-semantics-v0.md`.
 - Filesystem cache-write failures are logged and do not roll back the original
   successful mutation; clean-reopen replay requires the local cache write to
   have succeeded.
