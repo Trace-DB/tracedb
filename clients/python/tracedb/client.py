@@ -211,6 +211,12 @@ class TraceDB:
     def list_admin_jobs(self) -> JsonObject:
         return self.request_json("GET", "/v1/admin/jobs")
 
+    def traceql(self, query: str) -> JsonObject:
+        return self.traceql_request({"query": query})
+
+    def traceql_request(self, request: JsonObject) -> JsonObject:
+        return self.request_json("POST", "/v1/traceql", dict(request))
+
     def table(self, name: str) -> "TraceDBTable":
         return TraceDBTable(self, name)
 
@@ -478,6 +484,7 @@ def _is_retry_safe_request(method: str, path: str) -> bool:
         ("POST", "/v1/records/get"),
         ("POST", "/v1/records/scan"),
         ("POST", "/v1/query"),
+        ("POST", "/v1/traceql"),
         ("POST", "/v1/explain"),
     }
 

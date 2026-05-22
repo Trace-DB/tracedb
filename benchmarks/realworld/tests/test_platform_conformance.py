@@ -191,6 +191,7 @@ class PlatformConformanceTests(unittest.TestCase):
                 "get": True,
                 "scan": True,
                 "query": True,
+                "traceql_string_execution": True,
                 "explain": True,
                 "delete": True,
                 "idempotency": True,
@@ -201,6 +202,8 @@ class PlatformConformanceTests(unittest.TestCase):
             "records_put": 1,
             "records_inserted": 3,
             "records_scanned": 3,
+            "traceql_result_count": 1,
+            "traceql_explain": True,
             "patched_status": "reviewed",
             "deleted_hidden": True,
             "idempotency_replay_epoch": 2,
@@ -224,7 +227,7 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["get"]["status"], "passed")
         self.assertEqual(scenarios["scan"]["status"], "passed")
         self.assertEqual(scenarios["query"]["status"], "passed")
-        self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
+        self.assertEqual(scenarios["traceql_string_execution"]["status"], "passed")
         self.assertEqual(scenarios["explain"]["status"], "passed")
         self.assertEqual(scenarios["delete"]["status"], "passed")
         self.assertEqual(scenarios["idempotency"]["status"], "passed")

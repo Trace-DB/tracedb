@@ -83,7 +83,7 @@
     {
       "id": "python_sdk",
       "label": "Python SDK",
-      "status": "sync_http_smoked_from_installed_package_with_safe_and_idempotency_retries",
+      "status": "sync_http_smoked_from_installed_package_with_traceql_safe_and_idempotency_retries",
       "role": "sync-first AI/data/notebook SDK over the canonical HTTP contract",
       "evidence": [
         "clients/python/tracedb/client.py",
@@ -96,6 +96,8 @@
         "TRACEDB_IDEMPOTENCY_RETRIES",
         "safe_retries",
         "idempotency_retries",
+        "TraceDB.traceql",
+        "traceql_request",
         "python3 -m unittest discover -s clients/python/tests",
         "python3 clients/python/install_smoke.py",
         "installed package + clients/python/http_smoke.py",

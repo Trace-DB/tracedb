@@ -148,19 +148,19 @@ demo/verify, not `http_demo`, not local `doctor http` diagnostics, not Rust SDK
 quickstart evidence, not `typescript_check`, not TypeScript HTTP smoke, not
 managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 
-Current TypeScript conformance checkpoint: `scripts/platform_conformance.py
---surface typescript_sdk` maps the public TypeScript SDK HTTP smoke summary
-into all 13 Platform Contract v0 scenario IDs, with
-`traceql_string_execution` now covered by the public `TraceDB.traceql()` helper.
-Modal workspace run `ap-7dKR46BWCsRmjRBCNctWhn` passed in 82.426s, including
-`platform-conformance-quick`, `typescript-sdk-conformance`, `npm run
-public-http-smoke`, `npm run gateway-smoke`, and `cargo test --workspace
---all-targets`. The quick conformance lane proved `http_direct` at 13/13 and
-`rust_sdk` at 13/13 with native TraceQL covered through
-`TraceDbClient::traceql_typed`; `typescript-sdk-conformance` proved
-`typescript_sdk` at 13/13 with TraceQL result and explain evidence. This is
-local SDK conformance evidence, not managed-cloud proof, SQL compatibility,
-GraphQL, or benchmark evidence.
+Current SDK conformance checkpoint: `scripts/platform_conformance.py` now maps
+HTTP direct, Rust SDK, TypeScript SDK, and Python SDK into all 13 Platform
+Contract v0 scenario IDs. Modal workspace run
+`ap-OXNVYFecdsQUnmJo00P2He` passed in 125.134s, including
+`platform-conformance-quick`, `typescript-sdk-conformance`,
+`python-sdk-conformance`, Python unit/install smokes, TypeScript package/HTTP
+lanes, and `cargo test --workspace --all-targets`. The quick conformance lane
+proved `http_direct` at 13/13 and `rust_sdk` at 13/13 with native TraceQL
+covered through `TraceDbClient::traceql_typed`; `typescript-sdk-conformance`
+proved `typescript_sdk` at 13/13; and `python-sdk-conformance` proved
+`python_sdk` at 13/13 with installed-package TraceQL result and explain
+evidence. This is SDK conformance evidence, not managed-cloud proof, SQL
+compatibility, GraphQL, or benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -384,12 +384,11 @@ Native TraceQL now executes through the canonical HTTP surface:
 directives with `traceql_query_from_str`, and compiles them into the existing
 `HybridQuery` model before returning the same result shape as `POST /v1/query`.
 The conformance harness now includes `traceql_string_execution`; HTTP direct
-passes that scenario through `/v1/traceql`, and the Rust SDK lane now passes it
-through `TraceDbClient::traceql_typed`. The TypeScript SDK lane now passes it
-through `TraceDB.traceql()`. Python still reports it as `not_checked` until a
-native TraceQL helper exists. This is native TraceQL
-execution evidence only; SQL compatibility, PostgreSQL compatibility, and
-GraphQL remain unimplemented.
+passes that scenario through `/v1/traceql`, the Rust SDK lane passes it through
+`TraceDbClient::traceql_typed`, the TypeScript SDK lane passes it through
+`TraceDB.traceql()`, and the Python SDK lane passes it through the sync
+`TraceDB.traceql()` helper. This is native TraceQL execution evidence only; SQL
+compatibility, PostgreSQL compatibility, and GraphQL remain unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

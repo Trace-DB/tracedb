@@ -204,6 +204,24 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
             )
             assert isinstance(explain["returned_count"], int)
 
+            traceql_query = "\n".join(
+                [
+                    "FROM docs",
+                    "TENANT tenant-a",
+                    'WHERE status = "published"',
+                    'MATCH body "TraceDB Python"',
+                    "NEAR embedding [1.0, 0.0, 0.0]",
+                    "FRESHNESS STRICT",
+                    "LIMIT 3",
+                ]
+            )
+            traceql = db.traceql(traceql_query)
+            traceql_results = traceql.get("results")
+            assert isinstance(traceql_results, list)
+            assert any(result.get("record_id") == "intro" for result in traceql_results)
+            traceql_explain = db.traceql(f"{traceql_query}\nEXPLAIN")
+            assert isinstance(traceql_explain.get("explain", {}).get("returned_count"), int)
+
             deleted = docs.delete("ops", tombstone="python_sdk_smoke", idempotency_key=f"python-{run_id}-delete")
             assert deleted["deleted"] is True
             deleted_get = docs.get("ops")
@@ -255,6 +273,7 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                     "get": True,
                     "scan": True,
                     "query": True,
+                    "traceql_string_execution": True,
                     "explain": True,
                     "delete": True,
                     "idempotency": True,
@@ -267,6 +286,8 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                 "records_put": 1,
                 "records_inserted": 3,
                 "records_scanned": scan["returned_count"],
+                "traceql_result_count": len(traceql_results),
+                "traceql_explain": True,
                 "catalog_databases": len(databases.get("databases", [])),
                 "catalog_branches": len(branches.get("branches", [])),
                 "put_epoch": put_response["epoch"],

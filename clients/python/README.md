@@ -26,6 +26,14 @@ rows = (
     .limit(20)
     .all()
 )
+
+traceql_rows = db.traceql("""
+FROM docs
+TENANT tenant-a
+WHERE status = "published"
+MATCH body "TraceDB"
+LIMIT 20
+""")
 ```
 
 `TraceDB.from_env()` reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
@@ -38,12 +46,14 @@ The client uses only the Python standard library today. It preserves the raw
 HTTP escape hatch with `request_json(...)`, exposes `TraceDBHTTPError` with
 method, path, status, response body, parsed `error`, and optional `code`, and
 supports caller-provided `Idempotency-Key` values on mutation/admin calls.
+`TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
+TraceQL strings through `POST /v1/traceql`.
 `safe_retries` retries transient HTTP 5xx responses only for read-only routes:
-health, ready, get, scan, query, and explain. It does not retry writes or admin
-mutations. `idempotency_retries` is default-off and retries transient HTTP 5xx
-responses for mutation/admin routes only when that request carries a
-caller-provided `Idempotency-Key`; unkeyed writes and 4xx/conflict responses are
-not retried.
+health, ready, get, scan, query, native TraceQL, and explain. It does not retry
+writes or admin mutations. `idempotency_retries` is default-off and retries
+transient HTTP 5xx responses for mutation/admin routes only when that request
+carries a caller-provided `Idempotency-Key`; unkeyed writes and 4xx/conflict
+responses are not retried.
 
 Run the local unit/package checks:
 
@@ -66,14 +76,14 @@ python3 clients/python/http_smoke.py
 ```
 
 The smoke starts a local `tracedb-server` and drives schema apply, single put,
-batch ingest, patch, get, scan, query, explain, delete, idempotency replay and
-conflict, error envelope parsing, compact, snapshot, restore, and admin jobs. It
-emits `python sdk http smoke ok`.
+batch ingest, patch, get, scan, query, TraceQL string execution, explain,
+delete, idempotency replay and conflict, error envelope parsing, compact,
+snapshot, restore, and admin jobs. It emits `python sdk http smoke ok`.
 
 This is sync Python SDK product-path evidence. The package metadata is local
 project/package-shape evidence only. The platform conformance lane installs a
 copied package into an isolated temporary pip `--target` and runs this HTTP
 smoke with source-path imports disabled, so SDK conformance cannot pass by
 accidentally importing the repo copy. It is not async support, PyPI release
-readiness, managed-cloud proof, SQL compatibility, TraceQL, GraphQL, or
+readiness, managed-cloud proof, SQL compatibility, GraphQL, or
 benchmark evidence.

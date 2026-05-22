@@ -502,12 +502,12 @@ Native TraceQL now executes through the canonical HTTP surface:
 directives with `traceql_query_from_str`, and compiles them into the existing
 `HybridQuery` model before returning the same result shape as `POST /v1/query`.
 The platform conformance harness now includes `traceql_string_execution`; HTTP
-direct passes that scenario through `/v1/traceql`, and the Rust SDK lane now
-passes it through `TraceDbClient::traceql_typed`. The TypeScript SDK lane now
-passes it through the public `TraceDB.traceql()` helper. Python still reports it
-as `not_checked` until a native TraceQL helper exists. This is native TraceQL
-execution evidence only; SQL compatibility, PostgreSQL compatibility, and
-GraphQL remain unimplemented.
+direct passes that scenario through `/v1/traceql`, the Rust SDK lane passes it
+through `TraceDbClient::traceql_typed`, the TypeScript SDK lane passes it
+through the public `TraceDB.traceql()` helper, and the Python SDK lane passes it
+through the sync `TraceDB.traceql()` helper. This is native TraceQL execution
+evidence only; SQL compatibility, PostgreSQL compatibility, and GraphQL remain
+unimplemented.
 
 The generated TypeScript artifact includes OpenAPI-derived schema aliases such
 as `TableSchema`, `RecordPutBatchRequest`, `HybridQuery`, and

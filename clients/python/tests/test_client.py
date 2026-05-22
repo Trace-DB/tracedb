@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tomllib
 import unittest
@@ -102,6 +103,53 @@ class TraceDBClientTests(unittest.TestCase):
 
         with mock.patch("urllib.request.urlopen", side_effect=[retry_error, _FakeResponse('{"ok":true}')]) as urlopen:
             self.assertEqual(db.health(), {"ok": True})
+
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_traceql_posts_query_string_to_canonical_route_with_routing(self) -> None:
+        db = TraceDB(
+            "http://127.0.0.1:8090",
+            database_id="db-local",
+            branch_id="db-local:main",
+        )
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"results":[{"record_id":"intro"}]}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1")
+
+        self.assertEqual(response, {"results": [{"record_id": "intro"}]})
+        self.assertEqual(len(captured), 1)
+        request = captured[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.full_url, "http://127.0.0.1:8090/v1/traceql")
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")),
+            {
+                "branch_id": "db-local:main",
+                "database_id": "db-local",
+                "query": "FROM docs\nTENANT tenant-a\nLIMIT 1",
+            },
+        )
+
+    def test_traceql_safe_retries_retry_read_only_5xx_then_return_json(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/traceql",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch(
+            "urllib.request.urlopen",
+            side_effect=[retry_error, _FakeResponse('{"results":[]}')],
+        ) as urlopen:
+            self.assertEqual(db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1"), {"results": []})
 
         self.assertEqual(urlopen.call_count, 2)
 

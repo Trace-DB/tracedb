@@ -73,7 +73,7 @@ Every product surface must map to these contract components:
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
-| Python SDK | `python_sdk` | Sync HTTP smoked from installed package with safe and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
+| Python SDK | `python_sdk` | Sync HTTP smoked from installed package with native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; SQL-ish syntax parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
 
@@ -125,17 +125,18 @@ snapshot/restore into the same scenario IDs. The `python_sdk` lane first
 installs a copied `clients/python` package into an isolated temporary pip
 `--target`, then runs `clients/python/http_smoke.py` with source-path imports
 disabled. It maps schema apply, put, batch, patch, get, scan, query, explain,
-delete, idempotency, errors, and snapshot/restore into the same scenario IDs and
-still reports `traceql_string_execution` as `not_checked` until the sync SDK
-exposes native TraceQL execution. Future surfaces must report unimplemented
-scenarios as `not_checked` rather than silently treating them as success.
+TraceQL string execution, delete, idempotency, errors, and snapshot/restore
+into the same scenario IDs through the installed sync SDK. Future surfaces must
+report unimplemented scenarios as `not_checked` rather than silently treating
+them as success.
 
-Current verified checkpoint: Modal workspace run `ap-7dKR46BWCsRmjRBCNctWhn`
-passed in 82.426s. Its `platform-conformance-quick` command reported
+Current verified checkpoint: Modal workspace run `ap-OXNVYFecdsQUnmJo00P2He`
+passed in 125.134s. Its `platform-conformance-quick` command reported
 `http_direct` 13/13 and `rust_sdk` 13/13, including
 `traceql_string_execution`; its `typescript-sdk-conformance` command reported
-`typescript_sdk` 13/13 with native TraceQL covered by public SDK result and
-explain evidence.
+`typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
+`python_sdk` 13/13 with native TraceQL covered by installed-package smoke result
+and explain evidence.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and
@@ -190,10 +191,12 @@ stdlib-only SDK also exposes `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
 `TRACEDB_IDEMPOTENCY_RETRIES`. `safe_retries` only retries transient 5xx
-responses for health, ready, get, scan, query, and explain.
+responses for health, ready, get, scan, query, native TraceQL, and explain.
 `idempotency_retries` is default-off and retries transient 5xx responses for
 mutation/admin routes only when that request carries a caller-provided
 `Idempotency-Key`; unkeyed writes and 4xx/conflict responses are not retried.
+`TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
+TraceQL strings through the canonical `POST /v1/traceql` route.
 The local package/unit lane is `python3 -m unittest discover -s
 clients/python/tests`; `python3 clients/python/install_smoke.py` prefers a
 temporary venv, installs `clients/python` with pip `--no-deps`, and runs a
