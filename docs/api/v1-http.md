@@ -45,8 +45,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
   It now also has a first ergonomic table/query layer over the same wire
   contract through `TraceDb::connect(config)?` and
   `db.table("docs").tenant("tenant-a")`, including table insert, batch insert,
-  get, scan, and delete helpers plus `TableHandle::query()` / direct query
-  chaining that posts the canonical `HybridQuery` shape.
+  patch, get, scan, and delete helpers plus `TableHandle::query()` / direct
+  query chaining that posts the canonical `HybridQuery` shape to `/v1/query`
+  or `/v1/explain`.
   It also exposes `TraceDbAsyncClient` as a minimal async facade over the same
   HTTP contract. This first async surface runs the existing transport on a
   background thread per request so callers can await typed read, write, and

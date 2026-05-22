@@ -12,8 +12,9 @@ use std::sync::{
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 use tracedb_query::{
-    FreshnessMode, HybridQuery, HybridQueryRow, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordPatchRequest, RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
+    FreshnessMode, HybridExplain, HybridQuery, HybridQueryRow, RecordDeleteRequest,
+    RecordGetRequest, RecordInput, RecordPatchRequest, RecordPutBatchRequest, RecordScanRequest,
+    TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
     BranchesResponse, DatabasesResponse, ErrorResponse, HealthResponse, JobsResponse,
@@ -124,8 +125,9 @@ fn capture_json_body_server() -> (String, std::thread::JoinHandle<serde_json::Va
 }
 
 fn capture_json_body_response_server(
-    response_body: &'static str,
+    response_body: impl Into<String>,
 ) -> (String, std::thread::JoinHandle<serde_json::Value>) {
+    let response_body = response_body.into();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
@@ -602,6 +604,34 @@ fn table_handle_query_builder_posts_canonical_hybrid_query() {
     assert_eq!(body["text"], "rust sdk");
     assert_eq!(body["vector"], json!([1.0, 0.0, 0.0]));
     assert_eq!(body["top_k"], 20);
+    assert_eq!(body["freshness"], "Strict");
+    assert_eq!(body["explain"], true);
+}
+
+#[test]
+fn table_handle_explain_plan_posts_canonical_hybrid_query() {
+    let response_body = serde_json::to_string(&HybridExplain::default()).expect("explain json");
+    let (url, request_body) = capture_json_body_response_server(response_body);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let explain = client
+        .table("docs")
+        .tenant("tenant-a")
+        .where_eq("status", "published")
+        .match_text("body", "rust sdk explain")
+        .near("embedding", vec![1.0, 0.0, 0.0])
+        .limit(15)
+        .explain_plan()
+        .expect("table explain plan");
+    let body = request_body.join().expect("request body");
+
+    assert_eq!(explain.returned_count, 0);
+    assert_eq!(body["table"], "docs");
+    assert_eq!(body["tenant_id"], "tenant-a");
+    assert_eq!(body["scalar_eq"]["status"], "published");
+    assert_eq!(body["text"], "rust sdk explain");
+    assert_eq!(body["vector"], json!([1.0, 0.0, 0.0]));
+    assert_eq!(body["top_k"], 15);
     assert_eq!(body["freshness"], "Strict");
     assert_eq!(body["explain"], true);
 }

@@ -1775,8 +1775,15 @@ impl QueryBuilder {
     pub fn all(self) -> TraceDbClientResult<QueryResponse> {
         let path = "/v1/query";
         let client = self.client("POST", path)?;
-        let query = self.into_hybrid_query()?;
+        let query = self.into_hybrid_query(path)?;
         client.query_typed(&query)
+    }
+
+    pub fn explain_plan(self) -> TraceDbClientResult<HybridExplain> {
+        let path = "/v1/explain";
+        let client = self.client("POST", path)?;
+        let query = self.into_hybrid_query(path)?;
+        client.explain_typed(&query)
     }
 
     pub fn build(self) -> TraceQueryRequest {
@@ -1824,8 +1831,8 @@ impl QueryBuilder {
         }
     }
 
-    fn into_hybrid_query(self) -> TraceDbClientResult<HybridQuery> {
-        let tenant_id = self.required_tenant_id("POST", "/v1/query")?;
+    fn into_hybrid_query(self, path: &str) -> TraceDbClientResult<HybridQuery> {
+        let tenant_id = self.required_tenant_id("POST", path)?;
         let freshness = self.hybrid_freshness();
         Ok(HybridQuery {
             table: self.table,

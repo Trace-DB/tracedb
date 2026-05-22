@@ -250,10 +250,11 @@ idempotency helpers. This is an async integration surface for the current
 product path, not a final runtime-native Tokio/async-std transport.
 The blocking Rust SDK now also exposes a first ergonomic reference layer through
 `TraceDb::connect(config)?` and `db.table("docs").tenant("tenant-a")`. That
-`TableHandle` can insert single records, batch insert records, get records,
-scan, delete, enter query mode with `query()`, add scalar equality predicates,
-add text/vector query clauses, request explain output, set a limit, and execute
-`all()` against the canonical `/v1/query` `HybridQuery` shape.
+`TableHandle` can insert single records, batch insert records, patch records,
+get records, scan, delete, enter query mode with `query()`, add scalar equality
+predicates, add text/vector query clauses, request explain output, set a limit,
+execute `all()` against `/v1/query`, and execute `explain_plan()` against
+`/v1/explain` using the canonical `HybridQuery` shape.
 `TraceDbClientConfig::from_env()` now builds Rust SDK
 connection config from `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`,

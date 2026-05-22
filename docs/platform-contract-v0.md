@@ -129,11 +129,12 @@ the same scenario IDs. Future surfaces must report unimplemented scenarios as
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and
 `db.table("docs").tenant("tenant-a")` returns a `TableHandle`. Handles can
-execute table insert, batch insert, get, scan, and delete calls, then enter the
-query builder with `query()` or the direct chaining helpers `where_eq`,
-`match_text`, `near`, `with_explain`, `limit`, and `all()`. These helpers
-compile into the existing `RecordInput`, `RecordPutBatchRequest`, record
-request, and `HybridQuery` models; the raw HTTP methods remain available.
+execute table insert, batch insert, patch, get, scan, and delete calls, then
+enter the query builder with `query()` or the direct chaining helpers
+`where_eq`, `match_text`, `near`, `with_explain`, `limit`, `all()`, and
+`explain_plan()`. These helpers compile into the existing `RecordInput`,
+`RecordPutBatchRequest`, record request, and `HybridQuery` models; the raw HTTP
+methods remain available.
 `TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
