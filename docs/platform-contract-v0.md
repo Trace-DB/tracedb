@@ -150,8 +150,8 @@ SDL export from `GET /v1/graphql/schema`, and checks the bounded
 snapshot/restore scenarios remain explicit `not_checked` results until GraphQL
 owns those semantics.
 
-Current verified checkpoint: Modal workspace run `ap-tutj9wKpgEIIDS6zukrmPe`
-passed 20/20 commands in 94.012s. Its `platform-conformance-quick` command
+Current verified checkpoint: Modal workspace run `ap-RPGPKFDjFK13bpAOn4x9m0`
+passed 20/20 commands in 93.2s. Its `platform-conformance-quick` command
 reported `http_direct` 13/13 and `rust_sdk` 13/13, including
 `traceql_string_execution`; its `typescript-sdk-conformance` command reported
 `typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
@@ -164,8 +164,10 @@ and 9/13 intentionally `not_checked`. Its `graphql-http-conformance` command
 reported `graphql` as `ok: true`, `complete: false`, with schema apply, query,
 explain, and errors passed and 9/13 scenarios intentionally `not_checked`. Its
 `typescript-npm-public-http-smoke` command exercised the TypeScript public SDK
-through schema/write/read/query/admin flows plus native TraceQL and bounded
-GraphQL result/explain calls over real HTTP. Its
+through schema/write/read/query/admin flows plus `TraceDB.graphqlSchema()` over
+real HTTP, reporting `graphql_schema_export: true`, `docs` as the exported
+GraphQL schema table, `type DocsRow` as a schema token, native TraceQL, and
+bounded GraphQL result/explain calls. Its
 `cargo test --workspace --all-targets` command included the generated GraphQL
 SDL unit test, HTTP GraphQL schema export test, Rust SDK `GraphQlQueryRequest`,
 sync `graphql_typed`, safe retry, async `graphql_typed`, and generated schema
@@ -191,13 +193,18 @@ the same for the bounded `POST /v1/graphql` adapter with
 `GraphQlQueryRequest`. These helpers compile into or reuse the existing
 `RecordInput`, `RecordPutBatchRequest`, record request, `TraceQlQueryRequest`,
 `GraphQlQueryRequest`, `GraphQlSchemaResponse`, and `HybridQuery` models; the
-raw HTTP methods remain available.
+raw HTTP methods remain available. `GraphQlSchemaResponse.execution` is the
+canonical wire field for the execution note; the Rust SDK accepts the older
+`execution_caveat` spelling as a backward-compatible alias but emits the current
+field in typed examples and tests.
 
-The TypeScript public SDK mirrors the same bounded GraphQL wire route through
+The TypeScript public SDK mirrors the generated GraphQL schema route through
+`TraceDB.graphqlSchema()` over the generated transport's `/v1/graphql/schema`
+method, then mirrors the same bounded GraphQL wire route through
 `TraceDB.graphql(query)` and `graphqlRequest({ query })` over the generated
-transport's `/v1/graphql` method. This is public SDK access to the bounded
-adapter, not GraphQL mutation support, resolver runtime, GraphQL data-envelope
-execution, or full GraphQL adapter parity.
+transport's `/v1/graphql` method. This is public SDK access to generated SDL
+export and the bounded adapter, not GraphQL mutation support, resolver runtime,
+GraphQL data-envelope execution, or full GraphQL adapter parity.
 
 The Python sync SDK mirrors the same bounded GraphQL wire route through
 `TraceDB.graphql(query)` and `graphql_request({"query": query})` over
@@ -293,7 +300,7 @@ The query crate exposes `graphql_schema_sdl_from_tables` to generate SDL from
 applied `TableSchema` definitions and the bounded GraphQL adapter compiler
 primitive `graphql_query_from_str`. The HTTP server exposes the generated SDL
 through `GET /v1/graphql/schema` with `GraphQlSchemaResponse`, including the
-adapter marker, table names, and an execution caveat that `POST /v1/graphql`
+adapter marker, table names, and the `execution` note that `POST /v1/graphql`
 returns TraceDB's `QueryResponse` rather than a GraphQL data envelope.
 `graphql_query_from_str` accepts one root selection whose field name is the
 table, with arguments such as `tenant_id`, `where`/`filter`, `match`/`text`,
@@ -304,9 +311,10 @@ into `HybridQuery`. The HTTP server exposes that path through
 with `TraceDbClient::graphql_schema`, `TraceDbClient::graphql_schema_typed`,
 and `TraceDbAsyncClient::graphql_schema_typed`, and mirrors the bounded query
 route with `GraphQlQueryRequest`, `TraceDbClient::graphql_typed`, and
-`TraceDbAsyncClient::graphql_typed`; the TypeScript SDK mirrors bounded
-execution with `TraceDB.graphql()` and `TraceDB.graphqlRequest()`; the Python
-SDK mirrors bounded execution with `TraceDB.graphql()` and
+`TraceDbAsyncClient::graphql_typed`; the TypeScript SDK mirrors schema export
+with `TraceDB.graphqlSchema()` and bounded execution with `TraceDB.graphql()`
+and `TraceDB.graphqlRequest()`; the Python SDK mirrors bounded execution with
+`TraceDB.graphql()` and
 `graphql_request({"query": query})`. Mutations, subscriptions, fragments,
 aliases, unknown arguments, duplicate semantic arguments, and multiple root
 fields fail with `invalid GraphQL adapter` errors.

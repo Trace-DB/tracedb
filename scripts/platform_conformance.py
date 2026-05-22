@@ -416,7 +416,7 @@ def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
     if schema_payload.get("adapter") != "bounded_graphql_query_adapter":
         raise RuntimeError(f"GraphQL schema adapter marker missing: {schema_payload}")
     if schema_payload.get("execution") != "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope":
-        raise RuntimeError(f"GraphQL schema execution caveat missing: {schema_payload}")
+        raise RuntimeError(f"GraphQL schema execution field missing: {schema_payload}")
     if not isinstance(schema_tables, list) or "docs" not in schema_tables:
         raise RuntimeError(f"GraphQL schema response missing docs table: {schema_payload}")
     if not isinstance(schema_sdl, str) or any(token not in schema_sdl for token in schema_tokens):

@@ -151,6 +151,13 @@ try {
     vector_columns: [{ dimensions: 3, name: "embedding", source_columns: ["body"] }],
   };
   await db.applySchema(schema, { idempotencyKey: `ts-public-${runId}-schema` });
+  const graphqlSchema = await db.graphqlSchema();
+  const graphqlSchemaTables = graphqlSchema.tables ?? [];
+  const graphqlSchemaText = graphqlSchema.schema ?? "";
+  assert.equal(graphqlSchema.adapter, "bounded_graphql_query_adapter");
+  assert.ok(graphqlSchemaTables.includes("docs"));
+  assert.match(graphqlSchemaText, /type DocsRow/);
+  assert.match(graphqlSchema.execution ?? "", /QueryResponse/);
 
   const docs = db.table("docs").tenant("tenant-a");
   const putFields = {
@@ -333,6 +340,7 @@ try {
       catalog: true,
       metrics: true,
       schema_apply: true,
+      graphql_schema_export: true,
       put: true,
       insert: true,
       batch_ingest: true,
@@ -356,6 +364,8 @@ try {
     records_scanned: scanResponse.returned_count,
     traceql_result_count: traceqlResults.length,
     traceql_explain: traceqlExplain.explain !== undefined,
+    graphql_schema_tables: graphqlSchemaTables,
+    graphql_schema_tokens: ["type DocsRow"].filter((token) => graphqlSchemaText.includes(token)),
     graphql_result_count: graphqlResults.length,
     graphql_explain: graphqlExplain.explain !== undefined,
     catalog_databases: databases.databases?.length,

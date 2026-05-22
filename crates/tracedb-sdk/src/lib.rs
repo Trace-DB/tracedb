@@ -1347,7 +1347,8 @@ pub struct GraphQlSchemaResponse {
     pub adapter: String,
     pub schema: String,
     pub tables: Vec<String>,
-    pub execution_caveat: String,
+    #[serde(alias = "execution_caveat")]
+    pub execution: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

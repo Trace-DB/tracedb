@@ -490,7 +490,7 @@ fn async_client_typed_write_options_retry_5xx_when_idempotent() {
 #[test]
 fn retryable_health_requests_retry_5xx_then_return_success() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
     ]);
     let client =
@@ -505,7 +505,7 @@ fn retryable_health_requests_retry_5xx_then_return_success() {
 #[test]
 fn write_routes_do_not_retry_5xx_without_idempotency_contract() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
     ]);
     let client =
@@ -661,7 +661,7 @@ fn traceql_typed_posts_native_query_string() {
 #[test]
 fn traceql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 14\r\nConnection: close\r\n\r\n{\"results\":[]}",
     ]);
     let client =
@@ -695,7 +695,7 @@ fn graphql_request_typed_posts_bounded_query_string() {
 #[test]
 fn graphql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 14\r\nConnection: close\r\n\r\n{\"results\":[]}",
     ]);
     let client =
@@ -711,7 +711,7 @@ fn graphql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
 
 #[test]
 fn graphql_schema_typed_gets_generated_schema_response() {
-    let response_body = r#"{"adapter":"bounded_graphql","schema":"type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n","tables":["docs"],"execution_caveat":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope."}"#;
+    let response_body = r#"{"adapter":"bounded_graphql_query_adapter","schema":"type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n","tables":["docs"],"execution":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope"}"#;
     let (url, request) = capture_http_request_response_server(response_body);
     let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
@@ -720,10 +720,10 @@ fn graphql_schema_typed_gets_generated_schema_response() {
         .expect("graphql schema typed response");
     let request = request.join().expect("request");
 
-    assert_eq!(response.adapter, "bounded_graphql");
+    assert_eq!(response.adapter, "bounded_graphql_query_adapter");
     assert!(response.schema.contains("type Query"));
     assert_eq!(response.tables, vec!["docs"]);
-    assert!(response.execution_caveat.contains("QueryResponse"));
+    assert!(response.execution.contains("QueryResponse"));
     assert!(request.starts_with("GET /v1/graphql/schema HTTP/1.1"));
     assert!(request.contains("\r\nContent-Length: 0\r\n"));
     assert!(!request.contains("\r\nContent-Type: application/json\r\n"));
@@ -732,8 +732,8 @@ fn graphql_schema_typed_gets_generated_schema_response() {
 #[test]
 fn graphql_schema_typed_retries_transient_read_failures_when_safe_retries_enabled() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 224\r\nConnection: close\r\n\r\n{\"adapter\":\"bounded_graphql\",\"schema\":\"type Query {\\n  docs(tenant_id: String!, limit: Int): [docs!]!\\n}\\n\",\"tables\":[\"docs\"],\"execution_caveat\":\"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope.\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 230\r\nConnection: close\r\n\r\n{\"adapter\":\"bounded_graphql_query_adapter\",\"schema\":\"type Query {\\n  docs(tenant_id: String!, limit: Int): [docs!]!\\n}\\n\",\"tables\":[\"docs\"],\"execution\":\"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope\"}",
     ]);
     let client =
         TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
@@ -766,14 +766,14 @@ fn async_client_graphql_typed_posts_bounded_query_string() {
 
 #[test]
 fn async_client_graphql_schema_typed_gets_generated_schema_response() {
-    let response_body = r#"{"adapter":"bounded_graphql","schema":"type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n","tables":["docs"],"execution_caveat":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope."}"#;
+    let response_body = r#"{"adapter":"bounded_graphql_query_adapter","schema":"type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n","tables":["docs"],"execution":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope"}"#;
     let (url, request) = capture_http_request_response_server(response_body);
     let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
     let response = block_on(client.graphql_schema_typed()).expect("async graphql schema typed");
     let request = request.join().expect("request");
 
-    assert_eq!(response.adapter, "bounded_graphql");
+    assert_eq!(response.adapter, "bounded_graphql_query_adapter");
     assert_eq!(response.tables, vec!["docs"]);
     assert!(request.starts_with("GET /v1/graphql/schema HTTP/1.1"));
 }
@@ -887,7 +887,7 @@ fn request_options_reject_invalid_idempotency_key_header_values() {
 #[test]
 fn write_routes_with_idempotency_key_still_do_not_retry_5xx() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
     ]);
     let client =
@@ -908,7 +908,7 @@ fn write_routes_with_idempotency_key_still_do_not_retry_5xx() {
 #[test]
 fn admin_snapshot_safe_retries_do_not_retry_even_with_idempotency_key() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 54\r\nConnection: close\r\n\r\n{\"snapshot\":true,\"target\":\"/tmp/tracedb-snapshot\"}",
     ]);
     let client =
@@ -929,7 +929,7 @@ fn admin_snapshot_safe_retries_do_not_retry_even_with_idempotency_key() {
 #[test]
 fn idempotency_retries_skip_writes_without_idempotency_key() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
     ]);
     let client = TraceDbClient::new(
@@ -950,7 +950,7 @@ fn idempotency_retries_skip_writes_without_idempotency_key() {
 #[test]
 fn write_routes_with_idempotency_key_retry_5xx_when_enabled() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
     ]);
     let client = TraceDbClient::new(
@@ -969,7 +969,7 @@ fn write_routes_with_idempotency_key_retry_5xx_when_enabled() {
 #[test]
 fn admin_snapshot_retries_5xx_with_idempotency_key_when_enabled() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 54\r\nConnection: close\r\n\r\n{\"snapshot\":true,\"target\":\"/tmp/tracedb-snapshot\"}",
     ]);
     let client = TraceDbClient::new(
@@ -1065,7 +1065,7 @@ fn idempotency_retries_do_not_retry_conflicts_or_4xx() {
 #[test]
 fn idempotency_retries_do_not_apply_to_read_routes() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
     ]);
     let client = TraceDbClient::new(
@@ -1087,7 +1087,7 @@ fn idempotency_retries_do_not_apply_to_read_routes() {
 #[test]
 fn idempotency_retries_do_not_apply_to_unsupported_routes() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
     ]);
     let client = TraceDbClient::new(

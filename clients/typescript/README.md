@@ -21,10 +21,12 @@ scan/get/delete, admin compact/snapshot/restore, and a query builder that
 compiles to the canonical `HybridQuery` body. The wrapper also exposes native
 TraceQL execution through `TraceDB.traceql(query)` and
 `TraceDB.traceqlRequest({ query })` over the generated `/v1/traceql` transport
-method, plus bounded GraphQL query execution through `TraceDB.graphql(query)`
-and `TraceDB.graphqlRequest({ query })` over the generated `/v1/graphql`
-transport method. The raw generated transport also exposes `graphqlSchema()`
-for `GET /v1/graphql/schema`; that route exports SDL generated from applied
+method, generated GraphQL SDL export through `TraceDB.graphqlSchema()` over the
+generated `/v1/graphql/schema` transport method, plus bounded GraphQL query
+execution through `TraceDB.graphql(query)` and
+`TraceDB.graphqlRequest({ query })` over the generated `/v1/graphql` transport
+method. The raw generated transport also exposes `graphqlSchema()` for direct
+`GET /v1/graphql/schema` callers; that route exports SDL generated from applied
 TraceDB table schema and is not a GraphQL resolver runtime.
 
 The generated artifact also emits TypeScript aliases from the OpenAPI component
@@ -87,10 +89,12 @@ checks table-scoped `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, a
 compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
 `match`, `near`, `with`, `limit`, `all`, and `explainPlan`. It also checks
 `TraceDB.traceql()` request shape and read-only safe retries for native TraceQL,
-`TraceDB.graphql()` request shape and read-only safe retries for bounded
-GraphQL, and missing-tenant validation raises `TraceDbRequestError` before
-`fetchImpl` is called. This is public-DX smoke coverage over the generated
-transport, not publishing readiness or managed-cloud proof.
+`TraceDB.graphqlSchema()` response decoding plus read-only safe retries for the
+generated SDL route, `TraceDB.graphql()` request shape and read-only safe
+retries for bounded GraphQL, and missing-tenant validation raises
+`TraceDbRequestError` before `fetchImpl` is called. This is public-DX smoke
+coverage over the generated transport, not publishing readiness or managed-cloud
+proof.
 
 The package entry smoke imports from `@tracedb/sdk` and
 `@tracedb/sdk/transport` through the package `exports` map and verifies the
@@ -132,9 +136,10 @@ npm run public-http-smoke -- --summary-json /tmp/tracedb-typescript-sdk-smoke.js
 The public HTTP smoke starts a local `tracedb-server` child process with an
 isolated temporary data directory, waits for readiness, then drives `TraceDB`
 and table handles through health, catalog, metrics, schema apply, insert, batch
-ingest, patch, get, scan, query, native TraceQL result/explain, bounded GraphQL
-result/explain, explain, delete, idempotency replay/conflict, parsed error
-envelopes, compact, snapshot, restore, and admin jobs. It emits a
+ingest, patch, get, scan, query, GraphQL schema export, native TraceQL
+result/explain, bounded GraphQL result/explain, explain, delete, idempotency
+replay/conflict, parsed error envelopes, compact, snapshot, restore, and admin
+jobs. It emits a
 JSON summary and `typescript public sdk http smoke ok`. This is local loopback
 product evidence for the public wrapper over the generated transport and is the
 input for:
@@ -351,9 +356,9 @@ generated client rejects empty or CR/LF-containing idempotency keys before
 network I/O with
 `TraceDbRequestError`.
 The public wrapper's `safeRetries` / `TRACEDB_SAFE_RETRIES` setting is separate:
-it retries transient HTTP 5xx responses only for health/ready, get, scan, query,
-native TraceQL, bounded GraphQL, and explain. It does not retry write or admin
-mutations.
+it retries transient HTTP 5xx responses only for health/ready, GraphQL schema
+export, get, scan, query, native TraceQL, bounded GraphQL, and explain. It does
+not retry write or admin mutations.
 The public wrapper's `idempotencyRetries` / `TRACEDB_IDEMPOTENCY_RETRIES`
 setting is also default-off. It retries transient HTTP 5xx responses for
 mutation/admin routes only when the individual request carries a validated

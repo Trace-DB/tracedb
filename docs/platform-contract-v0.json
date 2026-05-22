@@ -145,6 +145,7 @@
         "TraceDbClient::graphql_schema",
         "TraceDbClient::graphql_schema_typed",
         "TraceDbAsyncClient::graphql_schema_typed",
+        "TraceDB.graphqlSchema",
         "graphql_query_from_str",
         "POST /v1/graphql",
         "GraphQlQueryRequest",

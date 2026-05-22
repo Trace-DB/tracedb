@@ -3,6 +3,7 @@ import {
   TraceDB,
   TraceDbRequestError,
   type GraphQlQueryRequest,
+  type GraphQlSchemaResponse,
   type JsonObject,
   type TraceDbFetchInit,
 } from "./src/sdk.ts";
@@ -47,6 +48,14 @@ const db = new TraceDB({
       return okJson({
         results: [{ record_id: "intro", tenant_id: "tenant-a" }],
         explain: { returned_count: 1 },
+      });
+    }
+    if (input.endsWith("/v1/graphql/schema")) {
+      return okJson({
+        adapter: "bounded_graphql_query_adapter",
+        schema: "type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n",
+        tables: ["docs"],
+        execution: "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope",
       });
     }
     if (input.endsWith("/v1/explain")) {
@@ -181,6 +190,37 @@ assert.equal(
   "TRACEDB_SAFE_RETRIES should retry bounded GraphQL read-only 5xx responses",
 );
 assert.equal(graphqlRetryCalls[0].input, "http://127.0.0.1:8090/v1/graphql");
+
+const graphqlSchemaRetryCalls: FetchCall[] = [];
+let graphqlSchemaRetryAttempt = 0;
+const graphqlSchemaRetryDb = TraceDB.fromEnv({
+  env: {
+    TRACEDB_URL: "http://127.0.0.1:8090",
+    TRACEDB_SAFE_RETRIES: "1",
+  },
+  fetchImpl: async (input, init) => {
+    graphqlSchemaRetryCalls.push({ input, init });
+    graphqlSchemaRetryAttempt += 1;
+    if (graphqlSchemaRetryAttempt === 1) {
+      return responseJson(503, { error: "temporarily unavailable" });
+    }
+    return okJson({
+      adapter: "bounded_graphql_query_adapter",
+      schema: "type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n",
+      tables: ["docs"],
+      execution: "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope",
+    });
+  },
+});
+const retriedGraphqlSchema = await graphqlSchemaRetryDb.graphqlSchema();
+assert.equal(retriedGraphqlSchema.tables?.[0], "docs");
+assert.equal(
+  graphqlSchemaRetryCalls.length,
+  2,
+  "TRACEDB_SAFE_RETRIES should retry GraphQL schema read-only 5xx responses",
+);
+assert.equal(graphqlSchemaRetryCalls[0].input, "http://127.0.0.1:8090/v1/graphql/schema");
+assert.equal(graphqlSchemaRetryCalls[0].init.method, "GET");
 
 const mutationRetryCalls: FetchCall[] = [];
 const mutationRetryDb = new TraceDB({
@@ -394,6 +434,15 @@ const graphqlViaRequest = await db.graphqlRequest(graphqlRequest);
 assert.equal(graphqlViaRequest.results?.[0]?.record_id, "intro");
 const graphqlRequestBody = JSON.parse(calls[7].init.body ?? "{}");
 assert.equal(graphqlRequestBody.query, graphqlQuery);
+
+const graphqlSchema: GraphQlSchemaResponse = await db.graphqlSchema();
+assert.equal(graphqlSchema.adapter, "bounded_graphql_query_adapter");
+assert.equal(graphqlSchema.tables?.[0], "docs");
+assert.match(graphqlSchema.schema ?? "", /type Query/);
+assert.match(graphqlSchema.execution ?? "", /QueryResponse/);
+assert.equal(calls[8].input, "http://127.0.0.1:8090/v1/graphql/schema");
+assert.equal(calls[8].init.method, "GET");
+assert.equal(calls[8].init.body, undefined);
 
 await db.table("docs").tenant("tenant-a").get("intro");
 await db.table("docs").tenant("tenant-a").limit(5).scan();
