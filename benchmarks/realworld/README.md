@@ -489,8 +489,16 @@ artifact path is available inside the Modal container and you want the scheduled
 job to validate evidence artifacts before launching the heavy suite work.
 The `soak_railway` and `release_100k` Modal presets now also pass
 `--railway-require-runbook-verification`; provide
-`--railway-runbook-verification-json` inside the Modal container or those lanes
-block before child scenario execution.
+`--railway-runbook-verification-json` or those lanes block before child scenario
+execution. For Modal remote runs, local evidence inputs passed through
+`--railway-persistence-pre-manifest-json`, `--railway-operation-receipt-json`,
+`--railway-backup-receipt-json`, and `--railway-runbook-verification-json` are
+copied into `benchmarks/realworld/.modal-input-artifacts/<run-id>/` before the
+remote call and the container receives the mounted `/workspace/TraceDB/...`
+path. This keeps generated reports excluded from the Modal source mount while
+still letting scheduled soak/release jobs consume explicit operator evidence.
+The staging directory is ignored by git; it is transport for evidence artifacts,
+not new proof by itself.
 When a Railway manifest is present, `runner suite` also writes
 `railway-artifacts.json` and records it in `suite-gate.json` as
 `artifact_paths.railway_artifacts_json`. That file indexes the suite artifacts

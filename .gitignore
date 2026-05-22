@@ -8,6 +8,7 @@ __pycache__/
 benchmarks/realworld/reports/*
 !benchmarks/realworld/reports/.gitkeep
 benchmarks/realworld/.cache/
+benchmarks/realworld/.modal-input-artifacts/
 benchmarks/realworld/.venv/
 benchmarks/realworld/run-data/
 benchmarks/realworld/report-bundles/

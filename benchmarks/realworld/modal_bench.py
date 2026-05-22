@@ -13,7 +13,7 @@ import sys
 import tarfile
 import time
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -29,7 +29,30 @@ REPO_ROOT = LAB_ROOT.parent.parent
 REMOTE_REPO = "/workspace/TraceDB"
 DEFAULT_REPORTS_DIR = "/tmp/tracedb-modal-reports"
 DEFAULT_BUNDLE_DIR = "/tmp/tracedb-modal-bundles"
+MODAL_INPUT_ARTIFACTS_DIR = ".modal-input-artifacts"
 DEFAULT_MAX_RECORDS = 1000
+MODAL_INPUT_ARTIFACT_FIELDS = (
+    (
+        "railway_persistence_pre_manifest_json",
+        "railway_persistence_pre_manifest",
+        "railway-persistence-pre-manifest.json",
+    ),
+    (
+        "railway_operation_receipt_json",
+        "railway_operation_receipt",
+        "railway-operation-receipt.json",
+    ),
+    (
+        "railway_backup_receipt_json",
+        "railway_backup_receipt",
+        "railway-backup-receipt.json",
+    ),
+    (
+        "railway_runbook_verification_json",
+        "railway_runbook_verification",
+        "railway-runbook-verification.json",
+    ),
+)
 MODAL_MIN_EPHEMERAL_DISK_MB = 524_288
 DEFAULT_MODAL_APP_NAME = "tracedb-realworld-smoke"
 MODAL_APP_NAME_ENV = "TRACEDB_MODAL_APP_NAME"
@@ -713,6 +736,92 @@ def config_git_identity(config: ModalSmokeConfig, repo_root: Path) -> dict[str, 
             identity["error"] = config.source_git_error
         return identity
     return git_identity(repo_root)
+
+
+def _safe_modal_artifact_segment(value: str) -> str:
+    segment = "".join(
+        character if character.isalnum() or character in "._-" else "_"
+        for character in value
+    ).strip("._")
+    return segment or "run"
+
+
+def _resolve_local_artifact_path(path_text: str, *, lab_root: Path) -> Path:
+    path = Path(path_text).expanduser()
+    if path.is_absolute():
+        return path
+    candidates = [
+        Path.cwd() / path,
+        REPO_ROOT / path,
+        lab_root / path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stage_modal_input_artifacts(
+    config: ModalSmokeConfig,
+    *,
+    lab_root: Path = LAB_ROOT,
+    remote_lab_root: Path = Path(REMOTE_REPO) / "benchmarks" / "realworld",
+) -> tuple[ModalSmokeConfig, list[dict[str, Any]]]:
+    """Copy local evidence inputs into a repo path mounted by Modal remote runs."""
+
+    staged_artifacts: list[dict[str, Any]] = []
+    replacements: dict[str, str] = {}
+    run_segment = _safe_modal_artifact_segment(config.run_id)
+    remote_prefix = str(remote_lab_root)
+    for field_name, artifact_kind, artifact_filename in MODAL_INPUT_ARTIFACT_FIELDS:
+        artifact_path_text = getattr(config, field_name)
+        if not artifact_path_text:
+            continue
+        if artifact_path_text == remote_prefix or artifact_path_text.startswith(f"{remote_prefix}/"):
+            continue
+
+        source_path = _resolve_local_artifact_path(artifact_path_text, lab_root=lab_root)
+        if not source_path.exists():
+            raise FileNotFoundError(f"{artifact_kind} artifact not found: {artifact_path_text}")
+
+        staged_path = (
+            lab_root
+            / MODAL_INPUT_ARTIFACTS_DIR
+            / run_segment
+            / artifact_filename
+        )
+        staged_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.resolve() != staged_path.resolve():
+            shutil.copy2(source_path, staged_path)
+
+        remote_path = (
+            remote_lab_root
+            / MODAL_INPUT_ARTIFACTS_DIR
+            / run_segment
+            / artifact_filename
+        )
+        replacements[field_name] = str(remote_path)
+        staged_artifacts.append(
+            {
+                "kind": artifact_kind,
+                "source_path": str(source_path),
+                "staged_path": str(staged_path),
+                "remote_path": str(remote_path),
+                "size_bytes": staged_path.stat().st_size,
+                "sha256": _file_sha256(staged_path),
+            }
+        )
+    if not replacements:
+        return config, staged_artifacts
+    return replace(config, **replacements), staged_artifacts
 
 
 def build_manifest(
@@ -1980,9 +2089,31 @@ if modal is not None:
         target: str = "tracedb",
         surface: str = "sdk",
         scenarios: str = "sdk_cli_surface",
+        suite_spec: str = "",
+        suite_preset: str = "",
+        suite_preflight_only: bool = False,
+        railway_config_from_env: bool = False,
+        railway_health_check: bool = False,
+        railway_health_timeout_seconds: float = 5.0,
+        railway_stateful_smoke: bool = False,
+        railway_stateful_smoke_timeout_seconds: float = 5.0,
+        railway_stateful_marker_id: str = "",
+        railway_stateful_read_only: bool = False,
+        railway_snapshot_restore_check: bool = False,
+        railway_snapshot_restore_timeout_seconds: float = 60.0,
+        railway_snapshot_root: str = "",
+        railway_verify_restored_marker: bool = False,
+        railway_restart_redeploy_plan: bool = False,
+        railway_persistence_pre_manifest_json: str = "",
+        railway_operation_receipt_json: str = "",
+        railway_backup_receipt_json: str = "",
+        railway_runbook_verification_json: str = "",
+        railway_require_runbook_verification: bool = False,
         openrouter_mode: str = "off",
+        openrouter_cap: str = "moderate",
         tracedb_ingest_mode: str = "per_record",
         seed: int = 42,
+        min_free_mb: int = 20_000,
         allow_external_controls: bool = False,
         require_services: bool = False,
         tracedb_engine_control: bool = False,
@@ -1992,24 +2123,52 @@ if modal is not None:
         opensearch_control: bool = False,
         mongodb_control: bool = False,
         milvus_control: bool = False,
+        tracedb_port: int = 18_080,
+        postgres_port: int = 25_432,
+        pgvector_port: int = 25_433,
+        qdrant_port: int = 26_333,
+        opensearch_port: int = 29_200,
+        mongodb_port: int = 27_027,
         allow_large: bool = False,
         allow_provider: bool = False,
         summary_json: str = "",
         bundle_output: str = "",
         bundle_export_max_mb: int = DEFAULT_BUNDLE_EXPORT_MAX_MB,
     ) -> None:
-        result = run_smoke_remote.remote(
-            export_bundle=bool(bundle_output),
-            bundle_export_max_mb=bundle_export_max_mb,
+        if suite_preset and suite_preset not in SUITE_PRESETS:
+            raise ValueError(f"unknown suite preset: {suite_preset}")
+        args = argparse.Namespace(
             run_id=run_id,
             records=records,
             dataset=dataset,
             target=target,
             surface=surface,
             scenarios=scenarios,
+            suite_spec=suite_spec,
+            suite_preset=suite_preset,
+            suite_preflight_only=suite_preflight_only,
+            railway_config_from_env=railway_config_from_env,
+            railway_health_check=railway_health_check,
+            railway_health_timeout_seconds=railway_health_timeout_seconds,
+            railway_stateful_smoke=railway_stateful_smoke,
+            railway_stateful_smoke_timeout_seconds=railway_stateful_smoke_timeout_seconds,
+            railway_stateful_marker_id=railway_stateful_marker_id,
+            railway_stateful_read_only=railway_stateful_read_only,
+            railway_snapshot_restore_check=railway_snapshot_restore_check,
+            railway_snapshot_restore_timeout_seconds=railway_snapshot_restore_timeout_seconds,
+            railway_snapshot_root=railway_snapshot_root,
+            railway_verify_restored_marker=railway_verify_restored_marker,
+            railway_restart_redeploy_plan=railway_restart_redeploy_plan,
+            railway_persistence_pre_manifest_json=railway_persistence_pre_manifest_json,
+            railway_operation_receipt_json=railway_operation_receipt_json,
+            railway_backup_receipt_json=railway_backup_receipt_json,
+            railway_runbook_verification_json=railway_runbook_verification_json,
+            railway_require_runbook_verification=railway_require_runbook_verification,
             openrouter_mode=openrouter_mode,
+            openrouter_cap=openrouter_cap,
             tracedb_ingest_mode=tracedb_ingest_mode,
             seed=seed,
+            min_free_mb=min_free_mb,
             allow_external_controls=allow_external_controls,
             require_services=require_services,
             tracedb_engine_control=tracedb_engine_control,
@@ -2019,12 +2178,28 @@ if modal is not None:
             opensearch_control=opensearch_control,
             mongodb_control=mongodb_control,
             milvus_control=milvus_control,
+            tracedb_port=tracedb_port,
+            postgres_port=postgres_port,
+            pgvector_port=pgvector_port,
+            qdrant_port=qdrant_port,
+            opensearch_port=opensearch_port,
+            mongodb_port=mongodb_port,
             allow_large=allow_large,
             allow_provider=allow_provider,
-            modal_app_name=modal_app_name(),
+        )
+        config = replace(
+            _config_from_args(args),
             modal_image_kind=selected_image_kind,
             **source_git_kwargs(),
         )
+        config, staged_input_artifacts = stage_modal_input_artifacts(config)
+        result = run_smoke_remote.remote(
+            export_bundle=bool(bundle_output),
+            bundle_export_max_mb=bundle_export_max_mb,
+            **asdict(config),
+        )
+        if staged_input_artifacts:
+            result["staged_input_artifacts"] = staged_input_artifacts
         result = write_bundle_output(result, bundle_output, max_mb=bundle_export_max_mb)
         write_summary_json(result, summary_json)
         print(json.dumps(result, indent=2, sort_keys=True))

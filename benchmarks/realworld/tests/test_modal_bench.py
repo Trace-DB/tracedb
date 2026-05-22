@@ -183,6 +183,95 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-require-runbook-verification", command)
         self.assertIn("--railway-runbook-verification-json", command)
 
+    def test_stage_modal_input_artifacts_copies_runbook_verification_for_remote(self) -> None:
+        from modal_bench import (
+            ModalSmokeConfig,
+            build_suite_command,
+            stage_modal_input_artifacts,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            lab_root = root / "benchmarks" / "realworld"
+            lab_root.mkdir(parents=True)
+            source = root / "reports" / "railway-runbook-verification.json"
+            source.parent.mkdir(parents=True)
+            source.write_text('{"status":"passed"}\n', encoding="utf-8")
+            backup_receipt = root / "reports" / "railway-backup-receipt.json"
+            backup_receipt.write_text('{"kind":"railway_backup_receipt"}\n', encoding="utf-8")
+
+            config = ModalSmokeConfig(
+                run_id="soak-test",
+                railway_backup_receipt_json=str(backup_receipt),
+                railway_runbook_verification_json=str(source),
+                railway_runbook_verification_required=True,
+            )
+            staged_config, staged_artifacts = stage_modal_input_artifacts(
+                config,
+                lab_root=lab_root,
+                remote_lab_root=Path("/workspace/TraceDB/benchmarks/realworld"),
+            )
+
+            staged_path = (
+                lab_root
+                / ".modal-input-artifacts"
+                / "soak-test"
+                / "railway-runbook-verification.json"
+            )
+            remote_path = (
+                "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
+                "soak-test/railway-runbook-verification.json"
+            )
+            self.assertEqual(staged_path.read_text(encoding="utf-8"), '{"status":"passed"}\n')
+            self.assertEqual(staged_config.railway_runbook_verification_json, remote_path)
+            self.assertEqual(
+                staged_config.railway_backup_receipt_json,
+                "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
+                "soak-test/railway-backup-receipt.json",
+            )
+            self.assertEqual([artifact["kind"] for artifact in staged_artifacts], [
+                "railway_backup_receipt",
+                "railway_runbook_verification",
+            ])
+            runbook_artifact = staged_artifacts[1]
+            self.assertEqual(runbook_artifact["source_path"], str(source))
+            self.assertEqual(runbook_artifact["staged_path"], str(staged_path))
+            self.assertEqual(runbook_artifact["remote_path"], remote_path)
+            self.assertEqual(
+                runbook_artifact["sha256"],
+                hashlib.sha256(b'{"status":"passed"}\n').hexdigest(),
+            )
+
+            command = build_suite_command(staged_config)
+            self.assertEqual(
+                command[command.index("--railway-runbook-verification-json") + 1],
+                remote_path,
+            )
+
+    def test_stage_modal_input_artifacts_keeps_remote_runbook_path(self) -> None:
+        from modal_bench import ModalSmokeConfig, stage_modal_input_artifacts
+
+        remote_path = (
+            "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
+            "existing/railway-runbook-verification.json"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lab_root = Path(temp_dir) / "benchmarks" / "realworld"
+            lab_root.mkdir(parents=True)
+            config = ModalSmokeConfig(
+                run_id="existing",
+                railway_runbook_verification_json=remote_path,
+            )
+
+            staged_config, staged_artifacts = stage_modal_input_artifacts(
+                config,
+                lab_root=lab_root,
+                remote_lab_root=Path("/workspace/TraceDB/benchmarks/realworld"),
+            )
+
+            self.assertEqual(staged_config, config)
+            self.assertEqual(staged_artifacts, [])
+
     def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
         from modal_bench import build_suite_command, _parse_args
 
