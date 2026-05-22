@@ -11,9 +11,11 @@ over the same committed records, not external sync jobs.
 
 TraceField is the memory/runtime research program that informs future runtime
 directions. It is not the current product and is not an implemented runtime in
-this repo. Agent Memory Flight Recorder is a future concrete demo wedge.
-Tensor artifacts are future governed derived-artifact/module work; TraceDB does
-not currently provide tensor compute or tensor storage services.
+this repo. Agent Memory Flight Recorder is a concrete local demo wedge built on
+TraceDB records, query/explain output, and replayable receipts; it is not the
+product identity. Tensor artifacts are future governed derived-artifact/module
+work; TraceDB does not currently provide tensor compute or tensor storage
+services.
 `crates/tracedb-memory-runtime` is placeholder/scaffolding only; memory calculus
 is not implemented.
 

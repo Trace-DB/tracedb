@@ -33,6 +33,33 @@ By default, unavailable competitor services are reported as unavailable instead
 of making the run fail. Use `--require-services` when a Compose stack is expected
 to be running and unavailable baselines should fail the run.
 
+## Agent Memory Flight Recorder Receipt
+
+The local chat-memory demo emits an Agent Memory Flight Recorder receipt over
+real TraceDB CLI commands:
+
+```bash
+cargo build -p tracedb-cli
+python3 -m runner chat-demo \
+  --output-json reports/chat-demo/latest.json \
+  --output-md reports/chat-demo/latest.md
+```
+
+The JSON report includes `flight_recorder_receipt` with inserted record ids,
+tenant scope, query/explain summary, replay command count, delete visibility
+evidence, and explicit non-guarantees. This is a local TraceDB receipt demo, not
+a TraceField runtime claim, tensor artifact claim, managed-cloud proof, legal
+export/purge claim, or product benchmark win.
+
+When local macOS executable policy blocks direct CLI execution, run the targeted
+Modal product lane instead:
+
+```bash
+modal run scripts/modal_product_verify.py \
+  --mode quickstart \
+  --only agent_memory_flight_recorder
+```
+
 ## OpenRouter Scientific Runs
 
 OpenRouter is automatically used when `OPENROUTER_API_KEY` is configured. For

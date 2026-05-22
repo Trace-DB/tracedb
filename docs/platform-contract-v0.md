@@ -33,9 +33,10 @@ TraceDB SDK Contract
 MCP is optional glue later. It does not drive this architecture.
 TraceField is the memory/runtime research program that informs future runtime
 directions, not the current product or an implemented runtime in this repo.
-Agent Memory Flight Recorder is a future concrete demo wedge. Tensor artifacts
-are future governed derived-artifact/module work, not current tensor compute or
-tensor storage services.
+Agent Memory Flight Recorder is a concrete local demo wedge built on TraceDB
+records, query/explain output, and replayable receipts; it is not a conformance
+surface yet. Tensor artifacts are future governed derived-artifact/module work,
+not current tensor compute or tensor storage services.
 `crates/tracedb-memory-runtime` is placeholder/scaffolding only; memory calculus
 is not implemented.
 

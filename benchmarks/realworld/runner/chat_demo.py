@@ -246,6 +246,14 @@ class ChatDemoRunner:
         erasure_before_ids = result_ids(erasure_before)
         erasure_after_ids = result_ids(erasure_after)
         beta_visible = beta_get.get("record") is not None
+        non_guarantees = [
+            "local logical demo only",
+            "no cloud dependency",
+            "no legal export/purge claim",
+            "no LangSmith canonical storage",
+            "no TraceField runtime behavior",
+            "no tensor artifact support",
+        ]
         report = {
             "demo": "local-chat-memory",
             "repo_root": str(self.repo_root),
@@ -273,12 +281,21 @@ class ChatDemoRunner:
                 "beta_tenant_record_visible": beta_visible,
             },
             "commands": commands,
-            "caveats": [
-                "local logical demo only",
-                "no cloud dependency",
-                "no legal export/purge claim",
-                "no LangSmith canonical storage",
-            ],
+            "flight_recorder_receipt": build_flight_recorder_receipt(
+                records=records,
+                baseline=baseline,
+                baseline_query=query_payload(
+                    tenant_id=TENANT,
+                    text="deterministic local memory hybrid",
+                    vector=[1.0, 0.0, 0.0, 0.0],
+                    freshness="Strict",
+                ),
+                commands=commands,
+                deleted_ids=deleted_ids,
+                erasure_after_ids=erasure_after_ids,
+                non_guarantees=non_guarantees,
+            ),
+            "caveats": non_guarantees,
         }
         failures = demo_invariant_failures(report)
         report["invariant_failures"] = failures
@@ -326,6 +343,74 @@ def feature_counts(output: dict[str, Any]) -> dict[str, int]:
         "failed": int(explain.get("failed_feature_count", 0)),
         "missing": int(explain.get("missing_feature_count", 0)),
     }
+
+
+def build_flight_recorder_receipt(
+    *,
+    records: list[dict[str, Any]],
+    baseline: dict[str, Any],
+    baseline_query: dict[str, Any],
+    commands: list[dict[str, Any]],
+    deleted_ids: list[str],
+    erasure_after_ids: list[str],
+    non_guarantees: list[str],
+) -> dict[str, Any]:
+    return {
+        "receipt_kind": "agent_memory_flight_recorder",
+        "substrate": "TraceDB",
+        "scope": "local_product_demo",
+        "product_identity": "AI-native transactional candidate-stream database",
+        "records": {
+            "table": TABLE,
+            "tenant": TENANT,
+            "record_count": len(records),
+            "record_ids": [record["id"] for record in records],
+            "tenants": sorted({record["tenant_id"] for record in records}),
+        },
+        "retrieval": {
+            "query_text": str(baseline_query.get("text", "")),
+            "freshness": baseline_query.get("freshness"),
+            "result_ids": result_ids(baseline),
+            "explain": summarize_explain(baseline.get("explain", {})),
+        },
+        "provenance": {
+            "source_fields": ["id", "tenant", "user_id", "body", "kind"],
+            "deleted_subject_record_ids": list(deleted_ids),
+            "deleted_subject_visible_after_delete": any(
+                record_id in set(erasure_after_ids) for record_id in deleted_ids
+            ),
+        },
+        "replay": {
+            "commands_recorded": len(commands),
+            "command_exit_failures": [
+                command for command in commands if command.get("exit_code") != 0
+            ],
+        },
+        "tracefield_runtime": {
+            "status": "not_implemented",
+            "note": "This receipt uses TraceDB records/query/explain evidence only.",
+        },
+        "tensor_artifacts": {
+            "status": "future_module_layer",
+            "note": "No tensor artifact module is exercised by this demo.",
+        },
+        "non_guarantees": list(non_guarantees),
+    }
+
+
+def summarize_explain(explain: Any) -> dict[str, Any]:
+    if not isinstance(explain, dict):
+        return {}
+    summary_keys = [
+        "returned_count",
+        "candidate_count",
+        "dirty_feature_count",
+        "pending_feature_count",
+        "failed_feature_count",
+        "missing_feature_count",
+        "freshness_mode",
+    ]
+    return {key: explain[key] for key in summary_keys if key in explain}
 
 
 def demo_invariant_failures(report: dict[str, Any]) -> list[str]:
@@ -404,6 +489,29 @@ def render_markdown_report(report: dict[str, Any]) -> str:
             lines.append(command["stderr"])
             lines.append("```")
         lines.append("")
+    lines.extend(["## Agent Memory Flight Recorder Receipt", ""])
+    receipt = report.get("flight_recorder_receipt")
+    if isinstance(receipt, dict):
+        lines.append(f"- `receipt_kind`: `{receipt.get('receipt_kind')}`")
+        lines.append(f"- `substrate`: `{receipt.get('substrate')}`")
+        retrieval = receipt.get("retrieval", {})
+        if isinstance(retrieval, dict):
+            lines.append(
+                f"- `retrieval.result_ids`: `{json.dumps(retrieval.get('result_ids', []), sort_keys=True)}`"
+            )
+        runtime = receipt.get("tracefield_runtime", {})
+        if isinstance(runtime, dict):
+            lines.append(f"- `tracefield_runtime.status`: `{runtime.get('status')}`")
+        tensors = receipt.get("tensor_artifacts", {})
+        if isinstance(tensors, dict):
+            lines.append(f"- `tensor_artifacts.status`: `{tensors.get('status')}`")
+        lines.extend(["", "### Non-Guarantees", ""])
+        for non_guarantee in receipt.get("non_guarantees", []):
+            lines.append(f"- {non_guarantee}")
+    else:
+        lines.append("- not generated")
+        lines.append("- no TraceField runtime behavior")
+    lines.append("")
     lines.extend(["## Caveats", ""])
     for caveat in report.get("caveats", []):
         lines.append(f"- {caveat}")

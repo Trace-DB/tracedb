@@ -40,9 +40,25 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "quickstart-doc-contract-test",
                 "platform-contract-doc-test",
                 "platform-conformance-quick",
+                "agent-memory-flight-recorder-build",
+                "agent-memory-flight-recorder",
                 "product-quickstart-skip-typescript",
             ],
         )
+        self.assertEqual(
+            commands[-2]["argv"],
+            [
+                "python3",
+                "-m",
+                "runner",
+                "chat-demo",
+                "--output-json",
+                "/tmp/tracedb-agent-memory-flight-recorder.json",
+                "--output-md",
+                "/tmp/tracedb-agent-memory-flight-recorder.md",
+            ],
+        )
+        self.assertEqual(commands[-2]["cwd"], "benchmarks/realworld")
         self.assertEqual(
             commands[-1]["argv"],
             [
@@ -63,6 +79,8 @@ class ModalProductVerifyTests(unittest.TestCase):
         command_names = [command["name"] for command in module.build_command_plan("workspace")]
 
         self.assertIn("product-quickstart-skip-typescript", command_names)
+        self.assertIn("agent-memory-flight-recorder-build", command_names)
+        self.assertIn("agent-memory-flight-recorder", command_names)
         self.assertIn("typescript-npm-ci", command_names)
         self.assertIn("tracedb-cli-demo-tests", command_names)
         self.assertIn("tracedb-testkit-usability-tests", command_names)
@@ -130,6 +148,21 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertEqual(commands[0]["cwd"], "clients/typescript")
         self.assertEqual(commands[1]["argv"], ["npm", "run", "gateway-smoke"])
         self.assertEqual(commands[1]["cwd"], "clients/typescript")
+
+    def test_only_agent_memory_flight_recorder_runs_build_and_demo(self) -> None:
+        module = load_module()
+
+        commands = module.build_command_plan("quickstart", only="agent_memory_flight_recorder")
+
+        self.assertEqual(
+            [command["name"] for command in commands],
+            [
+                "agent-memory-flight-recorder-build",
+                "agent-memory-flight-recorder",
+            ],
+        )
+        self.assertEqual(commands[0]["argv"], ["cargo", "build", "-p", "tracedb-cli"])
+        self.assertEqual(commands[1]["cwd"], "benchmarks/realworld")
 
     def test_only_rejects_unknown_modal_product_command(self) -> None:
         module = load_module()

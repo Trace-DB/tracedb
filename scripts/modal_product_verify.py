@@ -58,6 +58,10 @@ SKIPPED_TYPESCRIPT_STEPS = [
     "typescript_gateway_smoke",
 ]
 ONLY_COMMAND_ALIASES = {
+    "agent_memory_flight_recorder": [
+        "agent-memory-flight-recorder-build",
+        "agent-memory-flight-recorder",
+    ],
     "typescript_gateway_smoke": [
         "typescript-npm-ci",
         "typescript-npm-public-gateway-smoke",
@@ -127,6 +131,24 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 "--summary-json",
                 "/tmp/tracedb-platform-conformance.json",
             ],
+        },
+        {
+            "name": "agent-memory-flight-recorder-build",
+            "argv": ["cargo", "build", "-p", "tracedb-cli"],
+        },
+        {
+            "name": "agent-memory-flight-recorder",
+            "argv": [
+                "python3",
+                "-m",
+                "runner",
+                "chat-demo",
+                "--output-json",
+                "/tmp/tracedb-agent-memory-flight-recorder.json",
+                "--output-md",
+                "/tmp/tracedb-agent-memory-flight-recorder.md",
+            ],
+            "cwd": "benchmarks/realworld",
         },
         {
             "name": "product-quickstart-skip-typescript",

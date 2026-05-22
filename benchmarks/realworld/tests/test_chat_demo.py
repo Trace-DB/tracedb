@@ -101,6 +101,17 @@ class ChatDemoTest(unittest.TestCase):
             self.assertTrue(any(command[:3] == ["feature", "status", "set"] for command in normalized))
             self.assertTrue(any(command[0] == "patch" for command in normalized))
             self.assertTrue(any(command[0] == "delete" for command in normalized))
+            receipt = report["flight_recorder_receipt"]
+            self.assertEqual(receipt["receipt_kind"], "agent_memory_flight_recorder")
+            self.assertEqual(receipt["substrate"], "TraceDB")
+            self.assertEqual(receipt["tracefield_runtime"]["status"], "not_implemented")
+            self.assertEqual(receipt["tensor_artifacts"]["status"], "future_module_layer")
+            self.assertEqual(receipt["records"]["record_count"], 7)
+            self.assertIn("alpha-memory-1", receipt["records"]["record_ids"])
+            self.assertEqual(receipt["retrieval"]["query_text"], "deterministic local memory hybrid")
+            self.assertEqual(receipt["retrieval"]["result_ids"], ["alpha-memory-1"])
+            self.assertTrue(receipt["replay"]["commands_recorded"] >= 1)
+            self.assertIn("no TraceField runtime behavior", receipt["non_guarantees"])
 
     def test_runner_raises_when_invariants_fail(self) -> None:
         def fake_run(command: list[str]) -> tuple[int, str, str]:
@@ -170,6 +181,8 @@ class ChatDemoTest(unittest.TestCase):
         self.assertIn("no cloud dependency", markdown)
         self.assertIn("no legal export/purge claim", markdown)
         self.assertIn("no LangSmith canonical storage", markdown)
+        self.assertIn("Agent Memory Flight Recorder Receipt", markdown)
+        self.assertIn("no TraceField runtime behavior", markdown)
 
 
 if __name__ == "__main__":
