@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 import json
 import tempfile
@@ -22,7 +23,9 @@ from railway_bench import (
     build_railway_operator_runbook,
     build_railway_manifest,
     build_railway_persistence_verdict,
+    build_railway_runbook_verification,
     load_railway_config,
+    railway_runbook_verification_markdown,
     redact_env,
     run_railway_endpoint_health,
     run_railway_snapshot_restore_check,
@@ -652,6 +655,184 @@ class RailwayBenchTests(unittest.TestCase):
         )
         self.assertIn("runbook_only", runbook["claim_boundary"])
         self.assertNotIn("railway-token-secret", repr(runbook))
+
+    def test_runbook_verification_completes_required_artifacts(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            runbook = build_railway_operator_runbook(
+                config,
+                suite_id="soak-runbook",
+                suite_spec_id="soak_railway",
+                suite_spec_path="suites/soak_railway.json",
+                reports_dir=str(reports),
+                railway={
+                    "required": True,
+                    "backup_required": True,
+                    "restart_required": True,
+                },
+            )
+            paths = runbook["artifact_paths"]
+            marker = {
+                "table": "railway_stateful_markers",
+                "tenant_id": "railway-smoke",
+                "id": "marker-123",
+                "run_id": "soak-runbook-pre",
+            }
+
+            preflight_dir = Path(paths["preflight_suite_dir"])
+            preflight_dir.mkdir(parents=True)
+            (preflight_dir / "suite-gate.json").write_text('{"status":"usable"}\n')
+
+            backup_path = Path(paths["backup_receipt_json"])
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            backup_path.write_text(
+                json.dumps(
+                    build_railway_backup_receipt(
+                        config,
+                        suite_id="soak-runbook",
+                        status="passed",
+                        backup_id="backup_123",
+                        confirmed=True,
+                        backup_created=True,
+                        restore_validated=True,
+                        restore_validation_method="restored marker smoke",
+                    )
+                )
+                + "\n"
+            )
+
+            pre_manifest_path = Path(paths["pre_manifest_json"])
+            pre_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            pre_manifest = {
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "stateful_smoke": {
+                    "status": "passed",
+                    "mode": "write_read",
+                    "marker": marker,
+                },
+            }
+            pre_manifest_path.write_text(json.dumps(pre_manifest) + "\n")
+
+            receipt = build_railway_operation_receipt(
+                config,
+                suite_id="soak-runbook",
+                operation="restart",
+                status="passed",
+                executed=True,
+                confirmed=True,
+                command="railway restart --service service_tracedb",
+            )
+            receipt_path = Path(paths["operation_receipt_json"])
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(json.dumps(receipt) + "\n")
+
+            post_manifest = {
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                "stateful_smoke": {
+                    "status": "passed",
+                    "mode": "read_only",
+                    "marker": dict(marker, run_id="soak-runbook-post"),
+                },
+                "persistence_verdict": {
+                    "kind": "railway_persistence_verdict",
+                    "status": "passed",
+                },
+            }
+            post_dir = Path(paths["post_operation_suite_dir"])
+            post_dir.mkdir(parents=True, exist_ok=True)
+            (post_dir / "railway-manifest.json").write_text(json.dumps(post_manifest) + "\n")
+
+            verification = build_railway_runbook_verification(
+                runbook,
+                root=Path(temp_dir),
+                max_age_seconds=3600.0,
+            )
+            markdown = railway_runbook_verification_markdown(verification)
+
+        self.assertEqual(verification["kind"], "railway_runbook_verification")
+        self.assertEqual(verification["status"], "complete")
+        self.assertEqual(verification["missing_steps"], [])
+        self.assertEqual(verification["failed_steps"], [])
+        self.assertEqual(verification["stale_steps"], [])
+        self.assertEqual(
+            verification["complete_steps"],
+            [
+                "preflight_gate",
+                "backup_receipt",
+                "pre_operation_marker",
+                "operation_receipt",
+                "post_operation_marker",
+            ],
+        )
+        self.assertIn("preflight_gate", markdown)
+        self.assertNotIn("railway-token-secret", repr(verification))
+
+    def test_runbook_verification_reports_missing_and_stale_artifacts(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports = Path(temp_dir) / "reports"
+            runbook = build_railway_operator_runbook(
+                config,
+                suite_id="soak-runbook",
+                suite_spec_id="soak_railway",
+                suite_spec_path="suites/soak_railway.json",
+                reports_dir=str(reports),
+                railway={
+                    "required": True,
+                    "backup_required": True,
+                    "restart_required": True,
+                },
+            )
+            backup_path = Path(runbook["artifact_paths"]["backup_receipt_json"])
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            backup_path.write_text(
+                json.dumps(
+                    build_railway_backup_receipt(
+                        config,
+                        suite_id="soak-runbook",
+                        status="passed",
+                        backup_id="backup_123",
+                        confirmed=True,
+                        backup_created=True,
+                        restore_validated=True,
+                        restore_validation_method="restored marker smoke",
+                    )
+                )
+                + "\n"
+            )
+            os.utime(backup_path, (1, 1))
+
+            verification = build_railway_runbook_verification(
+                runbook,
+                root=Path(temp_dir),
+                max_age_seconds=1.0,
+            )
+
+        self.assertEqual(verification["status"], "blocked")
+        self.assertIn("backup_receipt", verification["stale_steps"])
+        self.assertIn("post_operation_marker", verification["missing_steps"])
+        self.assertNotIn("railway-token-secret", repr(verification))
 
     def test_operation_receipt_validation_accepts_confirmed_service_scoped_restart(self) -> None:
         receipt = {

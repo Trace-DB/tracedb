@@ -408,6 +408,21 @@ python3 -m runner railway-runbook \
 The runbook is an artifact plan only. It never creates backups, restarts
 services, redeploys code, or proves persistence until the listed commands and
 operator receipts are actually run.
+After the listed commands run, verify the evidence chain without mutating
+Railway:
+
+```bash
+python3 -m runner railway-runbook-verify \
+  --runbook-json reports/soak-railway-operator-check/railway-runbook.json \
+  --output-json reports/soak-railway-operator-check/railway-runbook-verification.json \
+  --output-md reports/soak-railway-operator-check/railway-runbook-verification.md
+```
+
+The verifier reads existing `suite-gate.json`, receipt, and manifest artifacts,
+then reports `complete` or `blocked` with `missing_steps`, `failed_steps`, and
+`stale_steps`. It is proof-of-artifacts only: it never creates backups,
+restarts services, redeploys code, or turns plan-only evidence into persistence
+proof.
 Use `--preflight-only` when the goal is to validate configured Railway evidence
 before starting expensive scenarios. The command writes the normal
 `suite.json`, `suite.md`, `suite-gate.json`, optional `railway-manifest.json`,

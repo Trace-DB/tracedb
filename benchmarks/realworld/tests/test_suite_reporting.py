@@ -845,6 +845,147 @@ class SuiteReportingTests(unittest.TestCase):
         self.assertNotIn("railway-token-secret", repr(runbook))
         self.assertNotIn("railway-token-secret", markdown)
 
+    def test_railway_runbook_verify_command_reports_complete_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            preflight_dir = root / "reports" / "soak-runbook-preflight"
+            preflight_dir.mkdir(parents=True)
+            (preflight_dir / "suite-gate.json").write_text('{"status":"usable"}\n')
+
+            backup_path = root / "reports" / "soak-runbook" / "railway-backup-receipt.json"
+            backup_path.parent.mkdir(parents=True)
+            backup_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "railway_backup_receipt",
+                        "status": "passed",
+                        "confirmed": True,
+                        "backup_created": True,
+                        "restore_validated": True,
+                        "service_id": "service_tracedb",
+                        "backup_id": "backup_123",
+                        "restore_validation_method": "restored marker smoke",
+                    }
+                )
+                + "\n"
+            )
+
+            marker = {
+                "table": "railway_stateful_markers",
+                "tenant_id": "railway-smoke",
+                "id": "marker-123",
+                "run_id": "soak-runbook-pre",
+            }
+            pre_manifest_path = root / "reports" / "soak-runbook-pre" / "railway-manifest.json"
+            pre_manifest_path.parent.mkdir(parents=True)
+            pre_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "status": "configured",
+                        "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+                        "stateful_smoke": {
+                            "status": "passed",
+                            "mode": "write_read",
+                            "marker": marker,
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+            operation_path = root / "reports" / "soak-runbook" / "railway-operation-receipt.json"
+            operation_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "railway_operation_receipt",
+                        "operation": "restart",
+                        "status": "passed",
+                        "executed": True,
+                        "confirmed": True,
+                        "service_id": "service_tracedb",
+                    }
+                )
+                + "\n"
+            )
+
+            post_dir = root / "reports" / "soak-runbook-post"
+            post_dir.mkdir(parents=True)
+            (post_dir / "railway-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "configured",
+                        "stateful_smoke": {
+                            "status": "passed",
+                            "mode": "read_only",
+                            "marker": dict(marker, run_id="soak-runbook-post"),
+                        },
+                        "persistence_verdict": {
+                            "kind": "railway_persistence_verdict",
+                            "status": "passed",
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+            runbook_path = root / "railway-runbook.json"
+            runbook_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "railway_operator_runbook",
+                        "suite_id": "soak-runbook",
+                        "suite_spec": {"id": "soak_railway"},
+                        "service": {"service_id": "service_tracedb"},
+                        "required_evidence": {
+                            "backup_receipt": True,
+                            "operation_receipt": True,
+                            "pre_operation_marker": True,
+                            "post_operation_marker": True,
+                        },
+                        "artifact_paths": {
+                            "preflight_suite_dir": str(preflight_dir),
+                            "backup_receipt_json": str(backup_path),
+                            "pre_manifest_json": str(pre_manifest_path),
+                            "operation_receipt_json": str(operation_path),
+                            "post_operation_suite_dir": str(post_dir),
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+            output_json = root / "railway-runbook-verification.json"
+            output_md = root / "railway-runbook-verification.md"
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "railway-runbook-verify",
+                    "--runbook-json",
+                    str(runbook_path),
+                    "--output-json",
+                    str(output_json),
+                    "--output-md",
+                    str(output_md),
+                ],
+                cwd=LAB_ROOT,
+                env={**os.environ, "BENCH_DISABLE_ENV_FILE": "1"},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            verification = json.loads(output_json.read_text())
+            markdown = output_md.read_text()
+
+        self.assertEqual(verification["kind"], "railway_runbook_verification")
+        self.assertEqual(verification["status"], "complete")
+        self.assertIn("preflight_gate", verification["complete_steps"])
+        self.assertIn("Railway Runbook Verification", markdown)
+
     def test_railway_backup_receipt_writes_manifest_and_gate_status(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             reports = Path(temp_dir) / "reports"

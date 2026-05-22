@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shlex
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib import error as urlerror
@@ -872,6 +873,127 @@ def railway_operator_runbook_markdown(runbook: Mapping[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def build_railway_runbook_verification(
+    runbook: Mapping[str, Any],
+    *,
+    root: Path | str | None = None,
+    max_age_seconds: float | None = None,
+) -> dict[str, Any]:
+    root_path = Path(root) if root is not None else Path.cwd()
+    payload = _dict_value(runbook)
+    paths = _dict_value(payload.get("artifact_paths"))
+    required = _dict_value(payload.get("required_evidence"))
+    service = _dict_value(payload.get("service"))
+    expected_service_id = str(service.get("service_id", ""))
+    steps: list[dict[str, Any]] = []
+
+    _append_json_artifact_step(
+        steps,
+        name="preflight_gate",
+        path=_runbook_artifact_path(paths, "preflight_suite_dir", root_path, child="suite-gate.json"),
+        required=True,
+        max_age_seconds=max_age_seconds,
+        evaluator=_evaluate_preflight_gate,
+    )
+
+    if required.get("backup_receipt"):
+        _append_json_artifact_step(
+            steps,
+            name="backup_receipt",
+            path=_runbook_artifact_path(paths, "backup_receipt_json", root_path),
+            required=True,
+            max_age_seconds=max_age_seconds,
+            evaluator=lambda artifact: _evaluate_backup_receipt(artifact, expected_service_id),
+        )
+
+    if required.get("pre_operation_marker"):
+        _append_json_artifact_step(
+            steps,
+            name="pre_operation_marker",
+            path=_runbook_artifact_path(paths, "pre_manifest_json", root_path),
+            required=True,
+            max_age_seconds=max_age_seconds,
+            evaluator=_evaluate_pre_operation_manifest,
+        )
+
+    if required.get("operation_receipt"):
+        _append_json_artifact_step(
+            steps,
+            name="operation_receipt",
+            path=_runbook_artifact_path(paths, "operation_receipt_json", root_path),
+            required=True,
+            max_age_seconds=max_age_seconds,
+            evaluator=lambda artifact: _evaluate_operation_receipt(artifact, expected_service_id),
+        )
+
+    if required.get("post_operation_marker"):
+        _append_json_artifact_step(
+            steps,
+            name="post_operation_marker",
+            path=_runbook_artifact_path(
+                paths,
+                "post_operation_suite_dir",
+                root_path,
+                child="railway-manifest.json",
+            ),
+            required=True,
+            max_age_seconds=max_age_seconds,
+            evaluator=_evaluate_post_operation_manifest,
+        )
+
+    complete_steps = [step["name"] for step in steps if step["status"] == "complete"]
+    missing_steps = [step["name"] for step in steps if step["status"] == "missing"]
+    failed_steps = [step["name"] for step in steps if step["status"] == "failed"]
+    stale_steps = [step["name"] for step in steps if step["status"] == "stale"]
+    status = "complete" if not missing_steps and not failed_steps and not stale_steps else "blocked"
+    return _redact_sensitive(
+        {
+            "kind": "railway_runbook_verification",
+            "suite_id": payload.get("suite_id", ""),
+            "suite_spec": _dict_value(payload.get("suite_spec")).get("id", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+            "complete_steps": complete_steps,
+            "missing_steps": missing_steps,
+            "failed_steps": failed_steps,
+            "stale_steps": stale_steps,
+            "steps": steps,
+            "claim_boundary": "verification_of_existing_artifacts_only_no_railway_mutation",
+        }
+    )
+
+
+def railway_runbook_verification_markdown(verification: Mapping[str, Any]) -> str:
+    steps = list(verification.get("steps", []))
+    lines = [
+        "# TraceDB Railway Runbook Verification",
+        "",
+        f"- Suite ID: `{verification.get('suite_id', '')}`",
+        f"- Suite spec: `{verification.get('suite_spec', '')}`",
+        f"- Status: `{verification.get('status', '')}`",
+        f"- Claim boundary: `{verification.get('claim_boundary', '')}`",
+        "",
+        "## Steps",
+        "",
+        "| Step | Status | Required | Path |",
+        "| --- | --- | --- | --- |",
+    ]
+    for step in steps:
+        item = _dict_value(step)
+        lines.append(
+            f"| `{item.get('name', '')}` | `{item.get('status', '')}` | "
+            f"`{item.get('required', False)}` | `{item.get('path', '')}` |"
+        )
+    blocking = []
+    for key in ("missing_steps", "failed_steps", "stale_steps"):
+        values = list(verification.get(key, []))
+        if values:
+            blocking.append(f"- `{key}`: {', '.join(f'`{value}`' for value in values)}")
+    if blocking:
+        lines.extend(["", "## Blocking Gaps", "", *blocking])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def run_railway_endpoint_health(
     config: Mapping[str, Any],
     *,
@@ -1214,6 +1336,169 @@ def redact_env(env: Mapping[str, str]) -> dict[str, str]:
     for key, value in env.items():
         redacted[key] = "<redacted>" if _is_sensitive_key(key) and value else value
     return redacted
+
+
+def _append_json_artifact_step(
+    steps: list[dict[str, Any]],
+    *,
+    name: str,
+    path: Path | None,
+    required: bool,
+    max_age_seconds: float | None,
+    evaluator: Any,
+) -> None:
+    if path is None:
+        steps.append(
+            {
+                "name": name,
+                "status": "missing",
+                "path": "",
+                "required": required,
+                "details": {"errors": ["artifact path is not configured"]},
+            }
+        )
+        return
+    age_check = _artifact_age_status(path, max_age_seconds)
+    if age_check["status"] != "present":
+        steps.append(
+            {
+                "name": name,
+                "status": age_check["status"],
+                "path": str(path),
+                "required": required,
+                "details": age_check,
+            }
+        )
+        return
+    try:
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        steps.append(
+            {
+                "name": name,
+                "status": "failed",
+                "path": str(path),
+                "required": required,
+                "details": {"errors": [str(exc)]},
+            }
+        )
+        return
+    if not isinstance(artifact, Mapping):
+        steps.append(
+            {
+                "name": name,
+                "status": "failed",
+                "path": str(path),
+                "required": required,
+                "details": {"errors": ["artifact JSON must be an object"]},
+            }
+        )
+        return
+    evaluation = evaluator(artifact)
+    steps.append(
+        {
+            "name": name,
+            "status": "complete" if evaluation["ok"] else "failed",
+            "path": str(path),
+            "required": required,
+            "details": _redact_sensitive(evaluation),
+        }
+    )
+
+
+def _runbook_artifact_path(
+    paths: Mapping[str, Any],
+    key: str,
+    root: Path,
+    *,
+    child: str = "",
+) -> Path | None:
+    value = str(paths.get(key, ""))
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = root / path
+    return path / child if child else path
+
+
+def _artifact_age_status(path: Path, max_age_seconds: float | None) -> dict[str, Any]:
+    if not path.exists():
+        return {"status": "missing", "errors": ["artifact does not exist"]}
+    age_seconds = max(0.0, time.time() - path.stat().st_mtime)
+    if max_age_seconds is not None and max_age_seconds > 0 and age_seconds > max_age_seconds:
+        return {
+            "status": "stale",
+            "age_seconds": age_seconds,
+            "max_age_seconds": max_age_seconds,
+            "errors": ["artifact is older than max_age_seconds"],
+        }
+    return {"status": "present", "age_seconds": age_seconds, "errors": []}
+
+
+def _evaluate_preflight_gate(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    status = str(artifact.get("status", ""))
+    ok = status in {"usable", "degraded", "claim-ready", "claim_ready"}
+    errors = [] if ok else [f"suite-gate status is not usable/degraded/claim-ready: {status}"]
+    return {"ok": ok, "status": status, "errors": errors}
+
+
+def _evaluate_backup_receipt(
+    artifact: Mapping[str, Any],
+    expected_service_id: str,
+) -> dict[str, Any]:
+    validation = validate_railway_backup_receipt(
+        artifact,
+        expected_service_id=expected_service_id,
+    )
+    return {
+        "ok": validation["ok"],
+        "status": validation["status"],
+        "missing": validation["missing"],
+        "errors": validation["errors"],
+        "warnings": validation["warnings"],
+    }
+
+
+def _evaluate_pre_operation_manifest(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    smoke = _dict_value(artifact.get("stateful_smoke"))
+    mode = str(smoke.get("mode", "write_read"))
+    ok = smoke.get("status") == "passed" and mode == "write_read"
+    errors = [] if ok else ["pre-operation stateful smoke must pass in write_read mode"]
+    return {
+        "ok": ok,
+        "status": smoke.get("status", ""),
+        "mode": mode,
+        "errors": errors,
+    }
+
+
+def _evaluate_operation_receipt(
+    artifact: Mapping[str, Any],
+    expected_service_id: str,
+) -> dict[str, Any]:
+    validation = validate_railway_operation_receipt(
+        artifact,
+        expected_service_id=expected_service_id,
+    )
+    return {
+        "ok": validation["ok"],
+        "status": validation["status"],
+        "missing": validation["missing"],
+        "errors": validation["errors"],
+        "warnings": validation["warnings"],
+    }
+
+
+def _evaluate_post_operation_manifest(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    verdict = _dict_value(artifact.get("persistence_verdict"))
+    ok = verdict.get("status") == "passed"
+    errors = [] if ok else ["post-operation manifest must include a passed persistence_verdict"]
+    return {
+        "ok": ok,
+        "status": verdict.get("status", ""),
+        "errors": errors,
+    }
 
 
 def _runbook_command(

@@ -39,7 +39,9 @@ try:
         build_railway_operation_plan,
         build_railway_operator_runbook,
         build_railway_persistence_verdict,
+        build_railway_runbook_verification,
         railway_operator_runbook_markdown,
+        railway_runbook_verification_markdown,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
@@ -57,7 +59,9 @@ except ImportError:  # pragma: no cover - package import path used by unit disco
         build_railway_operation_plan,
         build_railway_operator_runbook,
         build_railway_persistence_verdict,
+        build_railway_runbook_verification,
         railway_operator_runbook_markdown,
+        railway_runbook_verification_markdown,
         load_railway_config,
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
@@ -276,6 +280,26 @@ def main(argv: list[str] | None = None) -> int:
     railway_runbook.add_argument("--output-json", default="reports/railway-runbook.json")
     railway_runbook.add_argument("--output-md", default="reports/railway-runbook.md")
 
+    railway_runbook_verify = subcommands.add_parser(
+        "railway-runbook-verify",
+        help="verify existing Railway runbook evidence artifacts without mutating Railway",
+    )
+    railway_runbook_verify.add_argument("--runbook-json", required=True)
+    railway_runbook_verify.add_argument(
+        "--output-json",
+        default="reports/railway-runbook-verification.json",
+    )
+    railway_runbook_verify.add_argument(
+        "--output-md",
+        default="reports/railway-runbook-verification.md",
+    )
+    railway_runbook_verify.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=0.0,
+        help="Mark artifacts older than this many seconds stale; 0 disables age checks.",
+    )
+
     chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
     chat_demo.add_argument("--data-dir", default="")
     chat_demo.add_argument("--tracedb-cli", default="")
@@ -322,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_railway_backup_receipt(args)
     if args.command == "railway-runbook":
         return run_railway_runbook(args)
+    if args.command == "railway-runbook-verify":
+        return run_railway_runbook_verify(args)
     if args.command == "chat-demo":
         return run_chat_demo(args)
     if args.command == "tracedb-scaling":
@@ -489,6 +515,28 @@ def run_railway_runbook(args: argparse.Namespace) -> int:
     print(f"wrote {output_json}")
     print(f"wrote {output_md}")
     return 0 if runbook["status"] == "ready" else 1
+
+
+def run_railway_runbook_verify(args: argparse.Namespace) -> int:
+    lab_root = Path.cwd()
+    runbook_path = _resolve_path(lab_root, args.runbook_json)
+    payload = json.loads(runbook_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("--runbook-json must contain a JSON object")
+    max_age_seconds = args.max_age_seconds if args.max_age_seconds > 0 else None
+    verification = build_railway_runbook_verification(
+        payload,
+        root=lab_root,
+        max_age_seconds=max_age_seconds,
+    )
+    output_json = _resolve_path(lab_root, args.output_json)
+    output_md = _resolve_path(lab_root, args.output_md)
+    write_json(verification, output_json)
+    output_md.parent.mkdir(parents=True, exist_ok=True)
+    output_md.write_text(railway_runbook_verification_markdown(verification), encoding="utf-8")
+    print(f"wrote {output_json}")
+    print(f"wrote {output_md}")
+    return 0 if verification["status"] == "complete" else 1
 
 
 def execute_benchmark(
