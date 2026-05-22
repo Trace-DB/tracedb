@@ -280,6 +280,33 @@ class TraceDBTable:
             idempotency_key=idempotency_key,
         )
 
+    def insert_rows(
+        self,
+        rows: list[Mapping[str, Any]],
+        *,
+        id_field: str = "id",
+        idempotency_key: str | None = None,
+    ) -> JsonObject:
+        if not id_field:
+            raise TraceDBRequestError("POST", "/v1/records/put-batch", "id_field cannot be empty")
+        tenant_id = self._required_tenant("/v1/records/put-batch")
+        records = []
+        for index, row in enumerate(rows):
+            fields = dict(row)
+            if id_field not in fields:
+                raise TraceDBRequestError(
+                    "POST",
+                    "/v1/records/put-batch",
+                    f"row {index} missing id field {id_field!r}",
+                )
+            records.append(self._record_input_with_tenant(str(fields[id_field]), fields, tenant_id))
+        return self.db.request_json(
+            "POST",
+            "/v1/records/put-batch",
+            {"records": records},
+            idempotency_key=idempotency_key,
+        )
+
     def patch(self, record_id: str, fields: JsonObject, *, idempotency_key: str | None = None) -> JsonObject:
         return self.db.request_json(
             "POST",

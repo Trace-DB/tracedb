@@ -17,6 +17,11 @@ docs.insert("intro", {
     "status": "published",
 })
 
+docs.insert_rows([
+    {"id": "sdk", "body": "TraceDB sync SDK", "embedding": [0.8, 0.2, 0], "status": "published"},
+    {"id": "ops", "body": "TraceDB snapshot restore path", "embedding": [0, 1, 0], "status": "published"},
+], idempotency_key="docs-batch-1")
+
 rows = (
     db.table("docs")
     .where({"tenant_id": "tenant-a", "status": "published"})
@@ -52,6 +57,11 @@ The client uses only the Python standard library today. It preserves the raw
 HTTP escape hatch with `request_json(...)`, exposes `TraceDBHTTPError` with
 method, path, status, response body, parsed `error`, and optional `code`, and
 supports caller-provided `Idempotency-Key` values on mutation/admin calls.
+`table.insert_batch([{"id": ..., "fields": {...}}])` preserves the raw
+TraceDB record-input shape. `table.insert_rows([...])` is the notebook/data
+workflow helper: it accepts row dictionaries, reads the record id from `id` by
+default, supports `id_field="..."` for custom row keys, copies row fields into
+the canonical batch request, and still executes through `POST /v1/records/put-batch`.
 `TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
 TraceQL strings through `POST /v1/traceql`.
 `TraceDB.graphql_schema()` reads generated SDL from `GET /v1/graphql/schema`.
@@ -86,7 +96,7 @@ python3 clients/python/http_smoke.py
 ```
 
 The smoke starts a local `tracedb-server` and drives schema apply, single put,
-batch ingest, patch, get, scan, query, TraceQL string execution, explain,
+row batch ingest, patch, get, scan, query, TraceQL string execution, explain,
 GraphQL schema export, bounded GraphQL result/explain, delete, idempotency
 replay and conflict, error envelope parsing, compact, snapshot, restore, and
 admin jobs. It emits

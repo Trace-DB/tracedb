@@ -95,6 +95,8 @@
         "clients/python/install_smoke.py",
         "clients/python/http_smoke.py",
         "clients/python/README.md",
+        "TraceDBTable.insert_rows",
+        "row batch ingestion over POST /v1/records/put-batch",
         "TRACEDB_SAFE_RETRIES",
         "TRACEDB_IDEMPOTENCY_RETRIES",
         "safe_retries",

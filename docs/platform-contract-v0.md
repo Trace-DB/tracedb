@@ -78,7 +78,7 @@ Every product surface must map to these contract components:
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
-| Python SDK | `python_sdk` | Sync HTTP smoked from installed package with native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
+| Python SDK | `python_sdk` | Sync HTTP smoked from installed package with row batch ingestion, native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; bounded SQL-ish `SELECT` adapter checked | Adapter into the same TraceQuery/query model, not SQL compatibility. |
 | GraphQL | `graphql` | Generated SDL export plus bounded `POST /v1/graphql` HTTP adapter checked for schema apply, query, explain, and errors; other scenarios `not_checked` | Future full adapter into the same TraceQuery/query model. |
 
@@ -249,8 +249,9 @@ transport remains available and remains the source of route methods.
 
 The Python package now starts the sync-first AI/data SDK lane in
 `clients/python/tracedb/client.py`. `TraceDB(url, token="dev-token")` exposes
-table handles and a query builder with `insert`, `insert_batch`, `patch`, `get`,
-`scan`, `delete`, `where`, `match_text`, `near`, `with_options`, `limit`,
+table handles and a query builder with `insert`, raw-contract `insert_batch`,
+row-oriented `insert_rows`, `patch`, `get`, `scan`, `delete`, `where`,
+`match_text`, `near`, `with_options`, `limit`,
 `all`, and `explain_plan`, plus health/catalog/metrics/admin helpers. The
 stdlib-only SDK also exposes `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
@@ -265,6 +266,9 @@ mutation/admin routes only when that request carries a caller-provided
 TraceQL strings through the canonical `POST /v1/traceql` route.
 `TraceDB.graphql(query)` and `graphql_request({"query": query})` execute bounded
 GraphQL query-adapter strings through the canonical `POST /v1/graphql` route.
+`insert_rows` is intentionally SDK-side ergonomics for AI/data rows; it copies
+row dictionaries into the existing `POST /v1/records/put-batch` request shape
+and supports `id_field` for custom row ids.
 The local package/unit lane is `python3 -m unittest discover -s
 clients/python/tests`; `python3 clients/python/install_smoke.py` prefers a
 temporary venv, installs `clients/python` with pip `--no-deps`, and runs a

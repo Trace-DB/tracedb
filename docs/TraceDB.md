@@ -355,12 +355,14 @@ managed-cloud proof or benchmark evidence.
 The Python SDK now starts the sync-first AI/data SDK lane under
 `clients/python/tracedb`. `TraceDB(url, token="dev-token")` and
 `TraceDB.from_env()` expose table
-handles and a query builder with `insert`, `insert_batch`, `patch`, `get`,
-`scan`, `delete`, `where`, `match_text`, `near`, `with_options`, `limit`,
-`all`, and `explain_plan`, plus health/catalog/metrics/admin helpers,
+handles and a query builder with `insert`, raw-contract `insert_batch`,
+row-oriented `insert_rows`, `patch`, `get`, `scan`, `delete`, `where`,
+`match_text`, `near`, `with_options`, `limit`, `all`, and `explain_plan`, plus
+health/catalog/metrics/admin helpers,
 managed `database_id` / `branch_id` routing metadata injection,
 `Idempotency-Key` support, parsed HTTP error envelopes, and read-only
-`safe_retries` for health, ready, get, scan, query, and explain.
+`safe_retries` for health, ready, GraphQL schema export, get, scan, query,
+native TraceQL, bounded GraphQL, and explain.
 `idempotency_retries` is default-off and retries transient 5xx responses for
 mutation/admin routes only when that request carries a caller-provided
 `Idempotency-Key`; unkeyed writes and 4xx/conflict responses are not retried.
@@ -378,7 +380,7 @@ copied package into an isolated temporary pip `--target` before running
 workspace verification runs both package lanes before Python conformance.
 `python3 clients/python/http_smoke.py --summary-json
 /tmp/tracedb-python-sdk-smoke.json` starts a local `tracedb-server` and drives
-the Python surface through schema apply, put, batch ingest, patch, get, scan,
+the Python surface through schema apply, put, row batch ingest, patch, get, scan,
 query, explain, delete, idempotency replay/conflict, error-envelope parsing,
 compact, snapshot, restore, and admin jobs. `python3
 scripts/platform_conformance.py --surface python_sdk --summary-json

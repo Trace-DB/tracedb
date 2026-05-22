@@ -82,7 +82,8 @@ node --experimental-strip-types clients/typescript/smoke.ts
   public wrapper through the local gateway auth/routing lane.
 - The Python SDK under `clients/python/tracedb` is the first sync AI/data SDK
   lane over this API surface. It is stdlib-only for now and exposes `TraceDB`,
-  table handles, single and batch inserts, patch, get, scan, delete,
+  table handles, single inserts, raw-contract batch inserts, row-oriented
+  `insert_rows` batch ingestion, patch, get, scan, delete,
   health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
   routing metadata injection, `Idempotency-Key` support, read-only
   `safe_retries` / `TRACEDB_SAFE_RETRIES`, `idempotency_retries` /
@@ -352,7 +353,7 @@ on the failed step for debugging.
 `product-regression --only python_sdk_smoke` runs only
 `python3 clients/python/http_smoke.py` from the workspace root. The smoke starts
 its own local `tracedb-server` child process and exercises the sync Python SDK
-through ready, catalog, schema apply, insert, batch ingest, patch, get, scan,
+through ready, catalog, schema apply, insert, row batch ingest, patch, get, scan,
 query, explain, delete, idempotency, error envelopes, compact, snapshot,
 restore, and jobs. It emits one-step `local-product-regression` JSON with
 `only_step: "python_sdk_smoke"`. This is local sync Python SDK HTTP smoke

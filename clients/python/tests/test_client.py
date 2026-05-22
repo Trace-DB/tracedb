@@ -298,6 +298,109 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertEqual(response, {"epoch": 9})
         self.assertEqual(urlopen.call_count, 2)
 
+    def test_table_insert_rows_posts_row_dicts_to_canonical_batch_route(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090")
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"record_count":2,"epoch":7}')
+
+        rows = [
+            {"id": "intro", "body": "hello", "embedding": [1, 0, 0], "status": "published"},
+            {"id": "ops", "body": "operations", "embedding": [0, 1, 0], "status": "draft"},
+        ]
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = db.table("docs").tenant("tenant-a").insert_rows(
+                rows,
+                idempotency_key="python-rows-1",
+            )
+
+        self.assertEqual(response, {"record_count": 2, "epoch": 7})
+        self.assertEqual(len(captured), 1)
+        request = captured[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.full_url, "http://127.0.0.1:8090/v1/records/put-batch")
+        self.assertEqual(request.get_header("Idempotency-key"), "python-rows-1")
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")),
+            {
+                "records": [
+                    {
+                        "table": "docs",
+                        "tenant_id": "tenant-a",
+                        "id": "intro",
+                        "fields": {
+                            "id": "intro",
+                            "tenant": "tenant-a",
+                            "body": "hello",
+                            "embedding": [1, 0, 0],
+                            "status": "published",
+                        },
+                    },
+                    {
+                        "table": "docs",
+                        "tenant_id": "tenant-a",
+                        "id": "ops",
+                        "fields": {
+                            "id": "ops",
+                            "tenant": "tenant-a",
+                            "body": "operations",
+                            "embedding": [0, 1, 0],
+                            "status": "draft",
+                        },
+                    },
+                ]
+            },
+        )
+
+    def test_table_insert_rows_supports_custom_id_field(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090")
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"record_count":1}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = db.table("docs").tenant("tenant-a").insert_rows(
+                [{"doc_id": "intro", "body": "hello"}],
+                id_field="doc_id",
+            )
+
+        self.assertEqual(response, {"record_count": 1})
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(
+            json.loads(captured[0].data.decode("utf-8")),
+            {
+                "records": [
+                    {
+                        "table": "docs",
+                        "tenant_id": "tenant-a",
+                        "id": "intro",
+                        "fields": {
+                            "doc_id": "intro",
+                            "body": "hello",
+                            "id": "intro",
+                            "tenant": "tenant-a",
+                        },
+                    }
+                ]
+            },
+        )
+
+    def test_table_insert_rows_rejects_missing_id_field_before_http(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090")
+
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaisesRegex(TraceDBRequestError, "row 0 missing id field 'doc_id'"):
+                db.table("docs").tenant("tenant-a").insert_rows(
+                    [{"body": "hello"}],
+                    id_field="doc_id",
+                )
+
+        urlopen.assert_not_called()
+
     def test_idempotency_retries_skip_unkeyed_mutation_5xx(self) -> None:
         db = TraceDB("http://127.0.0.1:8090", idempotency_retries=1)
         retry_error = urllib.error.HTTPError(
@@ -358,6 +461,7 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertIn("db.graphql_schema", smoke)
         self.assertIn("db.graphql", smoke)
         self.assertIn("db.graphql_request", smoke)
+        self.assertIn("table.insert_rows", smoke)
         self.assertIn("TRACEDB_IDEMPOTENCY_RETRIES", smoke)
         self.assertIn("idempotency_retries", smoke)
         self.assertIn("python sdk install smoke ok", smoke)

@@ -162,23 +162,19 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
             assert conflict_status == 409
             assert replay_response["epoch"] == put_response["epoch"]
 
-            batch = docs.insert_batch(
+            batch = docs.insert_rows(
                 [
                     {
                         "id": "sdk",
-                        "fields": {
-                            "body": "TraceDB Python sync SDK table handle",
-                            "embedding": [0.8, 0.2, 0],
-                            "status": "published",
-                        },
+                        "body": "TraceDB Python sync SDK table handle",
+                        "embedding": [0.8, 0.2, 0],
+                        "status": "published",
                     },
                     {
                         "id": "ops",
-                        "fields": {
-                            "body": "TraceDB Python SDK snapshot restore path",
-                            "embedding": [0, 1, 0],
-                            "status": "published",
-                        },
+                        "body": "TraceDB Python SDK snapshot restore path",
+                        "embedding": [0, 1, 0],
+                        "status": "published",
                     },
                 ],
                 idempotency_key=f"python-{run_id}-batch",
@@ -291,6 +287,7 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
                     "graphql_schema_export": True,
                     "put": True,
                     "batch_ingest": True,
+                    "row_batch_ingest": True,
                     "patch": True,
                     "get": True,
                     "scan": True,

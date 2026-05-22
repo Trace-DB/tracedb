@@ -476,8 +476,12 @@ The Python SDK now has a sync-first package under `clients/python/tracedb`:
 from tracedb import TraceDB
 
 db = TraceDB.from_env()
+docs = db.table("docs").tenant("tenant-a")
+docs.insert_rows([
+    {"id": "intro", "body": "TraceDB Python", "embedding": [1, 0, 0], "status": "published"},
+])
 rows = (
-    db.table("docs")
+    docs
     .where({"tenant_id": "tenant-a", "status": "published"})
     .match_text("body", "TraceDB Python")
     .near("embedding", [1, 0, 0])
@@ -501,9 +505,13 @@ health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
 routing metadata injection, `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, `TRACEDB_IDEMPOTENCY_RETRIES`,
-`Idempotency-Key` support, and parsed HTTP error envelopes. `safe_retries`
-retries transient HTTP 5xx responses only for health/read routes: health, ready,
-get, scan, query, and explain. `idempotency_retries` is default-off and retries
+`Idempotency-Key` support, and parsed HTTP error envelopes. `insert_batch`
+preserves the raw TraceDB record-input shape, while `insert_rows` accepts normal
+row dictionaries for notebook/data ingestion and still executes through
+`POST /v1/records/put-batch`. `safe_retries` retries transient HTTP 5xx
+responses only for health/read routes: health, ready, GraphQL schema export,
+get, scan, query, native TraceQL, bounded GraphQL, and explain.
+`idempotency_retries` is default-off and retries
 transient HTTP 5xx responses for mutation/admin routes only when that request
 carries a caller-provided `Idempotency-Key`; unkeyed writes and 4xx/conflict
 responses are not retried. The unit lane checks the local package shape and env
