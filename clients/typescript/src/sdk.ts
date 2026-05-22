@@ -120,6 +120,12 @@ export type TableRecordInput = {
   fields: JsonObject;
 };
 
+export type TableRowInput = JsonObject;
+
+export type TraceDBInsertRowsOptions = TraceDbRequestOptions & {
+  idField?: string;
+};
+
 export type TraceDBDeleteOptions = TraceDbRequestOptions & {
   tombstone?: string;
 };
@@ -317,6 +323,31 @@ export class TraceDBTable {
       records: records.map((record) => this.recordInputWithTenant(record.id, record.fields, tenantId)),
     };
     return this.transport.putBatch(request, options);
+  }
+
+  async insertRows(
+    rows: TableRowInput[],
+    options: TraceDBInsertRowsOptions = {},
+  ): Promise<PutBatchResponse> {
+    const { idField = "id", ...requestOptions } = options;
+    if (idField.length === 0) {
+      throw new TraceDbRequestError("POST", "/v1/records/put-batch", "idField cannot be empty");
+    }
+    const tenantId = this.requiredTenantId("POST", "/v1/records/put-batch");
+    const request: RecordPutBatchRequest = {
+      records: rows.map((row, index) => {
+        const fields: JsonObject = { ...row };
+        if (!Object.prototype.hasOwnProperty.call(fields, idField)) {
+          throw new TraceDbRequestError(
+            "POST",
+            "/v1/records/put-batch",
+            `row ${index} missing id field '${idField}'`,
+          );
+        }
+        return this.recordInputWithTenant(String(fields[idField]), fields, tenantId);
+      }),
+    };
+    return this.transport.putBatch(request, requestOptions);
   }
 
   async patch(

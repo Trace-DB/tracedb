@@ -128,9 +128,10 @@ managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 public-http-smoke)`, which starts its own local `tracedb-server` child process
 and exercises the public TypeScript SDK wrapper over the generated transport,
 and emits one-step `local-product-regression` JSON with `only_step:
-"typescript_http_smoke"`. The smoke now includes idempotency replay/conflict
-and parsed error-envelope evidence for the shared conformance harness. This is
-local public TypeScript SDK HTTP smoke evidence only, not full product
+"typescript_http_smoke"`. The smoke now includes idempotency replay/conflict,
+raw-contract batch ingestion, row batch ingestion, and parsed error-envelope
+evidence for the shared conformance harness. This is local public TypeScript SDK
+HTTP smoke evidence only, not full product
 gate coverage, not embedded demo/verify, not `http_demo`, not local
 `doctor http` diagnostics, not Rust SDK quickstart evidence, not
 `typescript_check`, not generated-transport `http-smoke`, not TypeScript gateway
@@ -297,11 +298,13 @@ The TypeScript package now also starts the public platform SDK layer at
 transport and exposes `TraceDB.fromEnv()` for `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
-`TRACEDB_IDEMPOTENCY_RETRIES`, plus table handles for single insert, batch
-insert, patch, get, scan, delete, admin compact/snapshot/restore/jobs, and
+`TRACEDB_IDEMPOTENCY_RETRIES`, plus table handles for single insert,
+raw-contract batch insert, row-oriented `insertRows`, patch, get, scan, delete,
+admin compact/snapshot/restore/jobs, and
 query-builder chaining through `where({ tenant_id })`, `match`, `near`, `with`,
 `limit`, `all`, and `explainPlan`. The public wrapper retries transient 5xx
-responses only for health/ready, get, scan, query, and explain through
+responses only for health/ready, GraphQL schema export, get, scan, query,
+native TraceQL, bounded GraphQL, and explain through
 `safeRetries`; keyed mutation/admin retry is default-off through
 `idempotencyRetries` and only applies when the individual request carries a
 caller-provided idempotency key.

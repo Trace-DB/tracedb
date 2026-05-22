@@ -16,7 +16,8 @@ The source public entrypoint is `src/index.ts`, which re-exports the wrapper in
 with declarations at `dist/index.d.ts`. That wrapper intentionally uses the
 generated `TraceDbClient` as its transport layer instead of duplicating HTTP
 routes. Current public DX starts with `new TraceDB({ url, token })` or
-`TraceDB.fromEnv()`, table handles, record writes, batch ingest, patch,
+`TraceDB.fromEnv()`, table handles, record writes, raw-contract batch ingest,
+row-oriented batch ingest, patch,
 scan/get/delete, admin compact/snapshot/restore, and a query builder that
 compiles to the canonical `HybridQuery` body. The wrapper also exposes native
 TraceQL execution through `TraceDB.traceql(query)` and
@@ -85,9 +86,10 @@ wrapper layer against a fake transport. It checks `TraceDB.fromEnv()` for
 `TRACEDB_TIMEOUT_MS`, verifies `TRACEDB_SAFE_RETRIES` retries transient 5xx
 responses only for read-only routes, verifies `TRACEDB_IDEMPOTENCY_RETRIES`
 retries transient 5xx responses only for keyed mutation/admin routes, and then
-checks table-scoped `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
-compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
-`match`, `near`, `with`, `limit`, `all`, and `explainPlan`. It also checks
+checks table-scoped `insert`, raw-contract `insertBatch`, row-oriented
+`insertRows`, `patch`, `get`, `scan`, `delete`, admin compact/snapshot/restore,
+and query-builder chaining via `where({ tenant_id })`, `match`, `near`, `with`,
+`limit`, `all`, and `explainPlan`. It also checks
 `TraceDB.traceql()` request shape and read-only safe retries for native TraceQL,
 `TraceDB.graphqlSchema()` response decoding plus read-only safe retries for the
 generated SDL route, `TraceDB.graphql()` request shape and read-only safe
@@ -135,11 +137,11 @@ npm run public-http-smoke -- --summary-json /tmp/tracedb-typescript-sdk-smoke.js
 
 The public HTTP smoke starts a local `tracedb-server` child process with an
 isolated temporary data directory, waits for readiness, then drives `TraceDB`
-and table handles through health, catalog, metrics, schema apply, insert, batch
-ingest, patch, get, scan, query, GraphQL schema export, native TraceQL
-result/explain, bounded GraphQL result/explain, explain, delete, idempotency
-replay/conflict, parsed error envelopes, compact, snapshot, restore, and admin
-jobs. It emits a
+and table handles through health, catalog, metrics, schema apply, insert, row
+batch ingest, raw-contract batch ingest, patch, get, scan, query, GraphQL schema
+export, native TraceQL result/explain, bounded GraphQL result/explain, explain,
+delete, idempotency replay/conflict, parsed error envelopes, compact, snapshot,
+restore, and admin jobs. It emits a
 JSON summary and `typescript public sdk http smoke ok`. This is local loopback
 product evidence for the public wrapper over the generated transport and is the
 input for:
@@ -297,8 +299,11 @@ await db.applySchema(schema);
 
 const docs = db.table("docs").tenant("tenant-a");
 await docs.insert("a", { body: "hello", embedding: [1, 0, 0] });
+await docs.insertRows([
+  { id: "b", body: "row batch", embedding: [0, 1, 0], status: "published" },
+]);
 await docs.insertBatch([
-  { id: "b", fields: { body: "batch", embedding: [0, 1, 0] } },
+  { id: "c", fields: { body: "raw batch", embedding: [0, 0, 1] } },
 ]);
 
 const result = await db

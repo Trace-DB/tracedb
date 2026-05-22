@@ -192,28 +192,39 @@ try {
   }
   assert.equal(idempotencyConflictStatus, 409);
 
-  const batch = await docs.insertBatch(
+  const rowBatch = await docs.insertRows(
     [
       {
         id: "sdk",
-        fields: {
-          body: "TraceDB public TypeScript SDK table handle",
-          embedding: [0.8, 0.2, 0],
-          status: "published",
-        },
+        body: "TraceDB public TypeScript SDK table handle",
+        embedding: [0.8, 0.2, 0],
+        status: "published",
       },
       {
         id: "ops",
+        body: "TraceDB snapshot restore and WAL recovery",
+        embedding: [0, 1, 0],
+        status: "published",
+      },
+    ],
+    { idempotencyKey: `ts-public-${runId}-row-batch` },
+  );
+  assert.equal(rowBatch.record_count, 2);
+
+  const rawBatch = await docs.insertBatch(
+    [
+      {
+        id: "raw",
         fields: {
-          body: "TraceDB snapshot restore and WAL recovery",
-          embedding: [0, 1, 0],
-          status: "published",
+          body: "TraceDB raw TypeScript SDK batch contract",
+          embedding: [0.2, 0.2, 0.8],
+          status: "draft",
         },
       },
     ],
-    { idempotencyKey: `ts-public-${runId}-batch` },
+    { idempotencyKey: `ts-public-${runId}-raw-batch` },
   );
-  assert.equal(batch.record_count, 2);
+  assert.equal(rawBatch.record_count, 1);
 
   await docs.patch("sdk", { status: "reviewed", reviewer: "public-http-smoke" }, {
     idempotencyKey: `ts-public-${runId}-patch`,
@@ -222,7 +233,7 @@ try {
   assert.equal(patched.record?.fields?.status, "reviewed");
 
   const scanResponse = await docs.limit(10).scan();
-  assert.equal(scanResponse.returned_count, 3);
+  assert.equal(scanResponse.returned_count, 4);
 
   const queryResponse = await db
     .table("docs")
@@ -344,6 +355,7 @@ try {
       put: true,
       insert: true,
       batch_ingest: true,
+      row_batch_ingest: true,
       patch: true,
       get: true,
       scan: true,
@@ -360,7 +372,7 @@ try {
       jobs: true,
     },
     records_put: 1,
-    records_inserted: 3,
+    records_inserted: 4,
     records_scanned: scanResponse.returned_count,
     traceql_result_count: traceqlResults.length,
     traceql_explain: traceqlExplain.explain !== undefined,

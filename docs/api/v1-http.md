@@ -73,7 +73,8 @@ node --experimental-strip-types clients/typescript/smoke.ts
   called.
 - The TypeScript public SDK wrapper under `clients/typescript/src/sdk.ts` is the
   first hand-written platform SDK layer over that generated transport. It
-  exposes `TraceDB`, table handles, single and batch inserts, patch,
+  exposes `TraceDB`, table handles, single inserts, raw-contract batch inserts,
+  row-oriented `insertRows` batch ingestion, patch,
   scan/get/delete, admin compact/snapshot/restore/jobs, and query-builder
   chaining through `where({ tenant_id })`, `match`, `near`, `with`, `limit`,
   `all`, and `explainPlan`. It is smoke-tested with fake fetch through
@@ -375,10 +376,11 @@ public-http-smoke` in `clients/typescript`, which starts its own local
 `tracedb-server` child process and exercises the public TypeScript SDK wrapper
 over the generated transport, and emits one-step `local-product-regression` JSON
 with `only_step: "typescript_http_smoke"`. The smoke includes idempotency
-replay/conflict and parsed error-envelope evidence for the shared
-`typescript_sdk` platform conformance lane. This is local public TypeScript SDK HTTP
-smoke evidence only, not full product gate coverage, not embedded demo/verify,
-not `http_demo`, not local `doctor http`, not Rust SDK quickstart, not
+replay/conflict, raw-contract batch ingestion, row batch ingestion, and parsed
+error-envelope evidence for the shared `typescript_sdk` platform conformance
+lane. This is local public TypeScript SDK HTTP smoke evidence only, not full
+product gate coverage, not embedded demo/verify, not `http_demo`, not local
+`doctor http`, not Rust SDK quickstart, not
 `typescript_check`, not generated-transport `http-smoke`, not TypeScript gateway
 smoke, not managed-cloud proof, not benchmark evidence, and not SQL
 compatibility.
@@ -465,14 +467,17 @@ npm run public-http-smoke
 `http-smoke` starts `tracedb-server` with an isolated temporary data directory
 and uses the generated client against real HTTP routes. `public-http-smoke`
 starts the same kind of local server and uses the public `TraceDB` wrapper for
-schema apply, insert, batch ingest, patch, get, scan, query, explain, delete,
-idempotency replay/conflict, parsed error envelopes, compact, snapshot, restore,
-and admin jobs. `python3 scripts/platform_conformance.py --surface
-typescript_sdk` maps the public smoke summary into the Platform Contract v0
-scenario IDs. The public wrapper also exposes `TraceDB.fromEnv()` for
+schema apply, insert, raw-contract batch ingest, row batch ingest, patch, get,
+scan, query, explain, delete, idempotency replay/conflict, parsed error
+envelopes, compact, snapshot, restore, and admin jobs.
+`python3 scripts/platform_conformance.py --surface typescript_sdk` maps the
+public smoke summary into the Platform Contract v0 scenario IDs. The public
+wrapper also exposes `TraceDB.fromEnv()` for
 `TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
 `TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`, matching the shared SDK
-connection/routing config boundary.
+connection/routing config boundary. `insertRows` is SDK-side ergonomics for
+row dictionaries and still sends `POST /v1/records/put-batch`; `insertBatch`
+remains available for raw TraceDB record-input bodies.
 
 It also has an endpoint quickstart for an already-running local or
 managed-style HTTP endpoint:

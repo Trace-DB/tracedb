@@ -244,8 +244,9 @@ compatibility checks.
 `--only typescript_http_smoke` runs only
 `(cd clients/typescript && npm run public-http-smoke)`, which starts its own
 local `tracedb-server` child process and exercises the public TypeScript SDK
-wrapper through ready, catalog, schema apply, insert, batch ingest, patch, get,
-scan, query, explain, delete, compact, snapshot, restore, and jobs. It emits
+wrapper through ready, catalog, schema apply, insert, raw-contract batch ingest,
+row batch ingest, patch, get, scan, query, explain, delete, compact, snapshot,
+restore, and jobs. It emits
 the normal one-step `local-product-regression` JSON summary with `only_step:
 "typescript_http_smoke"`. This is local public TypeScript SDK HTTP smoke
 evidence only; it does not run embedded demo/verify, `http_demo`, local
@@ -390,17 +391,22 @@ The wrapper lives in `clients/typescript/src/sdk.ts`, uses the generated
 `TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES` so the public
 TypeScript SDK shares the same connection, routing, read-only retry, and keyed
 mutation/admin retry config boundary as Rust. `safeRetries` retries transient
-5xx responses only for health/ready, get, scan, query, and explain.
+5xx responses only for health/ready, GraphQL schema export, get, scan, query,
+native TraceQL, bounded GraphQL, and explain. `insertRows` accepts normal row
+dictionaries for app/data ingestion and still executes through
+`POST /v1/records/put-batch`; `insertBatch` preserves the raw TraceDB
+record-input shape.
 `idempotencyRetries` is default-off and retries transient 5xx responses for
 mutation/admin routes only when the individual request carries a caller-provided
 idempotency key.
 `npm run public-http-smoke` starts a local server and drives the public wrapper
-through schema apply, insert, batch ingest, patch, get, scan, query, explain,
-delete, idempotency replay/conflict, parsed error envelopes, compact, snapshot,
-restore, and jobs. `npm run public-http-smoke -- --summary-json
-/tmp/tracedb-typescript-sdk-smoke.json` writes the machine-readable summary
-that `python3 scripts/platform_conformance.py --surface typescript_sdk` maps
-onto the Platform Contract v0 scenario IDs. It is TypeScript public-DX parity
+through schema apply, insert, raw-contract batch ingest, row batch ingest, patch,
+get, scan, query, explain, delete, idempotency replay/conflict, parsed error
+envelopes, compact, snapshot, restore, and jobs.
+`npm run public-http-smoke -- --summary-json /tmp/tracedb-typescript-sdk-smoke.json`
+writes the machine-readable summary that
+`python3 scripts/platform_conformance.py --surface typescript_sdk` maps onto
+the Platform Contract v0 scenario IDs. It is TypeScript public-DX parity
 evidence, not a published npm package claim.
 
 The TypeScript SDK now has package-ready metadata for the public SDK entrypoint

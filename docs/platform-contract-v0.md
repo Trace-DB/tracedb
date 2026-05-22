@@ -77,7 +77,7 @@ Every product surface must map to these contract components:
 | --- | --- | --- | --- |
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
-| TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
+| TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with raw-contract and row batch ingestion, env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with row batch ingestion, native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; bounded SQL-ish `SELECT` adapter checked | Adapter into the same TraceQuery/query model, not SQL compatibility. |
 | GraphQL | `graphql` | Generated SDL export plus bounded `POST /v1/graphql` HTTP adapter checked for schema apply, query, explain, and errors; other scenarios `not_checked` | Future full adapter into the same TraceQuery/query model. |
@@ -228,9 +228,10 @@ The TypeScript package now starts the public SDK layer in
 `TraceDbClient` transport subpath through built `dist` JS/declaration outputs.
 `new TraceDB({ url, token })` or
 `TraceDB.fromEnv()` wraps that transport and exposes table handles with
-`insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
-compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
-`explainPlan`, `traceql`, and `traceqlRequest`. `TraceDB.fromEnv()` reads
+`insert`, raw-contract `insertBatch`, row-oriented `insertRows`, `patch`, `get`,
+`scan`, `delete`, admin compact/snapshot/restore/jobs, `where`, `match`, `near`,
+`with`, `limit`, `all`, `explainPlan`, `traceql`, and `traceqlRequest`.
+`TraceDB.fromEnv()` reads
 `TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
 `TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
 `TRACEDB_IDEMPOTENCY_RETRIES` so the TypeScript public SDK shares the same
@@ -243,7 +244,8 @@ build/pack, packed temp-consumer install, package-entry, and typecheck guarded
 and now has real local HTTP and gateway smokes through `npm run
 public-http-smoke` and `npm run gateway-smoke`.
 The public HTTP smoke now emits machine-readable idempotency, TraceQL
-result/explain, bounded GraphQL result/explain, and error-envelope evidence for
+result/explain, bounded GraphQL result/explain, raw-contract batch ingestion,
+row batch ingestion, and error-envelope evidence for
 `scripts/platform_conformance.py --surface typescript_sdk`; the generated
 transport remains available and remains the source of route methods.
 

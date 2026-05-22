@@ -288,6 +288,99 @@ await assert.rejects(
 );
 assert.equal(unkeyedIdempotencyRetryCalls.length, 1, "idempotencyRetries require Idempotency-Key");
 
+const rowBatchCalls: FetchCall[] = [];
+const rowBatchDb = new TraceDB({
+  url: "http://127.0.0.1:8090",
+  fetchImpl: async (input, init) => {
+    rowBatchCalls.push({ input, init });
+    return okJson({ epoch: 10, record_count: 2 });
+  },
+});
+const rowInputs = [
+  { id: "row-a", body: "row batch a", embedding: [1, 0, 0], status: "published" },
+  { id: "row-b", body: "row batch b", embedding: [0, 1, 0], status: "draft" },
+];
+const rowBatch = await rowBatchDb
+  .table("docs")
+  .tenant("tenant-a")
+  .insertRows(rowInputs, { idempotencyKey: "ts-rows-1" });
+assert.equal(rowBatch.record_count, 2);
+assert.equal(rowBatchCalls[0].input, "http://127.0.0.1:8090/v1/records/put-batch");
+assert.equal(rowBatchCalls[0].init.headers["Idempotency-Key"], "ts-rows-1");
+assert.deepEqual(rowInputs[0], {
+  id: "row-a",
+  body: "row batch a",
+  embedding: [1, 0, 0],
+  status: "published",
+});
+assert.deepEqual(
+  JSON.parse(rowBatchCalls[0].init.body ?? "{}"),
+  {
+    records: [
+      {
+        table: "docs",
+        tenant_id: "tenant-a",
+        id: "row-a",
+        fields: {
+          id: "row-a",
+          tenant: "tenant-a",
+          body: "row batch a",
+          embedding: [1, 0, 0],
+          status: "published",
+        },
+      },
+      {
+        table: "docs",
+        tenant_id: "tenant-a",
+        id: "row-b",
+        fields: {
+          id: "row-b",
+          tenant: "tenant-a",
+          body: "row batch b",
+          embedding: [0, 1, 0],
+          status: "draft",
+        },
+      },
+    ],
+  },
+);
+
+await rowBatchDb
+  .table("docs")
+  .tenant("tenant-a")
+  .insertRows([{ doc_id: "custom-row", body: "custom id field" }], { idField: "doc_id" });
+assert.deepEqual(
+  JSON.parse(rowBatchCalls[1].init.body ?? "{}"),
+  {
+    records: [
+      {
+        table: "docs",
+        tenant_id: "tenant-a",
+        id: "custom-row",
+        fields: {
+          doc_id: "custom-row",
+          body: "custom id field",
+          id: "custom-row",
+          tenant: "tenant-a",
+        },
+      },
+    ],
+  },
+);
+
+const rowBatchCallCount = rowBatchCalls.length;
+await assert.rejects(
+  () => rowBatchDb.table("docs").tenant("tenant-a").insertRows([{ body: "missing id" }], { idField: "doc_id" }),
+  (error: unknown) => {
+    assert.ok(error instanceof TraceDbRequestError);
+    assert.equal(error.method, "POST");
+    assert.equal(error.path, "/v1/records/put-batch");
+    assert.match(error.message, /row 0 missing id field 'doc_id'/);
+    return true;
+  },
+);
+assert.equal(rowBatchCalls.length, rowBatchCallCount, "missing row id should reject before fetch");
+
 assert.throws(
   () => TraceDB.fromEnv({ env: {} }),
   (error: unknown) => {

@@ -1006,6 +1006,7 @@ fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
     assert_eq!(smoke_summary["sdk_surface"], "public");
     assert_eq!(smoke_summary["steps"]["schema_apply"], true);
     assert_eq!(smoke_summary["steps"]["batch_ingest"], true);
+    assert_eq!(smoke_summary["steps"]["row_batch_ingest"], true);
     assert_eq!(smoke_summary["steps"]["patch"], true);
     assert_eq!(smoke_summary["steps"]["query"], true);
     assert_eq!(smoke_summary["steps"]["explain"], true);
@@ -1013,8 +1014,8 @@ fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
     assert_eq!(smoke_summary["steps"]["compact"], true);
     assert_eq!(smoke_summary["steps"]["snapshot"], true);
     assert_eq!(smoke_summary["steps"]["restore"], true);
-    assert_eq!(smoke_summary["records_inserted"], 3);
-    assert_eq!(smoke_summary["records_scanned"], 3);
+    assert_eq!(smoke_summary["records_inserted"], 4);
+    assert_eq!(smoke_summary["records_scanned"], 4);
     assert_eq!(smoke_summary["deleted_hidden"], true);
     assert_eq!(smoke_summary["sql_module"], "not_implemented");
 }
