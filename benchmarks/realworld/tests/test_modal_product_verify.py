@@ -86,8 +86,8 @@ class ModalProductVerifyTests(unittest.TestCase):
             },
             "human_summary": {
                 "status": "passed",
-                "steps_passed": 5,
-                "steps_total": 5,
+                "steps_passed": 6,
+                "steps_total": 6,
                 "failed_step": None,
             },
             "steps": {
@@ -96,6 +96,7 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "http_demo": {"ok": True},
                 "local_doctor": {"ok": True},
                 "rust_sdk_quickstart": {"ok": True},
+                "python_sdk_smoke": {"ok": True},
             },
         }
 
@@ -104,7 +105,7 @@ class ModalProductVerifyTests(unittest.TestCase):
             receipt,
         )
 
-        self.assertEqual(summary["steps_passed"], 5)
+        self.assertEqual(summary["steps_passed"], 6)
         self.assertEqual(summary["typescript_enabled"], False)
         self.assertEqual(summary["skipped_typescript_steps"], 3)
 

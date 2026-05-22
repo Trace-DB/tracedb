@@ -50,6 +50,7 @@ EXPECTED_REDUCED_STEPS = [
     "http_demo",
     "local_doctor",
     "rust_sdk_quickstart",
+    "python_sdk_smoke",
 ]
 SKIPPED_TYPESCRIPT_STEPS = [
     "typescript_check",

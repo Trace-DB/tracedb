@@ -77,8 +77,8 @@ should report `ok: true`, `mode: "local-product-regression"`,
 `not_implemented`, and managed-cloud/benchmark claims as `not_checked`.
 `product-quickstart --skip-typescript` is the reduced fallback receipt for
 machines without Node tooling: it still writes the same default report artifact,
-keeps `report_file`, reports `typescript_enabled: false`, passes the five
-non-TypeScript local steps, and omits `typescript_check`,
+keeps `report_file`, reports `typescript_enabled: false`, passes the six
+non-TypeScript local steps including `python_sdk_smoke`, and omits `typescript_check`,
 `typescript_http_smoke`, and `typescript_gateway_smoke`. Treat it as a
 reduced local evidence path, not the full product gate.
 When local executable policy or machine resources block product verification,
@@ -93,7 +93,8 @@ env files, benchmark reports, caches, or Node modules, then runs
 `cargo fmt --all -- --check`, the focused quickstart receipt test, the docs
 contract test, and `product-quickstart --skip-typescript`. It validates the
 default quickstart receipt against stdout, including `report_file`,
-`typescript_enabled: false`, the five non-TypeScript steps, SQL as
+`typescript_enabled: false`, the six non-TypeScript steps including
+`python_sdk_smoke`, SQL as
 `not_implemented`, and managed-cloud/benchmark claims as `not_checked`.
 `--mode workspace` additionally runs the full CLI demo test file, usability
 acceptance test file, and `cargo test --workspace --all-targets`. This remains remote Linux product verification, not proof that the local Mac can execute the
@@ -116,6 +117,12 @@ endpoint diagnostics evidence only, not full product-regression gate coverage.
 quickstart admin dir, runs only the Rust SDK quickstart step, and emits
 one-step `local-product-regression` JSON. It is local Rust SDK quickstart
 evidence only, not full product-regression gate coverage.
+`--only python_sdk_smoke` runs only `python3 clients/python/http_smoke.py`
+from the workspace root and emits one-step `local-product-regression` JSON. It
+is local sync Python SDK HTTP smoke evidence only, not full product-regression
+gate coverage, not embedded demo/verify, not local HTTP demo, not endpoint
+diagnostics, not Rust SDK quickstart, not TypeScript smoke coverage, not
+managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 `--only typescript_check` runs only `(cd clients/typescript && npm run check)`
 and emits one-step `local-product-regression` JSON. It is generated TypeScript
 check evidence only, not full product-regression gate coverage, not local HTTP

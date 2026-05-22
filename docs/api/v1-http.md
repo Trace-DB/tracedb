@@ -274,7 +274,8 @@ cargo run -p tracedb-cli -- product-quickstart
 
 The gate emits one `local-product-regression` JSON summary for the embedded
 demo/verify path, local HTTP SDK demo, endpoint doctor, Rust SDK quickstart,
-and generated TypeScript check/http/gateway smoke paths, with a compact
+Python sync SDK smoke, and generated TypeScript check/http/gateway smoke paths,
+with a compact
 top-level `human_summary` for quick operator scanning. It is local product
 regression evidence only: SQL remains not implemented, managed-cloud is not
 checked, and benchmarks are not checked. Failure ergonomics for the consolidated
@@ -296,8 +297,8 @@ validate the local quickstart receipt by checking that artifact for `ok: true`,
 `product-quickstart --skip-typescript` is the reduced fallback receipt for
 machines without Node tooling: it still writes
 `target/tracedb/product-quickstart.json`, keeps `report_file`, reports
-`typescript_enabled: false`, passes the five non-TypeScript local steps, and
-omits `typescript_check`, `typescript_http_smoke`, and
+`typescript_enabled: false`, passes the six non-TypeScript local steps including
+`python_sdk_smoke`, and omits `typescript_check`, `typescript_http_smoke`, and
 `typescript_gateway_smoke`. Treat it as a reduced local evidence path, not the
 full product gate.
 `product-quickstart --inject-failure embedded_demo` validates the failure
@@ -332,6 +333,16 @@ benchmark evidence, and not SQL compatibility. If the Rust SDK child exits
 nonzero after writing quickstart JSON, product-regression preserves that nested
 object under `steps.rust_sdk_quickstart.summary` and keeps stdout/stderr tails
 on the failed step for debugging.
+`product-regression --only python_sdk_smoke` runs only
+`python3 clients/python/http_smoke.py` from the workspace root. The smoke starts
+its own local `tracedb-server` child process and exercises the sync Python SDK
+through ready, catalog, schema apply, insert, batch ingest, patch, get, scan,
+query, explain, delete, idempotency, error envelopes, compact, snapshot,
+restore, and jobs. It emits one-step `local-product-regression` JSON with
+`only_step: "python_sdk_smoke"`. This is local sync Python SDK HTTP smoke
+evidence only, not full product gate coverage, not `http_demo`, not local
+`doctor http`, not Rust SDK quickstart, not TypeScript smoke, not managed-cloud
+proof, not benchmark evidence, and not SQL compatibility.
 `product-regression --only typescript_check` runs only `npm run check` in
 `clients/typescript`, which currently performs the private package typecheck
 plus dependency-free generated-client smoke, and emits one-step

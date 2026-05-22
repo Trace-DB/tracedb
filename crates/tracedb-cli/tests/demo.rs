@@ -152,10 +152,10 @@ fn product_regression_runs_local_product_gate() {
     assert_eq!(summary["human_summary"]["status"], "passed");
     assert_eq!(
         summary["human_summary"]["message"],
-        "local product regression passed: 8/8 steps"
+        "local product regression passed: 9/9 steps"
     );
-    assert_eq!(summary["human_summary"]["steps_passed"], 8);
-    assert_eq!(summary["human_summary"]["steps_total"], 8);
+    assert_eq!(summary["human_summary"]["steps_passed"], 9);
+    assert_eq!(summary["human_summary"]["steps_total"], 9);
     assert_eq!(summary["human_summary"]["failed_step"], Value::Null);
     for step in [
         "embedded_demo",
@@ -163,6 +163,7 @@ fn product_regression_runs_local_product_gate() {
         "http_demo",
         "local_doctor",
         "rust_sdk_quickstart",
+        "python_sdk_smoke",
         "typescript_check",
         "typescript_http_smoke",
         "typescript_gateway_smoke",
@@ -183,6 +184,14 @@ fn product_regression_runs_local_product_gate() {
     assert_eq!(
         summary["steps"]["local_doctor"]["summary"]["ready_wait"]["ok"],
         true
+    );
+    assert_eq!(
+        summary["steps"]["python_sdk_smoke"]["summary"]["mode"],
+        "python-sdk-http-smoke"
+    );
+    assert_eq!(
+        summary["steps"]["python_sdk_smoke"]["summary"]["sdk_surface"],
+        "python_sync"
     );
 }
 
@@ -327,22 +336,23 @@ fn product_quickstart_skip_typescript_uses_default_report_file_and_marks_reduced
     assert_eq!(summary["human_summary"]["status"], "passed");
     assert_eq!(
         summary["human_summary"]["message"],
-        "local product regression passed: 5/5 steps"
+        "local product regression passed: 6/6 steps"
     );
-    assert_eq!(summary["human_summary"]["steps_passed"], 5);
-    assert_eq!(summary["human_summary"]["steps_total"], 5);
+    assert_eq!(summary["human_summary"]["steps_passed"], 6);
+    assert_eq!(summary["human_summary"]["steps_total"], 6);
     assert_eq!(summary["human_summary"]["failed_step"], Value::Null);
 
     let steps = summary["steps"]
         .as_object()
         .expect("product quickstart steps object");
-    assert_eq!(steps.len(), 5);
+    assert_eq!(steps.len(), 6);
     for step in [
         "embedded_demo",
         "embedded_verify",
         "http_demo",
         "local_doctor",
         "rust_sdk_quickstart",
+        "python_sdk_smoke",
     ] {
         assert_eq!(
             steps[step]["ok"], true,
@@ -487,12 +497,12 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
     assert_eq!(summary["human_summary"]["status"], "listed");
     assert_eq!(
         summary["human_summary"]["message"],
-        "local product regression steps listed: 8 steps; only_supported=8"
+        "local product regression steps listed: 9 steps; only_supported=9"
     );
-    assert_eq!(summary["human_summary"]["steps_total"], 8);
-    assert_eq!(summary["human_summary"]["only_supported"], 8);
+    assert_eq!(summary["human_summary"]["steps_total"], 9);
+    assert_eq!(summary["human_summary"]["only_supported"], 9);
     let steps = summary["steps"].as_array().expect("steps array");
-    assert_eq!(steps.len(), 8);
+    assert_eq!(steps.len(), 9);
     let step_names = steps
         .iter()
         .map(|step| step["name"].as_str().expect("step name"))
@@ -505,6 +515,7 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
             "http_demo",
             "local_doctor",
             "rust_sdk_quickstart",
+            "python_sdk_smoke",
             "typescript_check",
             "typescript_http_smoke",
             "typescript_gateway_smoke",
@@ -814,6 +825,78 @@ fn product_regression_rust_sdk_quickstart_failure_preserves_child_summary() {
     assert_eq!(sdk_summary["admin"]["requested"], true);
     assert_eq!(sdk_summary["steps"]["ready"], false);
     assert_eq!(sdk_summary["sql_module"], "not_implemented");
+}
+
+#[test]
+fn product_regression_only_python_sdk_smoke_runs_single_gate_step() {
+    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
+        .lock()
+        .expect("lock product regression smoke path");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("only-python-sdk-smoke");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("product-regression")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--only")
+        .arg("python_sdk_smoke")
+        .output()
+        .expect("run tracedb product-regression Python SDK smoke step");
+    assert!(
+        output.status.success(),
+        "product-regression --only python_sdk_smoke failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("product-regression Python SDK smoke json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-product-regression");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["only_step"], "python_sdk_smoke");
+    assert_eq!(summary["local_server_url"], Value::Null);
+    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(summary["claims"]["benchmark"], "not_checked");
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(summary["steps"]["python_sdk_smoke"]["ok"], true);
+    assert_eq!(
+        summary["steps"]["python_sdk_smoke"]["command"],
+        "python3 clients/python/http_smoke.py"
+    );
+    assert!(
+        summary["steps"]["python_sdk_smoke"]["cwd"]
+            .as_str()
+            .is_some_and(|cwd| cwd.ends_with("TraceDB")),
+        "python_sdk_smoke should run from the workspace root: {summary}"
+    );
+    let smoke_summary = &summary["steps"]["python_sdk_smoke"]["summary"];
+    assert_eq!(smoke_summary["ok"], true);
+    assert_eq!(smoke_summary["mode"], "python-sdk-http-smoke");
+    assert_eq!(smoke_summary["sdk_surface"], "python_sync");
+    assert_eq!(smoke_summary["steps"]["schema_apply"], true);
+    assert_eq!(smoke_summary["steps"]["put"], true);
+    assert_eq!(smoke_summary["steps"]["batch_ingest"], true);
+    assert_eq!(smoke_summary["steps"]["patch"], true);
+    assert_eq!(smoke_summary["steps"]["get"], true);
+    assert_eq!(smoke_summary["steps"]["scan"], true);
+    assert_eq!(smoke_summary["steps"]["query"], true);
+    assert_eq!(smoke_summary["steps"]["explain"], true);
+    assert_eq!(smoke_summary["steps"]["delete"], true);
+    assert_eq!(smoke_summary["steps"]["idempotency"], true);
+    assert_eq!(smoke_summary["steps"]["error_envelope"], true);
+    assert_eq!(smoke_summary["steps"]["compact"], true);
+    assert_eq!(smoke_summary["steps"]["snapshot"], true);
+    assert_eq!(smoke_summary["steps"]["restore"], true);
+    assert_eq!(smoke_summary["steps"]["jobs"], true);
+    assert_eq!(smoke_summary["records_put"], 1);
+    assert_eq!(smoke_summary["records_inserted"], 3);
+    assert_eq!(smoke_summary["records_scanned"], 3);
+    assert_eq!(smoke_summary["deleted_hidden"], true);
+    assert_eq!(smoke_summary["idempotency_conflict_status"], 409);
+    assert_eq!(smoke_summary["error_envelope"]["status"], 400);
+    assert_eq!(smoke_summary["sql_module"], "not_implemented");
 }
 
 #[test]

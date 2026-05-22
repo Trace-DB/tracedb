@@ -79,7 +79,8 @@ The gate emits one JSON summary with `mode: "local-product-regression"`,
 `scope: "local_only"`, a compact top-level `human_summary`, and explicit
 `not_checked` markers for managed-cloud and benchmark claims. It orchestrates
 the embedded demo/verify path, `http-demo`, local `doctor http`, the Rust SDK
-quickstart, and generated TypeScript check/http/gateway smoke paths. It is
+quickstart, the Python sync SDK smoke, and generated TypeScript
+check/http/gateway smoke paths. It is
 local product regression evidence, not SQL compatibility, managed-cloud proof,
 or benchmark evidence. Use
 `--skip-typescript` when the local Node tooling is not installed. For CI
@@ -132,8 +133,8 @@ cargo run -q -p tracedb-cli -- product-quickstart --skip-typescript
 ```
 
 The receipt still writes `target/tracedb/product-quickstart.json`, preserves
-`report_file`, reports `typescript_enabled: false`, passes the five
-non-TypeScript local steps, and omits `typescript_check`,
+`report_file`, reports `typescript_enabled: false`, passes the six
+non-TypeScript local steps including `python_sdk_smoke`, and omits `typescript_check`,
 `typescript_http_smoke`, and `typescript_gateway_smoke`. Treat this as a
 reduced local evidence path for machines without Node tooling, not the full
 product gate.
@@ -150,8 +151,8 @@ env files, benchmark reports, caches, and Node modules excluded, then runs
 `cargo fmt --all -- --check`, the focused quickstart receipt test, the docs
 contract test, and `product-quickstart --skip-typescript`. It validates
 `target/tracedb/product-quickstart.json` against stdout and confirms the
-reduced receipt still has `typescript_enabled: false`, five non-TypeScript
-steps, SQL as `not_implemented`, and managed-cloud/benchmark claims as
+reduced receipt still has `typescript_enabled: false`, six non-TypeScript
+steps including `python_sdk_smoke`, SQL as `not_implemented`, and managed-cloud/benchmark claims as
 `not_checked`. Use `--mode workspace` for the heavier remote lane that also
 runs the full CLI demo test file, usability acceptance test file, and
 `cargo test --workspace --all-targets`. This is remote Linux product verification;
@@ -196,6 +197,16 @@ When the Rust SDK child exits nonzero after emitting quickstart JSON, the
 wrapper preserves that nested child object under
 `steps.rust_sdk_quickstart.summary` while also retaining stdout/stderr tails for
 operator debugging.
+`--only python_sdk_smoke` runs only `python3 clients/python/http_smoke.py` from
+the workspace root. The smoke starts its own local `tracedb-server` child
+process and exercises the sync Python SDK through ready, catalog, schema apply,
+insert, batch ingest, patch, get, scan, query, explain, delete, idempotency,
+error envelopes, compact, snapshot, restore, and jobs. It emits the normal
+one-step `local-product-regression` JSON summary with `only_step:
+"python_sdk_smoke"`. This is local sync Python SDK HTTP smoke evidence only;
+it does not run embedded demo/verify, `http_demo`, local `doctor http`, the
+Rust SDK quickstart, generated TypeScript smoke steps, managed-cloud checks,
+benchmark controls, or SQL compatibility checks.
 `--only typescript_check` runs only `(cd clients/typescript && npm run check)`,
 which currently performs the private package typecheck plus dependency-free
 generated-client smoke. It emits the normal one-step

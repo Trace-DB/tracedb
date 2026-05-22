@@ -146,7 +146,10 @@ stdlib-only smoke `python3 clients/python/http_smoke.py` starts a local
 `tracedb-server` and proves all required v0 contract scenarios through the
 Python surface. It is sync SDK contract evidence, not package publishing
 readiness, async support, managed-cloud proof, SQL compatibility, or GraphQL
-support.
+support. The smoke is also promoted into the local product gate as
+`product-regression --only python_sdk_smoke`, so `product-quickstart
+--skip-typescript` now retains Python SDK contract evidence while omitting only
+the TypeScript lanes.
 
 ## Surface Implementation Rules
 

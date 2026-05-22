@@ -1030,6 +1030,7 @@ const PRODUCT_REGRESSION_STEPS: &[&str] = &[
     "http_demo",
     "local_doctor",
     "rust_sdk_quickstart",
+    "python_sdk_smoke",
     "typescript_check",
     "typescript_http_smoke",
     "typescript_gateway_smoke",
@@ -1236,6 +1237,12 @@ fn run_product_regression(
         }
         return finish_product_regression(config, local_server_url, steps);
     }
+    if config.only_step.as_deref() == Some("python_sdk_smoke") {
+        let command = product_regression_python_sdk_command(&workspace);
+        let step = run_product_regression_step_or_injected(&config, "python_sdk_smoke", command);
+        steps.insert("python_sdk_smoke".to_string(), step);
+        return finish_product_regression(config, local_server_url, steps);
+    }
     if config.only_step.as_deref() == Some("typescript_check") {
         let command = product_regression_typescript_command(&workspace, &["run", "check"]);
         let step = run_product_regression_step_or_injected(&config, "typescript_check", command);
@@ -1318,6 +1325,14 @@ fn run_product_regression(
         }
     }
     if server_step_failed {
+        return finish_product_regression(config, local_server_url, steps);
+    }
+
+    let python = product_regression_python_sdk_command(&workspace);
+    let step = run_product_regression_step_or_injected(&config, "python_sdk_smoke", python);
+    let ok = product_regression_step_ok(&step);
+    steps.insert("python_sdk_smoke".to_string(), step);
+    if !ok {
         return finish_product_regression(config, local_server_url, steps);
     }
 
@@ -1488,6 +1503,14 @@ fn product_regression_rust_sdk_quickstart_command(
         &admin_dir_string,
     ]);
     Ok(command)
+}
+
+fn product_regression_python_sdk_command(workspace: &std::path::Path) -> Command {
+    let mut command = Command::new("python3");
+    command
+        .current_dir(workspace)
+        .args(["clients/python/http_smoke.py"]);
+    command
 }
 
 fn product_regression_typescript_command(workspace: &std::path::Path, args: &[&str]) -> Command {

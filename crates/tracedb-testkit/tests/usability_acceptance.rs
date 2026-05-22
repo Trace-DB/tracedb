@@ -756,6 +756,7 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "http_demo",
         "local_doctor",
         "rust_sdk_quickstart",
+        "python_sdk_smoke",
         "typescript_check",
         "typescript_http_smoke",
         "typescript_gateway_smoke",
@@ -887,6 +888,10 @@ fn local_product_regression_runner_declares_current_product_gate() {
         assert!(
             markdown.contains("--only rust_sdk_quickstart"),
             "{name} should document targeted Rust SDK quickstart execution"
+        );
+        assert!(
+            markdown.contains("--only python_sdk_smoke"),
+            "{name} should document targeted Python SDK smoke execution"
         );
         assert!(
             markdown.contains("--only typescript_check"),
