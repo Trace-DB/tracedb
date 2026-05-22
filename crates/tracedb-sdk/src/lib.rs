@@ -528,6 +528,27 @@ impl TraceDbClient {
         self.post_typed("/v1/traceql", request)
     }
 
+    pub fn graphql(&self, query: impl Into<String>) -> TraceDbClientResult<Value> {
+        let request = GraphQlQueryRequest::new(query);
+        self.graphql_request(&request)
+    }
+
+    pub fn graphql_request(&self, request: &GraphQlQueryRequest) -> TraceDbClientResult<Value> {
+        self.post_json("/v1/graphql", request)
+    }
+
+    pub fn graphql_typed(&self, query: impl Into<String>) -> TraceDbClientResult<QueryResponse> {
+        let request = GraphQlQueryRequest::new(query);
+        self.graphql_request_typed(&request)
+    }
+
+    pub fn graphql_request_typed(
+        &self,
+        request: &GraphQlQueryRequest,
+    ) -> TraceDbClientResult<QueryResponse> {
+        self.post_typed("/v1/graphql", request)
+    }
+
     pub fn explain(&self, query: &HybridQuery) -> TraceDbClientResult<Value> {
         self.post_json("/v1/explain", query)
     }
@@ -1000,6 +1021,15 @@ impl TraceDbAsyncClient {
             .await
     }
 
+    pub async fn graphql_typed(
+        &self,
+        query: impl Into<String>,
+    ) -> TraceDbClientResult<QueryResponse> {
+        let request = GraphQlQueryRequest::new(query);
+        self.run(move |client| client.graphql_request_typed(&request))
+            .await
+    }
+
     pub async fn explain_typed(&self, query: &HybridQuery) -> TraceDbClientResult<HybridExplain> {
         let query = query.clone();
         self.run(move |client| client.explain_typed(&query)).await
@@ -1288,6 +1318,19 @@ impl TraceQlQueryRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GraphQlQueryRequest {
+    pub query: String,
+}
+
+impl GraphQlQueryRequest {
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CompactResponse {
     pub compacted: bool,
 }
@@ -1538,6 +1581,7 @@ fn is_retry_safe_request(method: &str, path: &str) -> bool {
             | ("POST", "/v1/records/scan")
             | ("POST", "/v1/query")
             | ("POST", "/v1/traceql")
+            | ("POST", "/v1/graphql")
             | ("POST", "/v1/explain")
     )
 }

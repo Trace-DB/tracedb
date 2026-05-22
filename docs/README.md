@@ -55,7 +55,9 @@ tenant_id = <value> [AND field = value]* [LIMIT n]`; broader SQL,
 PostgreSQL compatibility, GraphQL schema generation, GraphQL mutations,
 resolver runtime, and full GraphQL adapter parity remain unimplemented. The
 current GraphQL evidence is limited to bounded `graphql_query_from_str`
-compilation plus `POST /v1/graphql` query/explain/error conformance.
+compilation, `POST /v1/graphql` query/explain/error conformance, and the Rust
+SDK helper methods `TraceDbClient::graphql_typed` and
+`TraceDbAsyncClient::graphql_typed` over that same HTTP route.
 
 Local product smoke:
 

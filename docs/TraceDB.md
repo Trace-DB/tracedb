@@ -151,15 +151,17 @@ managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 Current platform conformance checkpoint: `scripts/platform_conformance.py` maps
 HTTP direct, Rust SDK, TypeScript SDK, and Python SDK into all 13 Platform
 Contract v0 scenario IDs, plus partial TraceQL/SQL-ish and GraphQL adapter
-lanes. Modal workspace run `ap-kT2bkWU3mZdoQktVrFyxpA` passed 20/20 commands in
-126.884s, including `platform-conformance-quick`,
+lanes. Modal workspace run `ap-FY2iyAJBUl2851jB6qpiRX` passed 20/20 commands in
+89.053s, including `platform-conformance-quick`,
 `traceql-sqlish-conformance`, `graphql-http-conformance`,
 `typescript-sdk-conformance`, `python-sdk-conformance`, Python unit/install
 smokes, TypeScript package/HTTP/gateway lanes, and
 `cargo test --workspace --all-targets`. The GraphQL lane reported query,
 explain, and error behavior as passed with 10/13 scenarios intentionally
-`not_checked`. This is platform conformance evidence, not managed-cloud proof,
-SQL compatibility, full GraphQL adapter parity, or benchmark evidence.
+`not_checked`, and the workspace tests included the Rust SDK
+`GraphQlQueryRequest`, sync/async `graphql_typed`, and GraphQL safe retry
+coverage. This is platform conformance evidence, not managed-cloud proof, SQL
+compatibility, full GraphQL adapter parity, or benchmark evidence.
 
 The local HTTP plus SDK smoke is also available as one command:
 
@@ -398,9 +400,10 @@ TraceQL/query-adapter execution evidence only; SQL compatibility and PostgreSQL
 compatibility remain unimplemented. `POST /v1/graphql` now exposes a bounded
 GraphQL query adapter over the same `HybridQuery` model, and the GraphQL
 conformance lane checks query, explain, and error behavior while leaving
-schema/write/admin scenarios `not_checked`. GraphQL schema generation,
-mutation support, resolver runtime, and full adapter parity remain
-unimplemented.
+schema/write/admin scenarios `not_checked`. The Rust SDK exposes this bounded
+adapter through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
+`GraphQlQueryRequest`. GraphQL schema generation, mutation support, resolver
+runtime, and full adapter parity remain unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory after a successful

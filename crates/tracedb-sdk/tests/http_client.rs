@@ -17,10 +17,10 @@ use tracedb_query::{
     TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
-    BranchesResponse, DatabasesResponse, ErrorResponse, HealthResponse, JobsResponse,
-    MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TableHandle, TableRecordInput,
-    TraceDb, TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
-    TraceDbRequestOptions,
+    BranchesResponse, DatabasesResponse, ErrorResponse, GraphQlQueryRequest, HealthResponse,
+    JobsResponse, MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest, TableHandle,
+    TableRecordInput, TraceDb, TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig,
+    TraceDbClientError, TraceDbRequestOptions,
 };
 
 fn schema() -> TableSchema {
@@ -665,6 +665,58 @@ fn traceql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
 
     assert!(response.results.is_empty());
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn graphql_request_typed_posts_bounded_query_string() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+    let request = GraphQlQueryRequest::new(
+        r#"query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }"#,
+    );
+
+    let response = client
+        .graphql_request_typed(&request)
+        .expect("graphql typed response");
+    let body = request_body.join().expect("request body");
+
+    assert!(response.results.is_empty());
+    assert_eq!(body["query"], request.query);
+}
+
+#[test]
+fn graphql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 14\r\nConnection: close\r\n\r\n{\"results\":[]}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+
+    let response = client
+        .graphql_typed(r#"query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }"#)
+        .expect("graphql safe retry");
+
+    assert!(response.results.is_empty());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn async_client_graphql_typed_posts_bounded_query_string() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
+    let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = block_on(
+        client.graphql_typed(r#"query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }"#),
+    )
+    .expect("async graphql typed response");
+    let body = request_body.join().expect("request body");
+
+    assert!(response.results.is_empty());
+    assert_eq!(
+        body["query"],
+        r#"query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }"#
+    );
 }
 
 #[test]

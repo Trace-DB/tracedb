@@ -145,8 +145,8 @@ TraceQL, idempotency, and snapshot/restore scenarios remain explicit
 `not_checked` results until GraphQL owns those semantics or a schema-generated
 adapter exists.
 
-Current verified checkpoint: Modal workspace run `ap-kT2bkWU3mZdoQktVrFyxpA`
-passed 20/20 commands in 126.884s. Its `platform-conformance-quick` command
+Current verified checkpoint: Modal workspace run `ap-FY2iyAJBUl2851jB6qpiRX`
+passed 20/20 commands in 89.053s. Its `platform-conformance-quick` command
 reported `http_direct` 13/13 and `rust_sdk` 13/13, including
 `traceql_string_execution`; its `typescript-sdk-conformance` command reported
 `typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
@@ -155,7 +155,10 @@ and explain evidence. Its `traceql-sqlish-conformance` command reported
 `traceql_sqlish` as `ok: true`, `complete: false`, with 4/13 scenarios passed
 and 9/13 intentionally `not_checked`. Its `graphql-http-conformance` command
 reported `graphql` as `ok: true`, `complete: false`, with query, explain, and
-errors passed and 10/13 scenarios intentionally `not_checked`.
+errors passed and 10/13 scenarios intentionally `not_checked`. Its
+`cargo test --workspace --all-targets` command included the Rust SDK
+`GraphQlQueryRequest`, sync `graphql_typed`, safe retry, and async
+`graphql_typed` helper coverage.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and
@@ -165,9 +168,11 @@ enter the query builder with `query()` or the direct chaining helpers
 `where_eq`, `match_text`, `near`, `with_explain`, `limit`, `all()`, and
 `explain_plan()`. `TraceDbClient::traceql_typed` and `traceql_request_typed`
 send native TraceQL strings to `POST /v1/traceql` and decode the same
-`QueryResponse` envelope as `query_typed`. These helpers compile into or reuse
-the existing `RecordInput`, `RecordPutBatchRequest`, record request,
-`TraceQlQueryRequest`, and `HybridQuery` models; the raw HTTP methods remain
+`QueryResponse` envelope as `query_typed`. `TraceDbClient::graphql_typed` and
+`graphql_request_typed` do the same for the bounded `POST /v1/graphql` adapter
+with `GraphQlQueryRequest`. These helpers compile into or reuse the existing
+`RecordInput`, `RecordPutBatchRequest`, record request, `TraceQlQueryRequest`,
+`GraphQlQueryRequest`, and `HybridQuery` models; the raw HTTP methods remain
 available.
 `TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
@@ -257,7 +262,9 @@ table, with arguments such as `tenant_id`, `where`/`filter`, `match`/`text`,
 `near`/`vector`, `limit`, `freshness`, and `explain`, then compiles directly
 into `HybridQuery`. The HTTP server exposes that path through
 `POST /v1/graphql` with `GraphQlQueryRequest`, returning the same
-`QueryResponse` shape as `/v1/query`. Mutations, subscriptions, fragments,
+`QueryResponse` shape as `/v1/query`. The Rust SDK mirrors that wire route with
+`GraphQlQueryRequest`, `TraceDbClient::graphql_typed`, and
+`TraceDbAsyncClient::graphql_typed`. Mutations, subscriptions, fragments,
 aliases, unknown arguments, duplicate semantic arguments, and multiple root
 fields fail with `invalid GraphQL adapter` errors. This is bounded
 query/explain/error execution evidence only; TraceDB still has no GraphQL
@@ -287,6 +294,8 @@ Use the smallest ladder that proves the touched surface:
 ```bash
 cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_declares_sdk_conformance_harness -- --exact
 cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run
+cargo test -p tracedb-sdk --test http_client graphql_request_typed_posts_bounded_query_string --no-run
+cargo test -p tracedb-sdk --test http_client graphql_typed_retries_transient_read_failures_when_safe_retries_enabled --no-run
 python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-conformance.json
 python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
