@@ -1818,6 +1818,57 @@ impl QueryBuilder {
             .put_batch_typed_with_options(&request, options)
     }
 
+    pub fn insert_rows(
+        &self,
+        rows: Vec<Map<String, Value>>,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        let options = TraceDbRequestOptions::default();
+        self.insert_rows_with_id_field_and_options(rows, "id", &options)
+    }
+
+    pub fn insert_rows_with_options(
+        &self,
+        rows: Vec<Map<String, Value>>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        self.insert_rows_with_id_field_and_options(rows, "id", options)
+    }
+
+    pub fn insert_rows_with_id_field(
+        &self,
+        rows: Vec<Map<String, Value>>,
+        id_field: impl Into<String>,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        let options = TraceDbRequestOptions::default();
+        self.insert_rows_with_id_field_and_options(rows, id_field, &options)
+    }
+
+    pub fn insert_rows_with_id_field_and_options(
+        &self,
+        rows: Vec<Map<String, Value>>,
+        id_field: impl Into<String>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<PutBatchResponse> {
+        let path = "/v1/records/put-batch";
+        let id_field = id_field.into();
+        if id_field.is_empty() {
+            return Err(TraceDbClientError::InvalidRequest {
+                method: "POST".to_string(),
+                path: path.to_string(),
+                message: "id_field cannot be empty".to_string(),
+            });
+        }
+        let tenant_id = self.required_tenant_id("POST", path)?;
+        let records = rows
+            .into_iter()
+            .enumerate()
+            .map(|(index, fields)| self.row_record_input(index, fields, &id_field, &tenant_id))
+            .collect::<TraceDbClientResult<Vec<_>>>()?;
+        let request = RecordPutBatchRequest::new(records);
+        self.client("POST", path)?
+            .put_batch_typed_with_options(&request, options)
+    }
+
     pub fn patch_record(
         &self,
         id: impl Into<String>,
@@ -2003,6 +2054,27 @@ impl QueryBuilder {
             tenant_id: tenant_id.to_string(),
             fields,
         }
+    }
+
+    fn row_record_input(
+        &self,
+        index: usize,
+        fields: Map<String, Value>,
+        id_field: &str,
+        tenant_id: &str,
+    ) -> TraceDbClientResult<RecordInput> {
+        let id = fields
+            .get(id_field)
+            .ok_or_else(|| TraceDbClientError::InvalidRequest {
+                method: "POST".to_string(),
+                path: "/v1/records/put-batch".to_string(),
+                message: format!("row {index} missing id field '{id_field}'"),
+            })?;
+        let id = match id {
+            Value::String(id) => id.clone(),
+            value => value.to_string(),
+        };
+        Ok(self.record_input(TableRecordInput::new(id, fields), tenant_id))
     }
 }
 

@@ -76,6 +76,7 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["put"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
+    assert_eq!(summary["steps"]["row_batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["query"], true);
     assert_eq!(summary["steps"]["scan"], true);
@@ -98,6 +99,7 @@ fn sdk_quickstart_example_runs_against_real_http_server() {
     assert_eq!(summary["idempotency_keys"], true);
     assert_eq!(summary["records_put"], 1);
     assert_eq!(summary["records_batched"], 2);
+    assert_eq!(summary["records_row_batched"], 2);
     assert_eq!(summary["records_inserted"], 3);
     assert_eq!(summary["records_scanned"], 3);
     assert_eq!(summary["patched"], true);
@@ -179,6 +181,7 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["put"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
+    assert_eq!(summary["steps"]["row_batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["query"], true);
     assert_eq!(summary["steps"]["scan"], true);
@@ -201,6 +204,7 @@ fn sdk_quickstart_example_skips_admin_without_admin_dir() {
     assert_eq!(summary["idempotency_keys"], false);
     assert_eq!(summary["records_put"], 1);
     assert_eq!(summary["records_batched"], 2);
+    assert_eq!(summary["records_row_batched"], 2);
     assert_eq!(summary["records_inserted"], 3);
     assert_eq!(summary["records_scanned"], 3);
     assert_eq!(summary["patched"], true);
@@ -271,6 +275,7 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["steps"]["schema_apply"], true);
     assert_eq!(summary["steps"]["put"], true);
     assert_eq!(summary["steps"]["batch_ingest"], true);
+    assert_eq!(summary["steps"]["row_batch_ingest"], true);
     assert_eq!(summary["steps"]["patch"], true);
     assert_eq!(summary["steps"]["delete"], true);
     assert_eq!(summary["steps"]["error_envelope"], true);
@@ -283,6 +288,7 @@ fn sdk_quickstart_accepts_idempotency_retries_from_env() {
     assert_eq!(summary["health_ok"], true);
     assert_eq!(summary["records_put"], 1);
     assert_eq!(summary["records_batched"], 2);
+    assert_eq!(summary["records_row_batched"], 2);
     assert_eq!(summary["records_inserted"], 3);
     assert_eq!(summary["error_envelope"]["status"], 400);
     assert_eq!(summary["sql_module"], "not_implemented");

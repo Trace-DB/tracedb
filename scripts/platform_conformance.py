@@ -816,9 +816,19 @@ def map_rust_sdk_product_summary(
         )
         if step_passed("put") and isinstance(records_put, int) and records_put >= 1
         else failed("put", RuntimeError("Rust SDK quickstart single-record put evidence missing")),
-        "batch": passed("batch", "rust_sdk_quickstart steps.batch_ingest")
-        if step_passed("batch_ingest")
-        else failed("batch", RuntimeError("Rust SDK quickstart batch_ingest did not pass")),
+        "batch": passed(
+            "batch",
+            "rust_sdk_quickstart steps.batch_ingest and steps.row_batch_ingest",
+            {
+                "records_batched": quickstart.get("records_batched"),
+                "records_row_batched": quickstart.get("records_row_batched"),
+            },
+        )
+        if step_passed("batch_ingest") and step_passed("row_batch_ingest")
+        else failed(
+            "batch",
+            RuntimeError("Rust SDK quickstart batch_ingest or row_batch_ingest did not pass"),
+        ),
         "patch": passed("patch", "rust_sdk_quickstart steps.patch")
         if step_passed("patch")
         else failed("patch", RuntimeError("Rust SDK quickstart patch did not pass")),

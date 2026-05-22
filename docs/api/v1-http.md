@@ -45,9 +45,9 @@ node --experimental-strip-types clients/typescript/smoke.ts
   It now also has a first ergonomic table/query layer over the same wire
   contract through `TraceDb::connect(config)?` and
   `db.table("docs").tenant("tenant-a")`, including table insert, batch insert,
-  patch, get, scan, and delete helpers plus `TableHandle::query()` / direct
-  query chaining that posts the canonical `HybridQuery` shape to `/v1/query`
-  or `/v1/explain`.
+  row-oriented `insert_rows` over the same batch wire shape, patch, get, scan,
+  and delete helpers plus `TableHandle::query()` / direct query chaining that
+  posts the canonical `HybridQuery` shape to `/v1/query` or `/v1/explain`.
   It also exposes `TraceDbAsyncClient` as a minimal async facade over the same
   HTTP contract. This first async surface runs the existing transport on a
   background thread per request so callers can await typed read, write, and
@@ -344,13 +344,14 @@ compatibility checks. `product-regression --only rust_sdk_quickstart` starts a
 managed-style local loopback `tracedb-server`, creates/uses the quickstart admin
 dir, runs only the existing Rust SDK quickstart product-regression step, and
 emits one-step `local-product-regression` JSON with `only_step:
-"rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence only, not
-full product gate coverage, not `http_demo`, not local `doctor http`
-diagnostics, not generated TypeScript smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility. If the Rust SDK child exits
-nonzero after writing quickstart JSON, product-regression preserves that nested
-object under `steps.rust_sdk_quickstart.summary` and keeps stdout/stderr tails
-on the failed step for debugging.
+"rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence for typed
+HTTP plus table-handle row batch ingestion only, not full product gate coverage,
+not `http_demo`, not local `doctor http` diagnostics, not generated TypeScript
+smoke, not managed-cloud proof, not benchmark evidence, and not SQL
+compatibility. If the Rust SDK child exits nonzero after writing quickstart JSON,
+product-regression preserves that nested object under
+`steps.rust_sdk_quickstart.summary` and keeps stdout/stderr tails on the failed
+step for debugging.
 `product-regression --only python_sdk_smoke` runs only
 `python3 clients/python/http_smoke.py` from the workspace root. The smoke starts
 its own local `tracedb-server` child process and exercises the sync Python SDK

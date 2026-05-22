@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordPatchRequest, RecordPutBatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
+    RecordPatchRequest, RecordScanRequest, TableSchema, VectorColumnSchema,
 };
 use tracedb_sdk::{
     ErrorResponse, RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig,
@@ -78,19 +78,29 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         Some(options) => client.put_typed_with_options(&put_record, options)?,
         None => client.put_typed(&put_record)?,
     };
-    let batch = RecordPutBatchRequest::new(vec![
-        record(
-            "intro",
-            "tenant-a",
-            "rust database api quickstart",
-            [1.0, 0.0, 0.0],
-        ),
-        record("ops", "tenant-a", "snapshot restore flow", [0.0, 1.0, 0.0]),
-    ]);
+    let docs = client.table("docs").tenant("tenant-a");
+    let batch_rows = vec![
+        json!({
+            "id": "intro",
+            "body": "rust database api quickstart",
+            "embedding": [1.0, 0.0, 0.0],
+        })
+        .as_object()
+        .expect("row literal is an object")
+        .clone(),
+        json!({
+            "id": "ops",
+            "body": "snapshot restore flow",
+            "embedding": [0.0, 1.0, 0.0],
+        })
+        .as_object()
+        .expect("row literal is an object")
+        .clone(),
+    ];
     let ingest_options = idempotency_options(idempotency_run_id.as_deref(), "put-batch");
     let ingest = match ingest_options.as_ref() {
-        Some(options) => client.put_batch_typed_with_options(&batch, options)?,
-        None => client.put_batch_typed(&batch)?,
+        Some(options) => docs.insert_rows_with_options(batch_rows, options)?,
+        None => docs.insert_rows(batch_rows)?,
     };
     let patch_request = patch_request();
     let patch_options = idempotency_options(idempotency_run_id.as_deref(), "patch-intro");
@@ -139,6 +149,7 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         "schema_apply": true,
         "put": true,
         "batch_ingest": true,
+        "row_batch_ingest": true,
         "patch": true,
         "scan": true,
         "query": true,
@@ -171,6 +182,7 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         "put_epoch": put.epoch,
         "records_put": 1,
         "records_batched": ingest.record_count,
+        "records_row_batched": ingest.record_count,
         "records_inserted": ingest.record_count + 1,
         "patched": patch.epoch > schema.epoch,
         "patched_status": patched
@@ -244,6 +256,7 @@ impl QuickstartFailure {
             "schema_apply": false,
             "put": false,
             "batch_ingest": false,
+            "row_batch_ingest": false,
             "patch": false,
             "scan": false,
             "query": false,

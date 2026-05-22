@@ -144,7 +144,8 @@ endpoint diagnostics evidence only, not full product-regression gate coverage.
 `--only rust_sdk_quickstart` starts a managed local server, creates/uses the
 quickstart admin dir, runs only the Rust SDK quickstart step, and emits
 one-step `local-product-regression` JSON. It is local Rust SDK quickstart
-evidence only, not full product-regression gate coverage.
+evidence for typed HTTP plus table-handle row batch ingestion only, not full
+product-regression gate coverage.
 `--only python_sdk_smoke` runs only `python3 clients/python/http_smoke.py`
 from the workspace root and emits one-step `local-product-regression` JSON. It
 is local sync Python SDK HTTP smoke evidence only, not full product-regression

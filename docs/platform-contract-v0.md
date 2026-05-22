@@ -76,7 +76,7 @@ Every product surface must map to these contract components:
 | Surface | ID | Current status | Contract role |
 | --- | --- | --- | --- |
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
-| Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
+| Rust SDK | `rust_sdk` | Reference candidate with env config and row batch ingestion | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
 | TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with raw-contract and row batch ingestion, env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with row batch ingestion, native TraceQL, safe retries, and idempotency retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Native TraceQL HTTP execution checked; bounded SQL-ish `SELECT` adapter checked | Adapter into the same TraceQuery/query model, not SQL compatibility. |
@@ -124,8 +124,10 @@ and now checks all 13 current v0 scenario IDs, including native
 `traceql_string_execution` through `POST /v1/traceql`. The `rust_sdk` lane maps
 the existing Rust SDK quickstart product path into the same manifest scenario
 IDs and now checks all 13 current IDs, including `traceql_string_execution`
-through `TraceDbClient::traceql_typed`. The `typescript_sdk` lane runs the
-public TypeScript SDK smoke through `npm run public-http-smoke --
+through `TraceDbClient::traceql_typed`; the quickstart batch scenario now uses
+the table-handle `insert_rows` helper while still posting the canonical
+`/v1/records/put-batch` body. The `typescript_sdk` lane runs the public
+TypeScript SDK smoke through `npm run public-http-smoke --
 --summary-json ...` and maps schema apply, put, batch, patch, get, scan, query,
 TraceQL string execution, explain, delete, idempotency, errors, and
 snapshot/restore into the same scenario IDs. The `python_sdk` lane first
@@ -248,6 +250,16 @@ result/explain, bounded GraphQL result/explain, raw-contract batch ingestion,
 row batch ingestion, and error-envelope evidence for
 `scripts/platform_conformance.py --surface typescript_sdk`; the generated
 transport remains available and remains the source of route methods.
+
+The Rust SDK reference layer now exposes row-oriented table ingestion alongside
+the raw typed methods. `TraceDbClient::table("docs").tenant("tenant-a")` and
+`TraceDb::connect(config)?.table("docs").tenant("tenant-a")` expose
+`insert_rows`, `insert_rows_with_options`, `insert_rows_with_id_field`, and
+`insert_rows_with_id_field_and_options`. These helpers accept normal
+`serde_json::Map` row dictionaries, copy them into the existing
+`RecordPutBatchRequest` shape, inject `tenant` and `id` fields consistently with
+raw `insert_batch`, and preserve `Idempotency-Key` behavior through
+`TraceDbRequestOptions`.
 
 The Python package now starts the sync-first AI/data SDK lane in
 `clients/python/tracedb/client.py`. `TraceDB(url, token="dev-token")` exposes

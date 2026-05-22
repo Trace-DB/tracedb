@@ -37,12 +37,14 @@
     {
       "id": "rust_sdk",
       "label": "Rust SDK",
-      "status": "reference_candidate_with_connect_table_handle_explain_plan",
+      "status": "reference_candidate_with_connect_table_handle_explain_plan_and_row_batch",
       "role": "reference ergonomic SDK over the wire contract",
       "evidence": [
         "crates/tracedb-sdk",
         "TraceDb::connect",
         "TableHandle::query",
+        "TableHandle::insert_rows",
+        "row batch ingestion over POST /v1/records/put-batch",
         "QueryBuilder::explain_plan",
         "TraceDbClientConfig::from_env",
         "cargo run -p tracedb-sdk --example quickstart"

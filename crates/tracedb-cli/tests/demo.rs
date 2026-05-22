@@ -727,6 +727,7 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["steps"]["schema_apply"], true);
     assert_eq!(sdk_summary["steps"]["put"], true);
     assert_eq!(sdk_summary["steps"]["batch_ingest"], true);
+    assert_eq!(sdk_summary["steps"]["row_batch_ingest"], true);
     assert_eq!(sdk_summary["steps"]["patch"], true);
     assert_eq!(sdk_summary["steps"]["query"], true);
     assert_eq!(sdk_summary["steps"]["traceql_string_execution"], true);
@@ -754,6 +755,7 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["admin"]["restore"], true);
     assert_eq!(sdk_summary["records_put"], 1);
     assert_eq!(sdk_summary["records_batched"], 2);
+    assert_eq!(sdk_summary["records_row_batched"], 2);
     assert_eq!(sdk_summary["records_inserted"], 3);
     assert_eq!(sdk_summary["records_scanned"], 3);
     assert_eq!(sdk_summary["patched"], true);

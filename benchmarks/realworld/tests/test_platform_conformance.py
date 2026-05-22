@@ -135,6 +135,7 @@ class PlatformConformanceTests(unittest.TestCase):
                             "schema_apply": True,
                             "put": True,
                             "batch_ingest": True,
+                            "row_batch_ingest": True,
                             "patch": True,
                             "scan": True,
                             "query": True,
@@ -148,6 +149,8 @@ class PlatformConformanceTests(unittest.TestCase):
                         "patched_status": "reviewed",
                         "deleted_hidden": True,
                         "records_put": 1,
+                        "records_batched": 2,
+                        "records_row_batched": 2,
                         "put_epoch": 2,
                         "traceql_result_count": 1,
                         "traceql_explain": True,
@@ -169,6 +172,8 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(surface["surface"], "rust_sdk")
         self.assertEqual(scenarios["schema_apply"]["status"], "passed")
         self.assertEqual(scenarios["batch"]["status"], "passed")
+        self.assertEqual(scenarios["batch"]["details"]["records_batched"], 2)
+        self.assertEqual(scenarios["batch"]["details"]["records_row_batched"], 2)
         self.assertEqual(scenarios["patch"]["status"], "passed")
         self.assertEqual(scenarios["get"]["status"], "passed")
         self.assertEqual(scenarios["delete"]["status"], "passed")

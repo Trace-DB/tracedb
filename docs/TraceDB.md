@@ -98,10 +98,10 @@ compatibility.
 `tracedb-server`, creates/uses the quickstart admin dir, runs only the existing
 Rust SDK quickstart product-regression step, and emits one-step
 `local-product-regression` JSON with `only_step: "rust_sdk_quickstart"`. This
-is local Rust SDK quickstart evidence only, not full product gate coverage, not
-`http_demo`, not local `doctor http` diagnostics, not generated TypeScript
-smoke, not managed-cloud proof, not benchmark evidence, and not SQL
-compatibility.
+is local Rust SDK quickstart evidence for typed HTTP plus table-handle row
+batch ingestion only, not full product gate coverage, not `http_demo`, not
+local `doctor http` diagnostics, not generated TypeScript smoke, not
+managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 Failed Rust SDK child runs that still emit quickstart JSON are preserved under
 `steps.rust_sdk_quickstart.summary`, with stdout/stderr tails retained on the
 failed step.
@@ -262,11 +262,15 @@ idempotency helpers. This is an async integration surface for the current
 product path, not a final runtime-native Tokio/async-std transport.
 The blocking Rust SDK now also exposes a first ergonomic reference layer through
 `TraceDb::connect(config)?` and `db.table("docs").tenant("tenant-a")`. That
-`TableHandle` can insert single records, batch insert records, patch records,
-get records, scan, delete, enter query mode with `query()`, add scalar equality
-predicates, add text/vector query clauses, request explain output, set a limit,
-execute `all()` against `/v1/query`, and execute `explain_plan()` against
-`/v1/explain` using the canonical `HybridQuery` shape.
+`TableHandle` can insert single records, raw-contract batch insert records,
+row-oriented `insert_rows` from normal `serde_json::Map` dictionaries with a
+custom id-field option, patch records, get records, scan, delete, enter query
+mode with `query()`, add scalar equality predicates, add text/vector query
+clauses, request explain output, set a limit, execute `all()` against
+`/v1/query`, and execute `explain_plan()` against `/v1/explain` using the
+canonical `HybridQuery` shape. The row helper still compiles into
+`RecordPutBatchRequest` and `POST /v1/records/put-batch`; it is SDK
+ergonomics, not a second write contract.
 `TraceDbClientConfig::from_env()` now builds Rust SDK
 connection config from `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`,

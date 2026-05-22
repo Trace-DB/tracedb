@@ -832,6 +832,155 @@ fn table_handle_insert_batch_posts_canonical_batch_body() {
 }
 
 #[test]
+fn table_handle_insert_rows_posts_row_dicts_to_canonical_batch_body() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"epoch":9,"record_count":2}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+    let options = TraceDbRequestOptions::new().with_idempotency_key("table-rows-1");
+    let rows = vec![
+        json!({
+            "id": "row-intro",
+            "status": "published",
+            "body": "row batch ergonomic rust sdk",
+            "embedding": [1.0, 0.0, 0.0],
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        json!({
+            "id": "row-ops",
+            "status": "draft",
+            "body": "row batch canonical wire path",
+            "embedding": [0.0, 1.0, 0.0],
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ];
+    let original_rows = rows.clone();
+
+    let response = client
+        .table("docs")
+        .tenant("tenant-a")
+        .insert_rows_with_options(rows.clone(), &options)
+        .expect("table row batch insert");
+    let body = request_body.join().expect("request body");
+
+    assert_eq!(rows, original_rows);
+    assert_eq!(response.epoch, 9);
+    assert_eq!(response.record_count, 2);
+    assert_eq!(body["records"][0]["table"], "docs");
+    assert_eq!(body["records"][0]["tenant_id"], "tenant-a");
+    assert_eq!(body["records"][0]["id"], "row-intro");
+    assert_eq!(body["records"][0]["fields"]["id"], "row-intro");
+    assert_eq!(body["records"][0]["fields"]["tenant"], "tenant-a");
+    assert_eq!(body["records"][0]["fields"]["status"], "published");
+    assert_eq!(body["records"][1]["table"], "docs");
+    assert_eq!(body["records"][1]["tenant_id"], "tenant-a");
+    assert_eq!(body["records"][1]["id"], "row-ops");
+    assert_eq!(body["records"][1]["fields"]["id"], "row-ops");
+    assert_eq!(body["records"][1]["fields"]["tenant"], "tenant-a");
+    assert_eq!(body["records"][1]["fields"]["status"], "draft");
+}
+
+#[test]
+fn table_handle_insert_rows_supports_custom_id_field() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"epoch":10,"record_count":1}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = client
+        .table("docs")
+        .tenant("tenant-a")
+        .insert_rows_with_id_field(
+            vec![json!({
+                "doc_id": "custom-row",
+                "status": "published",
+                "body": "custom id field row",
+                "embedding": [1.0, 0.0, 0.0],
+            })
+            .as_object()
+            .unwrap()
+            .clone()],
+            "doc_id",
+        )
+        .expect("table row batch insert");
+    let body = request_body.join().expect("request body");
+
+    assert_eq!(response.record_count, 1);
+    assert_eq!(body["records"][0]["table"], "docs");
+    assert_eq!(body["records"][0]["tenant_id"], "tenant-a");
+    assert_eq!(body["records"][0]["id"], "custom-row");
+    assert_eq!(body["records"][0]["fields"]["doc_id"], "custom-row");
+    assert_eq!(body["records"][0]["fields"]["id"], "custom-row");
+    assert_eq!(body["records"][0]["fields"]["tenant"], "tenant-a");
+}
+
+#[test]
+fn table_handle_insert_rows_rejects_missing_id_before_http() {
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(
+        "http://127.0.0.1:9".to_string(),
+        "dev-token",
+    ));
+
+    let error = client
+        .table("docs")
+        .tenant("tenant-a")
+        .insert_rows(vec![json!({"body": "missing id"})
+            .as_object()
+            .unwrap()
+            .clone()])
+        .expect_err("missing row id should fail before HTTP");
+
+    match error {
+        TraceDbClientError::InvalidRequest {
+            method,
+            path,
+            message,
+        } => {
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/v1/records/put-batch");
+            assert!(
+                message.contains("row 0 missing id field 'id'"),
+                "unexpected validation message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn table_handle_insert_rows_rejects_empty_id_field_before_http() {
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(
+        "http://127.0.0.1:9".to_string(),
+        "dev-token",
+    ));
+
+    let error = client
+        .table("docs")
+        .tenant("tenant-a")
+        .insert_rows_with_id_field(
+            vec![json!({"id": "row-intro", "body": "empty id field config"})
+                .as_object()
+                .unwrap()
+                .clone()],
+            "",
+        )
+        .expect_err("empty row id field should fail before HTTP");
+
+    match error {
+        TraceDbClientError::InvalidRequest {
+            method,
+            path,
+            message,
+        } => {
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/v1/records/put-batch");
+            assert_eq!(message, "id_field cannot be empty");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn request_options_send_idempotency_key_header_without_enabling_write_retries() {
     let (url, request) = capture_http_request_server();
     let client =
