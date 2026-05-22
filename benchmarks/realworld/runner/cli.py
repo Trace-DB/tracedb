@@ -31,6 +31,7 @@ from .types import RunConfig
 
 try:
     from railway_bench import (
+        build_railway_artifact_manifest,
         build_railway_manifest,
         build_railway_operation_receipt,
         build_railway_operation_plan,
@@ -42,6 +43,7 @@ try:
     )
 except ImportError:  # pragma: no cover - package import path used by unit discovery.
     from ..railway_bench import (
+        build_railway_artifact_manifest,
         build_railway_manifest,
         build_railway_operation_receipt,
         build_railway_operation_plan,
@@ -555,6 +557,7 @@ def run_suite(args: argparse.Namespace) -> int:
     }
     if railway_manifest is not None:
         artifact_paths["railway_manifest_json"] = "railway-manifest.json"
+        artifact_paths["railway_artifacts_json"] = "railway-artifacts.json"
     write_suite_json(suite_report, suite_dir / "suite.json")
     write_suite_markdown(suite_report, suite_dir / "suite.md")
     suite_gate = build_suite_gate(
@@ -564,6 +567,15 @@ def run_suite(args: argparse.Namespace) -> int:
         railway_manifest=railway_manifest,
     )
     write_suite_gate_json(suite_gate, suite_dir / "suite-gate.json")
+    if railway_manifest is not None:
+        railway_artifacts = build_railway_artifact_manifest(
+            suite_dir,
+            suite_id=suite_id,
+            artifact_paths=suite_gate["artifact_paths"],
+            railway_manifest=railway_manifest,
+            suite_gate=suite_gate,
+        )
+        write_json(railway_artifacts, suite_dir / "railway-artifacts.json")
     if suite_gate["blocking_failures"]:
         exit_code = 1
     print(f"wrote {suite_dir / 'suite.json'}")

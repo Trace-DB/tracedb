@@ -541,6 +541,7 @@ class SuiteReportingTests(unittest.TestCase):
             suite_dir = reports / "railway-plan-suite-test"
             gate = json.loads((suite_dir / "suite-gate.json").read_text())
             manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+            artifact_manifest = json.loads((suite_dir / "railway-artifacts.json").read_text())
 
         self.assertEqual(manifest["operation_plan"]["status"], "plan_only")
         self.assertFalse(manifest["operation_plan"]["execution"]["executed"])
@@ -548,8 +549,18 @@ class SuiteReportingTests(unittest.TestCase):
             gate["claim_status"]["railway_restart_redeploy"],
             "plan_only",
         )
+        self.assertEqual(
+            gate["artifact_paths"]["railway_artifacts_json"],
+            "railway-artifacts.json",
+        )
         self.assertEqual(gate["status"], "usable")
+        self.assertEqual(artifact_manifest["kind"], "railway_suite_artifact_manifest")
+        self.assertEqual(artifact_manifest["railway_claim_status"]["gate_status"], "usable")
+        self.assertTrue(
+            any(artifact["name"] == "railway_manifest_json" for artifact in artifact_manifest["artifacts"])
+        )
         self.assertNotIn("railway-token-secret", repr(manifest))
+        self.assertNotIn("railway-token-secret", repr(artifact_manifest))
 
     def test_railway_operation_receipt_command_writes_valid_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

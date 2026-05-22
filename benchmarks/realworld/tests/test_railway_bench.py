@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import json
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -13,6 +14,7 @@ LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
 from railway_bench import (
+    build_railway_artifact_manifest,
     build_railway_operation_receipt,
     build_railway_operation_plan,
     build_railway_manifest,
@@ -541,6 +543,39 @@ class RailwayBenchTests(unittest.TestCase):
         self.assertIn("receipt_only", receipt["claim_boundary"])
         self.assertTrue(validation["ok"], validation)
         self.assertNotIn("railway-token-secret", repr(receipt))
+
+    def test_artifact_manifest_records_suite_files_without_leaking_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            suite_dir = Path(temp_dir)
+            (suite_dir / "suite.json").write_text('{"secret":"railway-token-secret"}\n')
+            (suite_dir / "suite.md").write_text("# suite\n")
+            (suite_dir / "suite-gate.json").write_text('{"status":"usable"}\n')
+            (suite_dir / "railway-manifest.json").write_text('{"status":"configured"}\n')
+
+            manifest = build_railway_artifact_manifest(
+                suite_dir,
+                suite_id="railway-artifacts-test",
+                artifact_paths={
+                    "suite_json": "suite.json",
+                    "suite_md": "suite.md",
+                    "suite_gate_json": "suite-gate.json",
+                    "railway_manifest_json": "railway-manifest.json",
+                },
+                railway_manifest={"status": "configured"},
+                suite_gate={"status": "usable"},
+            )
+
+        artifacts = {artifact["name"]: artifact for artifact in manifest["artifacts"]}
+        self.assertEqual(manifest["kind"], "railway_suite_artifact_manifest")
+        self.assertEqual(manifest["suite_id"], "railway-artifacts-test")
+        self.assertEqual(artifacts["suite_json"]["path"], "suite.json")
+        self.assertTrue(artifacts["suite_json"]["exists"])
+        self.assertGreater(artifacts["suite_json"]["size_bytes"], 0)
+        self.assertRegex(artifacts["suite_json"]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(manifest["railway_claim_status"]["manifest_status"], "configured")
+        self.assertEqual(manifest["railway_claim_status"]["gate_status"], "usable")
+        self.assertIn("snapshot_restore_not_checked", manifest["open_proof_gaps"])
+        self.assertNotIn("railway-token-secret", repr(manifest))
 
     def test_persistence_verdict_passes_for_matching_marker_and_operator_receipt(self) -> None:
         pre_manifest = {

@@ -361,6 +361,12 @@ The Modal `railway_stateful`, `soak_railway`, and `release_100k` presets pass
 or remote Railway lanes fail fast when the persistent lab is not reachable or
 cannot accept a marker write/read while also carrying an explicit operator plan
 for the next persistence gate.
+When a Railway manifest is present, `runner suite` also writes
+`railway-artifacts.json` and records it in `suite-gate.json` as
+`artifact_paths.railway_artifacts_json`. That file indexes the suite artifacts
+by relative path, existence, size, and SHA-256 without copying artifact contents,
+so Modal bundles carry a compact review manifest for Railway evidence. It is
+not backup, snapshot, restore, or live recovery proof.
 
 ## Modal CPU/RAM Smoke
 
@@ -608,7 +614,8 @@ exact recall, same-file recall, nDCG, and MRR for adapters that expose query
 result lists.
 
 Reports are bundled into one `tar.gz` containing `suite.json`, `suite.md`,
-`suite-gate.json`, optional `railway-manifest.json`, and `manifest.json`. The
+`suite-gate.json`, optional `railway-manifest.json`, optional
+`railway-artifacts.json`, and `manifest.json`. The
 manifest records the run config, seed, Modal app name, resource class, redacted
 benchmark environment, and git commit/dirty state. Use `--summary-json` for
 clean local per-run evidence instead of scraping Modal logs, and use

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib import error as urlerror
 from urllib import parse, request
 from typing import Mapping, Any
@@ -130,6 +132,44 @@ def build_railway_manifest(
     if persistence_verdict is not None:
         manifest["persistence_verdict"] = dict(persistence_verdict)
     return manifest
+
+
+def build_railway_artifact_manifest(
+    suite_dir: Path,
+    *,
+    suite_id: str,
+    artifact_paths: Mapping[str, str],
+    railway_manifest: Mapping[str, Any] | None = None,
+    suite_gate: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    railway_manifest = _dict_value(railway_manifest)
+    suite_gate = _dict_value(suite_gate)
+    claim_status = _dict_value(suite_gate.get("claim_status"))
+    artifacts = [
+        _artifact_entry(suite_dir, name, path)
+        for name, path in sorted(dict(artifact_paths).items())
+        if name != "railway_artifacts_json"
+    ]
+    return {
+        "kind": "railway_suite_artifact_manifest",
+        "suite_id": suite_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "artifacts": artifacts,
+        "railway_claim_status": {
+            "gate_status": suite_gate.get("status", "unknown"),
+            "manifest_status": railway_manifest.get("status", "not_checked"),
+            "endpoint_health": claim_status.get("railway_endpoint_health", "not_checked"),
+            "stateful_smoke": claim_status.get("railway_stateful_smoke", "not_checked"),
+            "restart_redeploy": claim_status.get("railway_restart_redeploy", "not_checked"),
+            "persistence": claim_status.get("railway_persistence", "not_checked"),
+        },
+        "open_proof_gaps": [
+            "snapshot_restore_not_checked",
+            "backup_validation_not_checked",
+            "artifact_manifest_not_live_restore_proof",
+        ],
+        "claim_boundary": "artifact_manifest_indexes_suite_outputs_not_backup_snapshot_restore_proof",
+    }
 
 
 def validate_railway_operation_receipt(
@@ -557,6 +597,24 @@ def _redact_sensitive(value: Any) -> Any:
 
 def _dict_value(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _artifact_entry(suite_dir: Path, name: str, path: str) -> dict[str, Any]:
+    artifact_path = Path(path)
+    resolved = artifact_path if artifact_path.is_absolute() else suite_dir / artifact_path
+    exists = resolved.exists()
+    entry = {
+        "name": name,
+        "path": path,
+        "exists": exists,
+        "size_bytes": 0,
+        "sha256": "",
+    }
+    if exists and resolved.is_file():
+        data = resolved.read_bytes()
+        entry["size_bytes"] = len(data)
+        entry["sha256"] = hashlib.sha256(data).hexdigest()
+    return entry
 
 
 def _marker_identity(marker: Mapping[str, Any]) -> tuple[str, str, str]:
