@@ -72,7 +72,7 @@ Every product surface must map to these contract components:
 | --- | --- | --- | --- |
 | HTTP direct | `http_direct` | Current | Canonical wire contract. |
 | Rust SDK | `rust_sdk` | Reference candidate with env config | Ergonomic reference SDK over the wire contract while preserving raw HTTP methods. |
-| TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config and safe retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
+| TypeScript SDK | `typescript_sdk` | Public wrapper conformance checked with env config, safe retries, and idempotency retries | Hand-written `TraceDB` table/query wrapper over the generated transport. |
 | Python SDK | `python_sdk` | Sync HTTP smoked from installed package with read-only safe retries | Sync-first AI/data/notebook SDK over the canonical HTTP contract. |
 | TraceQL / SQL-ish | `traceql_sqlish` | Parked | Future adapter into the same TraceQuery/query model. |
 | GraphQL | `graphql` | Planned after contract | Future schema-generated adapter into the same TraceQuery/query model. |
@@ -151,11 +151,13 @@ The TypeScript package now starts the public SDK layer in
 compact/snapshot/restore/jobs, `where`, `match`, `near`, `with`, `limit`, `all`,
 and `explainPlan`. `TraceDB.fromEnv()` reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
-`TRACEDB_TIMEOUT_MS`, and `TRACEDB_SAFE_RETRIES` so the TypeScript public SDK
-shares the same connection, routing, and read-only retry boundary as Rust and
-Python. `safeRetries` only retries transient 5xx responses for health/ready,
-get, scan, query, and explain; mutations and admin routes remain governed by
-caller-provided idempotency keys. The wrapper is fake-fetch,
+`TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
+`TRACEDB_IDEMPOTENCY_RETRIES` so the TypeScript public SDK shares the same
+connection, routing, read-only retry, and keyed mutation/admin retry boundary as
+Rust. `safeRetries` only retries transient 5xx responses for health/ready, get,
+scan, query, and explain. `idempotencyRetries` is default-off and retries
+transient 5xx responses for mutation/admin routes only when the request carries
+a caller-provided `Idempotency-Key`. The wrapper is fake-fetch,
 build/pack, packed temp-consumer install, package-entry, and typecheck guarded
 and now has real local HTTP and gateway smokes through `npm run
 public-http-smoke` and `npm run gateway-smoke`.

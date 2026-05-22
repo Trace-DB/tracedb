@@ -71,6 +71,7 @@ export type TraceDBConfig = Omit<TraceDbClientConfig, "baseUrl"> & {
   baseUrl?: string;
   timeoutMs?: number;
   safeRetries?: number;
+  idempotencyRetries?: number;
 };
 
 export type TraceDBEnv = Partial<
@@ -80,14 +81,22 @@ export type TraceDBEnv = Partial<
     | "TRACEDB_DATABASE_ID"
     | "TRACEDB_BRANCH_ID"
     | "TRACEDB_TIMEOUT_MS"
-    | "TRACEDB_SAFE_RETRIES",
+    | "TRACEDB_SAFE_RETRIES"
+    | "TRACEDB_IDEMPOTENCY_RETRIES",
     string | undefined
   >
 >;
 
 export type TraceDBFromEnvOptions = Omit<
   TraceDBConfig,
-  "url" | "baseUrl" | "token" | "databaseId" | "branchId" | "timeoutMs" | "safeRetries"
+  | "url"
+  | "baseUrl"
+  | "token"
+  | "databaseId"
+  | "branchId"
+  | "timeoutMs"
+  | "safeRetries"
+  | "idempotencyRetries"
 > & {
   env?: TraceDBEnv;
   url?: string;
@@ -97,6 +106,7 @@ export type TraceDBFromEnvOptions = Omit<
   branchId?: string;
   timeoutMs?: number;
   safeRetries?: number;
+  idempotencyRetries?: number;
 };
 
 export type TableRecordInput = {
@@ -127,9 +137,14 @@ export class TraceDB {
     }
     const timeoutMs = validateTimeoutMs(config.timeoutMs, "timeoutMs");
     const safeRetries = validateNonNegativeInteger(config.safeRetries, "safeRetries");
-    const fetchImpl = fetchWithSafeRetries(
+    const idempotencyRetries = validateNonNegativeInteger(
+      config.idempotencyRetries,
+      "idempotencyRetries",
+    );
+    const fetchImpl = fetchWithRetries(
       fetchWithTimeout(config.fetchImpl, timeoutMs),
       safeRetries ?? 0,
+      idempotencyRetries ?? 0,
     );
     this.transport = new TraceDbClient({
       baseUrl,
@@ -158,6 +173,13 @@ export class TraceDB {
       options.safeRetries === undefined
         ? parseNonNegativeIntegerFromEnv(env.TRACEDB_SAFE_RETRIES, "TRACEDB_SAFE_RETRIES")
         : validateNonNegativeInteger(options.safeRetries, "safeRetries");
+    const idempotencyRetries =
+      options.idempotencyRetries === undefined
+        ? parseNonNegativeIntegerFromEnv(
+            env.TRACEDB_IDEMPOTENCY_RETRIES,
+            "TRACEDB_IDEMPOTENCY_RETRIES",
+          )
+        : validateNonNegativeInteger(options.idempotencyRetries, "idempotencyRetries");
     return new TraceDB({
       url,
       token: options.token ?? env.TRACEDB_TOKEN,
@@ -166,6 +188,7 @@ export class TraceDB {
       fetchImpl: options.fetchImpl,
       timeoutMs,
       safeRetries,
+      idempotencyRetries,
     });
   }
 
@@ -593,11 +616,12 @@ function fetchWithTimeout(
   };
 }
 
-function fetchWithSafeRetries(
+function fetchWithRetries(
   fetchImpl: TraceDbFetch | undefined,
   safeRetries: number,
+  idempotencyRetries: number,
 ): TraceDbFetch | undefined {
-  if (safeRetries === 0) {
+  if (safeRetries === 0 && idempotencyRetries === 0) {
     return fetchImpl;
   }
   const defaultFetch = (globalThis as typeof globalThis & { fetch?: TraceDbFetch }).fetch;
@@ -606,13 +630,28 @@ function fetchWithSafeRetries(
     return undefined;
   }
   return async (input: string, init: TraceDbFetchInit) => {
-    const attempts = isRetrySafeRequest(input, init) ? safeRetries + 1 : 1;
+    const attempts = retryAttemptCount(input, init, safeRetries, idempotencyRetries);
     let response = await resolvedFetch(input, init);
     for (let attempt = 1; attempt < attempts && !response.ok && response.status >= 500; attempt += 1) {
       response = await resolvedFetch(input, init);
     }
     return response;
   };
+}
+
+function retryAttemptCount(
+  input: string,
+  init: TraceDbFetchInit,
+  safeRetries: number,
+  idempotencyRetries: number,
+): number {
+  if (isRetrySafeRequest(input, init)) {
+    return safeRetries + 1;
+  }
+  if (isIdempotentRetryRequest(input, init) && hasIdempotencyKey(init)) {
+    return idempotencyRetries + 1;
+  }
+  return 1;
 }
 
 function isRetrySafeRequest(input: string, init: TraceDbFetchInit): boolean {
@@ -628,6 +667,28 @@ function isRetrySafeRequest(input: string, init: TraceDbFetchInit): boolean {
       requestPath(input) === "/v1/explain"
     )
   );
+}
+
+function isIdempotentRetryRequest(input: string, init: TraceDbFetchInit): boolean {
+  return (
+    init.method === "POST" &&
+    (
+      requestPath(input) === "/v1/schema/apply" ||
+      requestPath(input) === "/v1/insert" ||
+      requestPath(input) === "/v1/records/put" ||
+      requestPath(input) === "/v1/records/put-batch" ||
+      requestPath(input) === "/v1/records/patch" ||
+      requestPath(input) === "/v1/records/delete" ||
+      requestPath(input) === "/v1/admin/compact" ||
+      requestPath(input) === "/v1/admin/snapshot" ||
+      requestPath(input) === "/v1/admin/restore"
+    )
+  );
+}
+
+function hasIdempotencyKey(init: TraceDbFetchInit): boolean {
+  const key = init.headers["Idempotency-Key"];
+  return key !== undefined && key.length > 0;
 }
 
 function requestPath(input: string): string {

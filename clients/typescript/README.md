@@ -74,8 +74,9 @@ The public SDK smoke imports `src/sdk.ts` and verifies the first table/query
 wrapper layer against a fake transport. It checks `TraceDB.fromEnv()` for
 `TRACEDB_URL`, `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS`, verifies `TRACEDB_SAFE_RETRIES` retries transient 5xx
-responses only for read-only routes, and then checks table-scoped `insert`,
-`insertBatch`, `patch`, `get`, `scan`, `delete`, admin
+responses only for read-only routes, verifies `TRACEDB_IDEMPOTENCY_RETRIES`
+retries transient 5xx responses only for keyed mutation/admin routes, and then
+checks table-scoped `insert`, `insertBatch`, `patch`, `get`, `scan`, `delete`, admin
 compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
 `match`, `near`, `with`, `limit`, `all`, and `explainPlan`. It also checks
 missing-tenant validation raises `TraceDbRequestError` before `fetchImpl` is
@@ -342,6 +343,10 @@ network I/O with
 The public wrapper's `safeRetries` / `TRACEDB_SAFE_RETRIES` setting is separate:
 it retries transient HTTP 5xx responses only for health/ready, get, scan, query,
 and explain. It does not retry write or admin mutations.
+The public wrapper's `idempotencyRetries` / `TRACEDB_IDEMPOTENCY_RETRIES`
+setting is also default-off. It retries transient HTTP 5xx responses for
+mutation/admin routes only when the individual request carries a validated
+`Idempotency-Key`; it does not retry unkeyed writes or 4xx/409 responses.
 
 ```ts
 await client.deleteRecord(

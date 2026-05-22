@@ -364,11 +364,13 @@ The wrapper lives in `clients/typescript/src/sdk.ts`, uses the generated
 `TraceDbClient` as its transport, and is covered by `npm run public-smoke`.
 `TraceDB.fromEnv()` reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and
-`TRACEDB_SAFE_RETRIES` so the public TypeScript SDK shares the same connection,
-routing, and read-only retry config boundary as Rust and Python. `safeRetries`
-retries transient 5xx responses only for health/ready, get, scan, query, and
-explain; mutations and admin routes remain governed by caller-provided
-idempotency keys.
+`TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES` so the public
+TypeScript SDK shares the same connection, routing, read-only retry, and keyed
+mutation/admin retry config boundary as Rust. `safeRetries` retries transient
+5xx responses only for health/ready, get, scan, query, and explain.
+`idempotencyRetries` is default-off and retries transient 5xx responses for
+mutation/admin routes only when the individual request carries a caller-provided
+idempotency key.
 `npm run public-http-smoke` starts a local server and drives the public wrapper
 through schema apply, insert, batch ingest, patch, get, scan, query, explain,
 delete, idempotency replay/conflict, parsed error envelopes, compact, snapshot,

@@ -136,6 +136,53 @@ await assert.rejects(
 );
 assert.equal(mutationRetryCalls.length, 1, "safeRetries must not retry mutations");
 
+const idempotencyRetryCalls: FetchCall[] = [];
+let idempotencyRetryAttempt = 0;
+const idempotencyRetryDb = TraceDB.fromEnv({
+  env: {
+    TRACEDB_URL: "http://127.0.0.1:8090",
+    TRACEDB_IDEMPOTENCY_RETRIES: "1",
+  },
+  fetchImpl: async (input, init) => {
+    idempotencyRetryCalls.push({ input, init });
+    idempotencyRetryAttempt += 1;
+    if (idempotencyRetryAttempt === 1) {
+      return responseJson(503, { error: "write unavailable" });
+    }
+    return okJson({ epoch: 9 });
+  },
+});
+const retriedInsert = await idempotencyRetryDb
+  .table("docs")
+  .tenant("tenant-a")
+  .insert("idempotent-intro", { body: "retry write" }, { idempotencyKey: "ts-idem-insert-1" });
+assert.equal(retriedInsert.epoch, 9);
+assert.equal(
+  idempotencyRetryCalls.length,
+  2,
+  "TRACEDB_IDEMPOTENCY_RETRIES should retry keyed mutation 5xx responses",
+);
+assert.equal(idempotencyRetryCalls[0].init.headers["Idempotency-Key"], "ts-idem-insert-1");
+
+const unkeyedIdempotencyRetryCalls: FetchCall[] = [];
+const unkeyedIdempotencyRetryDb = new TraceDB({
+  url: "http://127.0.0.1:8090",
+  idempotencyRetries: 1,
+  fetchImpl: async (input, init) => {
+    unkeyedIdempotencyRetryCalls.push({ input, init });
+    return responseJson(503, { error: "write unavailable" });
+  },
+});
+await assert.rejects(
+  () => unkeyedIdempotencyRetryDb.table("docs").tenant("tenant-a").insert("intro", { body: "write" }),
+  (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /HTTP 503/);
+    return true;
+  },
+);
+assert.equal(unkeyedIdempotencyRetryCalls.length, 1, "idempotencyRetries require Idempotency-Key");
+
 assert.throws(
   () => TraceDB.fromEnv({ env: {} }),
   (error: unknown) => {
@@ -174,6 +221,22 @@ assert.throws(
     assert.ok(error instanceof TraceDbRequestError);
     assert.equal(error.method, "CONFIG");
     assert.equal(error.path, "TRACEDB_SAFE_RETRIES");
+    return true;
+  },
+);
+
+assert.throws(
+  () =>
+    TraceDB.fromEnv({
+      env: {
+        TRACEDB_URL: "http://127.0.0.1:8090",
+        TRACEDB_IDEMPOTENCY_RETRIES: "-1",
+      },
+    }),
+  (error: unknown) => {
+    assert.ok(error instanceof TraceDbRequestError);
+    assert.equal(error.method, "CONFIG");
+    assert.equal(error.path, "TRACEDB_IDEMPOTENCY_RETRIES");
     return true;
   },
 );
