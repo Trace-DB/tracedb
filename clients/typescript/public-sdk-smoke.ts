@@ -12,9 +12,13 @@ type FetchCall = {
 };
 
 function okJson(value: JsonObject) {
+  return responseJson(200, value);
+}
+
+function responseJson(status: number, value: JsonObject) {
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     async text(): Promise<string> {
       return JSON.stringify(value);
     },
@@ -92,6 +96,46 @@ const fromEnvBody = JSON.parse(fromEnvCalls[0].init.body ?? "{}");
 assert.equal(fromEnvBody.database_id, "env-db");
 assert.equal(fromEnvBody.branch_id, "env-branch");
 
+const retryCalls: FetchCall[] = [];
+let retryAttempt = 0;
+const retryDb = TraceDB.fromEnv({
+  env: {
+    TRACEDB_URL: "http://127.0.0.1:8090",
+    TRACEDB_SAFE_RETRIES: "1",
+  },
+  fetchImpl: async (input, init) => {
+    retryCalls.push({ input, init });
+    retryAttempt += 1;
+    if (retryAttempt === 1) {
+      return responseJson(503, { error: "temporarily unavailable" });
+    }
+    return okJson({ record: { id: "intro", table: "docs", tenant_id: "tenant-a", fields: {} } });
+  },
+});
+const retriedGet = await retryDb.table("docs").tenant("tenant-a").get("intro");
+assert.equal(retriedGet.record?.id, "intro");
+assert.equal(retryCalls.length, 2, "TRACEDB_SAFE_RETRIES should retry read-only 5xx responses");
+assert.equal(retryCalls[0].input, "http://127.0.0.1:8090/v1/records/get");
+
+const mutationRetryCalls: FetchCall[] = [];
+const mutationRetryDb = new TraceDB({
+  url: "http://127.0.0.1:8090",
+  safeRetries: 1,
+  fetchImpl: async (input, init) => {
+    mutationRetryCalls.push({ input, init });
+    return responseJson(503, { error: "write unavailable" });
+  },
+});
+await assert.rejects(
+  () => mutationRetryDb.table("docs").tenant("tenant-a").insert("intro", { body: "write" }),
+  (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /HTTP 503/);
+    return true;
+  },
+);
+assert.equal(mutationRetryCalls.length, 1, "safeRetries must not retry mutations");
+
 assert.throws(
   () => TraceDB.fromEnv({ env: {} }),
   (error: unknown) => {
@@ -114,6 +158,22 @@ assert.throws(
     assert.ok(error instanceof TraceDbRequestError);
     assert.equal(error.method, "CONFIG");
     assert.equal(error.path, "TRACEDB_TIMEOUT_MS");
+    return true;
+  },
+);
+
+assert.throws(
+  () =>
+    TraceDB.fromEnv({
+      env: {
+        TRACEDB_URL: "http://127.0.0.1:8090",
+        TRACEDB_SAFE_RETRIES: "-1",
+      },
+    }),
+  (error: unknown) => {
+    assert.ok(error instanceof TraceDbRequestError);
+    assert.equal(error.method, "CONFIG");
+    assert.equal(error.path, "TRACEDB_SAFE_RETRIES");
     return true;
   },
 );

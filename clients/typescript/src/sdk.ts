@@ -70,6 +70,7 @@ export type TraceDBConfig = Omit<TraceDbClientConfig, "baseUrl"> & {
   url?: string;
   baseUrl?: string;
   timeoutMs?: number;
+  safeRetries?: number;
 };
 
 export type TraceDBEnv = Partial<
@@ -78,14 +79,15 @@ export type TraceDBEnv = Partial<
     | "TRACEDB_TOKEN"
     | "TRACEDB_DATABASE_ID"
     | "TRACEDB_BRANCH_ID"
-    | "TRACEDB_TIMEOUT_MS",
+    | "TRACEDB_TIMEOUT_MS"
+    | "TRACEDB_SAFE_RETRIES",
     string | undefined
   >
 >;
 
 export type TraceDBFromEnvOptions = Omit<
   TraceDBConfig,
-  "url" | "baseUrl" | "token" | "databaseId" | "branchId" | "timeoutMs"
+  "url" | "baseUrl" | "token" | "databaseId" | "branchId" | "timeoutMs" | "safeRetries"
 > & {
   env?: TraceDBEnv;
   url?: string;
@@ -94,6 +96,7 @@ export type TraceDBFromEnvOptions = Omit<
   databaseId?: string;
   branchId?: string;
   timeoutMs?: number;
+  safeRetries?: number;
 };
 
 export type TableRecordInput = {
@@ -123,12 +126,17 @@ export class TraceDB {
       );
     }
     const timeoutMs = validateTimeoutMs(config.timeoutMs, "timeoutMs");
+    const safeRetries = validateNonNegativeInteger(config.safeRetries, "safeRetries");
+    const fetchImpl = fetchWithSafeRetries(
+      fetchWithTimeout(config.fetchImpl, timeoutMs),
+      safeRetries ?? 0,
+    );
     this.transport = new TraceDbClient({
       baseUrl,
       token: config.token,
       databaseId: config.databaseId,
       branchId: config.branchId,
-      fetchImpl: fetchWithTimeout(config.fetchImpl, timeoutMs),
+      fetchImpl,
     });
   }
 
@@ -146,6 +154,10 @@ export class TraceDB {
       options.timeoutMs === undefined
         ? parseTimeoutMsFromEnv(env.TRACEDB_TIMEOUT_MS)
         : validateTimeoutMs(options.timeoutMs, "timeoutMs");
+    const safeRetries =
+      options.safeRetries === undefined
+        ? parseNonNegativeIntegerFromEnv(env.TRACEDB_SAFE_RETRIES, "TRACEDB_SAFE_RETRIES")
+        : validateNonNegativeInteger(options.safeRetries, "safeRetries");
     return new TraceDB({
       url,
       token: options.token ?? env.TRACEDB_TOKEN,
@@ -153,6 +165,7 @@ export class TraceDB {
       branchId: options.branchId ?? env.TRACEDB_BRANCH_ID,
       fetchImpl: options.fetchImpl,
       timeoutMs,
+      safeRetries,
     });
   }
 
@@ -533,6 +546,27 @@ function validateTimeoutMs(value: number | undefined, path: string): number | un
   return value;
 }
 
+function parseNonNegativeIntegerFromEnv(value: string | undefined, path: string): number | undefined {
+  if (value === undefined || value.trim().length === 0) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new TraceDbRequestError("CONFIG", path, `${path} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function validateNonNegativeInteger(value: number | undefined, path: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new TraceDbRequestError("CONFIG", path, `${path} must be a non-negative integer`);
+  }
+  return value;
+}
+
 function fetchWithTimeout(
   fetchImpl: TraceDbFetch | undefined,
   timeoutMs: number | undefined,
@@ -557,4 +591,49 @@ function fetchWithTimeout(
       clearTimeout(timeout);
     }
   };
+}
+
+function fetchWithSafeRetries(
+  fetchImpl: TraceDbFetch | undefined,
+  safeRetries: number,
+): TraceDbFetch | undefined {
+  if (safeRetries === 0) {
+    return fetchImpl;
+  }
+  const defaultFetch = (globalThis as typeof globalThis & { fetch?: TraceDbFetch }).fetch;
+  const resolvedFetch = fetchImpl ?? defaultFetch;
+  if (typeof resolvedFetch !== "function") {
+    return undefined;
+  }
+  return async (input: string, init: TraceDbFetchInit) => {
+    const attempts = isRetrySafeRequest(input, init) ? safeRetries + 1 : 1;
+    let response = await resolvedFetch(input, init);
+    for (let attempt = 1; attempt < attempts && !response.ok && response.status >= 500; attempt += 1) {
+      response = await resolvedFetch(input, init);
+    }
+    return response;
+  };
+}
+
+function isRetrySafeRequest(input: string, init: TraceDbFetchInit): boolean {
+  return (
+    init.method === "GET" &&
+    (requestPath(input) === "/v1/health" || requestPath(input) === "/v1/ready")
+  ) || (
+    init.method === "POST" &&
+    (
+      requestPath(input) === "/v1/records/get" ||
+      requestPath(input) === "/v1/records/scan" ||
+      requestPath(input) === "/v1/query" ||
+      requestPath(input) === "/v1/explain"
+    )
+  );
+}
+
+function requestPath(input: string): string {
+  try {
+    return new URL(input).pathname;
+  } catch {
+    return input.split("?", 1)[0];
+  }
 }

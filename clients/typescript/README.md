@@ -73,8 +73,9 @@ This is runtime smoke coverage for the checked artifact, not a package publishin
 The public SDK smoke imports `src/sdk.ts` and verifies the first table/query
 wrapper layer against a fake transport. It checks `TraceDB.fromEnv()` for
 `TRACEDB_URL`, `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
-`TRACEDB_TIMEOUT_MS`, then checks table-scoped `insert`, `insertBatch`, `patch`,
-`get`, `scan`, `delete`, admin
+`TRACEDB_TIMEOUT_MS`, verifies `TRACEDB_SAFE_RETRIES` retries transient 5xx
+responses only for read-only routes, and then checks table-scoped `insert`,
+`insertBatch`, `patch`, `get`, `scan`, `delete`, admin
 compact/snapshot/restore, and query-builder chaining via `where({ tenant_id })`,
 `match`, `near`, `with`, `limit`, `all`, and `explainPlan`. It also checks
 missing-tenant validation raises `TraceDbRequestError` before `fetchImpl` is
@@ -338,6 +339,9 @@ crash-atomic exactly-once, and not managed-cloud exactly-once semantics. The
 generated client rejects empty or CR/LF-containing idempotency keys before
 network I/O with
 `TraceDbRequestError`.
+The public wrapper's `safeRetries` / `TRACEDB_SAFE_RETRIES` setting is separate:
+it retries transient HTTP 5xx responses only for health/ready, get, scan, query,
+and explain. It does not retry write or admin mutations.
 
 ```ts
 await client.deleteRecord(

@@ -285,11 +285,14 @@ The TypeScript package now also starts the public platform SDK layer at
 `clients/typescript/src/sdk.ts`. `TraceDB` wraps the generated `TraceDbClient`
 transport and exposes `TraceDB.fromEnv()` for `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
-`TRACEDB_TIMEOUT_MS`, plus table handles for single insert, batch insert, patch,
-get, scan, delete, admin compact/snapshot/restore/jobs, and query-builder
-chaining through `where({ tenant_id })`, `match`, `near`, `with`, `limit`,
-`all`, and `explainPlan`. `npm run public-smoke` verifies this wrapper with a
-fake transport, env config, and missing-tenant request validation; `npm run public-http-smoke`
+`TRACEDB_TIMEOUT_MS`, and `TRACEDB_SAFE_RETRIES`, plus table handles for single
+insert, batch insert, patch, get, scan, delete, admin compact/snapshot/restore/jobs,
+and query-builder chaining through `where({ tenant_id })`, `match`, `near`,
+`with`, `limit`, `all`, and `explainPlan`. The public wrapper retries transient
+5xx responses only for health/ready, get, scan, query, and explain; mutations
+and admin routes remain governed by caller-provided idempotency keys.
+`npm run public-smoke` verifies this wrapper with a fake transport, env config,
+safe retry behavior, and missing-tenant request validation; `npm run public-http-smoke`
 verifies it against a real local `tracedb-server` with idempotency and
 error-envelope evidence, and `scripts/platform_conformance.py --surface
 typescript_sdk` now maps it into the shared Platform Contract v0 scenario IDs.

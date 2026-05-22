@@ -51,13 +51,15 @@
     {
       "id": "typescript_sdk",
       "label": "TypeScript SDK",
-      "status": "packed_consumer_entrypoint_conformance_checked",
+      "status": "packed_consumer_entrypoint_conformance_checked_with_safe_retries",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
         "clients/typescript/package.json",
         "clients/typescript/src/client.ts",
         "clients/typescript/src/sdk.ts",
         "TraceDB.fromEnv",
+        "TRACEDB_SAFE_RETRIES",
+        "safeRetries",
         "clients/typescript/public-sdk-smoke.ts",
         "clients/typescript/public-http-smoke.ts",
         "clients/typescript/http-smoke.ts",
