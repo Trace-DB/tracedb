@@ -35,6 +35,7 @@ class ReadyHandler(BaseHTTPRequestHandler):
 class StatefulSmokeHandler(ReadyHandler):
     def do_POST(self) -> None:
         body = self._read_body()
+        self.server.requests.append({"path": self.path, "body": body})
         if self.path == "/v1/schema/apply":
             self._send_json(200, {"epoch": 1})
             return
@@ -72,6 +73,7 @@ class TestHttpServer:
     def __init__(self, handler: type[BaseHTTPRequestHandler] = ReadyHandler) -> None:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.server.records = {}
+        self.server.requests = []
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
 
@@ -398,6 +400,88 @@ class SuiteReportingTests(unittest.TestCase):
             manifest["stateful_smoke"]["marker"]["table"],
             "railway_stateful_markers",
         )
+        self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "passed")
+        self.assertEqual(gate["status"], "usable")
+
+    def test_railway_stateful_read_only_marker_probe_writes_manifest_without_put(self) -> None:
+        with TestHttpServer(StatefulSmokeHandler) as server, tempfile.TemporaryDirectory() as temp_dir:
+            server.server.records[
+                ("railway_stateful_markers", "railway-smoke", "marker-123")
+            ] = {
+                "table": "railway_stateful_markers",
+                "id": "marker-123",
+                "tenant_id": "railway-smoke",
+                "fields": {
+                    "id": "marker-123",
+                    "tenant": "railway-smoke",
+                    "kind": "railway_stateful_smoke",
+                    "run_id": "pre-restart-run",
+                    "status": "written",
+                    "marker_id": "marker-123",
+                    "body": "TraceDB Railway stateful smoke marker marker-123",
+                },
+            }
+            reports = Path(temp_dir) / "reports"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BENCH_DISABLE_ENV_FILE": "1",
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": server.base_url,
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "runner",
+                    "suite",
+                    "--profile",
+                    "smoke",
+                    "--dataset",
+                    "generated",
+                    "--records",
+                    "16",
+                    "--target",
+                    "tracedb",
+                    "--surface",
+                    "sdk",
+                    "--openrouter-mode",
+                    "off",
+                    "--run-id",
+                    "railway-stateful-readonly-suite-test",
+                    "--reports-dir",
+                    str(reports),
+                    "--suite-spec",
+                    "suites/railway_stateful.json",
+                    "--scenarios",
+                    "sdk_cli_surface",
+                    "--railway-config-from-env",
+                    "--railway-stateful-smoke",
+                    "--railway-stateful-read-only",
+                    "--railway-stateful-marker-id",
+                    "marker-123",
+                ],
+                cwd=LAB_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            paths = [request["path"] for request in server.server.requests]
+            suite_dir = reports / "railway-stateful-readonly-suite-test"
+            gate = json.loads((suite_dir / "suite-gate.json").read_text())
+            manifest = json.loads((suite_dir / "railway-manifest.json").read_text())
+
+        self.assertEqual(manifest["stateful_smoke"]["status"], "passed")
+        self.assertEqual(manifest["stateful_smoke"]["mode"], "read_only")
+        self.assertEqual(paths, ["/v1/records/get"])
         self.assertEqual(gate["claim_status"]["railway_stateful_smoke"], "passed")
         self.assertEqual(gate["status"], "usable")
 

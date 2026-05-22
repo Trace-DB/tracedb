@@ -313,6 +313,11 @@ one marker record through `POST /v1/records/put`, reads it back through
 gate if the requested marker is not visible. This proves live write/read
 behavior for the current endpoint only: it still does not create services,
 restart services, redeploy images, or prove volume survival across a restart.
+After a manually executed Railway restart/redeploy, rerun the same suite with
+`--railway-stateful-smoke --railway-stateful-read-only
+--railway-stateful-marker-id <marker-id>` to read the original marker without
+schema apply or `put`; this is the non-mutating post-operation visibility probe
+used by the next persistence gate.
 `--railway-restart-redeploy-plan` adds a non-mutating `operation_plan` to the
 manifest and reports `railway_restart_redeploy: plan_only` in the gate. The plan
 lists safe preflight commands such as `railway status --json`,

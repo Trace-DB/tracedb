@@ -102,6 +102,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Per-request timeout for --railway-stateful-smoke.",
     )
     suite.add_argument(
+        "--railway-stateful-marker-id",
+        default="",
+        help="Specific Railway stateful marker id to write/read or read after a restart.",
+    )
+    suite.add_argument(
+        "--railway-stateful-read-only",
+        action="store_true",
+        help="When used with --railway-stateful-smoke, read an existing marker without schema apply or put.",
+    )
+    suite.add_argument(
         "--railway-restart-redeploy-plan",
         action="store_true",
         help="Record a non-mutating Railway restart/redeploy readiness plan in railway-manifest.json.",
@@ -628,6 +638,8 @@ def _load_or_write_railway_manifest(
                 timeout_seconds=args.railway_stateful_smoke_timeout_seconds,
                 bearer_token=os.environ.get("TRACEDB_HTTP_BEARER_TOKEN") or None,
                 run_id=suite_id,
+                marker_id=args.railway_stateful_marker_id or None,
+                write_marker=not args.railway_stateful_read_only,
             )
             if args.railway_stateful_smoke
             else None

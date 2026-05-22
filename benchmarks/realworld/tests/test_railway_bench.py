@@ -285,6 +285,72 @@ class RailwayBenchTests(unittest.TestCase):
         self.assertNotIn("gateway-secret-token", repr(smoke))
         self.assertNotIn("railway-token-secret", repr(smoke))
 
+    def test_stateful_read_only_probe_does_not_rewrite_marker(self) -> None:
+        with TestHttpServer(StatefulSmokeHandler) as server:
+            server.server.records[
+                ("railway_stateful_markers", "railway-smoke", "marker-123")
+            ] = {
+                "table": "railway_stateful_markers",
+                "id": "marker-123",
+                "tenant_id": "railway-smoke",
+                "fields": {
+                    "id": "marker-123",
+                    "tenant": "railway-smoke",
+                    "kind": "railway_stateful_smoke",
+                    "run_id": "pre-restart-run",
+                    "status": "written",
+                    "marker_id": "marker-123",
+                    "body": "TraceDB Railway stateful smoke marker marker-123",
+                },
+            }
+            config = load_railway_config(
+                {
+                    "RAILWAY_API_TOKEN": "railway-token-secret",
+                    "RAILWAY_PROJECT_ID": "project_123",
+                    "RAILWAY_ENVIRONMENT_ID": "env_123",
+                    "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                    "TRACEDB_RAILWAY_PRIVATE_URL": server.base_url,
+                    "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+                }
+            )
+
+            smoke = run_railway_stateful_smoke(
+                config,
+                marker_id="marker-123",
+                run_id="post-restart-run",
+                timeout_seconds=1.0,
+                write_marker=False,
+            )
+            paths = [request["path"] for request in server.server.requests]
+
+        self.assertEqual(smoke["status"], "passed")
+        self.assertEqual(smoke["mode"], "read_only")
+        self.assertEqual([op["name"] for op in smoke["operations"]], ["record_get"])
+        self.assertEqual(paths, ["/v1/records/get"])
+        self.assertNotIn("railway-token-secret", repr(smoke))
+
+    def test_stateful_read_only_probe_requires_existing_marker_id(self) -> None:
+        config = load_railway_config(
+            {
+                "RAILWAY_API_TOKEN": "railway-token-secret",
+                "RAILWAY_PROJECT_ID": "project_123",
+                "RAILWAY_ENVIRONMENT_ID": "env_123",
+                "TRACEDB_RAILWAY_SERVICE_ID": "service_tracedb",
+                "TRACEDB_RAILWAY_PRIVATE_URL": "http://tracedb.railway.internal:8080",
+                "TRACEDB_RAILWAY_VOLUME_PATH": "/data/tracedb",
+            }
+        )
+
+        smoke = run_railway_stateful_smoke(
+            config,
+            run_id="post-restart-run",
+            write_marker=False,
+        )
+
+        self.assertEqual(smoke["status"], "invalid")
+        self.assertEqual(smoke["mode"], "read_only")
+        self.assertIn("marker_id is required", smoke["errors"][0])
+
     def test_stateful_smoke_fails_when_marker_is_not_visible(self) -> None:
         with TestHttpServer(MissingMarkerHandler) as server:
             config = load_railway_config(

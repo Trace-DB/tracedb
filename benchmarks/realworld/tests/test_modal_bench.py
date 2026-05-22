@@ -167,6 +167,27 @@ class ModalBenchTests(unittest.TestCase):
         self.assertTrue(config.railway_stateful_smoke)
         self.assertIn("--railway-stateful-smoke", command)
 
+    def test_railway_stateful_read_only_marker_probe_can_be_enabled_without_preset(self) -> None:
+        from modal_bench import build_suite_command, _parse_args
+
+        config = _parse_args(
+            [
+                "--railway-stateful-smoke",
+                "--railway-stateful-read-only",
+                "--railway-stateful-marker-id",
+                "marker-123",
+                "--run-id",
+                "railway-readonly-test",
+            ]
+        )
+        command = build_suite_command(config)
+
+        self.assertTrue(config.railway_stateful_read_only)
+        self.assertEqual(config.railway_stateful_marker_id, "marker-123")
+        self.assertIn("--railway-stateful-read-only", command)
+        self.assertIn("--railway-stateful-marker-id", command)
+        self.assertEqual(command[command.index("--railway-stateful-marker-id") + 1], "marker-123")
+
     def test_railway_restart_redeploy_plan_can_be_enabled_without_preset(self) -> None:
         from modal_bench import build_suite_command, _parse_args
 

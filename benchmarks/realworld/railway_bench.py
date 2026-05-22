@@ -236,12 +236,24 @@ def run_railway_stateful_smoke(
     bearer_token: str | None = None,
     run_id: str = "",
     marker_id: str | None = None,
+    write_marker: bool = True,
 ) -> dict[str, Any]:
     base_url = _endpoint_base_url(config)
     marker = _stateful_marker(run_id=run_id, marker_id=marker_id)
+    mode = "write_read" if write_marker else "read_only"
+    if not write_marker and not marker_id:
+        return {
+            "status": "invalid",
+            "mode": mode,
+            "base_url": base_url,
+            "marker": marker,
+            "operations": [],
+            "errors": ["marker_id is required for read-only stateful smoke"],
+        }
     if not base_url:
         return {
             "status": "not_configured",
+            "mode": mode,
             "base_url": "",
             "marker": marker,
             "operations": [],
@@ -276,20 +288,22 @@ def run_railway_stateful_smoke(
         "id": marker["id"],
     }
 
-    operations = [
-        _request_json_operation(
-            "schema_apply",
-            base_url,
-            "POST",
-            "/v1/schema/apply",
-            schema,
-            timeout_seconds=timeout_seconds,
-            bearer_token=bearer_token,
-            idempotency_key=f"railway-smoke:{marker['id']}:schema",
+    operations = []
+    if write_marker:
+        operations.append(
+            _request_json_operation(
+                "schema_apply",
+                base_url,
+                "POST",
+                "/v1/schema/apply",
+                schema,
+                timeout_seconds=timeout_seconds,
+                bearer_token=bearer_token,
+                idempotency_key=f"railway-smoke:{marker['id']}:schema",
+            )
         )
-    ]
     errors = [operation["error"] for operation in operations if not operation["ok"]]
-    if not errors:
+    if write_marker and not errors:
         operations.append(
             _request_json_operation(
                 "record_put",
@@ -318,14 +332,19 @@ def run_railway_stateful_smoke(
         )
         if not operations[-1]["ok"]:
             errors.append(operations[-1]["error"])
-        elif not _marker_visible(operations[-1].get("response"), marker):
-            errors.append("marker write was not visible")
+        elif not _marker_visible(
+            operations[-1].get("response"),
+            marker,
+            require_run_id=write_marker,
+        ):
+            errors.append("marker write was not visible" if write_marker else "marker read was not visible")
 
     status = "passed" if not errors else "failed"
     if errors and any(operation.get("status_code") is None for operation in operations):
         status = "unreachable"
     return {
         "status": status,
+        "mode": mode,
         "base_url": base_url,
         "marker": marker,
         "operations": operations,
@@ -497,7 +516,12 @@ def _decode_json_or_excerpt(text: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"body": payload}
 
 
-def _marker_visible(response: Any, marker: Mapping[str, str]) -> bool:
+def _marker_visible(
+    response: Any,
+    marker: Mapping[str, str],
+    *,
+    require_run_id: bool = True,
+) -> bool:
     if not isinstance(response, dict):
         return False
     record = response.get("record")
@@ -510,5 +534,5 @@ def _marker_visible(response: Any, marker: Mapping[str, str]) -> bool:
         record.get("id") == marker["id"]
         and record.get("tenant_id") == marker["tenant_id"]
         and fields.get("marker_id") == marker["id"]
-        and fields.get("run_id") == marker["run_id"]
+        and (not require_run_id or fields.get("run_id") == marker["run_id"])
     )
