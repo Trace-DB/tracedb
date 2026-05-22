@@ -116,26 +116,26 @@ The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`
 and now checks all 13 current v0 scenario IDs, including native
 `traceql_string_execution` through `POST /v1/traceql`. The `rust_sdk` lane maps
 the existing Rust SDK quickstart product path into the same manifest scenario
-IDs and reports `traceql_string_execution` as `not_checked` until the public
-Rust SDK has a native TraceQL helper. The `typescript_sdk` lane runs the public
-TypeScript SDK smoke through `npm run public-http-smoke -- --summary-json ...`
-and maps schema apply, put, batch, patch, get, scan, query, explain, delete,
-idempotency, errors, and snapshot/restore into the same scenario IDs; it also
-reports `traceql_string_execution` as `not_checked` until the public wrapper
-exposes native TraceQL execution. The `python_sdk` lane first installs a copied
-`clients/python` package into an isolated temporary pip `--target`, then runs
-`clients/python/http_smoke.py` with source-path imports disabled. It maps
-schema apply, put, batch, patch, get, scan, query, explain, delete,
-idempotency, errors, and snapshot/restore into the same scenario IDs and
-reports `traceql_string_execution` as `not_checked` until the sync SDK exposes
-native TraceQL execution. Future surfaces must report unimplemented scenarios
-as `not_checked` rather than silently treating them as success.
+IDs and now checks all 13 current IDs, including `traceql_string_execution`
+through `TraceDbClient::traceql_typed`. The `typescript_sdk` lane runs the
+public TypeScript SDK smoke through `npm run public-http-smoke --
+--summary-json ...` and maps schema apply, put, batch, patch, get, scan, query,
+explain, delete, idempotency, errors, and snapshot/restore into the same
+scenario IDs; it still reports `traceql_string_execution` as `not_checked`
+until the public wrapper exposes native TraceQL execution. The `python_sdk` lane
+first installs a copied `clients/python` package into an isolated temporary pip
+`--target`, then runs `clients/python/http_smoke.py` with source-path imports
+disabled. It maps schema apply, put, batch, patch, get, scan, query, explain,
+delete, idempotency, errors, and snapshot/restore into the same scenario IDs and
+still reports `traceql_string_execution` as `not_checked` until the sync SDK
+exposes native TraceQL execution. Future surfaces must report unimplemented
+scenarios as `not_checked` rather than silently treating them as success.
 
-Current verified checkpoint: Modal workspace run `ap-z22LgowF3bcrjm1HPSAmQL`
-passed in 86.765s. Its `platform-conformance-quick` command reported
+Current verified checkpoint: Modal workspace run `ap-LKxKE8pqLXZrB8d2Ol232d`
+passed in 104.284s. Its `platform-conformance-quick` command reported
 `http_direct` 13/13 passed, including `traceql_string_execution` through
-`POST /v1/traceql`, and `rust_sdk` 12/13 passed with native TraceQL explicitly
-`not_checked`.
+`POST /v1/traceql`, and `rust_sdk` 13/13 passed with native TraceQL covered by
+the Rust SDK quickstart.
 
 The Rust SDK also has a first ergonomic reference layer over the same wire
 contract: `TraceDb::connect(config)?` returns the reference client, and
@@ -143,9 +143,12 @@ contract: `TraceDb::connect(config)?` returns the reference client, and
 execute table insert, batch insert, patch, get, scan, and delete calls, then
 enter the query builder with `query()` or the direct chaining helpers
 `where_eq`, `match_text`, `near`, `with_explain`, `limit`, `all()`, and
-`explain_plan()`. These helpers compile into the existing `RecordInput`,
-`RecordPutBatchRequest`, record request, and `HybridQuery` models; the raw HTTP
-methods remain available.
+`explain_plan()`. `TraceDbClient::traceql_typed` and `traceql_request_typed`
+send native TraceQL strings to `POST /v1/traceql` and decode the same
+`QueryResponse` envelope as `query_typed`. These helpers compile into or reuse
+the existing `RecordInput`, `RecordPutBatchRequest`, record request,
+`TraceQlQueryRequest`, and `HybridQuery` models; the raw HTTP methods remain
+available.
 `TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and

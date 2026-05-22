@@ -507,6 +507,27 @@ impl TraceDbClient {
         self.post_typed("/v1/query", query)
     }
 
+    pub fn traceql(&self, query: impl Into<String>) -> TraceDbClientResult<Value> {
+        let request = TraceQlQueryRequest::new(query);
+        self.traceql_request(&request)
+    }
+
+    pub fn traceql_request(&self, request: &TraceQlQueryRequest) -> TraceDbClientResult<Value> {
+        self.post_json("/v1/traceql", request)
+    }
+
+    pub fn traceql_typed(&self, query: impl Into<String>) -> TraceDbClientResult<QueryResponse> {
+        let request = TraceQlQueryRequest::new(query);
+        self.traceql_request_typed(&request)
+    }
+
+    pub fn traceql_request_typed(
+        &self,
+        request: &TraceQlQueryRequest,
+    ) -> TraceDbClientResult<QueryResponse> {
+        self.post_typed("/v1/traceql", request)
+    }
+
     pub fn explain(&self, query: &HybridQuery) -> TraceDbClientResult<Value> {
         self.post_json("/v1/explain", query)
     }
@@ -970,6 +991,15 @@ impl TraceDbAsyncClient {
         self.run(move |client| client.query_typed(&query)).await
     }
 
+    pub async fn traceql_typed(
+        &self,
+        query: impl Into<String>,
+    ) -> TraceDbClientResult<QueryResponse> {
+        let request = TraceQlQueryRequest::new(query);
+        self.run(move |client| client.traceql_request_typed(&request))
+            .await
+    }
+
     pub async fn explain_typed(&self, query: &HybridQuery) -> TraceDbClientResult<HybridExplain> {
         let query = query.clone();
         self.run(move |client| client.explain_typed(&query)).await
@@ -1245,6 +1275,19 @@ pub struct QueryResponse {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TraceQlQueryRequest {
+    pub query: String,
+}
+
+impl TraceQlQueryRequest {
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CompactResponse {
     pub compacted: bool,
 }
@@ -1494,6 +1537,7 @@ fn is_retry_safe_request(method: &str, path: &str) -> bool {
             | ("POST", "/v1/records/get")
             | ("POST", "/v1/records/scan")
             | ("POST", "/v1/query")
+            | ("POST", "/v1/traceql")
             | ("POST", "/v1/explain")
     )
 }

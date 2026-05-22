@@ -464,7 +464,7 @@ fn async_client_starts_http_work_without_blocking_first_poll() {
 #[test]
 fn async_client_typed_write_options_retry_5xx_when_idempotent() {
     let (url, attempts) = sequence_response_server(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"epoch\":7}",
     ]);
     let client = TraceDbAsyncClient::new(
@@ -634,6 +634,37 @@ fn table_handle_explain_plan_posts_canonical_hybrid_query() {
     assert_eq!(body["top_k"], 15);
     assert_eq!(body["freshness"], "Strict");
     assert_eq!(body["explain"], true);
+}
+
+#[test]
+fn traceql_typed_posts_native_query_string() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    let response = client
+        .traceql_typed("FROM docs\nTENANT tenant-a\nLIMIT 1")
+        .expect("traceql typed response");
+    let body = request_body.join().expect("request body");
+
+    assert!(response.results.is_empty());
+    assert_eq!(body["query"], "FROM docs\nTENANT tenant-a\nLIMIT 1");
+}
+
+#[test]
+fn traceql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 14\r\nConnection: close\r\n\r\n{\"results\":[]}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+
+    let response = client
+        .traceql_typed("FROM docs\nTENANT tenant-a\nLIMIT 1")
+        .expect("traceql safe retry");
+
+    assert!(response.results.is_empty());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
 }
 
 #[test]

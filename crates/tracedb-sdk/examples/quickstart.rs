@@ -101,6 +101,8 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
     let patched = client.get_record_typed(&RecordGetRequest::new("docs", "tenant-a", "intro"))?;
     let scan = client.scan_typed(&RecordScanRequest::new("docs", "tenant-a").limit(10))?;
     let query_response = client.query_typed(&query(false))?;
+    let traceql_response = client.traceql_typed(traceql_query(false))?;
+    let traceql_explain = client.traceql_typed(traceql_query(true))?;
     let explain = client.explain_typed(&query(false))?;
     let delete_request = RecordDeleteRequest::new("docs", "tenant-a", "ops");
     let delete_options = idempotency_options(idempotency_run_id.as_deref(), "delete-ops");
@@ -140,6 +142,7 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
         "patch": true,
         "scan": true,
         "query": true,
+        "traceql_string_execution": true,
         "explain": true,
         "delete": true,
         "error_envelope": true,
@@ -177,6 +180,8 @@ fn run_quickstart(args: &QuickstartArgs) -> Result<(), Box<dyn Error>> {
             .and_then(serde_json::Value::as_str),
         "records_scanned": scan.returned_count,
         "query_result_count": query_response.results.len(),
+        "traceql_result_count": traceql_response.results.len(),
+        "traceql_explain": traceql_explain.explain.is_some(),
         "explain_returned_count": explain.returned_count,
         "deleted": delete.deleted,
         "deleted_hidden": deleted.record.is_none(),
@@ -242,6 +247,7 @@ impl QuickstartFailure {
             "patch": false,
             "scan": false,
             "query": false,
+            "traceql_string_execution": false,
             "explain": false,
             "delete": false,
             "error_envelope": false,
@@ -637,4 +643,20 @@ fn query(explain: bool) -> HybridQuery {
         freshness: FreshnessMode::Strict,
         explain,
     }
+}
+
+fn traceql_query(explain: bool) -> String {
+    let mut lines = vec![
+        "FROM docs",
+        "TENANT tenant-a",
+        "WHERE status = \"reviewed\"",
+        "MATCH body \"rust\"",
+        "NEAR embedding [1.0, 0.0, 0.0]",
+        "FRESHNESS ALLOW_DIRTY",
+        "LIMIT 5",
+    ];
+    if explain {
+        lines.push("EXPLAIN");
+    }
+    lines.join("\n")
 }

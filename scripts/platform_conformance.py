@@ -618,6 +618,7 @@ def map_rust_sdk_product_summary(
     quickstart_steps = quickstart.get("steps", {})
     error_envelope = quickstart.get("error_envelope", {})
     records_put = quickstart.get("records_put")
+    traceql_result_count = quickstart.get("traceql_result_count")
 
     def step_passed(name: str) -> bool:
         return step.get("ok") is True and quickstart.get("ok") is True and quickstart_steps.get(name) is True
@@ -658,6 +659,22 @@ def map_rust_sdk_product_summary(
         "query": passed("query", "rust_sdk_quickstart steps.query")
         if step_passed("query")
         else failed("query", RuntimeError("Rust SDK quickstart query did not pass")),
+        "traceql_string_execution": passed(
+            "traceql_string_execution",
+            "rust_sdk_quickstart steps.traceql_string_execution",
+            {
+                "result_count": traceql_result_count,
+                "explain": quickstart.get("traceql_explain"),
+            },
+        )
+        if step_passed("traceql_string_execution")
+        and isinstance(traceql_result_count, int)
+        and traceql_result_count >= 1
+        and quickstart.get("traceql_explain") is True
+        else failed(
+            "traceql_string_execution",
+            RuntimeError("Rust SDK quickstart TraceQL string execution evidence missing"),
+        ),
         "explain": passed("explain", "rust_sdk_quickstart steps.explain")
         if step_passed("explain")
         else failed("explain", RuntimeError("Rust SDK quickstart explain did not pass")),

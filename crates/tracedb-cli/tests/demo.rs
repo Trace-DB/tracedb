@@ -729,12 +729,20 @@ fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
     assert_eq!(sdk_summary["steps"]["batch_ingest"], true);
     assert_eq!(sdk_summary["steps"]["patch"], true);
     assert_eq!(sdk_summary["steps"]["query"], true);
+    assert_eq!(sdk_summary["steps"]["traceql_string_execution"], true);
     assert_eq!(sdk_summary["steps"]["delete"], true);
     assert_eq!(sdk_summary["steps"]["error_envelope"], true);
     assert_eq!(sdk_summary["steps"]["compact"], true);
     assert_eq!(sdk_summary["steps"]["snapshot"], true);
     assert_eq!(sdk_summary["steps"]["restore"], true);
     assert_eq!(sdk_summary["steps"]["jobs"], true);
+    assert!(
+        sdk_summary["traceql_result_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1),
+        "Rust SDK quickstart should report TraceQL result evidence: {sdk_summary}"
+    );
+    assert_eq!(sdk_summary["traceql_explain"], true);
     assert_eq!(sdk_summary["health_ok"], true);
     assert!(sdk_summary["database_count"].as_u64().is_some());
     assert!(sdk_summary["branch_count"].as_u64().is_some());

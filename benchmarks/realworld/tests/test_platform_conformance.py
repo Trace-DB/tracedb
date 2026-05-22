@@ -136,6 +136,7 @@ class PlatformConformanceTests(unittest.TestCase):
                             "patch": True,
                             "scan": True,
                             "query": True,
+                            "traceql_string_execution": True,
                             "explain": True,
                             "delete": True,
                             "error_envelope": True,
@@ -146,6 +147,8 @@ class PlatformConformanceTests(unittest.TestCase):
                         "deleted_hidden": True,
                         "records_put": 1,
                         "put_epoch": 2,
+                        "traceql_result_count": 1,
+                        "traceql_explain": True,
                         "error_envelope": {
                             "status": 400,
                             "error": "missing field `table`",
@@ -171,7 +174,7 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertEqual(scenarios["snapshot_restore"]["status"], "passed")
         self.assertEqual(scenarios["put"]["status"], "passed")
         self.assertEqual(scenarios["errors"]["status"], "passed")
-        self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
+        self.assertEqual(scenarios["traceql_string_execution"]["status"], "passed")
 
     def test_python_sdk_smoke_summary_maps_to_contract_scenarios(self) -> None:
         module = load_module()
