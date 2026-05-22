@@ -273,6 +273,18 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 ],
             },
             {
+                "name": "query-field-rust-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "-p",
+                    "tracedb-query",
+                    "hybrid_query_",
+                    "--",
+                    "--nocapture",
+                ],
+            },
+            {
                 "name": "workspace-all-targets",
                 "argv": ["cargo", "test", "--workspace", "--all-targets"],
             },

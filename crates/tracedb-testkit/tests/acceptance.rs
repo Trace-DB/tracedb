@@ -87,7 +87,9 @@ fn query() -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),
         tenant_id: "tenant-a".to_string(),
+        text_field: None,
         text: Some("rust kernel".to_string()),
+        vector_field: None,
         vector: Some(vec![1.0, 0.0, 0.0]),
         scalar_eq: Default::default(),
         graph_seed: None,
@@ -529,7 +531,9 @@ fn vector_only_query_orders_by_exact_similarity() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: None,
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -581,7 +585,9 @@ fn hybrid_query_uses_vector_order_when_lexical_scores_are_tied() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("shared lexical topic".to_string()),
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -627,7 +633,9 @@ fn hybrid_query_preserves_rare_symbol_lexical_winner() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("ERR_VECTOR_DIMENSION_MISMATCH".to_string()),
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -671,7 +679,9 @@ fn hybrid_query_does_not_let_fallback_streams_swamp_lexical_hits() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("ultrarare api contract".to_string()),
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -708,7 +718,9 @@ fn evidence_queries_bound_fallback_access_path_candidates() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("agent memory vector".to_string()),
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -751,7 +763,9 @@ fn hybrid_query_explain_reports_phase_and_access_path_timings() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("agent memory vector timing".to_string()),
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -842,7 +856,9 @@ fn vector_query_dimension_mismatch_is_error_not_fallback() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: None,
+            vector_field: None,
             vector: Some(vec![1.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -862,7 +878,9 @@ fn policy_relational_and_hot_paths_feed_fallback_results_without_text_or_vector(
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: None,
+            vector_field: None,
             vector: None,
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -908,7 +926,9 @@ fn relational_fallback_returns_dirty_records_skipped_by_vector_path() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: None,
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -1132,7 +1152,9 @@ fn policy_boundary_query() -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),
         tenant_id: "tenant-a".to_string(),
+        text_field: None,
         text: Some("policy boundary vector".to_string()),
+        vector_field: None,
         vector: Some(vec![1.0, 0.0, 0.0]),
         scalar_eq: Default::default(),
         graph_seed: None,
@@ -1354,7 +1376,9 @@ fn query_explain_counts_pending_and_failed_features() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("lifecycle vector".to_string()),
+            vector_field: None,
             vector: Some(vec![1.0, 0.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -1744,7 +1768,9 @@ fn query_skips_segment_files_when_manifest_table_set_cannot_match() {
         .query(HybridQuery {
             table: "other_docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("fresh unrelated evidence".to_string()),
+            vector_field: None,
             vector: None,
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -1786,7 +1812,9 @@ fn compact_keeps_hot_rows_authoritative_for_segment_materialization_and_visibili
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            text_field: None,
             text: Some("rust database kernel".to_string()),
+            vector_field: None,
             vector: None,
             scalar_eq: Default::default(),
             graph_seed: None,
@@ -2767,7 +2795,9 @@ fn tenant_ids_scope_record_identity() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-b".to_string(),
+            text_field: None,
             text: Some("independent".to_string()),
+            vector_field: None,
             vector: Some(vec![0.0, 1.0, 0.0]),
             scalar_eq: Default::default(),
             graph_seed: None,

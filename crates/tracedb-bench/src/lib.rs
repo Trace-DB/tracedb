@@ -568,9 +568,11 @@ fn scaling_query(records: usize) -> HybridQuery {
     HybridQuery {
         table: "scaling_records".to_string(),
         tenant_id: "tenant-a".to_string(),
+        text_field: Some("body".to_string()),
         text: Some(format!(
             "agent memory vector retrieval policy freshness record {records}"
         )),
+        vector_field: Some("embedding".to_string()),
         vector: Some(vec![0.1, 0.2, 0.3, 0.4, 0.1, 0.2, 0.3, 0.4]),
         scalar_eq: Default::default(),
         graph_seed: None,
@@ -585,7 +587,9 @@ fn rare_lexical_scaling_query(records: usize) -> HybridQuery {
     HybridQuery {
         table: "scaling_records".to_string(),
         tenant_id: "tenant-a".to_string(),
+        text_field: Some("body".to_string()),
         text: Some(records.to_string()),
+        vector_field: None,
         vector: None,
         scalar_eq: Default::default(),
         graph_seed: None,
@@ -600,7 +604,9 @@ fn common_lexical_scaling_query() -> HybridQuery {
     HybridQuery {
         table: "scaling_records".to_string(),
         tenant_id: "tenant-a".to_string(),
+        text_field: Some("body".to_string()),
         text: Some("agent memory vector retrieval policy freshness".to_string()),
+        vector_field: None,
         vector: None,
         scalar_eq: Default::default(),
         graph_seed: None,

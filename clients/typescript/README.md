@@ -327,6 +327,11 @@ const result = await db
 console.log(result.results);
 ```
 
+The public query builder sends `match("body", ...)` as
+`HybridQuery.text_field = "body"` and `near("embedding", ...)` as
+`HybridQuery.vector_field = "embedding"`, so multi-text and multi-vector schemas
+do not lose the selected field at the SDK boundary.
+
 The generated transport remains available for raw route access:
 
 ```ts

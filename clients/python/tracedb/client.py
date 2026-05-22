@@ -399,7 +399,9 @@ class TraceDBQueryBuilder:
     table_name: str
     tenant_id: str | None = None
     scalar_eq: JsonObject | None = None
+    text_field: str | None = None
     text_query: str | None = None
+    vector_field: str | None = None
     vector_query: list[float] | None = None
     top_k: int = 10
     freshness: str = "Strict"
@@ -420,11 +422,11 @@ class TraceDBQueryBuilder:
         scalar_eq[field] = value
         return self._copy(scalar_eq=scalar_eq)
 
-    def match_text(self, _field: str, query: str) -> "TraceDBQueryBuilder":
-        return self._copy(text_query=query)
+    def match_text(self, field: str, query: str) -> "TraceDBQueryBuilder":
+        return self._copy(text_field=field, text_query=query)
 
-    def near(self, _field: str, vector: list[float]) -> "TraceDBQueryBuilder":
-        return self._copy(vector_query=list(vector))
+    def near(self, field: str, vector: list[float]) -> "TraceDBQueryBuilder":
+        return self._copy(vector_field=field, vector_query=list(vector))
 
     def with_options(
         self,
@@ -453,7 +455,9 @@ class TraceDBQueryBuilder:
             "table": self.table_name,
             "tenant_id": self.tenant_id,
             "scalar_eq": dict(self.scalar_eq or {}),
+            "text_field": self.text_field,
             "text": self.text_query,
+            "vector_field": self.vector_field,
             "vector": self.vector_query,
             "top_k": self.top_k,
             "freshness": self.freshness,
@@ -466,7 +470,9 @@ class TraceDBQueryBuilder:
             "table_name": self.table_name,
             "tenant_id": self.tenant_id,
             "scalar_eq": dict(self.scalar_eq or {}),
+            "text_field": self.text_field,
             "text_query": self.text_query,
+            "vector_field": self.vector_field,
             "vector_query": list(self.vector_query) if self.vector_query is not None else None,
             "top_k": self.top_k,
             "freshness": self.freshness,

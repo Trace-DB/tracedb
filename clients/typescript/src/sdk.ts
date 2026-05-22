@@ -461,7 +461,9 @@ export class TraceDBQueryBuilder {
   private readonly tableName: string;
   private readonly tenantId?: string;
   private readonly scalarEq: JsonObject;
+  private readonly textField?: string;
   private readonly textQuery?: string;
+  private readonly vectorField?: string;
   private readonly vectorQuery?: number[];
   private readonly topK: number;
   private readonly freshness: string;
@@ -472,7 +474,9 @@ export class TraceDBQueryBuilder {
     tableName: string,
     tenantId?: string,
     scalarEq: JsonObject = {},
+    textField?: string,
     textQuery?: string,
+    vectorField?: string,
     vectorQuery?: number[],
     topK = 10,
     freshness = "Strict",
@@ -482,7 +486,9 @@ export class TraceDBQueryBuilder {
     this.tableName = tableName;
     this.tenantId = tenantId;
     this.scalarEq = scalarEq;
+    this.textField = textField;
     this.textQuery = textQuery;
+    this.vectorField = vectorField;
     this.vectorQuery = vectorQuery;
     this.topK = topK;
     this.freshness = freshness;
@@ -511,12 +517,12 @@ export class TraceDBQueryBuilder {
     return this.copy({ scalarEq: { ...this.scalarEq, [field]: value } });
   }
 
-  match(_field: string, query: string): TraceDBQueryBuilder {
-    return this.copy({ textQuery: query });
+  match(field: string, query: string): TraceDBQueryBuilder {
+    return this.copy({ textField: field, textQuery: query });
   }
 
-  near(_field: string, vector: number[]): TraceDBQueryBuilder {
-    return this.copy({ vectorQuery: [...vector] });
+  near(field: string, vector: number[]): TraceDBQueryBuilder {
+    return this.copy({ vectorField: field, vectorQuery: [...vector] });
   }
 
   with(options: TraceDBQueryOptions): TraceDBQueryBuilder {
@@ -542,7 +548,9 @@ export class TraceDBQueryBuilder {
   private copy(overrides: {
     tenantId?: string;
     scalarEq?: JsonObject;
+    textField?: string;
     textQuery?: string;
+    vectorField?: string;
     vectorQuery?: number[];
     topK?: number;
     freshness?: string;
@@ -553,7 +561,9 @@ export class TraceDBQueryBuilder {
       this.tableName,
       overrides.tenantId ?? this.tenantId,
       overrides.scalarEq ?? this.scalarEq,
+      overrides.textField ?? this.textField,
       overrides.textQuery ?? this.textQuery,
+      overrides.vectorField ?? this.vectorField,
       overrides.vectorQuery ?? this.vectorQuery,
       overrides.topK ?? this.topK,
       overrides.freshness ?? this.freshness,
@@ -574,7 +584,9 @@ export class TraceDBQueryBuilder {
       table: this.tableName,
       tenant_id: tenantId,
       scalar_eq: this.scalarEq,
+      text_field: this.textField,
       text: this.textQuery,
+      vector_field: this.vectorField,
       vector: this.vectorQuery,
       top_k: this.topK,
       freshness: this.freshness,

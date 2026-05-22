@@ -79,7 +79,7 @@ Every product surface must map to these contract components:
 | `schema_migrations` | v0 requires schema apply. Migration planning/versioning is future but must remain part of the contract vocabulary. |
 | `record_writes` | Single-record put/patch/delete must share record identity, tenant identity, and field semantics across surfaces. |
 | `batch_ingest` | Batch writes are first-class and should preserve `record_count`, epoch, and optional write timing where exposed. |
-| `query_builder` | SDK builders should compile into the same `HybridQuery`/TraceQuery model as direct JSON calls. |
+| `query_builder` | SDK builders should compile into the same `HybridQuery`/TraceQuery model as direct JSON calls, including preserving text/vector field selection as `text_field` and `vector_field` instead of treating SDK field arguments as placeholders. |
 | `traceql_string_execution` | Native TraceQL v0 strings and the bounded SQL-ish `SELECT * FROM ... WHERE tenant_id = ... [AND field = value]* [LIMIT n]` adapter execute through `POST /v1/traceql` after compiling into `HybridQuery`; neither form is a separate engine. |
 | `result_envelope` | Success responses are route-specific JSON; errors preserve the current `{ "error": string, "code"?: string }` envelope plus SDK context. |
 | `explain_provenance_freshness_jobs` | Query/explain surfaces share `HybridExplain` fields for access paths, planner candidates, counters, timings, and freshness/provenance evidence as they mature. |
@@ -324,6 +324,8 @@ line-oriented string with `traceql_query_from_str`, accepts directives such as
 the same query execution and response shaping as `POST /v1/query`. This is
 native TraceQL evidence only. It is not SQL compatibility, PostgreSQL
 compatibility, GraphQL execution/runtime evidence, or a separate query engine.
+`MATCH <field> "..."` preserves `<field>` as `HybridQuery.text_field`; `NEAR
+<field> [...]` preserves `<field>` as `HybridQuery.vector_field`.
 
 The same `/v1/traceql` parser now accepts a deliberately bounded SQL-ish form:
 `EXPLAIN? SELECT * FROM <table> WHERE tenant_id = <value> [AND field = value]*

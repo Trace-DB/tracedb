@@ -56,7 +56,9 @@ fn query() -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),
         tenant_id: "tenant-a".to_string(),
+        text_field: None,
         text: Some("rust".to_string()),
+        vector_field: None,
         vector: Some(vec![1.0, 0.0, 0.0]),
         scalar_eq: Default::default(),
         graph_seed: None,

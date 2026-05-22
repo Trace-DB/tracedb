@@ -63,7 +63,11 @@ impl FreshnessMode {
 pub struct HybridQuery {
     pub table: String,
     pub tenant_id: String,
+    #[serde(default)]
+    pub text_field: Option<String>,
     pub text: Option<String>,
+    #[serde(default)]
+    pub vector_field: Option<String>,
     pub vector: Option<Vec<f32>>,
     #[serde(default)]
     pub scalar_eq: Map<String, Value>,
@@ -961,7 +965,12 @@ impl TraceDb {
             .manifest
             .table(&query.table)
             .ok_or_else(|| TraceDbError::UnknownTable(query.table.clone()))?;
-        validate_vector_query_dimensions(schema, query.vector.as_deref())?;
+        validate_text_query_field(schema, query.text.as_ref(), query.text_field.as_deref())?;
+        validate_vector_query_dimensions(
+            schema,
+            query.vector.as_deref(),
+            query.vector_field.as_deref(),
+        )?;
         validate_scalar_eq_predicates(schema, &query.scalar_eq)?;
         if query.top_k == 0 {
             timing.total_ms = elapsed_ms(total_started);
@@ -1027,7 +1036,9 @@ impl TraceDb {
             let mut trace_query = TraceQuery::hybrid(
                 &query.table,
                 &query.tenant_id,
+                query.text_field.as_deref(),
                 query.text.as_deref(),
+                query.vector_field.as_deref(),
                 query.vector.as_ref().map(Vec::len),
                 query.top_k,
             );
@@ -1067,7 +1078,9 @@ impl TraceDb {
         }
 
         let query_fragment = QueryFragment {
+            text_field: query.text_field.clone(),
             text: query.text.clone(),
+            vector_field: query.vector_field.clone(),
             vector_dimensions: query.vector.as_ref().map(Vec::len),
         };
         let visibility = visible
@@ -1084,7 +1097,9 @@ impl TraceDb {
                 sealed_records: &sealed_records,
                 tenant_id: &query.tenant_id,
                 scalar_eq_key: scalar_eq_cache_key(&query.scalar_eq),
+                text_field: query.text_field.clone(),
                 text: query.text.clone(),
+                vector_field: query.vector_field.clone(),
                 vector_query: query.vector.clone(),
                 graph_seed: query.graph_seed.clone(),
                 temporal_as_of: query.temporal_as_of,
@@ -2058,7 +2073,9 @@ struct QueryAccessInput<'a> {
     sealed_records: &'a [SegmentRecord],
     tenant_id: &'a str,
     scalar_eq_key: String,
+    text_field: Option<String>,
     text: Option<String>,
+    vector_field: Option<String>,
     vector_query: Option<Vec<f32>>,
     graph_seed: Option<String>,
     temporal_as_of: Option<u64>,
@@ -2089,7 +2106,9 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessP
         sealed_records,
         tenant_id,
         scalar_eq_key,
+        text_field,
         text,
+        vector_field,
         vector_query,
         graph_seed,
         temporal_as_of,
@@ -2175,6 +2194,7 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessP
             &scalar_eq_key,
             visible,
             sealed_records,
+            text_field.as_deref(),
             &text,
         );
         lexical_cache_hits = usize::from(lexical_report.cache_hit);
@@ -2221,8 +2241,16 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessP
         vector_candidates = visible
             .iter()
             .filter_map(|record| {
-                vector_score(schema, record, &vector_query, freshness).map(|(score, penalty)| {
-                    let freshness = vector_feature_freshness(schema, record);
+                vector_score(
+                    schema,
+                    record,
+                    vector_field.as_deref(),
+                    &vector_query,
+                    freshness,
+                )
+                .map(|(score, penalty)| {
+                    let freshness =
+                        vector_feature_freshness(schema, record, vector_field.as_deref());
                     Candidate {
                         record_id: record.header.record_id.clone(),
                         version_id: record.header.version_id.get(),
@@ -2241,13 +2269,15 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessP
             })
             .collect();
         vector_candidates.extend(sealed_records.iter().filter_map(|record| {
-            segment_vector_score(schema, record, &vector_query).map(|score| {
-                segment_candidate(record, "VectorPath", score, |score| ScoreComponents {
-                    vector: Some(score),
-                    final_score: score,
-                    ..ScoreComponents::default()
-                })
-            })
+            segment_vector_score(schema, record, vector_field.as_deref(), &vector_query).map(
+                |score| {
+                    segment_candidate(record, "VectorPath", score, |score| ScoreComponents {
+                        vector: Some(score),
+                        final_score: score,
+                        ..ScoreComponents::default()
+                    })
+                },
+            )
         }));
         vector_candidates.sort_by(|left, right| {
             score_order(
@@ -2320,11 +2350,12 @@ impl TraceDb {
         scalar_eq_key: &str,
         visible: &[StoredRecord],
         sealed_records: &[SegmentRecord],
+        text_field: Option<&str>,
         query: &str,
     ) -> LexicalQueryReport {
         let indexed_documents = visible.len() + sealed_records.len();
         if indexed_documents < MIN_LEXICAL_CACHE_DOCUMENTS {
-            let docs = lexical_documents(schema, visible, sealed_records);
+            let docs = lexical_documents(schema, visible, sealed_records, text_field);
             return LexicalQueryReport {
                 cache_hit: false,
                 cache_miss: false,
@@ -2339,7 +2370,7 @@ impl TraceDb {
             read_epoch: self.manifest.latest_epoch.get(),
             manifest_generation: self.manifest.manifest_generation,
             scalar_eq: scalar_eq_key.to_string(),
-            text_columns: schema.text_indexed_columns.clone(),
+            text_columns: selected_text_columns(schema, text_field),
         };
 
         if let Some(corpus) = self.lexical_cache.borrow().entries.get(&key) {
@@ -2354,7 +2385,7 @@ impl TraceDb {
         let (corpus, score_report) =
             tracedb_text::PreparedTextCorpus::from_documents_with_initial_score(
                 query,
-                &lexical_documents(schema, visible, sealed_records),
+                &lexical_documents(schema, visible, sealed_records, text_field),
             );
         let indexed_documents = corpus.document_count();
         self.lexical_cache.borrow_mut().entries.insert(key, corpus);
@@ -2426,11 +2457,13 @@ fn record_output(record: StoredRecord) -> RecordOutput {
     }
 }
 
-fn vector_feature_freshness(schema: &TableSchema, record: &StoredRecord) -> FeatureFreshness {
-    schema
-        .vector_columns
-        .iter()
-        .find_map(|vector| record.features.get(&vector.name))
+fn vector_feature_freshness(
+    schema: &TableSchema,
+    record: &StoredRecord,
+    vector_field: Option<&str>,
+) -> FeatureFreshness {
+    selected_vector_column(schema, vector_field)
+        .and_then(|vector| record.features.get(&vector.name))
         .map(|state| match state.status {
             FeatureStatus::Ready => FeatureFreshness::Ready,
             FeatureStatus::Dirty => FeatureFreshness::Dirty,
@@ -2444,41 +2477,71 @@ fn vector_feature_freshness(schema: &TableSchema, record: &StoredRecord) -> Feat
 fn vector_score(
     schema: &TableSchema,
     record: &StoredRecord,
+    vector_field: Option<&str>,
     query: &[f32],
     freshness: &FreshnessMode,
 ) -> Option<(f32, f32)> {
-    for vector in &schema.vector_columns {
-        let state = record.features.get(&vector.name)?;
-        let penalty = match (&state.status, freshness) {
-            (FeatureStatus::Ready, _) => 0.0,
-            (FeatureStatus::Dirty, FreshnessMode::AllowDirty) => 0.05,
-            _ => continue,
-        };
-        let value = record.fields.get(&vector.name).and_then(value_as_f32_vec)?;
-        let score = tracedb_vector::cosine_similarity(query, &value)?;
-        return Some((score, penalty));
-    }
-    None
+    let vector = selected_vector_column(schema, vector_field)?;
+    let state = record.features.get(&vector.name)?;
+    let penalty = match (&state.status, freshness) {
+        (FeatureStatus::Ready, _) => 0.0,
+        (FeatureStatus::Dirty, FreshnessMode::AllowDirty) => 0.05,
+        _ => return None,
+    };
+    let value = record.fields.get(&vector.name).and_then(value_as_f32_vec)?;
+    let score = tracedb_vector::cosine_similarity(query, &value)?;
+    Some((score, penalty))
 }
 
 fn segment_vector_score(
     schema: &TableSchema,
     record: &SegmentRecord,
+    vector_field: Option<&str>,
     query: &[f32],
 ) -> Option<f32> {
-    if let Some(vector) = schema.vector_columns.first() {
-        let value = record.vectors.get(&vector.name)?;
-        let score = tracedb_vector::cosine_similarity(query, value)?;
-        return Some(score);
-    }
-    None
+    let vector = selected_vector_column(schema, vector_field)?;
+    let value = record.vectors.get(&vector.name)?;
+    let score = tracedb_vector::cosine_similarity(query, value)?;
+    Some(score)
 }
 
-fn validate_vector_query_dimensions(schema: &TableSchema, query: Option<&[f32]>) -> Result<()> {
+fn validate_text_query_field(
+    schema: &TableSchema,
+    query: Option<&String>,
+    text_field: Option<&str>,
+) -> Result<()> {
+    if query.is_none() {
+        return Ok(());
+    }
+    let Some(text_field) = text_field else {
+        return Ok(());
+    };
+    if schema
+        .text_indexed_columns
+        .iter()
+        .any(|column| column == text_field)
+    {
+        return Ok(());
+    }
+    Err(TraceDbError::InvalidCommand(format!(
+        "invalid text query column {text_field}: not in schema text indexed columns"
+    )))
+}
+
+fn validate_vector_query_dimensions(
+    schema: &TableSchema,
+    query: Option<&[f32]>,
+    vector_field: Option<&str>,
+) -> Result<()> {
     let Some(query) = query else {
         return Ok(());
     };
-    let Some(vector) = schema.vector_columns.first() else {
+    let Some(vector) = selected_vector_column(schema, vector_field) else {
+        if let Some(vector_field) = vector_field {
+            return Err(TraceDbError::InvalidCommand(format!(
+                "invalid vector query column {vector_field}: not in schema vector columns"
+            )));
+        }
         return Err(TraceDbError::InvalidSchema(format!(
             "table {} has no vector columns",
             schema.name
@@ -2492,6 +2555,25 @@ fn validate_vector_query_dimensions(schema: &TableSchema, query: Option<&[f32]>)
         });
     }
     Ok(())
+}
+
+fn selected_text_columns(schema: &TableSchema, text_field: Option<&str>) -> Vec<String> {
+    text_field
+        .map(|field| vec![field.to_string()])
+        .unwrap_or_else(|| schema.text_indexed_columns.clone())
+}
+
+fn selected_vector_column<'a>(
+    schema: &'a TableSchema,
+    vector_field: Option<&str>,
+) -> Option<&'a VectorColumnSchema> {
+    match vector_field {
+        Some(field) => schema
+            .vector_columns
+            .iter()
+            .find(|vector| vector.name == field),
+        None => schema.vector_columns.first(),
+    }
 }
 
 fn validate_scalar_eq_predicates(
@@ -2586,37 +2668,50 @@ fn lexical_documents(
     schema: &TableSchema,
     visible: &[StoredRecord],
     sealed_records: &[SegmentRecord],
+    text_field: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut docs = visible
         .iter()
         .map(|record| {
             (
                 record.header.record_id.clone(),
-                text_body(schema, record).unwrap_or_default(),
+                text_body(schema, record, text_field).unwrap_or_default(),
             )
         })
         .collect::<Vec<_>>();
     docs.extend(sealed_records.iter().map(|record| {
         (
             record.record_id.clone(),
-            segment_text_body(record).unwrap_or_default(),
+            segment_text_body(record, text_field).unwrap_or_default(),
         )
     }));
     docs
 }
 
-fn text_body(schema: &TableSchema, record: &StoredRecord) -> Option<String> {
+fn text_body(
+    schema: &TableSchema,
+    record: &StoredRecord,
+    text_field: Option<&str>,
+) -> Option<String> {
     let mut parts = Vec::new();
-    for column in &schema.text_indexed_columns {
-        if let Some(Value::String(value)) = record.fields.get(column) {
+    for column in selected_text_columns(schema, text_field) {
+        if let Some(Value::String(value)) = record.fields.get(&column) {
             parts.push(value.clone());
         }
     }
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-fn segment_text_body(record: &SegmentRecord) -> Option<String> {
-    let parts = record.text.values().cloned().collect::<Vec<_>>();
+fn segment_text_body(record: &SegmentRecord, text_field: Option<&str>) -> Option<String> {
+    let parts = match text_field {
+        Some(field) => record
+            .text
+            .get(field)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        None => record.text.values().cloned().collect::<Vec<_>>(),
+    };
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
@@ -3180,7 +3275,9 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
 
     let mut table = None;
     let mut tenant_id = None;
+    let mut text_field = None;
     let mut text = None;
+    let mut vector_field = None;
     let mut vector = None;
     let mut scalar_eq = Map::new();
     let mut top_k = 10;
@@ -3217,11 +3314,23 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
                 scalar_eq.insert(field, parse_traceql_value(value, line_number)?);
             }
             "MATCH" => {
-                let (_column, value) = parse_traceql_column_value("MATCH", body, line_number)?;
+                let (column, value) = parse_traceql_column_value("MATCH", body, line_number)?;
+                set_traceql_once(
+                    &mut text_field,
+                    "MATCH field",
+                    column.to_string(),
+                    line_number,
+                )?;
                 text = Some(parse_traceql_string_value(value, line_number)?);
             }
             "NEAR" => {
-                let (_column, value) = parse_traceql_column_value("NEAR", body, line_number)?;
+                let (column, value) = parse_traceql_column_value("NEAR", body, line_number)?;
+                set_traceql_once(
+                    &mut vector_field,
+                    "NEAR field",
+                    column.to_string(),
+                    line_number,
+                )?;
                 let parsed_vector =
                     serde_json::from_str::<Vec<f32>>(value.trim()).map_err(|err| {
                         invalid_traceql(
@@ -3284,7 +3393,9 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
     Ok(HybridQuery {
         table: table.ok_or_else(|| invalid_traceql(0, "FROM is required"))?,
         tenant_id: tenant_id.ok_or_else(|| invalid_traceql(0, "TENANT is required"))?,
+        text_field,
         text,
+        vector_field,
         vector,
         scalar_eq,
         graph_seed: None,
@@ -3303,7 +3414,9 @@ pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
     let argument_pairs = split_graphql_top_level(arguments, ',')?;
 
     let mut tenant_id = None;
+    let mut text_field = None;
     let mut text = None;
+    let mut vector_field = None;
     let mut vector = None;
     let mut scalar_eq = Map::new();
     let mut top_k = 10;
@@ -3346,8 +3459,14 @@ pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
             "match" | "text" => {
                 text = Some(parse_graphql_string(value, name)?);
             }
+            "match_field" | "text_field" => {
+                text_field = Some(parse_graphql_string(value, name)?);
+            }
             "near" | "vector" => {
                 vector = Some(parse_graphql_vector(value, name)?);
+            }
+            "near_field" | "vector_field" => {
+                vector_field = Some(parse_graphql_string(value, name)?);
             }
             "limit" => {
                 top_k = parse_graphql_limit(value)?;
@@ -3369,7 +3488,9 @@ pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
     Ok(HybridQuery {
         table: table.to_string(),
         tenant_id: tenant_id.ok_or_else(|| invalid_graphql_adapter("tenant_id is required"))?,
+        text_field,
         text,
+        vector_field,
         vector,
         scalar_eq,
         graph_seed: None,
@@ -3408,9 +3529,13 @@ pub fn graphql_schema_sdl_from_tables(schemas: &[TableSchema]) -> Result<String>
         output.push_str(&format!("    where: {type_prefix}Where\n"));
         output.push_str(&format!("    filter: {type_prefix}Where\n"));
         output.push_str("    match: String\n");
+        output.push_str("    match_field: String\n");
         output.push_str("    text: String\n");
+        output.push_str("    text_field: String\n");
         output.push_str("    near: [Float!]\n");
+        output.push_str("    near_field: String\n");
         output.push_str("    vector: [Float!]\n");
+        output.push_str("    vector_field: String\n");
         output.push_str("    limit: Int\n");
         output.push_str("    freshness: TraceDBFreshness\n");
         output.push_str("    explain: Boolean\n");
@@ -3986,7 +4111,9 @@ fn traceql_sqlish_select_from_str(input: &str) -> Result<HybridQuery> {
     Ok(HybridQuery {
         table: table.to_string(),
         tenant_id: tenant_id.ok_or_else(|| invalid_sqlish("tenant_id is required"))?,
+        text_field: None,
         text: None,
+        vector_field: None,
         vector: None,
         scalar_eq,
         graph_seed: None,
@@ -4376,6 +4503,71 @@ mod tests {
         }
     }
 
+    fn fielded_schema() -> TableSchema {
+        TableSchema {
+            name: "fielded_docs".to_string(),
+            primary_id_column: "id".to_string(),
+            tenant_id_column: "tenant".to_string(),
+            scalar_columns: vec!["category".to_string()],
+            text_indexed_columns: vec!["title".to_string(), "body".to_string()],
+            vector_columns: vec![
+                VectorColumnSchema {
+                    name: "title_embedding".to_string(),
+                    dimensions: 2,
+                    source_columns: vec!["title".to_string()],
+                },
+                VectorColumnSchema {
+                    name: "body_embedding".to_string(),
+                    dimensions: 2,
+                    source_columns: vec!["body".to_string()],
+                },
+            ],
+        }
+    }
+
+    fn fielded_record(
+        id: &str,
+        title: &str,
+        body: &str,
+        title_embedding: [f32; 2],
+        body_embedding: [f32; 2],
+    ) -> RecordInput {
+        RecordInput {
+            table: "fielded_docs".to_string(),
+            id: id.to_string(),
+            tenant_id: "tenant-a".to_string(),
+            fields: json!({
+                "id": id,
+                "tenant": "tenant-a",
+                "category": "code",
+                "title": title,
+                "body": body,
+                "title_embedding": title_embedding,
+                "body_embedding": body_embedding,
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+        }
+    }
+
+    fn fielded_query() -> HybridQuery {
+        HybridQuery {
+            table: "fielded_docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            text_field: None,
+            text: None,
+            vector_field: None,
+            vector: None,
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 5,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        }
+    }
+
     #[test]
     fn traceql_query_string_compiles_to_hybrid_query() {
         let query = traceql_query_from_str(
@@ -4396,7 +4588,9 @@ mod tests {
         assert_eq!(query.table, "docs");
         assert_eq!(query.tenant_id, "tenant-a");
         assert_eq!(query.scalar_eq.get("category"), Some(&json!("code")));
+        assert_eq!(query.text_field.as_deref(), Some("body"));
         assert_eq!(query.text.as_deref(), Some("agent memory"));
+        assert_eq!(query.vector_field.as_deref(), Some("embedding"));
         assert_eq!(query.vector, Some(vec![1.0, 0.0, 0.0]));
         assert_eq!(query.freshness, FreshnessMode::Lazy);
         assert_eq!(query.top_k, 20);
@@ -4493,7 +4687,9 @@ mod tests {
               docs(
                 tenant_id: "tenant-a",
                 where: { category: "code", status: "reviewed" },
+                match_field: "body",
                 match: "TraceDB",
+                near_field: "embedding",
                 near: [1.0, 0.0, 0.0],
                 limit: 7,
                 freshness: ALLOW_DIRTY,
@@ -4512,7 +4708,9 @@ mod tests {
         assert_eq!(query.tenant_id, "tenant-a");
         assert_eq!(query.scalar_eq.get("category"), Some(&json!("code")));
         assert_eq!(query.scalar_eq.get("status"), Some(&json!("reviewed")));
+        assert_eq!(query.text_field.as_deref(), Some("body"));
         assert_eq!(query.text.as_deref(), Some("TraceDB"));
+        assert_eq!(query.vector_field.as_deref(), Some("embedding"));
         assert_eq!(query.vector, Some(vec![1.0, 0.0, 0.0]));
         assert_eq!(query.top_k, 7);
         assert_eq!(query.freshness, FreshnessMode::AllowDirty);
@@ -4534,6 +4732,113 @@ mod tests {
 
         assert!(
             matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("invalid GraphQL adapter"))
+        );
+    }
+
+    #[test]
+    fn hybrid_query_text_field_limits_lexical_candidate_stream() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(fielded_schema()).expect("schema");
+        db.insert(fielded_record(
+            "title-hit",
+            "needle in selected title",
+            "ordinary body",
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ))
+        .expect("insert title-hit");
+        db.insert(fielded_record(
+            "body-hit",
+            "ordinary title",
+            "needle in unselected body",
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ))
+        .expect("insert body-hit");
+
+        let mut query = fielded_query();
+        query.text_field = Some("title".to_string());
+        query.text = Some("needle".to_string());
+
+        let output = db.query(query).expect("query");
+        let lexical_candidates = output
+            .explain
+            .planner_candidates
+            .iter()
+            .filter(|candidate| candidate.source == "LexicalPath")
+            .map(|candidate| candidate.record_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(output.explain.text_candidates, 1);
+        assert_eq!(lexical_candidates, vec!["title-hit"]);
+    }
+
+    #[test]
+    fn hybrid_query_vector_field_selects_named_vector_column() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(fielded_schema()).expect("schema");
+        db.insert(fielded_record(
+            "title-vector-hit",
+            "title evidence",
+            "body evidence",
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ))
+        .expect("insert title-vector-hit");
+        db.insert(fielded_record(
+            "body-vector-hit",
+            "title evidence",
+            "body evidence",
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ))
+        .expect("insert body-vector-hit");
+
+        let mut query = fielded_query();
+        query.vector_field = Some("body_embedding".to_string());
+        query.vector = Some(vec![1.0, 0.0]);
+
+        let output = db.query(query).expect("query");
+        let vector_candidates = output
+            .explain
+            .planner_candidates
+            .iter()
+            .filter(|candidate| candidate.source == "VectorPath")
+            .map(|candidate| {
+                (
+                    candidate.record_id.as_str(),
+                    candidate.score_components.vector.unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(output.explain.vector_candidates, 2);
+        assert_eq!(vector_candidates[0].0, "body-vector-hit");
+        assert!(vector_candidates[0].1 > vector_candidates[1].1);
+    }
+
+    #[test]
+    fn hybrid_query_rejects_unknown_text_or_vector_field() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(fielded_schema()).expect("schema");
+
+        let mut text_query = fielded_query();
+        text_query.text_field = Some("missing_text".to_string());
+        text_query.text = Some("needle".to_string());
+        let text_error = db.query(text_query).expect_err("unknown text field");
+        assert!(
+            matches!(text_error, TraceDbError::InvalidCommand(message) if message.contains("invalid text query column"))
+        );
+
+        let mut vector_query = fielded_query();
+        vector_query.vector_field = Some("missing_vector".to_string());
+        vector_query.vector = Some(vec![1.0, 0.0]);
+        let vector_error = db.query(vector_query).expect_err("unknown vector field");
+        assert!(
+            matches!(vector_error, TraceDbError::InvalidCommand(message) if message.contains("invalid vector query column"))
         );
     }
 
@@ -4582,6 +4887,8 @@ mod tests {
         assert!(sdl.contains("docs("), "SDL: {sdl}");
         assert!(sdl.contains("tenant_id: ID!"), "SDL: {sdl}");
         assert!(sdl.contains("where: DocsWhere"), "SDL: {sdl}");
+        assert!(sdl.contains("match_field: String"), "SDL: {sdl}");
+        assert!(sdl.contains("near_field: String"), "SDL: {sdl}");
         assert!(sdl.contains("type DocsRow"), "SDL: {sdl}");
         assert!(sdl.contains("record_id: ID!"), "SDL: {sdl}");
         assert!(sdl.contains("category: TraceDBJSON"), "SDL: {sdl}");
@@ -4604,6 +4911,7 @@ mod tests {
             "{}",
             &small_records,
             &[],
+            None,
             "lexical cache",
         );
         let second_small = db.score_prepared_lexical_corpus(
@@ -4612,6 +4920,7 @@ mod tests {
             "{}",
             &small_records,
             &[],
+            None,
             "lexical cache",
         );
 
@@ -4630,6 +4939,7 @@ mod tests {
             "large",
             &large_records,
             &[],
+            None,
             "lexical cache",
         );
         let second_large = db.score_prepared_lexical_corpus(
@@ -4638,6 +4948,7 @@ mod tests {
             "large",
             &large_records,
             &[],
+            None,
             "lexical cache",
         );
 
@@ -4663,7 +4974,9 @@ mod tests {
             .query(HybridQuery {
                 table: "docs".to_string(),
                 tenant_id: "tenant-a".to_string(),
+                text_field: Some("body".to_string()),
                 text: Some("sealed evidence".to_string()),
+                vector_field: Some("embedding".to_string()),
                 vector: Some(vec![1.0, 0.0, 0.0]),
                 scalar_eq: Default::default(),
                 graph_seed: None,

@@ -792,7 +792,9 @@ fn run_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
     let query = HybridQuery {
         table: table.to_string(),
         tenant_id: tenant.to_string(),
+        text_field: Some("body".to_string()),
         text: Some("TraceDB API".to_string()),
+        vector_field: Some("embedding".to_string()),
         vector: Some(vec![1.0, 0.0, 0.0]),
         scalar_eq: Default::default(),
         graph_seed: None,
@@ -926,7 +928,9 @@ fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::E
     let query = HybridQuery {
         table: table.to_string(),
         tenant_id: tenant.to_string(),
+        text_field: Some("body".to_string()),
         text: Some("TraceDB API".to_string()),
+        vector_field: Some("embedding".to_string()),
         vector: Some(vec![1.0, 0.0, 0.0]),
         scalar_eq: Default::default(),
         graph_seed: None,

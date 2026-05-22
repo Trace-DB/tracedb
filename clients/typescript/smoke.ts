@@ -98,7 +98,9 @@ assert.equal(JSON.parse(calls[2].init.body ?? "{}").database_id, "db-default");
 const queryBody: HybridQuery = {
   table: "docs",
   tenant_id: "tenant-a",
+  text_field: "body",
   text: "hello",
+  vector_field: "embedding",
   vector: [1, 0, 0],
   scalar_eq: { status: "active" },
   graph_seed: "root-a",
@@ -109,6 +111,8 @@ const queryResponse: QueryResponse = await client.query(queryBody);
 assert.equal(queryResponse.ok, true);
 const queryRequest = JSON.parse(calls[3].init.body ?? "{}");
 assert.equal(queryRequest.vector.length, 3);
+assert.equal(queryRequest.text_field, "body");
+assert.equal(queryRequest.vector_field, "embedding");
 assert.equal(queryRequest.scalar_eq.status, "active");
 assert.equal(queryRequest.graph_seed, "root-a");
 assert.equal(queryRequest.temporal_as_of, 123);

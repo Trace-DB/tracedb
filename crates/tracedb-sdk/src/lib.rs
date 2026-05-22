@@ -1977,7 +1977,9 @@ impl QueryBuilder {
         TraceQueryRequest {
             table: self.table,
             tenant_id: self.tenant_id.unwrap_or_default(),
+            text_field: self.text_field,
             text: self.text_query,
+            vector_field: self.vector_field,
             vector: self.vector,
             scalar_eq: self.scalar_eq,
             top_k: self.limit,
@@ -2018,7 +2020,9 @@ impl QueryBuilder {
         Ok(HybridQuery {
             table: self.table,
             tenant_id,
+            text_field: self.text_field,
             text: self.text_query,
+            vector_field: self.vector_field,
             vector: self.vector,
             scalar_eq: self.scalar_eq,
             graph_seed: None,
@@ -2102,7 +2106,9 @@ impl QueryBuilder {
 pub struct TraceQueryRequest {
     pub table: String,
     pub tenant_id: String,
+    pub text_field: Option<String>,
     pub text: Option<String>,
+    pub vector_field: Option<String>,
     pub vector: Option<Vec<f32>>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub scalar_eq: Map<String, Value>,

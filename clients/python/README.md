@@ -54,6 +54,10 @@ graphql_rows = db.graphql(
 )
 ```
 
+The query builder preserves field selection: `match_text("body", ...)` becomes
+`HybridQuery.text_field = "body"` and `near("embedding", ...)` becomes
+`HybridQuery.vector_field = "embedding"` on the HTTP wire.
+
 `TraceDB.from_env()` reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and
 `TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES`. Explicit keyword

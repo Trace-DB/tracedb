@@ -491,7 +491,9 @@ const queryBody = JSON.parse(calls[3].init.body ?? "{}");
 assert.equal(queryBody.table, "docs");
 assert.equal(queryBody.tenant_id, "tenant-a");
 assert.deepEqual(queryBody.scalar_eq, { status: "published" });
+assert.equal(queryBody.text_field, "body");
 assert.equal(queryBody.text, "rust sdk");
+assert.equal(queryBody.vector_field, "embedding");
 assert.deepEqual(queryBody.vector, [1, 0, 0]);
 assert.equal(queryBody.freshness, "Lazy");
 assert.equal(queryBody.explain, true);
@@ -508,6 +510,8 @@ assert.equal(explain.returned_count, 2);
 const explainBody = JSON.parse(calls[4].init.body ?? "{}");
 assert.equal(explainBody.table, "docs");
 assert.equal(explainBody.tenant_id, "tenant-a");
+assert.equal(explainBody.text_field, "body");
+assert.equal(explainBody.vector_field, "embedding");
 
 const traceql = await db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1\nEXPLAIN");
 assert.equal(traceql.results?.[0]?.record_id, "intro");

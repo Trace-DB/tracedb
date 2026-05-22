@@ -216,13 +216,13 @@
       "id": "query",
       "required": true,
       "wire": "POST /v1/query",
-      "expected": "returns HybridQueryRow results with typed score components"
+      "expected": "returns HybridQueryRow results with typed score components and preserves optional text_field/vector_field query selection"
     },
     {
       "id": "traceql_string_execution",
       "required": true,
       "wire": "POST /v1/traceql",
-      "expected": "parses native TraceQL strings into the shared HybridQuery model and preserves query result/error envelope behavior"
+      "expected": "parses native TraceQL strings into the shared HybridQuery model, preserves MATCH/NEAR field names as text_field/vector_field, and preserves query result/error envelope behavior"
     },
     {
       "id": "explain",

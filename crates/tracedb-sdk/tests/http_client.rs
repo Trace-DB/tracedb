@@ -109,7 +109,9 @@ fn query(explain: bool) -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),
         tenant_id: "tenant-a".to_string(),
+        text_field: None,
         text: Some("rust api".to_string()),
+        vector_field: None,
         vector: Some(vec![1.0, 0.0, 0.0]),
         scalar_eq: Default::default(),
         graph_seed: None,
@@ -616,7 +618,9 @@ fn table_handle_query_builder_posts_canonical_hybrid_query() {
     assert_eq!(body["table"], "docs");
     assert_eq!(body["tenant_id"], "tenant-a");
     assert_eq!(body["scalar_eq"]["status"], "published");
+    assert_eq!(body["text_field"], "body");
     assert_eq!(body["text"], "rust sdk");
+    assert_eq!(body["vector_field"], "embedding");
     assert_eq!(body["vector"], json!([1.0, 0.0, 0.0]));
     assert_eq!(body["top_k"], 20);
     assert_eq!(body["freshness"], "Strict");
@@ -644,7 +648,9 @@ fn table_handle_explain_plan_posts_canonical_hybrid_query() {
     assert_eq!(body["table"], "docs");
     assert_eq!(body["tenant_id"], "tenant-a");
     assert_eq!(body["scalar_eq"]["status"], "published");
+    assert_eq!(body["text_field"], "body");
     assert_eq!(body["text"], "rust sdk explain");
+    assert_eq!(body["vector_field"], "embedding");
     assert_eq!(body["vector"], json!([1.0, 0.0, 0.0]));
     assert_eq!(body["top_k"], 15);
     assert_eq!(body["freshness"], "Strict");
@@ -1168,7 +1174,9 @@ fn trace_db_connect_exposes_reference_table_query_entrypoint() {
     assert_eq!(body["table"], "docs");
     assert_eq!(body["tenant_id"], "tenant-a");
     assert_eq!(body["scalar_eq"]["status"], "published");
+    assert_eq!(body["text_field"], "body");
     assert_eq!(body["text"], "rust reference sdk");
+    assert_eq!(body["vector_field"], "embedding");
     assert_eq!(body["vector"], json!([1.0, 0.0, 0.0]));
     assert_eq!(body["top_k"], 20);
     assert_eq!(body["freshness"], "Strict");

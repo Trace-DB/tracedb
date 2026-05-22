@@ -26,7 +26,11 @@ pub struct CostEstimate {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct QueryFragment {
+    #[serde(default)]
+    pub text_field: Option<String>,
     pub text: Option<String>,
+    #[serde(default)]
+    pub vector_field: Option<String>,
     pub vector_dimensions: Option<usize>,
 }
 
@@ -49,7 +53,11 @@ pub struct TraceQuery {
     pub tenant_id: String,
     #[serde(default)]
     pub scalar_eq: Map<String, Value>,
+    #[serde(default)]
+    pub text_field: Option<String>,
     pub text_terms: Vec<String>,
+    #[serde(default)]
+    pub vector_field: Option<String>,
     pub vector_dimensions: Option<usize>,
     pub graph_seeds: Vec<String>,
     pub temporal_as_of: Option<u64>,
@@ -61,7 +69,9 @@ impl TraceQuery {
     pub fn hybrid(
         target_table: impl Into<String>,
         tenant_id: impl Into<String>,
+        text_field: Option<&str>,
         text: Option<&str>,
+        vector_field: Option<&str>,
         vector_dimensions: Option<usize>,
         limit: usize,
     ) -> Self {
@@ -69,9 +79,11 @@ impl TraceQuery {
             target_table: target_table.into(),
             tenant_id: tenant_id.into(),
             scalar_eq: Map::new(),
+            text_field: text_field.map(str::to_string),
             text_terms: text
                 .map(|value| value.split_whitespace().map(str::to_string).collect())
                 .unwrap_or_default(),
+            vector_field: vector_field.map(str::to_string),
             vector_dimensions,
             graph_seeds: Vec::new(),
             temporal_as_of: None,

@@ -351,7 +351,11 @@ with `query()` or the direct chaining helpers `where_eq`, `match_text`, `near`,
 `with_explain`, `limit`, `all()`, and `explain_plan()`. The table helpers post
 the canonical record/batch/patch wire shapes, the builder posts the canonical
 `HybridQuery` wire shape to `/v1/query` or `/v1/explain`, and both paths are
-covered by request-shape and real loopback-server SDK tests. `insert_rows`
+covered by request-shape and real loopback-server SDK tests. Query builders
+preserve `.match_text("body", ...)` / `.match("body", ...)` as
+`HybridQuery.text_field` and `.near("embedding", ...)` as
+`HybridQuery.vector_field`; direct fieldless JSON remains accepted for
+backwards-compatible single-indexed-column queries. `insert_rows`
 accepts normal `serde_json::Map` row dictionaries, supports a custom id field,
 copies rows into the existing `RecordPutBatchRequest` body, and remains
 wire-compatible with `POST /v1/records/put-batch`.

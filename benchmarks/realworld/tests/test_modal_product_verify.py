@@ -84,6 +84,7 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertIn("typescript-npm-ci", command_names)
         self.assertIn("tracedb-cli-demo-tests", command_names)
         self.assertIn("tracedb-testkit-usability-tests", command_names)
+        self.assertIn("query-field-rust-tests", command_names)
         self.assertIn("typescript-npm-public-gateway-smoke", command_names)
         self.assertIn("python-sdk-unit-tests", command_names)
         self.assertIn("python-sdk-install-smoke", command_names)
@@ -129,6 +130,23 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "graphql",
                 "--summary-json",
                 "/tmp/tracedb-graphql-conformance.json",
+            ],
+        )
+        query_field_tests = next(
+            command
+            for command in module.build_command_plan("workspace")
+            if command["name"] == "query-field-rust-tests"
+        )
+        self.assertEqual(
+            query_field_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "tracedb-query",
+                "hybrid_query_",
+                "--",
+                "--nocapture",
             ],
         )
 

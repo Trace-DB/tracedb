@@ -153,6 +153,26 @@ class TraceDBClientTests(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 2)
 
+    def test_query_builder_preserves_text_and_vector_field_names(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090")
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"results":[]}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            db.table("docs").where({"tenant_id": "tenant-a"}).match_text(
+                "body", "python sdk"
+            ).near("embedding", [1, 0, 0]).all()
+
+        self.assertEqual(len(captured), 1)
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(body["text_field"], "body")
+        self.assertEqual(body["text"], "python sdk")
+        self.assertEqual(body["vector_field"], "embedding")
+        self.assertEqual(body["vector"], [1, 0, 0])
+
     def test_graphql_posts_query_string_to_canonical_route_with_routing(self) -> None:
         db = TraceDB(
             "http://127.0.0.1:8090",

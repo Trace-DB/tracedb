@@ -475,6 +475,13 @@
           "tenant_id": {
             "type": "string"
           },
+          "text_field": {
+            "description": "Optional schema text-indexed column to search. When omitted, TraceDB searches all text-indexed columns for backwards-compatible fieldless queries.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "text": {
             "type": [
               "string",
@@ -484,6 +491,13 @@
           "top_k": {
             "minimum": 0,
             "type": "integer"
+          },
+          "vector_field": {
+            "description": "Optional schema vector column to score. When omitted, TraceDB uses the first vector column for backwards-compatible fieldless queries.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "vector": {
             "items": {
