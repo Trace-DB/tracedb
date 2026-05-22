@@ -5,20 +5,28 @@ aliases:
 tags:
   - tracedb
   - docs
-status: stub
+status: current-public-handoff
 type: repo-handoff
-updated: 2026-05-19
+updated: 2026-05-22
 ---
 
 # TraceDB
 
-Canonical TraceDB architecture, strategy, benchmark, implementation, operations, and decision notes now live in the Grogan Development Vault:
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
 
-```text
-/Users/zgrogan/Repos/grogan-development-vault/10_Projects/TraceField Suite/TraceDB/
-```
+This repo-local file is the public TraceDB handoff for the current product
+surface: local/embedded engine, HTTP/CLI, SDKs, durability semantics, platform
+contract, and benchmark evidence boundaries.
 
-This repo-local file is intentionally a stub so code, tests, and handoff paths do not depend on the vault checkout.
+TraceField is the memory/runtime research program and a future runtime
+direction, not the current TraceDB product and not an implemented runtime in
+this repo. Agent Memory Flight Recorder is a future concrete demo wedge.
+Tensor artifacts are future governed derived-artifact/module work; TraceDB does
+not currently provide tensor compute or tensor storage services.
+`crates/tracedb-memory-runtime` is placeholder/scaffolding only; memory calculus
+is not implemented.
 
 ## Durability Semantics
 

@@ -11,6 +11,10 @@ updated: 2026-05-22
 
 # TraceDB v1 HTTP API Reference
 
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
+
 This document tracks the current TraceDB `v1` HTTP product surface exposed by
 `tracedb-server` and allowed through `tracedb-gateway`. It is a working local
 API reference, not a managed-cloud SLA, not a benchmark claim, and not a SQL
@@ -39,6 +43,8 @@ node --experimental-strip-types clients/typescript/smoke.ts
 ## Boundaries
 
 - SQL compatibility is not implemented.
+- TraceField is the memory/runtime research program and future runtime context,
+  not a current HTTP product surface or implemented runtime in this repo.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require an external control and a number to beat.
 - The current Rust SDK is a minimal blocking HTTP client for this API surface.

@@ -1,7 +1,14 @@
 # TraceDB Python SDK
 
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
+
 This directory contains the sync-first Python SDK surface for the current
 TraceDB Platform Contract v0 lane.
+It targets the current TraceDB HTTP product surface. TraceField runtime work,
+Agent Memory Flight Recorder, and tensor artifacts are future research/demo
+or governed-module directions, not current Python SDK claims.
 
 Current public DX:
 

@@ -1,8 +1,15 @@
 # TraceDB TypeScript Client And SDK
 
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
+
 This directory contains the package-ready TraceDB public TypeScript SDK plus a
 generated, dependency-free TypeScript `fetch` transport for the current TraceDB
 v1 HTTP API.
+It targets the current TraceDB HTTP product surface. TraceField runtime work,
+Agent Memory Flight Recorder, and tensor artifacts are future research/demo
+or governed-module directions, not current TypeScript SDK claims.
 
 The transport is generated from `docs/api/v1-openapi.json` and is checked in so
 product smokes and examples can import a stable artifact. The package metadata

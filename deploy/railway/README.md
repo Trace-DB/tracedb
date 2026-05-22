@@ -1,6 +1,10 @@
-# TraceDB Railway Alpha
+# TraceDB Railway Product Lab
 
-Railway alpha service layout:
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
+
+Railway product-lab service layout:
 
 - `tracedb-gateway`: public HTTP API, API-key auth, routing, rate limiting, usage metering.
 - `tracedb-engine`: private stateful engine, owns `/data/tracedb`, single replica.
@@ -17,6 +21,9 @@ Hard rules:
 - `tracedb-engine` is the only service that writes the TraceDB volume.
 - Bucket storage is not hot WAL or active mutable index state.
 - Engine initializes `/data/tracedb` at runtime, not during image build.
+- The Railway product lab is a TraceDB deployment proving ground, not a
+  managed-service promise, not a TraceField runtime claim, not Agent Memory
+  Flight Recorder, and not tensor artifact infrastructure.
 
 ## Current Benchmark Deployment Shape
 

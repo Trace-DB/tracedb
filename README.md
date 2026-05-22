@@ -1,14 +1,21 @@
 # TraceDB
 
-TraceDB is a development-stage transactional candidate-stream database. The
-current product surface is an embedded/local engine with CLI and HTTP paths.
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
 
-Canonical architecture, benchmark, and roadmap notes live in the Grogan
-Development vault:
+The current public product surface is a local/embedded engine with CLI, HTTP,
+and SDK paths. Native views currently means record/table writes plus lexical,
+vector, graph, temporal, freshness, policy, and explainable candidate streams
+over the same committed records, not external sync jobs.
 
-```text
-/Users/zgrogan/Repos/grogan-development-vault/10_Projects/TraceField Suite/TraceDB/
-```
+TraceField is the memory/runtime research program that informs future runtime
+directions. It is not the current product and is not an implemented runtime in
+this repo. Agent Memory Flight Recorder is a future concrete demo wedge.
+Tensor artifacts are future governed derived-artifact/module work; TraceDB does
+not currently provide tensor compute or tensor storage services.
+`crates/tracedb-memory-runtime` is placeholder/scaffolding only; memory calculus
+is not implemented.
 
 The DX-facing platform contract starts at `docs/platform-contract-v0.md`, with
 the machine-readable conformance manifest in `docs/platform-contract-v0.json`.

@@ -1,5 +1,9 @@
 # TraceDB Benchmark Offload Runbook
 
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
+
 The real-world benchmark lab can exceed a small development machine very quickly:
 OpenSearch, MongoDB, Qdrant, two Postgres instances, TraceDB WAL/segments, release
 build artifacts, and 4,096-dimensional provider embeddings all compete for disk.
@@ -35,8 +39,9 @@ The suite does not need a GPU for the current generated/OpenRouter path.
 
 Each run should answer a specific question:
 
-- Hypothesis: TraceDB can act as one unified database for record, lexical, vector,
-  document-shaped, tenant-filtered, and API-surface workloads.
+- Hypothesis: TraceDB can behave as a transactional candidate-stream database
+  for record, lexical, vector, document-shaped, tenant-filtered, and
+  API-surface workloads.
 - Controlled variable: one dataset digest, one seed, one record count, one model
   configuration.
 - Baselines: TraceDB, PostgreSQL, PostgreSQL+pgvector, MongoDB, Qdrant,
@@ -81,10 +86,14 @@ each adapter's chosen ingest mode.
 Current closeout checkpoint: `88c9223` has three clean 1024-record Modal
 TraceDB+pgvector batch repeats with source_dirty=false, verified exported
 bundles, and `control_status=external_control_available`. The checkpoint is
-semi-working development evidence, not a product win: pgvector still beats
-TraceDB on median query p95, transaction ingest, and storage while generated
-quality ties. The next write-path target is store_apply features/install/fields
-and key construction, not WAL or manifest.
+development evidence, not a product win: pgvector still beats TraceDB on median
+query p95, transaction ingest, and storage while generated quality ties. The
+next write-path target is store_apply features/install/fields and key
+construction, not WAL or manifest.
+
+TraceField runtime work, Agent Memory Flight Recorder, and tensor artifacts are
+future research/demo or governed-module directions. They are not part of the
+current benchmark product claim.
 
 ## Move the Repo to the Host
 

@@ -11,6 +11,10 @@ updated: 2026-05-22
 
 # TraceDB Platform Contract v0
 
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync
+drift. Explain every candidate.
+
 This is the DX-facing contract that SDKs and future adapters must converge on.
 It sits above the current HTTP route inventory and below language-specific SDK
 ergonomics:
@@ -27,6 +31,13 @@ TraceDB SDK Contract
 ```
 
 MCP is optional glue later. It does not drive this architecture.
+TraceField is the memory/runtime research program that informs future runtime
+directions, not the current product or an implemented runtime in this repo.
+Agent Memory Flight Recorder is a future concrete demo wedge. Tensor artifacts
+are future governed derived-artifact/module work, not current tensor compute or
+tensor storage services.
+`crates/tracedb-memory-runtime` is placeholder/scaffolding only; memory calculus
+is not implemented.
 
 The companion machine-readable manifest is `docs/platform-contract-v0.json`.
 The current wire contract is `docs/api/v1-http.md`; the current generated route
