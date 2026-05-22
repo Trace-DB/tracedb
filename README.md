@@ -171,6 +171,12 @@ run the same reduced quickstart path on Modal as remote Linux product verificati
 modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json
 ```
 
+For a targeted remote gateway proof, run only the TypeScript gateway lane:
+
+```bash
+modal run scripts/modal_product_verify.py --mode workspace --only typescript_gateway_smoke --summary-json /tmp/tracedb-modal-gateway-smoke.json
+```
+
 The Modal runner uploads the current checkout with `.git`, `target/`, local
 env files, benchmark reports, caches, and Node modules excluded, then runs
 `cargo fmt --all -- --check`, the focused quickstart receipt test, the docs
@@ -257,7 +263,8 @@ smoke, managed-cloud checks, benchmark controls, or SQL compatibility checks.
 plus gateway-mode `tracedb-server`, requires bearer auth, verifies bad-token and
 bad-branch rejection, and exercises the public TypeScript SDK wrapper through
 the gateway with `databaseId=db_local`, `branchId=db_local:main`, and a local
-admin scratch directory. It emits the normal one-step
+admin scratch directory. It covers query/explain plus native TraceQL, GraphQL
+SDL export, and bounded GraphQL query execution through the gateway. It emits the normal one-step
 `local-product-regression` JSON summary with `only_step:
 "typescript_gateway_smoke"`. This is local public TypeScript SDK gateway
 auth/routing evidence only; it does not run embedded demo/verify, `http_demo`,
@@ -475,8 +482,9 @@ This starts a local engine plus a gateway-mode `tracedb-server` with
 `TRACEDB_ENGINE_URL` pointing at the engine. It then runs the public `TraceDB`
 wrapper through the gateway with `databaseId=db_local`, `branchId=db_local:main`,
 and a local admin scratch directory, covering schema apply, insert, batch,
-patch, get, scan, query, explain, delete, compact, snapshot, restore, jobs,
-token rejection, and bad-branch rejection. It is local gateway auth/routing
+patch, get, scan, query, explain, native TraceQL, GraphQL SDL export, bounded
+GraphQL query execution, delete, compact, snapshot, restore, jobs, token
+rejection, and bad-branch rejection. It is local gateway auth/routing
 evidence for the public TypeScript SDK over the generated transport, not
 managed-cloud proof, package publishing readiness, or benchmark evidence.
 

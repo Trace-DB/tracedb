@@ -166,7 +166,9 @@ diagnostics, not Rust SDK quickstart, not `typescript_check`, not TypeScript
 gateway smoke coverage, not managed-cloud proof, not benchmark evidence, and
 not SQL compatibility.
 `--only typescript_gateway_smoke` runs only `(cd clients/typescript && npm run
-gateway-smoke)` and emits one-step `local-product-regression` JSON. It is local
+gateway-smoke)` and emits one-step `local-product-regression` JSON. It now
+covers native TraceQL, GraphQL SDL export, and bounded GraphQL query execution
+through the gateway. It is local
 public TypeScript SDK gateway auth/routing evidence only, not full
 product-regression gate coverage, not embedded demo/verify, not local HTTP
 demo, not endpoint diagnostics, not Rust SDK quickstart, not `typescript_check`,

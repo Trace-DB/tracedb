@@ -57,9 +57,15 @@ SKIPPED_TYPESCRIPT_STEPS = [
     "typescript_http_smoke",
     "typescript_gateway_smoke",
 ]
+ONLY_COMMAND_ALIASES = {
+    "typescript_gateway_smoke": [
+        "typescript-npm-ci",
+        "typescript-npm-public-gateway-smoke",
+    ],
+}
 
 
-def build_command_plan(mode: str) -> list[dict[str, Any]]:
+def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
     mode = mode.strip().lower()
     commands: list[dict[str, Any]] = [
         {
@@ -138,9 +144,9 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
         },
     ]
     if mode == "quickstart":
-        return commands
+        return select_only_commands(commands, only)
     if mode == "workspace":
-        return commands + [
+        return select_only_commands(commands + [
             {
                 "name": "traceql-sqlish-conformance",
                 "argv": [
@@ -247,8 +253,25 @@ def build_command_plan(mode: str) -> list[dict[str, Any]]:
                 "name": "workspace-all-targets",
                 "argv": ["cargo", "test", "--workspace", "--all-targets"],
             },
-        ]
+        ], only)
     raise ValueError("mode must be quickstart or workspace")
+
+
+def select_only_commands(commands: list[dict[str, Any]], only: str = "") -> list[dict[str, Any]]:
+    only = only.strip()
+    if not only:
+        return commands
+    requested = ONLY_COMMAND_ALIASES.get(only, [only])
+    selected = [
+        command
+        for command in commands
+        if command["name"] in requested
+    ]
+    found = {command["name"] for command in selected}
+    missing = [name for name in requested if name not in found]
+    if missing:
+        raise ValueError(f"unknown --only command {only}: missing {', '.join(missing)}")
+    return selected
 
 
 def _tail(text: str, max_chars: int = 12_000) -> str:
@@ -337,13 +360,15 @@ def run_verification(
     *,
     repo_root: Path,
     source_metadata: dict[str, Any] | None = None,
+    only: str = "",
 ) -> dict[str, Any]:
     started = time.monotonic()
-    commands = build_command_plan(mode)
+    commands = build_command_plan(mode, only=only)
     results: list[dict[str, Any]] = []
     summary: dict[str, Any] = {
         "ok": False,
         "mode": mode,
+        "only": only,
         "runner": "modal-product-verify",
         "repo_root": str(repo_root),
         "source": source_metadata or {},
@@ -420,6 +445,7 @@ def run_local(argv: list[str] | None = None) -> int:
         description="Run TraceDB product verification locally or describe the Modal ladder."
     )
     parser.add_argument("--mode", choices=["quickstart", "workspace"], default="quickstart")
+    parser.add_argument("--only", default="", help="run one named command or supported alias")
     parser.add_argument("--summary-json", default="")
     parser.add_argument("--local", action="store_true", help="run the ladder on this machine")
     args = parser.parse_args(argv)
@@ -429,6 +455,7 @@ def run_local(argv: list[str] | None = None) -> int:
             args.mode,
             repo_root=REPO_ROOT,
             source_metadata=source_git_metadata(),
+            only=args.only,
         )
         write_summary_json(summary, args.summary_json)
         print(json.dumps(summary, indent=2, sort_keys=True))
@@ -436,9 +463,11 @@ def run_local(argv: list[str] | None = None) -> int:
 
     plan = {
         "mode": args.mode,
+        "only": args.only,
         "runner": "modal-product-verify",
-        "modal_command": f"modal run scripts/modal_product_verify.py --mode {args.mode}",
-        "commands": build_command_plan(args.mode),
+        "modal_command": f"modal run scripts/modal_product_verify.py --mode {args.mode}"
+        + (f" --only {args.only}" if args.only else ""),
+        "commands": build_command_plan(args.mode, only=args.only),
         "upload_ignore": MODAL_IGNORE_PATTERNS,
     }
     write_summary_json(plan, args.summary_json)
@@ -473,18 +502,21 @@ if modal is not None:
     )
     def run_product_verify_remote(
         mode: str = "quickstart",
+        only: str = "",
         source_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return run_verification(
             mode,
             repo_root=Path(REMOTE_REPO),
             source_metadata=source_metadata,
+            only=only,
         )
 
     @app.local_entrypoint()
-    def main(mode: str = "quickstart", summary_json: str = "") -> None:
+    def main(mode: str = "quickstart", summary_json: str = "", only: str = "") -> None:
         result = run_product_verify_remote.remote(
             mode=mode,
+            only=only,
             source_metadata=source_git_metadata(),
         )
         write_summary_json(result, summary_json)

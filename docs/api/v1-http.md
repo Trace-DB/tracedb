@@ -389,7 +389,9 @@ compatibility.
 gateway-smoke` in `clients/typescript`, which starts a local engine plus
 gateway-mode `tracedb-server`, requires bearer auth, checks missing-token and
 bad-branch rejection, and runs the public TypeScript SDK wrapper through the
-gateway with managed routing metadata plus a local admin scratch dir. It emits
+gateway with managed routing metadata plus a local admin scratch dir. It now
+also proves gateway forwarding for native TraceQL, GraphQL SDL export, and
+bounded GraphQL query execution. It emits
 one-step `local-product-regression` JSON with `only_step:
 "typescript_gateway_smoke"`. This is local public TypeScript SDK gateway
 auth/routing evidence only, not full product gate coverage, not embedded
@@ -508,6 +510,8 @@ That smoke starts an engine plus a gateway-mode server with
 `TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
 `TRACEDB_ENGINE_URL` pointing at the engine. It runs the public `TraceDB`
 wrapper through the gateway with `databaseId=db_local`, `branchId=db_local:main`,
-and a local admin scratch path. This is local gateway bearer-auth and
+and a local admin scratch path. It covers query/explain plus native TraceQL,
+GraphQL SDL export, and bounded GraphQL query execution through the gateway.
+This is local gateway bearer-auth and
 managed-routing evidence for the public TypeScript SDK over the generated
 transport, not managed-cloud proof or benchmark evidence.

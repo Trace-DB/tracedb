@@ -270,20 +270,7 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
             "rate_limit_enabled": config.rate_limit_enabled,
             "rate_limit_requests": config.rate_limit_requests,
         })),
-        ("POST", "/v1/query")
-        | ("POST", "/v1/explain")
-        | ("POST", "/v1/insert")
-        | ("POST", "/v1/schema/apply")
-        | ("POST", "/v1/records/put")
-        | ("POST", "/v1/records/put-batch")
-        | ("POST", "/v1/records/patch")
-        | ("POST", "/v1/records/delete")
-        | ("POST", "/v1/records/get")
-        | ("POST", "/v1/records/scan")
-        | ("POST", "/v1/admin/compact")
-        | ("POST", "/v1/admin/snapshot")
-        | ("POST", "/v1/admin/restore")
-        | ("GET", "/v1/admin/jobs") => {
+        _ if is_proxied_gateway_route(method, path) => {
             match authorize_route_and_meter(&config, path, &body, bearer_token, query) {
                 Ok(target) => proxy_or_gateway_error(
                     &target.url,
@@ -301,6 +288,29 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
         }
         _ => not_found(),
     }
+}
+
+fn is_proxied_gateway_route(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/v1/query")
+            | ("POST", "/v1/explain")
+            | ("POST", "/v1/insert")
+            | ("POST", "/v1/schema/apply")
+            | ("POST", "/v1/records/put")
+            | ("POST", "/v1/records/put-batch")
+            | ("POST", "/v1/records/patch")
+            | ("POST", "/v1/records/delete")
+            | ("POST", "/v1/records/get")
+            | ("POST", "/v1/records/scan")
+            | ("POST", "/v1/traceql")
+            | ("POST", "/v1/graphql")
+            | ("GET", "/v1/graphql/schema")
+            | ("POST", "/v1/admin/compact")
+            | ("POST", "/v1/admin/snapshot")
+            | ("POST", "/v1/admin/restore")
+            | ("GET", "/v1/admin/jobs")
+    )
 }
 
 fn authorize_route_and_meter(
@@ -736,4 +746,16 @@ fn bind_addr_from_env() -> String {
             .map(|port| format!("0.0.0.0:{port}"))
             .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gateway_proxies_traceql_and_graphql_adapter_routes() {
+        assert!(is_proxied_gateway_route("POST", "/v1/traceql"));
+        assert!(is_proxied_gateway_route("POST", "/v1/graphql"));
+        assert!(is_proxied_gateway_route("GET", "/v1/graphql/schema"));
+    }
 }

@@ -114,6 +114,29 @@ class ModalProductVerifyTests(unittest.TestCase):
             ],
         )
 
+    def test_only_typescript_gateway_smoke_runs_install_and_gateway_smoke(self) -> None:
+        module = load_module()
+
+        commands = module.build_command_plan("workspace", only="typescript_gateway_smoke")
+
+        self.assertEqual(
+            [command["name"] for command in commands],
+            [
+                "typescript-npm-ci",
+                "typescript-npm-public-gateway-smoke",
+            ],
+        )
+        self.assertEqual(commands[0]["argv"], ["npm", "ci"])
+        self.assertEqual(commands[0]["cwd"], "clients/typescript")
+        self.assertEqual(commands[1]["argv"], ["npm", "run", "gateway-smoke"])
+        self.assertEqual(commands[1]["cwd"], "clients/typescript")
+
+    def test_only_rejects_unknown_modal_product_command(self) -> None:
+        module = load_module()
+
+        with self.assertRaisesRegex(ValueError, "unknown --only command"):
+            module.build_command_plan("workspace", only="does_not_exist")
+
     def test_reduced_quickstart_receipt_contract(self) -> None:
         module = load_module()
         receipt = {

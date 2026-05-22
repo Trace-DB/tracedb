@@ -385,6 +385,7 @@ python3 scripts/generate_openapi_v1.py --check
 python3 scripts/generate_typescript_client.py --check
 cargo run -p tracedb-cli -- product-quickstart --skip-typescript
 modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json
+modal run scripts/modal_product_verify.py --mode workspace --only typescript_gateway_smoke --summary-json /tmp/tracedb-modal-gateway-smoke.json
 ```
 
 Local macOS executable-policy failures are local environment evidence, not a

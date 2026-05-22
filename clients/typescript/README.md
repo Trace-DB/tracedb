@@ -186,8 +186,9 @@ The gateway smoke starts a local engine plus `tracedb-gateway` mode with
 `TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
 `TRACEDB_ENGINE_URL` pointing at the engine. It then runs `new TraceDB({
 url, token, databaseId, branchId })` through schema apply, insert, batch,
-patch, get, scan, query, explain, delete, compact, snapshot, restore, jobs,
-missing-token rejection, and bad-branch rejection. It emits `typescript public
+patch, get, scan, query, explain, native TraceQL, GraphQL SDL export, bounded
+GraphQL query execution, delete, compact, snapshot, restore, jobs, missing-token
+rejection, and bad-branch rejection. It emits `typescript public
 sdk gateway smoke ok`. This proves bearer-auth forwarding and managed-routing
 metadata on the public wrapper against the local gateway path; it is still not
 managed-cloud proof or benchmark evidence.
@@ -240,7 +241,8 @@ checks, benchmark controls, or SQL compatibility checks.
 starts a local engine plus gateway-mode server, requires bearer auth, checks
 missing-token and bad-branch rejection, and runs the public TypeScript SDK
 wrapper through the gateway with `databaseId=db_local`, `branchId=db_local:main`,
-and a local admin scratch dir. It does not run embedded demo/verify, `http_demo`,
+and a local admin scratch dir, including native TraceQL, GraphQL SDL export, and
+bounded GraphQL query execution. It does not run embedded demo/verify, `http_demo`,
 local `doctor http`, the Rust SDK
 quickstart, `typescript_check`, `http-smoke`, managed-cloud checks, benchmark
 controls, or SQL compatibility checks.

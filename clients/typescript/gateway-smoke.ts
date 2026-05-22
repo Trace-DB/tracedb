@@ -260,6 +260,36 @@ try {
     .explainPlan();
   assert.equal(typeof explainResponse.returned_count, "number");
 
+  const traceqlResponse = await db.traceql(
+    [
+      "FROM docs",
+      "TENANT tenant-a",
+      "WHERE status = published",
+      "MATCH TypeScript public SDK",
+      "LIMIT 3",
+      "EXPLAIN",
+    ].join("\n"),
+  );
+  assert.equal(Array.isArray(traceqlResponse.results), true);
+  assert.equal(typeof traceqlResponse.explain?.returned_count, "number");
+
+  const graphqlSchema = await db.graphqlSchema();
+  assert.equal(graphqlSchema.adapter, "bounded_graphql_query_adapter");
+  assert.equal(graphqlSchema.tables?.includes("docs"), true);
+  const graphqlSchemaText = graphqlSchema.schema;
+  if (typeof graphqlSchemaText !== "string") {
+    throw new Error("gateway GraphQL schema response did not include schema text");
+  }
+  assert.match(graphqlSchemaText, /type Query \{/);
+  assert.match(graphqlSchemaText, /docs\(/);
+  assert.match(graphqlSchemaText, /type DocsRow/);
+
+  const graphqlResponse = await db.graphql(
+    'query { docs(tenant_id: "tenant-a", match: "TypeScript public SDK", limit: 3, explain: true) { record_id } }',
+  );
+  assert.equal(Array.isArray(graphqlResponse.results), true);
+  assert.equal(typeof graphqlResponse.explain?.returned_count, "number");
+
   const deleteResponse = await docs.delete("ops", {
     idempotencyKey: `ts-public-gateway-${runId}-delete`,
     tombstone: "typescript_public_gateway_smoke",
@@ -311,6 +341,9 @@ try {
       scan: true,
       query: true,
       explain: true,
+      traceql: true,
+      graphql_schema: true,
+      graphql: true,
       delete: true,
       compact: true,
       snapshot: true,
