@@ -312,7 +312,10 @@ fields are optional, unknown JSON fields remain allowed, and runtime validation
 stays server-side. The generated `RecordPutBody` alias matches the current
 server route by allowing either direct `RecordInput` or `{ record: RecordInput
 }`, and `GetRecordResponse.record` is now typed as `RecordOutput | null` with
-the serialized `version_id` field. `HybridQuery` now explicitly includes
+the serialized `version_id` field. `TableSchema` runtime validation requires
+GraphQL-safe identifiers and rejects duplicate columns, overlapping
+scalar/text/vector columns, reserved TraceDB result metadata fields, and invalid
+vector source columns before WAL append. `HybridQuery` now explicitly includes
 `scalar_eq`, `graph_seed`, and `temporal_as_of` request fields. `RecordScanOutput`,
 `QueryResponse`, `HybridQueryRow`, `HybridScoreComponents`, and `HybridExplain`
 now expose the current server response shape for scan/query/explain, including

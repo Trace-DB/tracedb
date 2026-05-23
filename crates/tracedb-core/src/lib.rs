@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -170,31 +171,163 @@ pub struct TableSchema {
 
 impl TableSchema {
     pub fn validate(&self) -> Result<()> {
-        if self.name.trim().is_empty() {
+        validate_schema_identifier(&self.name, "table name")?;
+        let primary_id_column =
+            validate_schema_identifier(&self.primary_id_column, "primary id column")?;
+        let tenant_id_column =
+            validate_schema_identifier(&self.tenant_id_column, "tenant id column")?;
+        if primary_id_column == tenant_id_column {
             return Err(TraceDbError::InvalidSchema(
-                "table name cannot be empty".to_string(),
+                "primary id column and tenant id column must be distinct".to_string(),
             ));
         }
-        if self.primary_id_column.trim().is_empty() {
-            return Err(TraceDbError::InvalidSchema(
-                "primary id column cannot be empty".to_string(),
-            ));
+
+        let mut declared_source_columns = BTreeSet::new();
+        declared_source_columns.insert(primary_id_column.clone());
+        declared_source_columns.insert(tenant_id_column.clone());
+
+        let scalar_columns = validate_column_set(&self.scalar_columns, "scalar column")?;
+        for column in &scalar_columns {
+            reject_identity_overlap(column, &primary_id_column, "primary id", "scalar")?;
+            reject_identity_overlap(column, &tenant_id_column, "tenant id", "scalar")?;
+            declared_source_columns.insert(column.clone());
         }
-        if self.tenant_id_column.trim().is_empty() {
-            return Err(TraceDbError::InvalidSchema(
-                "tenant id column cannot be empty".to_string(),
-            ));
+
+        let text_columns = validate_column_set(&self.text_indexed_columns, "text indexed column")?;
+        for column in &text_columns {
+            reject_identity_overlap(column, &primary_id_column, "primary id", "text indexed")?;
+            reject_identity_overlap(column, &tenant_id_column, "tenant id", "text indexed")?;
+            if scalar_columns.contains(column) {
+                return Err(TraceDbError::InvalidSchema(format!(
+                    "column {column} cannot be both scalar and text indexed"
+                )));
+            }
+            declared_source_columns.insert(column.clone());
         }
+
+        let mut vector_names = BTreeSet::new();
         for vector in &self.vector_columns {
+            let vector_name = validate_schema_identifier(&vector.name, "vector column name")?;
+            if !vector_names.insert(vector_name.clone()) {
+                return Err(TraceDbError::InvalidSchema(format!(
+                    "duplicate vector column {vector_name}"
+                )));
+            }
+            reject_reserved_result_column(&vector_name)?;
+            reject_identity_overlap(&vector_name, &primary_id_column, "primary id", "vector")?;
+            reject_identity_overlap(&vector_name, &tenant_id_column, "tenant id", "vector")?;
+            if scalar_columns.contains(&vector_name) {
+                return Err(TraceDbError::InvalidSchema(format!(
+                    "column {vector_name} cannot be both scalar and vector"
+                )));
+            }
+            if text_columns.contains(&vector_name) {
+                return Err(TraceDbError::InvalidSchema(format!(
+                    "column {vector_name} cannot be both text indexed and vector"
+                )));
+            }
             if vector.dimensions == 0 {
                 return Err(TraceDbError::InvalidSchema(format!(
                     "vector column {} must have dimensions",
-                    vector.name
+                    vector_name
                 )));
+            }
+            if vector.source_columns.is_empty() {
+                return Err(TraceDbError::InvalidSchema(format!(
+                    "vector column {vector_name} must declare source columns"
+                )));
+            }
+            let mut source_seen = BTreeSet::new();
+            for source_column in &vector.source_columns {
+                let source_column =
+                    validate_schema_identifier(source_column, "vector source column")?;
+                if !source_seen.insert(source_column.clone()) {
+                    return Err(TraceDbError::InvalidSchema(format!(
+                        "duplicate vector column {vector_name} source column {source_column}"
+                    )));
+                }
+                if !declared_source_columns.contains(&source_column) {
+                    return Err(TraceDbError::InvalidSchema(format!(
+                        "vector column {vector_name} source column {source_column} is not declared"
+                    )));
+                }
             }
         }
         Ok(())
     }
+}
+
+fn validate_column_set(columns: &[String], kind: &str) -> Result<BTreeSet<String>> {
+    let mut seen = BTreeSet::new();
+    for column in columns {
+        let column = validate_schema_identifier(column, kind)?;
+        reject_reserved_result_column(&column)?;
+        if !seen.insert(column.clone()) {
+            return Err(TraceDbError::InvalidSchema(format!(
+                "duplicate {kind} {column}"
+            )));
+        }
+    }
+    Ok(seen)
+}
+
+fn validate_schema_identifier(name: &str, context: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(TraceDbError::InvalidSchema(format!(
+            "{context} cannot be empty"
+        )));
+    }
+    if trimmed != name {
+        return Err(TraceDbError::InvalidSchema(format!(
+            "{context} {trimmed} must not have leading or trailing whitespace"
+        )));
+    }
+    if trimmed.starts_with("__") {
+        return Err(TraceDbError::InvalidSchema(format!(
+            "{context} {trimmed} is reserved for GraphQL introspection"
+        )));
+    }
+    if !is_graphql_safe_identifier(trimmed) {
+        return Err(TraceDbError::InvalidSchema(format!(
+            "{context} {trimmed} is not a GraphQL-safe identifier"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn is_graphql_safe_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn reject_reserved_result_column(column: &str) -> Result<()> {
+    if matches!(column, "record_id" | "version_id" | "fields" | "score") {
+        return Err(TraceDbError::InvalidSchema(format!(
+            "column {column} is reserved for TraceDB result metadata"
+        )));
+    }
+    Ok(())
+}
+
+fn reject_identity_overlap(
+    column: &str,
+    identity_column: &str,
+    identity_kind: &str,
+    column_kind: &str,
+) -> Result<()> {
+    if column == identity_column {
+        return Err(TraceDbError::InvalidSchema(format!(
+            "column {column} cannot be both {identity_kind} and {column_kind}"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -445,4 +578,85 @@ pub fn database_id_from_path(path: impl Into<PathBuf>) -> String {
     let path = path.into();
     let checksum = checksum_bytes(path.to_string_lossy().as_bytes());
     format!("db-{checksum:08x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TableSchema, VectorColumnSchema};
+
+    fn schema() -> TableSchema {
+        TableSchema {
+            name: "docs".to_string(),
+            primary_id_column: "id".to_string(),
+            tenant_id_column: "tenant".to_string(),
+            scalar_columns: vec!["status".to_string()],
+            text_indexed_columns: vec!["body".to_string()],
+            vector_columns: vec![VectorColumnSchema {
+                name: "embedding".to_string(),
+                dimensions: 3,
+                source_columns: vec!["body".to_string()],
+            }],
+        }
+    }
+
+    fn validation_error(schema: TableSchema) -> String {
+        schema.validate().unwrap_err().to_string()
+    }
+
+    #[test]
+    fn schema_validation_rejects_duplicate_and_overlapping_column_names() {
+        let mut duplicate_scalar = schema();
+        duplicate_scalar.scalar_columns = vec!["status".to_string(), "status".to_string()];
+        assert!(validation_error(duplicate_scalar).contains("duplicate scalar column status"));
+
+        let mut overlapping_text = schema();
+        overlapping_text.text_indexed_columns = vec!["status".to_string()];
+        assert!(validation_error(overlapping_text)
+            .contains("column status cannot be both scalar and text indexed"));
+
+        let mut overlapping_vector = schema();
+        overlapping_vector.vector_columns[0].name = "body".to_string();
+        assert!(validation_error(overlapping_vector)
+            .contains("column body cannot be both text indexed and vector"));
+
+        let mut same_identity_columns = schema();
+        same_identity_columns.tenant_id_column = "id".to_string();
+        assert!(validation_error(same_identity_columns)
+            .contains("primary id column and tenant id column must be distinct"));
+    }
+
+    #[test]
+    fn schema_validation_rejects_reserved_or_graphql_invalid_identifiers() {
+        let mut invalid_table = schema();
+        invalid_table.name = "bad-name".to_string();
+        assert!(validation_error(invalid_table)
+            .contains("table name bad-name is not a GraphQL-safe identifier"));
+
+        let mut private_graphql_name = schema();
+        private_graphql_name.scalar_columns = vec!["__typename".to_string()];
+        assert!(validation_error(private_graphql_name)
+            .contains("column __typename is reserved for GraphQL introspection"));
+
+        let mut reserved_metadata = schema();
+        reserved_metadata.scalar_columns = vec!["score".to_string()];
+        assert!(validation_error(reserved_metadata)
+            .contains("column score is reserved for TraceDB result metadata"));
+    }
+
+    #[test]
+    fn schema_validation_rejects_inconsistent_vector_definitions() {
+        let mut empty_vector_name = schema();
+        empty_vector_name.vector_columns[0].name = " ".to_string();
+        assert!(validation_error(empty_vector_name).contains("vector column name cannot be empty"));
+
+        let mut empty_vector_source = schema();
+        empty_vector_source.vector_columns[0].source_columns = Vec::new();
+        assert!(validation_error(empty_vector_source)
+            .contains("vector column embedding must declare source columns"));
+
+        let mut unknown_vector_source = schema();
+        unknown_vector_source.vector_columns[0].source_columns = vec!["missing".to_string()];
+        assert!(validation_error(unknown_vector_source)
+            .contains("vector column embedding source column missing is not declared"));
+    }
 }

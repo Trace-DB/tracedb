@@ -85,6 +85,8 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertIn("tracedb-cli-demo-tests", command_names)
         self.assertIn("tracedb-testkit-usability-tests", command_names)
         self.assertIn("query-field-rust-tests", command_names)
+        self.assertIn("schema-validation-core-tests", command_names)
+        self.assertIn("schema-validation-acceptance-tests", command_names)
         self.assertIn("typescript-npm-public-gateway-smoke", command_names)
         self.assertIn("python-sdk-unit-tests", command_names)
         self.assertIn("python-sdk-install-smoke", command_names)
@@ -145,6 +147,42 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "-p",
                 "tracedb-query",
                 "hybrid_query_",
+                "--",
+                "--nocapture",
+            ],
+        )
+        schema_validation_core_tests = next(
+            command
+            for command in module.build_command_plan("workspace")
+            if command["name"] == "schema-validation-core-tests"
+        )
+        self.assertEqual(
+            schema_validation_core_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "tracedb-core",
+                "schema_validation_",
+                "--",
+                "--nocapture",
+            ],
+        )
+        schema_validation_acceptance_tests = next(
+            command
+            for command in module.build_command_plan("workspace")
+            if command["name"] == "schema-validation-acceptance-tests"
+        )
+        self.assertEqual(
+            schema_validation_acceptance_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "tracedb-testkit",
+                "--test",
+                "acceptance",
+                "schema_validation_",
                 "--",
                 "--nocapture",
             ],

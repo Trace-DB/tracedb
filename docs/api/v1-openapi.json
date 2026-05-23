@@ -475,14 +475,14 @@
           "tenant_id": {
             "type": "string"
           },
-          "text_field": {
-            "description": "Optional schema text-indexed column to search. When omitted, TraceDB searches all text-indexed columns for backwards-compatible fieldless queries.",
+          "text": {
             "type": [
               "string",
               "null"
             ]
           },
-          "text": {
+          "text_field": {
+            "description": "Optional schema text-indexed column to search. When omitted, TraceDB searches all text-indexed columns for backwards-compatible fieldless queries.",
             "type": [
               "string",
               "null"
@@ -492,19 +492,19 @@
             "minimum": 0,
             "type": "integer"
           },
-          "vector_field": {
-            "description": "Optional schema vector column to score. When omitted, TraceDB uses the first vector column for backwards-compatible fieldless queries.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "vector": {
             "items": {
               "type": "number"
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "vector_field": {
+            "description": "Optional schema vector column to score. When omitted, TraceDB uses the first vector column for backwards-compatible fieldless queries.",
+            "type": [
+              "string",
               "null"
             ]
           }
@@ -976,7 +976,7 @@
       },
       "TableSchema": {
         "additionalProperties": true,
-        "description": "TraceDB table schema.",
+        "description": "TraceDB table schema. Names must use GraphQL-safe identifiers; schema apply rejects duplicate columns, overlapping scalar/text/vector columns, reserved TraceDB result metadata fields, and undeclared vector source columns before WAL append.",
         "properties": {
           "name": {
             "type": "string"

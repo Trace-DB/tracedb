@@ -2548,6 +2548,31 @@ fn identity_schema_change_is_rejected_after_committed_rows() {
 }
 
 #[test]
+fn schema_validation_rejects_ambiguous_schema_before_wal_commit() {
+    let (temp, mut db) = db();
+    let before_epoch = db.inspect_manifest().unwrap().latest_epoch;
+    let before_wal_entries = db.inspect_wal().unwrap().len();
+
+    let mut invalid = schema();
+    invalid.scalar_columns = vec!["status".to_string(), "status".to_string()];
+
+    let err = db.apply_schema(invalid).unwrap_err();
+    assert!(err.to_string().contains("duplicate scalar column status"));
+    assert_eq!(db.inspect_wal().unwrap().len(), before_wal_entries);
+    drop(db);
+
+    let recovered = TraceDb::open(temp.path()).expect("recover");
+    assert_eq!(
+        recovered.inspect_manifest().unwrap().latest_epoch,
+        before_epoch
+    );
+    assert!(
+        recovered.inspect_manifest().unwrap().schemas.is_empty(),
+        "invalid schema must not be persisted"
+    );
+}
+
+#[test]
 fn wal_replay_recovers_schema_when_manifest_is_stale() {
     let (temp, mut db) = db();
     db.apply_schema(schema()).expect("schema");

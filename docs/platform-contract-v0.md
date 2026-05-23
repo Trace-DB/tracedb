@@ -108,7 +108,7 @@ and must not invent surface-specific semantics.
 
 | Scenario | ID | Current wire path | Required behavior |
 | --- | --- | --- | --- |
-| Schema apply | `schema_apply` | `POST /v1/schema/apply` | Applies `TableSchema` and returns an epoch. |
+| Schema apply | `schema_apply` | `POST /v1/schema/apply` | Applies `TableSchema` and returns an epoch. Schema validation rejects non-GraphQL-safe identifiers, duplicate columns, overlapping scalar/text/vector columns, reserved TraceDB result metadata fields, and invalid vector source columns before WAL append. |
 | Put | `put` | `POST /v1/records/put` | Writes or replaces one record and returns an epoch. |
 | Batch ingest | `batch` | `POST /v1/records/put-batch` | Writes multiple records and returns `record_count` plus epoch. |
 | Patch | `patch` | `POST /v1/records/patch` | Updates selected fields while preserving untouched fields. |

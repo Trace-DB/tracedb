@@ -180,7 +180,7 @@
       "id": "schema_apply",
       "required": true,
       "wire": "POST /v1/schema/apply",
-      "expected": "applies a TableSchema and returns an epoch"
+      "expected": "applies a TableSchema and returns an epoch; rejects non-GraphQL-safe identifiers, duplicate columns, overlapping scalar/text/vector columns, reserved TraceDB result metadata fields, and invalid vector source columns before WAL append"
     },
     {
       "id": "put",

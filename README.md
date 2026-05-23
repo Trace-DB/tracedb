@@ -617,7 +617,10 @@ artifact and generated client now also expose `HybridQuery.scalar_eq`,
 `HybridQuery.graph_seed`, and `HybridQuery.temporal_as_of` request fields, the
 server's `/v1/records/put` direct-or-wrapper body as `RecordPutBody`, and
 `getRecord` responses type `record` as `RecordOutput | null` with the serialized
-`version_id` field.
+`version_id` field. `TableSchema` runtime validation requires GraphQL-safe
+identifiers and rejects duplicate columns, overlapping scalar/text/vector
+columns, reserved TraceDB result metadata fields, and invalid vector source
+columns before WAL append.
 
 ## Current Boundaries
 

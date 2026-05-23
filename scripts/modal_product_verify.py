@@ -285,6 +285,32 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 ],
             },
             {
+                "name": "schema-validation-core-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "-p",
+                    "tracedb-core",
+                    "schema_validation_",
+                    "--",
+                    "--nocapture",
+                ],
+            },
+            {
+                "name": "schema-validation-acceptance-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "-p",
+                    "tracedb-testkit",
+                    "--test",
+                    "acceptance",
+                    "schema_validation_",
+                    "--",
+                    "--nocapture",
+                ],
+            },
+            {
                 "name": "workspace-all-targets",
                 "argv": ["cargo", "test", "--workspace", "--all-targets"],
             },

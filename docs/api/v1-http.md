@@ -236,7 +236,7 @@ error-envelope helpers. This is current-envelope ergonomics, not a broader RFC
 
 | Route | Request | Response |
 | --- | --- | --- |
-| `POST /v1/schema/apply` | `TableSchema`: `name`, `primary_id_column`, `tenant_id_column`, scalar columns, text-indexed columns, and vector columns. | `{ "epoch": number }`. |
+| `POST /v1/schema/apply` | `TableSchema`: `name`, `primary_id_column`, `tenant_id_column`, scalar columns, text-indexed columns, and vector columns. Names must be GraphQL-safe identifiers. The server rejects duplicate columns, overlapping scalar/text/vector columns, reserved TraceDB result metadata fields, zero-dimension vectors, and undeclared or duplicate vector source columns before WAL append. | `{ "epoch": number }`. |
 | `POST /v1/insert` | `RecordInput`: `table`, `id`, `tenant_id`, and `fields`. | `{ "epoch": number }`. Kept for compatibility; prefer records routes for product examples. |
 | `POST /v1/records/put` | Either `RecordInput` directly or `{ "record": RecordInput }`. Full replacement write. | `{ "epoch": number }`. |
 | `POST /v1/records/put-batch` | `RecordPutBatchRequest`: `records` plus optional `include_write_timing`. | `{ "epoch": number, "record_count": number }`; includes `write_timing` when requested. |

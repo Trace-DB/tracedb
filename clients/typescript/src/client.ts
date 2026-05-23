@@ -258,11 +258,11 @@ export interface HybridQuery extends JsonObject {
   table?: string;
   temporal_as_of?: number | null;
   tenant_id?: string;
-  text_field?: string | null;
   text?: string | null;
+  text_field?: string | null;
   top_k?: number;
-  vector_field?: string | null;
   vector?: number[] | null;
+  vector_field?: string | null;
 }
 
 export interface HybridQueryRow extends JsonObject {

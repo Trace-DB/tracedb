@@ -82,7 +82,7 @@ def components() -> dict[str, Any]:
     return {
         "schemas": {
             "EmptyObject": object_schema("Empty JSON object."),
-            "TableSchema": object_schema("TraceDB table schema.", {
+            "TableSchema": object_schema("TraceDB table schema. Names must use GraphQL-safe identifiers; schema apply rejects duplicate columns, overlapping scalar/text/vector columns, reserved TraceDB result metadata fields, and undeclared vector source columns before WAL append.", {
                 "name": {"type": "string"},
                 "primary_id_column": {"type": "string"},
                 "tenant_id_column": {"type": "string"},
@@ -139,7 +139,15 @@ def components() -> dict[str, Any]:
             "HybridQuery": object_schema("Hybrid lexical/vector/scalar query.", {
                 "table": {"type": "string"},
                 "tenant_id": {"type": "string"},
+                "text_field": nullable_schema({
+                    "type": "string",
+                    "description": "Optional schema text-indexed column to search. When omitted, TraceDB searches all text-indexed columns for backwards-compatible fieldless queries.",
+                }),
                 "text": {"type": ["string", "null"]},
+                "vector_field": nullable_schema({
+                    "type": "string",
+                    "description": "Optional schema vector column to score. When omitted, TraceDB uses the first vector column for backwards-compatible fieldless queries.",
+                }),
                 "vector": {"type": ["array", "null"], "items": {"type": "number"}},
                 "scalar_eq": object_schema("Scalar equality predicates keyed by schema scalar column."),
                 "graph_seed": nullable_schema({"type": "string"}),
