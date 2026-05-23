@@ -235,8 +235,11 @@ class TraceDB:
         copied = dict(body)
         if self.database_id and "database_id" not in copied:
             copied["database_id"] = self.database_id
-        if self.branch_id and "branch_id" not in copied:
-            copied["branch_id"] = self.branch_id
+        if "branch_id" not in copied:
+            if self.branch_id:
+                copied["branch_id"] = self.branch_id
+            elif self.database_id and isinstance(copied.get("database_id"), str):
+                copied["branch_id"] = f"{copied['database_id']}:main"
         return copied
 
 

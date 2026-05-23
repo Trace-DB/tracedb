@@ -64,7 +64,9 @@ the `Strict`, `Lazy`, and `AllowDirty` wire modes.
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and
 `TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES`. Explicit keyword
 arguments override matching environment values. Direct construction with
-`TraceDB(url, token="dev-token")` remains supported.
+`TraceDB(url, token="dev-token")` remains supported. If `database_id` is
+configured and `branch_id` is omitted, copied JSON POST bodies default
+`branch_id` to `<database_id>:main`.
 
 The client uses only the Python standard library today. It preserves the raw
 HTTP escape hatch with `request_json(...)`, exposes `TraceDBHTTPError` with

@@ -140,8 +140,9 @@ the gateway accepts the same product routes and forwards authorized requests to
 the engine.
 
 The minimal SDK can add `database_id` and `branch_id` fields to object-shaped
-POST bodies when configured for managed routing. Direct engine-local requests
-can omit those fields.
+POST bodies when configured for managed routing. If only `database_id` is
+configured, SDKs default the copied request's `branch_id` to
+`<database_id>:main`. Direct engine-local requests can omit those fields.
 
 `TraceDbAsyncClient` wraps the same Rust SDK configuration and exposes
 awaitable `ready`, `health`, catalog, metrics, admin-jobs, get, scan, query,
@@ -155,14 +156,17 @@ tests and scripts but not a final high-concurrency runtime-native transport.
 
 The generated TypeScript client follows the same routing metadata boundary:
 configured `databaseId` and `branchId` are added only to absent root
-`database_id` and `branch_id` fields on copied JSON POST bodies. Explicit
-request fields win, the caller's object is not mutated, and GET routes send no
-JSON body.
+`database_id` and `branch_id` fields on copied JSON POST bodies. If
+`databaseId` is configured and `branchId` is not, the copied POST body defaults
+`branch_id` to `<database_id>:main`. Explicit request fields win, the caller's
+object is not mutated, and GET routes send no JSON body.
 
 The Python SDK follows the same routing metadata boundary: configured
 `database_id` and `branch_id` are added only to absent root `database_id` and
-`branch_id` fields on copied JSON POST bodies. Explicit request fields win, the
-caller-provided object is not mutated, and GET routes send no JSON body.
+`branch_id` fields on copied JSON POST bodies. If `database_id` is configured
+and `branch_id` is not, the copied POST body defaults `branch_id` to
+`<database_id>:main`. Explicit request fields win, the caller-provided object is
+not mutated, and GET routes send no JSON body.
 
 Generated TypeScript aliases are sourced from the OpenAPI component schemas and
 are used in route method signatures. They are intentionally loose: the current

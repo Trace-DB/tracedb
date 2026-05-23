@@ -554,6 +554,31 @@ fn managed_client_injects_database_and_branch_ids_into_json_posts() {
 }
 
 #[test]
+fn managed_client_defaults_branch_id_from_database_id_into_json_posts() {
+    let (url, request_body) = capture_json_body_server();
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_database("db_prod"));
+
+    let response = client
+        .request_json(
+            "POST",
+            "/v1/query",
+            Some(&json!({
+                "table": "docs",
+                "tenant_id": "tenant-a",
+            })),
+        )
+        .expect("post");
+    let body = request_body.join().expect("request body");
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(body["table"], "docs");
+    assert_eq!(body["tenant_id"], "tenant-a");
+    assert_eq!(body["database_id"], "db_prod");
+    assert_eq!(body["branch_id"], "db_prod:main");
+}
+
+#[test]
 fn snapshot_typed_posts_target_and_decodes_response() {
     let (url, request_body) =
         capture_json_body_response_server(r#"{"snapshot":true,"target":"/tmp/tracedb-snapshot"}"#);

@@ -400,8 +400,12 @@ def render_helpers() -> str:
     if (this.databaseId && routed.database_id === undefined) {
       routed.database_id = this.databaseId;
     }
-    if (this.branchId && routed.branch_id === undefined) {
-      routed.branch_id = this.branchId;
+    if (routed.branch_id === undefined) {
+      if (this.branchId) {
+        routed.branch_id = this.branchId;
+      } else if (this.databaseId && typeof routed.database_id === "string") {
+        routed.branch_id = `${routed.database_id}:main`;
+      }
     }
     return routed;
   }

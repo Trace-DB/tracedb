@@ -135,6 +135,28 @@ class TraceDBClientTests(unittest.TestCase):
             },
         )
 
+    def test_traceql_defaults_branch_id_from_database_id(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", database_id="db-local")
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"results":[{"record_id":"intro"}]}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1")
+
+        self.assertEqual(response, {"results": [{"record_id": "intro"}]})
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(
+            json.loads(captured[0].data.decode("utf-8")),
+            {
+                "branch_id": "db-local:main",
+                "database_id": "db-local",
+                "query": "FROM docs\nTENANT tenant-a\nLIMIT 1",
+            },
+        )
+
     def test_traceql_safe_retries_retry_read_only_5xx_then_return_json(self) -> None:
         db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
         retry_error = urllib.error.HTTPError(

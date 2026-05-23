@@ -273,6 +273,21 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 ],
             },
             {
+                "name": "rust-sdk-routing-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "-p",
+                    "tracedb-sdk",
+                    "--test",
+                    "http_client",
+                    "managed_client_defaults_branch_id_from_database_id_into_json_posts",
+                    "--",
+                    "--exact",
+                    "--nocapture",
+                ],
+            },
+            {
                 "name": "query-field-rust-tests",
                 "argv": [
                     "cargo",

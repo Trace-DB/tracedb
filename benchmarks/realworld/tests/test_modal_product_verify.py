@@ -84,6 +84,7 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertIn("typescript-npm-ci", command_names)
         self.assertIn("tracedb-cli-demo-tests", command_names)
         self.assertIn("tracedb-testkit-usability-tests", command_names)
+        self.assertIn("rust-sdk-routing-tests", command_names)
         self.assertIn("query-field-rust-tests", command_names)
         self.assertIn("schema-validation-core-tests", command_names)
         self.assertIn("schema-validation-acceptance-tests", command_names)
@@ -184,6 +185,28 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "acceptance",
                 "schema_validation_",
                 "--",
+                "--nocapture",
+            ],
+        )
+
+    def test_only_rust_sdk_routing_runs_exact_http_client_regression(self) -> None:
+        module = load_module()
+
+        commands = module.build_command_plan("workspace", only="rust-sdk-routing-tests")
+
+        self.assertEqual([command["name"] for command in commands], ["rust-sdk-routing-tests"])
+        self.assertEqual(
+            commands[0]["argv"],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "tracedb-sdk",
+                "--test",
+                "http_client",
+                "managed_client_defaults_branch_id_from_database_id_into_json_posts",
+                "--",
+                "--exact",
                 "--nocapture",
             ],
         )

@@ -428,7 +428,9 @@ The wrapper lives in `clients/typescript/src/sdk.ts`, uses the generated
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and
 `TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES` so the public
 TypeScript SDK shares the same connection, routing, read-only retry, and keyed
-mutation/admin retry config boundary as Rust. `safeRetries` retries transient
+mutation/admin retry config boundary as Rust. If `databaseId` is configured and
+`branchId` is omitted, copied JSON POST bodies default `branch_id` to
+`<database_id>:main`. `safeRetries` retries transient
 5xx responses only for health/ready, GraphQL schema export, get, scan, query,
 native TraceQL, bounded GraphQL, and explain. `insertRows` accepts normal row
 dictionaries for app/data ingestion and still executes through
@@ -553,7 +555,9 @@ health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
 routing metadata injection, `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, and
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, `TRACEDB_IDEMPOTENCY_RETRIES`,
-`Idempotency-Key` support, and parsed HTTP error envelopes. `insert_batch`
+`Idempotency-Key` support, and parsed HTTP error envelopes. If `database_id` is
+configured and `branch_id` is omitted, copied JSON POST bodies default
+`branch_id` to `<database_id>:main`. `insert_batch`
 preserves the raw TraceDB record-input shape, while `insert_rows` accepts normal
 row dictionaries for notebook/data ingestion and still executes through
 `POST /v1/records/put-batch`. `safe_retries` retries transient HTTP 5xx
@@ -631,6 +635,8 @@ columns before WAL append.
 - The Rust `tracedb-sdk` crate now includes a minimal HTTP client for the
   current engine API plus the original request-builder helpers. It can attach
   managed `database_id` and `branch_id` routing metadata to JSON POST bodies,
+  defaulting `branch_id` to `<database_id>:main` when a configured database
+  omits an explicit branch,
   includes typed convenience response methods and typed query rows for the
   current product path, includes typed health/catalog/metrics/admin-jobs
   helpers, includes typed local admin helpers for compact, snapshot, and

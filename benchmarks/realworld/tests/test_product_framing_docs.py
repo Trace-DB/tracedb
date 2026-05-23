@@ -72,6 +72,19 @@ class ProductFramingDocsTests(unittest.TestCase):
                 self.assertIn(REQUIRED_TAGLINE, markdown)
                 self.assertIn(REQUIRED_MANIFESTO, markdown)
 
+    def test_contract_docs_define_database_only_branch_default(self) -> None:
+        required_phrase = "`branch_id` to `<database_id>:main`"
+        for path in [
+            ROOT / "README.md",
+            ROOT / "docs" / "TraceDB.md",
+            ROOT / "docs" / "api" / "v1-http.md",
+            ROOT / "docs" / "platform-contract-v0.md",
+            ROOT / "clients" / "typescript" / "README.md",
+            ROOT / "clients" / "python" / "README.md",
+        ]:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertIn(required_phrase, normalize(read_doc(path)))
+
     def test_public_docs_do_not_make_valuation_or_runtime_overclaims(self) -> None:
         for path in public_docs():
             markdown = normalize(read_doc(path)).lower()

@@ -74,7 +74,7 @@ Every product surface must map to these contract components:
 | Component | Contract |
 | --- | --- |
 | `connection_config` | URL, token, timeout, retry policy, and optional local/admin paths belong in connection configuration, not per-call reinvention. |
-| `database_branch_config` | Managed database and branch routing use `database_id` and `branch_id` metadata. Direct local-engine calls can omit them. |
+| `database_branch_config` | Managed database and branch routing use `database_id` and `branch_id` metadata. Direct local-engine calls can omit them. SDKs default `branch_id` to `<database_id>:main` on copied object-shaped POST bodies when a configured database omits an explicit branch. |
 | `table_handles` | SDKs should expose table-scoped handles so application code can bind a table once before writes and queries. |
 | `schema_migrations` | v0 requires schema apply. Migration planning/versioning is future but must remain part of the contract vocabulary. |
 | `record_writes` | Single-record put/patch/delete must share record identity, tenant identity, and field semantics across surfaces. |

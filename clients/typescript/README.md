@@ -345,7 +345,9 @@ import { TraceDbClient } from "@tracedb/sdk/transport";
 
 When `databaseId` or `branchId` is configured, the client copies object-shaped
 POST bodies and adds `database_id` and `branch_id` only when those root fields
-are absent. Explicit request fields win. GET routes send no JSON body.
+are absent. If `databaseId` is configured and `branchId` is omitted, copied
+POST bodies default `branch_id` to `<database_id>:main`. Explicit request fields
+win. GET routes send no JSON body.
 
 ```ts
 const managedClient = new TraceDbClient({

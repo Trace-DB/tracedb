@@ -118,6 +118,28 @@ const fromEnvBody = JSON.parse(fromEnvCalls[0].init.body ?? "{}");
 assert.equal(fromEnvBody.database_id, "env-db");
 assert.equal(fromEnvBody.branch_id, "env-branch");
 
+const fromEnvDefaultBranchCalls: FetchCall[] = [];
+const fromEnvDefaultBranchDb = TraceDB.fromEnv({
+  env: {
+    TRACEDB_URL: "http://127.0.0.1:8090/",
+    TRACEDB_TOKEN: "env-token",
+    TRACEDB_DATABASE_ID: "env-db-default",
+  },
+  fetchImpl: async (input, init) => {
+    fromEnvDefaultBranchCalls.push({ input, init });
+    return okJson({ epoch: 8 });
+  },
+});
+const fromEnvDefaultBranchInsert = await fromEnvDefaultBranchDb
+  .table("docs")
+  .tenant("tenant-a")
+  .insert("env-default-branch", { body: "from env default branch" });
+assert.equal(fromEnvDefaultBranchInsert.epoch, 8);
+assert.equal(fromEnvDefaultBranchCalls[0].input, "http://127.0.0.1:8090/v1/records/put");
+const fromEnvDefaultBranchBody = JSON.parse(fromEnvDefaultBranchCalls[0].init.body ?? "{}");
+assert.equal(fromEnvDefaultBranchBody.database_id, "env-db-default");
+assert.equal(fromEnvDefaultBranchBody.branch_id, "env-db-default:main");
+
 const retryCalls: FetchCall[] = [];
 let retryAttempt = 0;
 const retryDb = TraceDB.fromEnv({
