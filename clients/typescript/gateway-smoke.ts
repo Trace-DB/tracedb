@@ -265,7 +265,7 @@ try {
       "FROM docs",
       "TENANT tenant-a",
       "WHERE status = published",
-      "MATCH TypeScript public SDK",
+      'MATCH body "TypeScript public SDK"',
       "LIMIT 3",
       "EXPLAIN",
     ].join("\n"),

@@ -11,6 +11,7 @@ use tracedb_modules::{
 pub enum FeatureFreshnessMode {
     Strict,
     Lazy,
+    AllowDirty,
     OnRead,
     AllowStale,
 }
@@ -77,6 +78,12 @@ impl FeatureLifecycle {
         match mode {
             FeatureFreshnessMode::Strict => self.status == FeatureLifecycleStatus::Ready,
             FeatureFreshnessMode::Lazy => {
+                matches!(
+                    self.status,
+                    FeatureLifecycleStatus::Ready | FeatureLifecycleStatus::Dirty
+                )
+            }
+            FeatureFreshnessMode::AllowDirty => {
                 matches!(
                     self.status,
                     FeatureLifecycleStatus::Ready | FeatureLifecycleStatus::Dirty

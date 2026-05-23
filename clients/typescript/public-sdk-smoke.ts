@@ -556,6 +556,20 @@ await db.restore(
 const jobs = await db.listAdminJobs();
 assert.equal(jobs.jobs?.[0]?.queue, "tracedb.snapshot.create");
 
+await db
+  .table("docs")
+  .where({ tenant_id: "tenant-a" })
+  .match("body", "dirty feature")
+  .near("embedding", [1, 0, 0])
+  .with({ freshness: "allow_dirty" })
+  .all();
+const allowDirtyCall = calls.at(-1);
+if (allowDirtyCall === undefined) {
+  throw new Error("allow_dirty query did not issue a request");
+}
+const allowDirtyBody = JSON.parse(allowDirtyCall.init.body ?? "{}");
+assert.equal(allowDirtyBody.freshness, "AllowDirty");
+
 const callCount = calls.length;
 await assert.rejects(
   () => db.table("docs").match("body", "missing tenant").all(),

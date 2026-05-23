@@ -216,7 +216,7 @@
       "id": "query",
       "required": true,
       "wire": "POST /v1/query",
-      "expected": "returns HybridQueryRow results with typed score components and preserves optional text_field/vector_field query selection"
+      "expected": "returns HybridQueryRow results with typed score components, preserves optional text_field/vector_field query selection, and accepts Strict, Lazy, and AllowDirty freshness modes"
     },
     {
       "id": "traceql_string_execution",

@@ -434,6 +434,9 @@ native TraceQL, bounded GraphQL, and explain. `insertRows` accepts normal row
 dictionaries for app/data ingestion and still executes through
 `POST /v1/records/put-batch`; `insertBatch` preserves the raw TraceDB
 record-input shape.
+SDK query builders canonicalize `strict`, `lazy`, and `allow_dirty` freshness
+inputs to the same `Strict`, `Lazy`, and `AllowDirty` wire modes used by direct
+HTTP, TraceQL, and the bounded GraphQL adapter.
 `idempotencyRetries` is default-off and retries transient 5xx responses for
 mutation/admin routes only when the individual request carries a caller-provided
 idempotency key.

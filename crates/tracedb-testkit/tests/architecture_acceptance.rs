@@ -241,6 +241,7 @@ fn failed_feature_is_never_usable_for_retrieval_modes() {
     for mode in [
         FeatureFreshnessMode::Strict,
         FeatureFreshnessMode::Lazy,
+        FeatureFreshnessMode::AllowDirty,
         FeatureFreshnessMode::OnRead,
         FeatureFreshnessMode::AllowStale,
     ] {

@@ -331,6 +331,9 @@ The public query builder sends `match("body", ...)` as
 `HybridQuery.text_field = "body"` and `near("embedding", ...)` as
 `HybridQuery.vector_field = "embedding"`, so multi-text and multi-vector schemas
 do not lose the selected field at the SDK boundary.
+It also canonicalizes `strict`, `lazy`, and `allow_dirty` freshness inputs to
+the `Strict`, `Lazy`, and `AllowDirty` wire modes used by direct HTTP, TraceQL,
+and the bounded GraphQL adapter.
 
 The generated transport remains available for raw route access:
 

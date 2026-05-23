@@ -57,6 +57,8 @@ graphql_rows = db.graphql(
 The query builder preserves field selection: `match_text("body", ...)` becomes
 `HybridQuery.text_field = "body"` and `near("embedding", ...)` becomes
 `HybridQuery.vector_field = "embedding"` on the HTTP wire.
+It also canonicalizes `strict`, `lazy`, and `allow_dirty` freshness inputs to
+the `Strict`, `Lazy`, and `AllowDirty` wire modes.
 
 `TraceDB.from_env()` reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`, and

@@ -11,6 +11,7 @@ use std::sync::{
 };
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
+use tracedb_features::FeatureFreshnessMode;
 use tracedb_query::{
     FreshnessMode, HybridExplain, HybridQuery, HybridQueryRow, RecordDeleteRequest,
     RecordGetRequest, RecordInput, RecordPatchRequest, RecordPutBatchRequest, RecordScanRequest,
@@ -655,6 +656,24 @@ fn table_handle_explain_plan_posts_canonical_hybrid_query() {
     assert_eq!(body["top_k"], 15);
     assert_eq!(body["freshness"], "Strict");
     assert_eq!(body["explain"], true);
+}
+
+#[test]
+fn table_handle_allow_dirty_posts_canonical_hybrid_query() {
+    let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
+    let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
+
+    client
+        .table("docs")
+        .tenant("tenant-a")
+        .match_text("body", "dirty feature")
+        .near("embedding", vec![1.0, 0.0, 0.0])
+        .freshness(FeatureFreshnessMode::AllowDirty)
+        .all()
+        .expect("table query");
+    let body = request_body.join().expect("request body");
+
+    assert_eq!(body["freshness"], "AllowDirty");
 }
 
 #[test]

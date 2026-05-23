@@ -609,6 +609,13 @@ function normalizeFreshness(freshness: string): string {
   ) {
     return "Lazy";
   }
+  if (
+    normalized === "allowdirty" ||
+    normalized === "allow_dirty" ||
+    normalized === "allow-dirty"
+  ) {
+    return "AllowDirty";
+  }
   return freshness;
 }
 

@@ -1970,6 +1970,7 @@ impl QueryBuilder {
     pub fn build(self) -> TraceQueryRequest {
         let freshness = match self.freshness {
             FeatureFreshnessMode::Strict => "Strict",
+            FeatureFreshnessMode::AllowDirty => "AllowDirty",
             FeatureFreshnessMode::Lazy
             | FeatureFreshnessMode::OnRead
             | FeatureFreshnessMode::AllowStale => "Lazy",
@@ -2036,6 +2037,7 @@ impl QueryBuilder {
     fn hybrid_freshness(&self) -> FreshnessMode {
         match self.freshness {
             FeatureFreshnessMode::Strict => FreshnessMode::Strict,
+            FeatureFreshnessMode::AllowDirty => FreshnessMode::AllowDirty,
             FeatureFreshnessMode::Lazy
             | FeatureFreshnessMode::OnRead
             | FeatureFreshnessMode::AllowStale => FreshnessMode::Lazy,

@@ -553,6 +553,8 @@ def _normalize_freshness(freshness: str) -> str:
         return "Strict"
     if normalized in {"lazy", "onread", "on_read", "allowstale", "allow_stale"}:
         return "Lazy"
+    if normalized in {"allowdirty", "allow_dirty", "allow-dirty"}:
+        return "AllowDirty"
     return freshness
 
 

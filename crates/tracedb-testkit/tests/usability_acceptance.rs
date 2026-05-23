@@ -2336,6 +2336,10 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         "invalid api token",
         "unknown branch db_missing:main",
         "local-gateway-typescript-public-sdk-smoke",
+        "db.traceql",
+        "MATCH body \"TypeScript public SDK\"",
+        "db.graphqlSchema",
+        "db.graphql",
         "sdk_surface: \"public\"",
         "sql_module: \"not_implemented\"",
     ] {
