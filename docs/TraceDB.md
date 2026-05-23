@@ -40,6 +40,18 @@ states the non-guarantees: no managed-cloud backup/DR, no cross-replica
 idempotency, no crash-atomic exactly-once semantics, and no multi-process active
 writer claim for one data directory.
 
+## HTTP Stack Boundary
+
+The current HTTP stack boundary is explicit. `tracedb-server` and
+`tracedb-gateway` use stdlib `TcpListener` / `TcpStream`, one thread per
+accepted connection, and JSON over HTTP/1.1 for the local product path and
+gateway proof path. Engine mode stores the opened local database behind
+`Arc<Mutex<TraceDb>>`, so `Arc<Mutex<TraceDb>>` serializes engine access across
+accepted connections. The stack requires `Content-Length`, reads request bodies
+into memory with current header/body caps, and does not implement chunked
+transfer encoding. The current server path does not provide TLS or HTTP/2 and
+is not a production web-server stack.
+
 ## Local Product Smoke
 
 Run from the repo root:

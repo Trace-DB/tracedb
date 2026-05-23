@@ -66,6 +66,13 @@ The initial executable conformance runner is `scripts/platform_conformance.py`.
 - Local WAL/checkpoint/snapshot behavior is governed by
   `docs/durability-semantics-v0.md`; it is not a managed-cloud SLA, not
   cross-replica idempotency, and not crash-atomic exactly-once semantics.
+- The current HTTP stack boundary is local/development product proof: it uses
+  stdlib `TcpListener` / `TcpStream`, one thread per accepted connection, and
+  `Arc<Mutex<TraceDb>>` serializes engine access. It requires
+  `Content-Length`, does not implement chunked transfer encoding, does not
+  provide TLS or HTTP/2, and is not a production web-server stack. The HTTP
+  routes remain the canonical wire contract, but the server implementation is
+  not the final managed-service HTTP runtime.
 
 ## Developer Model
 

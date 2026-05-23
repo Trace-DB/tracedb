@@ -132,6 +132,23 @@ node --experimental-strip-types clients/typescript/smoke.ts
 - Gateway metering, request logging, and rate limiting may still observe each
   HTTP attempt.
 
+## Current HTTP Stack Boundary
+
+The current HTTP stack boundary is explicit: `tracedb-server` and
+`tracedb-gateway` use the Rust standard library path, stdlib `TcpListener` /
+`TcpStream`, one thread per accepted connection, and JSON over HTTP/1.1 for the
+local product and gateway proof lanes. Engine mode holds the opened local
+`TraceDb` behind `Arc<Mutex<TraceDb>>`, so `Arc<Mutex<TraceDb>>` serializes
+engine access even when multiple TCP connections are accepted.
+
+Requests are read into memory after headers are parsed. The stack requires
+`Content-Length`, enforces a 1 MiB header cap and 16 MiB request body cap, and
+does not implement chunked transfer encoding. The current server path does not
+provide TLS or HTTP/2, does not implement a production proxy feature set, and
+does not claim robust public internet server behavior. Treat it as TraceDB's
+local/development HTTP wire contract and gateway product proof surface, not a
+production web-server stack.
+
 ## Transport
 
 Requests and responses are JSON over HTTP/1.1. POST routes expect

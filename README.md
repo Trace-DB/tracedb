@@ -31,6 +31,15 @@ HTTP idempotency semantics for the local-first engine, including the current
 non-guarantees around cross-replica idempotency, crash-atomic exactly-once, and
 managed-cloud backup/DR.
 
+The current HTTP stack boundary is also explicit. `tracedb-server` and
+`tracedb-gateway` use stdlib `TcpListener` / `TcpStream`, one thread per
+accepted connection, and JSON over HTTP/1.1. Engine mode keeps the opened local
+database behind `Arc<Mutex<TraceDb>>`, so `Arc<Mutex<TraceDb>>` serializes
+engine access. The server requires `Content-Length`, reads request bodies into
+memory with current header/body caps, does not implement chunked transfer
+encoding, and does not provide TLS or HTTP/2. This is TraceDB's local
+HTTP/gateway product-proof surface, not a production web-server stack.
+
 Run the initial executable contract harness with:
 
 ```bash

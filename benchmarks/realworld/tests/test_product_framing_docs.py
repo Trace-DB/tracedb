@@ -85,6 +85,28 @@ class ProductFramingDocsTests(unittest.TestCase):
             with self.subTest(path=path.relative_to(ROOT)):
                 self.assertIn(required_phrase, normalize(read_doc(path)))
 
+    def test_http_stack_boundary_is_documented(self) -> None:
+        required_phrases = [
+            "current HTTP stack boundary",
+            "stdlib `TcpListener` / `TcpStream`",
+            "one thread per accepted connection",
+            "`Arc<Mutex<TraceDb>>` serializes engine access",
+            "requires `Content-Length`",
+            "does not implement chunked transfer encoding",
+            "does not provide TLS or HTTP/2",
+            "not a production web-server stack",
+        ]
+        for path in [
+            ROOT / "README.md",
+            ROOT / "docs" / "TraceDB.md",
+            ROOT / "docs" / "api" / "v1-http.md",
+            ROOT / "docs" / "platform-contract-v0.md",
+        ]:
+            markdown = normalize(read_doc(path))
+            for phrase in required_phrases:
+                with self.subTest(path=path.relative_to(ROOT), phrase=phrase):
+                    self.assertIn(phrase, markdown)
+
     def test_public_docs_do_not_make_valuation_or_runtime_overclaims(self) -> None:
         for path in public_docs():
             markdown = normalize(read_doc(path)).lower()
