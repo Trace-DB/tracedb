@@ -249,12 +249,16 @@ class TraceDBTable:
     name: str
     tenant_id: str | None = None
     scan_limit: int = 100
+    scan_cursor: str | None = None
 
     def tenant(self, tenant_id: str) -> "TraceDBTable":
-        return TraceDBTable(self.db, self.name, tenant_id, self.scan_limit)
+        return TraceDBTable(self.db, self.name, tenant_id, self.scan_limit, self.scan_cursor)
 
     def limit(self, limit: int) -> "TraceDBTable":
-        return TraceDBTable(self.db, self.name, self.tenant_id, limit)
+        return TraceDBTable(self.db, self.name, self.tenant_id, limit, self.scan_cursor)
+
+    def cursor(self, cursor: str) -> "TraceDBTable":
+        return TraceDBTable(self.db, self.name, self.tenant_id, self.scan_limit, cursor)
 
     def insert(self, record_id: str, fields: JsonObject, *, idempotency_key: str | None = None) -> JsonObject:
         return self.db.request_json(
@@ -335,14 +339,17 @@ class TraceDBTable:
         )
 
     def scan(self) -> JsonObject:
+        body: JsonObject = {
+            "table": self.name,
+            "tenant_id": self._required_tenant("/v1/records/scan"),
+            "limit": self.scan_limit,
+        }
+        if self.scan_cursor is not None:
+            body["cursor"] = self.scan_cursor
         return self.db.request_json(
             "POST",
             "/v1/records/scan",
-            {
-                "table": self.name,
-                "tenant_id": self._required_tenant("/v1/records/scan"),
-                "limit": self.scan_limit,
-            },
+            body,
         )
 
     def delete(
@@ -407,6 +414,7 @@ class TraceDBQueryBuilder:
     vector_field: str | None = None
     vector_query: list[float] | None = None
     top_k: int = 10
+    cursor_token: str | None = None
     freshness: str = "Strict"
     explain: bool = True
 
@@ -445,6 +453,9 @@ class TraceDBQueryBuilder:
     def limit(self, limit: int) -> "TraceDBQueryBuilder":
         return self._copy(top_k=limit)
 
+    def cursor(self, cursor: str) -> "TraceDBQueryBuilder":
+        return self._copy(cursor_token=cursor)
+
     def all(self) -> JsonObject:
         return self.db.request_json("POST", "/v1/query", self._hybrid_query("/v1/query"))
 
@@ -454,7 +465,7 @@ class TraceDBQueryBuilder:
     def _hybrid_query(self, path: str) -> JsonObject:
         if not self.tenant_id:
             raise TraceDBRequestError("POST", path, "query execution requires tenant(...) or where({'tenant_id': ...})")
-        return {
+        body: JsonObject = {
             "table": self.table_name,
             "tenant_id": self.tenant_id,
             "scalar_eq": dict(self.scalar_eq or {}),
@@ -466,6 +477,9 @@ class TraceDBQueryBuilder:
             "freshness": self.freshness,
             "explain": self.explain,
         }
+        if self.cursor_token is not None:
+            body["cursor"] = self.cursor_token
+        return body
 
     def _copy(self, **overrides: Any) -> "TraceDBQueryBuilder":
         values = {
@@ -478,6 +492,7 @@ class TraceDBQueryBuilder:
             "vector_field": self.vector_field,
             "vector_query": list(self.vector_query) if self.vector_query is not None else None,
             "top_k": self.top_k,
+            "cursor_token": self.cursor_token,
             "freshness": self.freshness,
             "explain": self.explain,
         }

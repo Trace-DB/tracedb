@@ -36,7 +36,10 @@ const db = new TraceDB({
   fetchImpl: async (input, init) => {
     calls.push({ input, init });
     if (input.endsWith("/v1/query")) {
-      return okJson({ results: [{ record_id: "intro", tenant_id: "tenant-a" }] });
+      return okJson({
+        results: [{ record_id: "intro", tenant_id: "tenant-a" }],
+        next_cursor: "cursor-1",
+      });
     }
     if (input.endsWith("/v1/traceql")) {
       return okJson({
@@ -507,11 +510,14 @@ const query = await db
   .near("embedding", [1, 0, 0])
   .with({ explain: true, freshness: "lazy" })
   .limit(20)
+  .cursor("20")
   .all();
 assert.equal(query.results?.[0]?.record_id, "intro");
+assert.equal(query.next_cursor, "cursor-1");
 const queryBody = JSON.parse(calls[3].init.body ?? "{}");
 assert.equal(queryBody.table, "docs");
 assert.equal(queryBody.tenant_id, "tenant-a");
+assert.equal(queryBody.cursor, "20");
 assert.deepEqual(queryBody.scalar_eq, { status: "published" });
 assert.equal(queryBody.text_field, "body");
 assert.equal(queryBody.text, "rust sdk");
@@ -564,7 +570,9 @@ assert.equal(calls[8].init.method, "GET");
 assert.equal(calls[8].init.body, undefined);
 
 await db.table("docs").tenant("tenant-a").get("intro");
-await db.table("docs").tenant("tenant-a").limit(5).scan();
+await db.table("docs").tenant("tenant-a").limit(5).cursor("5").scan();
+const scanBody = JSON.parse(calls[10].init.body ?? "{}");
+assert.equal(scanBody.cursor, "5");
 await db.table("docs").tenant("tenant-a").delete("intro", {
   idempotencyKey: "ts-public-delete-1",
   tombstone: "public_sdk_smoke",

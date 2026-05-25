@@ -251,6 +251,14 @@ def build_suite_gate(
         blocking_failures.append(
             f"Railway snapshot/restore check failed with status={railway_snapshot_restore}"
         )
+    if (
+        spec.railway.get("snapshot_restore_evidence_required")
+        and railway_snapshot_restore != "passed"
+    ):
+        blocking_failures.append(
+            "suite requires Railway snapshot/restore validation evidence, "
+            f"status={railway_snapshot_restore}"
+        )
     railway_restored_read = _railway_restored_read_status(railway_manifest)
     if railway_restored_read not in {"not_checked", "passed"}:
         blocking_failures.append(
@@ -261,10 +269,22 @@ def build_suite_gate(
         blocking_failures.append(
             f"Railway restart/redeploy check failed with status={railway_restart_redeploy}"
         )
+    if (
+        spec.railway.get("restart_redeploy_evidence_required")
+        and railway_restart_redeploy not in {"passed", "completed"}
+    ):
+        blocking_failures.append(
+            "suite requires Railway restart/redeploy validation evidence, "
+            f"status={railway_restart_redeploy}"
+        )
     railway_persistence = _railway_persistence_status(railway_manifest)
     if railway_persistence not in {"not_checked", "passed"}:
         blocking_failures.append(
             f"Railway persistence verdict failed with status={railway_persistence}"
+        )
+    if spec.railway.get("volume_evidence_required") and railway_persistence != "passed":
+        blocking_failures.append(
+            f"suite requires Railway volume persistence evidence, status={railway_persistence}"
         )
     railway_backup = _railway_backup_status(railway_manifest)
     if railway_backup not in {"not_checked", "passed"}:
@@ -284,6 +304,14 @@ def build_suite_gate(
             f"status={railway_runbook_verification_status}"
         )
     elif railway_runbook_verification_required and railway_runbook_verification_status != "complete":
+        blocking_failures.append(
+            "suite requires complete Railway runbook verification evidence, "
+            f"status={railway_runbook_verification_status}"
+        )
+    elif (
+        spec.railway.get("runbook_verification_required")
+        and railway_runbook_verification_status != "complete"
+    ):
         blocking_failures.append(
             "suite requires complete Railway runbook verification evidence, "
             f"status={railway_runbook_verification_status}"

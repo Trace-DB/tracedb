@@ -98,6 +98,7 @@ assert.equal(JSON.parse(calls[2].init.body ?? "{}").database_id, "db-default");
 const queryBody: HybridQuery = {
   table: "docs",
   tenant_id: "tenant-a",
+  cursor: "10",
   text_field: "body",
   text: "hello",
   vector_field: "embedding",
@@ -111,6 +112,7 @@ const queryResponse: QueryResponse = await client.query(queryBody);
 assert.equal(queryResponse.ok, true);
 const queryRequest = JSON.parse(calls[3].init.body ?? "{}");
 assert.equal(queryRequest.vector.length, 3);
+assert.equal(queryRequest.cursor, "10");
 assert.equal(queryRequest.text_field, "body");
 assert.equal(queryRequest.vector_field, "embedding");
 assert.equal(queryRequest.scalar_eq.status, "active");
@@ -150,7 +152,11 @@ const typedExplain: HybridExplain = {
   planner_candidates: [typedCandidate],
   phase_timings: [{ phase: "materialization", elapsed_ms: 0.1 }],
 };
-const typedQueryResponse: QueryResponse = { results: [typedRow], explain: typedExplain };
+const typedQueryResponse: QueryResponse = {
+  results: [typedRow],
+  explain: typedExplain,
+  next_cursor: "10",
+};
 const typedScanOutput: RecordScanOutput = {
   records: [
     {
@@ -162,9 +168,12 @@ const typedScanOutput: RecordScanOutput = {
     },
   ],
   returned_count: 1,
+  next_cursor: "1",
 };
 assert.equal(typedQueryResponse.results?.[0]?.score?.final_score, 1);
+assert.equal(typedQueryResponse.next_cursor, "10");
 assert.equal(typedQueryResponse.explain?.access_paths?.[0]?.access_path_id, "LexicalPath");
+assert.equal(typedScanOutput.next_cursor, "1");
 assert.equal(typedScanOutput.records?.[0]?.version_id, 1);
 
 const snapshotBody: SnapshotRequest = { target: "/tmp/tracedb-snapshot" };

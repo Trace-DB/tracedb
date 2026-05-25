@@ -446,6 +446,13 @@
         "additionalProperties": true,
         "description": "Hybrid lexical/vector/scalar query.",
         "properties": {
+          "cursor": {
+            "description": "Opaque cursor returned by the previous query page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "explain": {
             "type": "boolean"
           },
@@ -663,6 +670,12 @@
           "explain": {
             "$ref": "#/components/schemas/HybridExplain"
           },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "results": {
             "items": {
               "$ref": "#/components/schemas/HybridQueryRow"
@@ -857,6 +870,12 @@
         "additionalProperties": true,
         "description": "Scan output.",
         "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "records": {
             "items": {
               "$ref": "#/components/schemas/RecordOutput"
@@ -873,6 +892,13 @@
         "additionalProperties": true,
         "description": "Scan records request.",
         "properties": {
+          "cursor": {
+            "description": "Opaque cursor returned by the previous scan page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "limit": {
             "minimum": 0,
             "type": "integer"

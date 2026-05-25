@@ -1,0 +1,51 @@
+{
+  "id": "production_1m",
+  "label": "Production 1m",
+  "description": "Production release gate for one million generated_hybrid records, required SDK/API parity, Railway durability evidence, and external controls.",
+  "default_records": 1000000,
+  "record_counts": [1000000],
+  "dataset": "generated_hybrid",
+  "scenarios": ["sdk_cli_surface", "http_falsification", "search_rag_6"],
+  "surfaces": [
+    "http_direct",
+    "rust_sdk",
+    "typescript_sdk",
+    "python_sdk",
+    "traceql",
+    "graphql"
+  ],
+  "adapters": ["http", "sdk", "traceql", "graphql"],
+  "controls": ["tracedb", "pgvector", "qdrant", "opensearch"],
+  "blocking_rules": {
+    "correctness": true,
+    "sdk_parity": true,
+    "supported_api_parity": true,
+    "tenant_isolation": true,
+    "tombstones": true,
+    "error_envelopes": true,
+    "snapshot_restore": true,
+    "restart_redeploy": true,
+    "hard_failures": true,
+    "external_controls": true,
+    "require_external_controls": true,
+    "rolling_regression_blocking": true,
+    "performance_regression_policy": "rolling_regression_blocking"
+  },
+  "railway": {
+    "required": true,
+    "services": ["tracedb", "pgvector", "qdrant", "opensearch"],
+    "volume_required": true,
+    "volume_evidence_required": true,
+    "backup_required": true,
+    "restart_required": true,
+    "redeploy_required": true,
+    "restart_redeploy_evidence_required": true,
+    "snapshot_restore_evidence_required": true,
+    "runbook_verification_required": true
+  },
+  "unsupported_coverage": {
+    "sql_compatibility": "unsupported",
+    "graphql_subscriptions": "unsupported",
+    "sql_postgres_wire_protocol": "unsupported"
+  }
+}

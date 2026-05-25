@@ -745,6 +745,7 @@ impl TraceDbClient {
             scalar_eq: Map::new(),
             freshness: FeatureFreshnessMode::Strict,
             limit: 10,
+            cursor: None,
             explain: true,
         }
     }
@@ -1314,6 +1315,8 @@ pub struct QueryResponse {
     pub results: Vec<HybridQueryRow>,
     #[serde(default)]
     pub explain: Option<HybridExplain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1740,6 +1743,7 @@ pub struct QueryBuilder {
     scalar_eq: Map<String, Value>,
     freshness: FeatureFreshnessMode,
     limit: usize,
+    cursor: Option<String>,
     explain: bool,
 }
 
@@ -1775,6 +1779,11 @@ impl QueryBuilder {
 
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
+        self
+    }
+
+    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.cursor = Some(cursor.into());
         self
     }
 
@@ -1930,6 +1939,11 @@ impl QueryBuilder {
         let request =
             RecordScanRequest::new(self.table.clone(), self.required_tenant_id("POST", path)?)
                 .limit(self.limit);
+        let request = if let Some(cursor) = &self.cursor {
+            request.cursor(cursor.clone())
+        } else {
+            request
+        };
         self.client("POST", path)?.scan_typed(&request)
     }
 
@@ -1984,6 +1998,7 @@ impl QueryBuilder {
             vector: self.vector,
             scalar_eq: self.scalar_eq,
             top_k: self.limit,
+            cursor: self.cursor,
             freshness: freshness.to_string(),
             explain: self.explain,
         }
@@ -2003,6 +2018,7 @@ impl QueryBuilder {
             table: self.table,
             tenant_id: self.tenant_id.unwrap_or_default(),
             limit: 100,
+            cursor: self.cursor,
         }
     }
 
@@ -2021,6 +2037,7 @@ impl QueryBuilder {
         Ok(HybridQuery {
             table: self.table,
             tenant_id,
+            cursor: self.cursor,
             text_field: self.text_field,
             text: self.text_query,
             vector_field: self.vector_field,
@@ -2108,6 +2125,8 @@ impl QueryBuilder {
 pub struct TraceQueryRequest {
     pub table: String,
     pub tenant_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     pub text_field: Option<String>,
     pub text: Option<String>,
     pub vector_field: Option<String>,
@@ -2168,6 +2187,7 @@ pub struct RecordScanBuilder {
     table: String,
     tenant_id: String,
     limit: usize,
+    cursor: Option<String>,
 }
 
 impl RecordScanBuilder {
@@ -2176,14 +2196,23 @@ impl RecordScanBuilder {
         self
     }
 
+    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.cursor = Some(cursor.into());
+        self
+    }
+
     pub fn build(self) -> TraceHttpRequest {
+        let mut body = json!({
+            "table": self.table,
+            "tenant_id": self.tenant_id,
+            "limit": self.limit,
+        });
+        if let Some(cursor) = self.cursor {
+            body["cursor"] = json!(cursor);
+        }
         TraceHttpRequest {
             path: "/v1/records/scan".to_string(),
-            body: json!({
-                "table": self.table,
-                "tenant_id": self.tenant_id,
-                "limit": self.limit,
-            }),
+            body,
         }
     }
 }

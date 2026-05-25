@@ -63,6 +63,8 @@ impl FreshnessMode {
 pub struct HybridQuery {
     pub table: String,
     pub tenant_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     #[serde(default)]
     pub text_field: Option<String>,
     pub text: Option<String>,
@@ -213,6 +215,8 @@ pub struct RecordScanRequest {
     pub table: String,
     pub tenant_id: String,
     pub limit: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 impl RecordScanRequest {
@@ -221,11 +225,17 @@ impl RecordScanRequest {
             table: table.into(),
             tenant_id: tenant_id.into(),
             limit: 100,
+            cursor: None,
         }
     }
 
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
+        self
+    }
+
+    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.cursor = Some(cursor.into());
         self
     }
 }
@@ -243,6 +253,8 @@ pub struct RecordOutput {
 pub struct RecordScanOutput {
     pub records: Vec<RecordOutput>,
     pub returned_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -301,6 +313,18 @@ pub struct WritePathTiming {
 
 fn default_tombstone() -> String {
     "user_delete".to_string()
+}
+
+fn parse_cursor_offset(cursor: Option<&str>) -> Result<usize> {
+    match cursor {
+        Some(value) if value.trim().is_empty() => Err(TraceDbError::InvalidCommand(
+            "cursor must be a non-empty offset".to_string(),
+        )),
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| TraceDbError::InvalidCommand(format!("invalid cursor offset: {value}"))),
+        None => Ok(0),
+    }
 }
 
 pub trait BackupRestore {
@@ -932,18 +956,23 @@ impl TraceDb {
             .table(&request.table)
             .ok_or_else(|| TraceDbError::UnknownTable(request.table.clone()))?;
         let limit = request.limit.max(1);
-        let records = self
-            .store
-            .scan_records(
-                &request.table,
-                &request.tenant_id,
-                limit,
-                self.manifest.latest_epoch,
-            )
+        let cursor_offset = parse_cursor_offset(request.cursor.as_deref())?;
+        let mut records = self.store.visible_records_at(
+            &request.table,
+            &request.tenant_id,
+            self.manifest.latest_epoch,
+        );
+        records.sort_by(|left, right| left.header.record_id.cmp(&right.header.record_id));
+        let page = records
             .into_iter()
+            .skip(cursor_offset)
+            .take(limit.saturating_add(1))
             .map(record_output)
             .collect::<Vec<_>>();
+        let has_more = page.len() > limit;
+        let records = page.into_iter().take(limit).collect::<Vec<_>>();
         Ok(RecordScanOutput {
+            next_cursor: has_more.then(|| (cursor_offset + records.len()).to_string()),
             returned_count: records.len(),
             records,
         })
@@ -972,6 +1001,7 @@ impl TraceDb {
             query.vector_field.as_deref(),
         )?;
         validate_scalar_eq_predicates(schema, &query.scalar_eq)?;
+        let cursor_offset = parse_cursor_offset(query.cursor.as_deref())?;
         if query.top_k == 0 {
             timing.total_ms = elapsed_ms(total_started);
             timing.engine_core_ms = timing.total_ms;
@@ -989,6 +1019,7 @@ impl TraceDb {
                         fusion_method: "RRF".to_string(),
                         ..ExplainOutput::default()
                     },
+                    next_cursor: None,
                 },
             });
         }
@@ -1006,7 +1037,12 @@ impl TraceDb {
         let visible = filter_records_by_scalar_eq(visible, &query.scalar_eq);
         let sealed_records = filter_segment_records_by_scalar_eq(sealed_records, &query.scalar_eq);
         let scalar_filter_ms = elapsed_ms(scalar_filter_started);
-        let candidate_budget = query.top_k.saturating_mul(4).max(query.top_k).max(1);
+        let page_end = cursor_offset.saturating_add(query.top_k);
+        let requested_window = page_end.saturating_add(1);
+        let candidate_budget = requested_window
+            .saturating_mul(4)
+            .max(requested_window)
+            .max(1);
         let mut explain = ExplainOutput {
             read_epoch: self.manifest.latest_epoch,
             schema_epoch: self.manifest.latest_epoch,
@@ -1235,7 +1271,7 @@ impl TraceDb {
                 removed += 1;
                 continue;
             }
-            if materialized.len() >= query.top_k {
+            if materialized.len() >= requested_window {
                 continue;
             }
             if let Some(record) = records_by_id.get(&candidate.record_id) {
@@ -1247,10 +1283,17 @@ impl TraceDb {
         let materialize_ms = elapsed_ms(materialization_started);
         timing.materialize_ms = materialize_ms;
 
-        explain.materialized_count = materialized.len();
+        let has_more = materialized.len() > page_end;
+        let page = materialized
+            .into_iter()
+            .skip(cursor_offset)
+            .take(query.top_k)
+            .collect::<Vec<_>>();
+
+        explain.materialized_count = page.len();
         explain.final_visibility_guard_count = checked;
         explain.final_visibility_guard_removed = removed;
-        explain.returned_count = materialized.len();
+        explain.returned_count = page.len();
         if include_explain {
             let explain_build_started = Instant::now();
             explain
@@ -1264,7 +1307,8 @@ impl TraceDb {
         Ok(TimedQueryOutput {
             timing,
             output: QueryOutput {
-                results: materialized,
+                next_cursor: has_more.then(|| (cursor_offset + page.len()).to_string()),
+                results: page,
                 explain,
             },
         })
@@ -3393,6 +3437,7 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
     Ok(HybridQuery {
         table: table.ok_or_else(|| invalid_traceql(0, "FROM is required"))?,
         tenant_id: tenant_id.ok_or_else(|| invalid_traceql(0, "TENANT is required"))?,
+        cursor: None,
         text_field,
         text,
         vector_field,
@@ -3488,6 +3533,7 @@ pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
     Ok(HybridQuery {
         table: table.to_string(),
         tenant_id: tenant_id.ok_or_else(|| invalid_graphql_adapter("tenant_id is required"))?,
+        cursor: None,
         text_field,
         text,
         vector_field,
@@ -4111,6 +4157,7 @@ fn traceql_sqlish_select_from_str(input: &str) -> Result<HybridQuery> {
     Ok(HybridQuery {
         table: table.to_string(),
         tenant_id: tenant_id.ok_or_else(|| invalid_sqlish("tenant_id is required"))?,
+        cursor: None,
         text_field: None,
         text: None,
         vector_field: None,
@@ -4555,6 +4602,7 @@ mod tests {
         HybridQuery {
             table: "fielded_docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            cursor: None,
             text_field: None,
             text: None,
             vector_field: None,
@@ -4843,6 +4891,82 @@ mod tests {
     }
 
     #[test]
+    fn record_scan_paginates_with_stable_cursor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        for id in ["a", "b", "c"] {
+            db.put(RecordPutRequest::new(record(id, "cursor scan")))
+                .expect("put");
+        }
+
+        let first = db
+            .scan(RecordScanRequest::new("docs", "tenant-a").limit(2))
+            .expect("first page");
+        assert_eq!(
+            first
+                .records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert_eq!(first.next_cursor.as_deref(), Some("2"));
+
+        let second = db
+            .scan(
+                RecordScanRequest::new("docs", "tenant-a")
+                    .limit(2)
+                    .cursor(first.next_cursor.expect("cursor")),
+            )
+            .expect("second page");
+        assert_eq!(
+            second
+                .records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c"]
+        );
+        assert_eq!(second.next_cursor, None);
+    }
+
+    #[test]
+    fn hybrid_query_paginates_ranked_results_with_cursor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        for id in ["a", "b", "c"] {
+            db.put(RecordPutRequest::new(record(id, "cursor query")))
+                .expect("put");
+        }
+
+        let mut query = HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            cursor: None,
+            text_field: Some("body".to_string()),
+            text: Some("cursor".to_string()),
+            vector_field: None,
+            vector: None,
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 2,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        };
+        let first = db.query(query.clone()).expect("first page");
+        assert_eq!(first.results.len(), 2);
+        assert_eq!(first.next_cursor.as_deref(), Some("2"));
+
+        query.cursor = first.next_cursor;
+        let second = db.query(query).expect("second page");
+        assert_eq!(second.results.len(), 1);
+        assert_eq!(second.next_cursor, None);
+    }
+
+    #[test]
     fn graphql_query_rejects_resolver_specific_features() {
         for query in [
             r#"
@@ -4974,6 +5098,7 @@ mod tests {
             .query(HybridQuery {
                 table: "docs".to_string(),
                 tenant_id: "tenant-a".to_string(),
+                cursor: None,
                 text_field: Some("body".to_string()),
                 text: Some("sealed evidence".to_string()),
                 vector_field: Some("embedding".to_string()),

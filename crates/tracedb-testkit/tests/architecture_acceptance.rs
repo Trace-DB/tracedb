@@ -136,6 +136,7 @@ fn local_manifest_and_wal_carry_branch_and_managed_authority_fields() {
         .query(HybridQuery {
             table: "docs".to_string(),
             tenant_id: "tenant-a".to_string(),
+            cursor: None,
             text_field: None,
             text: Some("branch".to_string()),
             vector_field: None,
@@ -484,6 +485,7 @@ fn graph_and_temporal_query_paths_are_executable_not_only_registered() {
         .query(HybridQuery {
             table: "events".to_string(),
             tenant_id: "tenant-a".to_string(),
+            cursor: None,
             text_field: None,
             text: None,
             vector_field: None,

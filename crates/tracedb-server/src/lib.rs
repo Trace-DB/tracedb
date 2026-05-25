@@ -569,7 +569,11 @@ fn query_response(
     let value = if include_explain {
         serde_json::to_value(output).map_err(to_io_error)?
     } else {
-        json!({ "results": output.results })
+        let mut value = json!({ "results": output.results });
+        if let Some(next_cursor) = output.next_cursor {
+            value["next_cursor"] = json!(next_cursor);
+        }
+        value
     };
     let response_shape_ms = elapsed_ms(response_shape_start);
     Ok(ok_timed(

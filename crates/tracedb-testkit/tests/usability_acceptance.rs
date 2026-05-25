@@ -56,6 +56,7 @@ fn query() -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),
         tenant_id: "tenant-a".to_string(),
+        cursor: None,
         text_field: None,
         text: Some("rust".to_string()),
         vector_field: None,
@@ -316,7 +317,7 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
             "verify_record": {
                 "table": "docs",
                 "tenant_id": "tenant-a",
-                "id": "a"
+                "id": "b"
             }
         })
         .to_string(),
@@ -329,7 +330,7 @@ fn http_api_exposes_crud_admin_metrics_and_readiness_routes() {
     assert_eq!(restore_json["restored"], json!(true));
     assert_eq!(restore_json["verification"]["status"], json!("passed"));
     assert_eq!(restore_json["verification"]["record_visible"], json!(true));
-    assert_eq!(restore_json["verification"]["record"]["id"], json!("a"));
+    assert_eq!(restore_json["verification"]["record"]["id"], json!("b"));
     assert_http_contains(addr, "GET", "/v1/admin/jobs", "", "tracedb.segment.compact");
     let missing_response = http_response(addr, "GET", "/v1/missing", "");
     assert!(
@@ -1025,7 +1026,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "ready_wait_timeout_ms",
         "cargo run -p tracedb-cli -- doctor http",
         "Internal TraceDB-only runs are development evidence",
-        "No cursor metadata is emitted today",
+        "optional `next_cursor`",
     ] {
         assert!(
             markdown.contains(boundary),

@@ -183,6 +183,51 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-require-runbook-verification", command)
         self.assertIn("--railway-runbook-verification-json", command)
 
+    def test_production_1m_preset_wires_release_gate_and_modal_guards(self) -> None:
+        from modal_bench import build_suite_command, validate_config, _parse_args
+
+        config = _parse_args(["--suite-preset", "production_1m", "--run-id", "production-test"])
+        validate_config(config)
+        command = build_suite_command(config)
+
+        self.assertEqual(config.suite_spec, "benchmarks/realworld/suites/production_1m.json")
+        self.assertEqual(config.records, 1_000_000)
+        self.assertEqual(config.dataset, "generated_hybrid")
+        self.assertEqual(config.target, "tracedb,pgvector,qdrant,opensearch")
+        self.assertEqual(
+            config.surface,
+            "http_direct,rust_sdk,typescript_sdk,python_sdk,traceql,graphql",
+        )
+        self.assertEqual(config.tracedb_ingest_mode, "batch")
+        self.assertTrue(config.allow_large)
+        self.assertTrue(config.allow_external_controls)
+        self.assertTrue(config.require_services)
+        self.assertTrue(config.railway_config_from_env)
+        self.assertTrue(config.railway_health_check)
+        self.assertTrue(config.railway_stateful_smoke)
+        self.assertTrue(config.railway_snapshot_restore_check)
+        self.assertTrue(config.railway_verify_restored_marker)
+        self.assertTrue(config.railway_restart_redeploy_plan)
+        self.assertTrue(config.railway_runbook_verification_required)
+        for expected_flag in [
+            "--suite-spec",
+            "--require-services",
+            "--railway-config-from-env",
+            "--railway-health-check",
+            "--railway-stateful-smoke",
+            "--railway-snapshot-restore-check",
+            "--railway-verify-restored-marker",
+            "--railway-restart-redeploy-plan",
+            "--railway-require-runbook-verification",
+        ]:
+            self.assertIn(expected_flag, command)
+        self.assertEqual(
+            command[command.index("--suite-spec") + 1],
+            "benchmarks/realworld/suites/production_1m.json",
+        )
+        self.assertEqual(command[command.index("--records") + 1], "1000000")
+        self.assertEqual(command[command.index("--tracedb-ingest-mode") + 1], "batch")
+
     def test_stage_modal_input_artifacts_copies_runbook_verification_for_remote(self) -> None:
         from modal_bench import (
             ModalSmokeConfig,

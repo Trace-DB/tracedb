@@ -110,6 +110,7 @@ fn query(explain: bool) -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),
         tenant_id: "tenant-a".to_string(),
+        cursor: None,
         text_field: None,
         text: Some("rust api".to_string()),
         vector_field: None,
@@ -625,7 +626,8 @@ fn restore_typed_posts_source_target_and_decodes_response() {
 
 #[test]
 fn table_handle_query_builder_posts_canonical_hybrid_query() {
-    let (url, request_body) = capture_json_body_response_server(r#"{"results":[]}"#);
+    let (url, request_body) =
+        capture_json_body_response_server(r#"{"results":[],"next_cursor":"30"}"#);
     let client = TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
     let response = client
@@ -636,13 +638,16 @@ fn table_handle_query_builder_posts_canonical_hybrid_query() {
         .near("embedding", vec![1.0, 0.0, 0.0])
         .with_explain()
         .limit(20)
+        .cursor("10")
         .all()
         .expect("table query");
     let body = request_body.join().expect("request body");
 
     assert!(response.results.is_empty());
+    assert_eq!(response.next_cursor.as_deref(), Some("30"));
     assert_eq!(body["table"], "docs");
     assert_eq!(body["tenant_id"], "tenant-a");
+    assert_eq!(body["cursor"], "10");
     assert_eq!(body["scalar_eq"]["status"], "published");
     assert_eq!(body["text_field"], "body");
     assert_eq!(body["text"], "rust sdk");

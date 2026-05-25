@@ -135,10 +135,18 @@ def components() -> dict[str, Any]:
                 "table": {"type": "string"},
                 "tenant_id": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 0},
+                "cursor": nullable_schema({
+                    "type": "string",
+                    "description": "Opaque cursor returned by the previous scan page.",
+                }),
             }),
             "HybridQuery": object_schema("Hybrid lexical/vector/scalar query.", {
                 "table": {"type": "string"},
                 "tenant_id": {"type": "string"},
+                "cursor": nullable_schema({
+                    "type": "string",
+                    "description": "Opaque cursor returned by the previous query page.",
+                }),
                 "text_field": nullable_schema({
                     "type": "string",
                     "description": "Optional schema text-indexed column to search. When omitted, TraceDB searches all text-indexed columns for backwards-compatible fieldless queries.",
@@ -257,6 +265,7 @@ def components() -> dict[str, Any]:
             "RecordScanOutput": object_schema("Scan output.", {
                 "records": array_schema(schema_ref("RecordOutput")),
                 "returned_count": {"type": "integer"},
+                "next_cursor": nullable_schema({"type": "string"}),
             }),
             "HybridQueryRow": object_schema("Hybrid query result row.", {
                 "record_id": {"type": "string"},
@@ -292,6 +301,7 @@ def components() -> dict[str, Any]:
             "QueryResponse": object_schema("Query response.", {
                 "results": array_schema(schema_ref("HybridQueryRow")),
                 "explain": schema_ref("HybridExplain"),
+                "next_cursor": nullable_schema({"type": "string"}),
             }),
             "HybridExplain": object_schema("Explain response.", {
                 "read_epoch": {"type": "integer"},

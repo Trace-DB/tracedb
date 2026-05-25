@@ -290,20 +290,32 @@ export class TraceDBTable {
   private readonly name: string;
   private readonly tenantId?: string;
   private readonly scanLimit: number;
+  private readonly scanCursor?: string;
 
-  constructor(transport: TraceDbClient, name: string, tenantId?: string, scanLimit = 100) {
+  constructor(
+    transport: TraceDbClient,
+    name: string,
+    tenantId?: string,
+    scanLimit = 100,
+    scanCursor?: string,
+  ) {
     this.transport = transport;
     this.name = name;
     this.tenantId = tenantId;
     this.scanLimit = scanLimit;
+    this.scanCursor = scanCursor;
   }
 
   tenant(tenantId: string): TraceDBTable {
-    return new TraceDBTable(this.transport, this.name, tenantId, this.scanLimit);
+    return new TraceDBTable(this.transport, this.name, tenantId, this.scanLimit, this.scanCursor);
   }
 
   limit(limit: number): TraceDBTable {
-    return new TraceDBTable(this.transport, this.name, this.tenantId, limit);
+    return new TraceDBTable(this.transport, this.name, this.tenantId, limit, this.scanCursor);
+  }
+
+  cursor(cursor: string): TraceDBTable {
+    return new TraceDBTable(this.transport, this.name, this.tenantId, this.scanLimit, cursor);
   }
 
   async insert(
@@ -376,12 +388,14 @@ export class TraceDBTable {
   }
 
   async scan(options: TraceDbRequestOptions = {}): Promise<RecordScanOutput> {
+    const request = {
+      table: this.name,
+      tenant_id: this.requiredTenantId("POST", "/v1/records/scan"),
+      limit: this.scanLimit,
+      ...(this.scanCursor === undefined ? {} : { cursor: this.scanCursor }),
+    };
     return this.transport.scanRecords(
-      {
-        table: this.name,
-        tenant_id: this.requiredTenantId("POST", "/v1/records/scan"),
-        limit: this.scanLimit,
-      },
+      request,
       options,
     );
   }
@@ -466,6 +480,7 @@ export class TraceDBQueryBuilder {
   private readonly vectorField?: string;
   private readonly vectorQuery?: number[];
   private readonly topK: number;
+  private readonly cursorToken?: string;
   private readonly freshness: string;
   private readonly explain: boolean;
 
@@ -479,6 +494,7 @@ export class TraceDBQueryBuilder {
     vectorField?: string,
     vectorQuery?: number[],
     topK = 10,
+    cursorToken?: string,
     freshness = "Strict",
     explain = true,
   ) {
@@ -491,6 +507,7 @@ export class TraceDBQueryBuilder {
     this.vectorField = vectorField;
     this.vectorQuery = vectorQuery;
     this.topK = topK;
+    this.cursorToken = cursorToken;
     this.freshness = freshness;
     this.explain = explain;
   }
@@ -537,6 +554,10 @@ export class TraceDBQueryBuilder {
     return this.copy({ topK: limit });
   }
 
+  cursor(cursor: string): TraceDBQueryBuilder {
+    return this.copy({ cursorToken: cursor });
+  }
+
   async all(options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
     return this.transport.query(this.toHybridQuery("/v1/query"), options);
   }
@@ -553,6 +574,7 @@ export class TraceDBQueryBuilder {
     vectorField?: string;
     vectorQuery?: number[];
     topK?: number;
+    cursorToken?: string;
     freshness?: string;
     explain?: boolean;
   }): TraceDBQueryBuilder {
@@ -566,6 +588,7 @@ export class TraceDBQueryBuilder {
       overrides.vectorField ?? this.vectorField,
       overrides.vectorQuery ?? this.vectorQuery,
       overrides.topK ?? this.topK,
+      overrides.cursorToken ?? this.cursorToken,
       overrides.freshness ?? this.freshness,
       overrides.explain ?? this.explain,
     );
@@ -589,6 +612,7 @@ export class TraceDBQueryBuilder {
       vector_field: this.vectorField,
       vector: this.vectorQuery,
       top_k: this.topK,
+      cursor: this.cursorToken,
       freshness: this.freshness,
       explain: this.explain,
     };

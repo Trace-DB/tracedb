@@ -186,6 +186,81 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(claim_ready["claim_status"]["performance_claim"], "claim_ready")
         self.assertEqual(claim_ready["claim_status"]["railway_backup"], "passed")
 
+    def test_production_1m_suite_spec_defines_release_gate_contract(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "production_1m.json")
+
+        self.assertEqual(spec.id, "production_1m")
+        self.assertEqual(spec.default_records, 1_000_000)
+        self.assertEqual(spec.record_counts, [1_000_000])
+        self.assertEqual(spec.dataset, "generated_hybrid")
+        self.assertEqual(
+            spec.surfaces,
+            ["http_direct", "rust_sdk", "typescript_sdk", "python_sdk", "traceql", "graphql"],
+        )
+        self.assertEqual(spec.controls, ["tracedb", "pgvector", "qdrant", "opensearch"])
+        self.assertTrue(spec.requires_external_controls)
+        self.assertTrue(spec.railway_required)
+        self.assertTrue(spec.railway["volume_required"])
+        self.assertTrue(spec.railway["backup_required"])
+        self.assertTrue(spec.railway["restart_required"])
+        self.assertTrue(spec.railway["redeploy_required"])
+        self.assertTrue(spec.railway["runbook_verification_required"])
+        for rule in [
+            "correctness",
+            "sdk_parity",
+            "supported_api_parity",
+            "tenant_isolation",
+            "tombstones",
+            "error_envelopes",
+            "snapshot_restore",
+            "restart_redeploy",
+            "hard_failures",
+            "external_controls",
+            "rolling_regression_blocking",
+        ]:
+            self.assertTrue(spec.blocking_rules[rule], rule)
+        self.assertEqual(spec.unsupported_coverage["sql_compatibility"], "unsupported")
+        self.assertEqual(spec.unsupported_coverage["graphql_subscriptions"], "unsupported")
+        self.assertEqual(spec.unsupported_coverage["sql_postgres_wire_protocol"], "unsupported")
+        self.assertNotIn("graphql_mutations", spec.unsupported_coverage)
+
+    def test_production_1m_gate_blocks_until_required_railway_evidence_is_complete(self) -> None:
+        spec = load_suite_spec(LAB_ROOT / "suites" / "production_1m.json")
+
+        missing_evidence = build_suite_gate(
+            minimal_report(control_status="external_control_available"),
+            spec,
+            artifact_paths={"suite_json": "suite.json", "suite_md": "suite.md"},
+            railway_manifest={
+                "status": "configured",
+                "services": [{"role": "tracedb", "service_id": "service_tracedb"}],
+            },
+            railway_runbook_verification_required=spec.railway["runbook_verification_required"],
+        )
+
+        self.assertEqual(missing_evidence["status"], "blocked")
+        self.assertEqual(missing_evidence["claim_status"]["railway_backup"], "not_checked")
+        self.assertEqual(
+            missing_evidence["claim_status"]["railway_restart_redeploy"],
+            "not_checked",
+        )
+        self.assertEqual(
+            missing_evidence["claim_status"]["railway_runbook_verification"],
+            "not_checked",
+        )
+        self.assertTrue(
+            any("backup" in item for item in missing_evidence["blocking_failures"]),
+            missing_evidence["blocking_failures"],
+        )
+        self.assertTrue(
+            any("restart/redeploy" in item for item in missing_evidence["blocking_failures"]),
+            missing_evidence["blocking_failures"],
+        )
+        self.assertTrue(
+            any("runbook verification" in item for item in missing_evidence["blocking_failures"]),
+            missing_evidence["blocking_failures"],
+        )
+
     def test_railway_stateful_gate_requires_configured_manifest(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "railway_stateful.json")
 

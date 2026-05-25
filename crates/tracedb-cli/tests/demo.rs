@@ -878,7 +878,12 @@ fn product_regression_only_python_sdk_smoke_runs_single_gate_step() {
     assert!(
         summary["steps"]["python_sdk_smoke"]["cwd"]
             .as_str()
-            .is_some_and(|cwd| cwd.ends_with("TraceDB")),
+            .is_some_and(|cwd| {
+                std::path::Path::new(cwd).join("Cargo.toml").is_file()
+                    && std::path::Path::new(cwd)
+                        .join("clients/python/http_smoke.py")
+                        .is_file()
+            }),
         "python_sdk_smoke should run from the workspace root: {summary}"
     );
     let smoke_summary = &summary["steps"]["python_sdk_smoke"]["summary"];

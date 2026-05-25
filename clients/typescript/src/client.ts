@@ -251,6 +251,7 @@ export interface HybridExplain extends JsonObject {
 }
 
 export interface HybridQuery extends JsonObject {
+  cursor?: string | null;
   explain?: boolean;
   freshness?: string;
   graph_seed?: string | null;
@@ -313,6 +314,7 @@ export interface QueryPhaseTiming extends JsonObject {
 
 export interface QueryResponse extends JsonObject {
   explain?: HybridExplain;
+  next_cursor?: string | null;
   results?: HybridQueryRow[];
 }
 
@@ -378,11 +380,13 @@ export interface RecordPutRequest extends JsonObject {
 }
 
 export interface RecordScanOutput extends JsonObject {
+  next_cursor?: string | null;
   records?: RecordOutput[];
   returned_count?: number;
 }
 
 export interface RecordScanRequest extends JsonObject {
+  cursor?: string | null;
   limit?: number;
   table?: string;
   tenant_id?: string;

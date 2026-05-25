@@ -186,14 +186,34 @@ class TraceDBClientTests(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             db.table("docs").where({"tenant_id": "tenant-a"}).match_text(
                 "body", "python sdk"
-            ).near("embedding", [1, 0, 0]).all()
+            ).near("embedding", [1, 0, 0]).limit(2).cursor("2").all()
 
         self.assertEqual(len(captured), 1)
         body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(body["cursor"], "2")
+        self.assertEqual(body["top_k"], 2)
         self.assertEqual(body["text_field"], "body")
         self.assertEqual(body["text"], "python sdk")
         self.assertEqual(body["vector_field"], "embedding")
         self.assertEqual(body["vector"], [1, 0, 0])
+
+    def test_table_scan_posts_cursor_and_limit(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090")
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"records":[],"returned_count":0}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            db.table("docs").tenant("tenant-a").limit(25).cursor("25").scan()
+
+        self.assertEqual(len(captured), 1)
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(body["table"], "docs")
+        self.assertEqual(body["tenant_id"], "tenant-a")
+        self.assertEqual(body["limit"], 25)
+        self.assertEqual(body["cursor"], "25")
 
     def test_query_builder_canonicalizes_allow_dirty_freshness(self) -> None:
         db = TraceDB("http://127.0.0.1:8090")

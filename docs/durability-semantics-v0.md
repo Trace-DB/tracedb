@@ -147,9 +147,9 @@ TraceDB v0 does not yet claim:
 - distributed consensus or replication
 - multi-process active writer support on the same data directory
 - cross-replica idempotency
-- not cross-replica exactly-once semantics
-- not crash-atomic exactly-once semantics
-- not managed-cloud backup/DR semantics
+- cross-replica exactly-once semantics
+- crash-atomic exactly-once semantics
+- managed-cloud backup/DR semantics
 - automatic stale-lock repair for `engine.write.lock` or `000001.twal.lock`
 - SQL/PostgreSQL durability semantics
 - managed service RPO/RTO

@@ -647,6 +647,7 @@ fn query(explain: bool) -> HybridQuery {
     HybridQuery {
         table: "docs".to_string(),
         tenant_id: "tenant-a".to_string(),
+        cursor: None,
         text_field: None,
         text: Some("rust api".to_string()),
         vector_field: None,
