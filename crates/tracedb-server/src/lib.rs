@@ -10,10 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -25,7 +24,7 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower::load_shed::LoadShedLayer;
 use tower::timeout::TimeoutLayer;
 use tower::ServiceBuilder;
-use tracedb_core::{Epoch, TraceDbManifest};
+use tracedb_core::{stable_body_hash, Epoch, IdempotencyReceipt, TraceDbManifest};
 use tracedb_policy::ActorContext;
 use tracedb_query::{
     graphql_query_from_str, graphql_schema_sdl_from_tables, traceql_query_from_str, HybridQuery,
@@ -135,12 +134,48 @@ impl EngineHandle {
             .map_err(to_io_error)
     }
 
+    pub async fn apply_schema_with_idempotency_receipt(
+        &self,
+        schema: TableSchema,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> std::io::Result<Epoch> {
+        self.db
+            .write()
+            .await
+            .apply_schema_with_idempotency_receipt(schema, receipt)
+            .map_err(to_io_error)
+    }
+
     pub async fn insert(&self, input: RecordInput) -> std::io::Result<Epoch> {
         self.db.write().await.insert(input).map_err(to_io_error)
     }
 
+    pub async fn insert_with_idempotency_receipt(
+        &self,
+        input: RecordInput,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> std::io::Result<Epoch> {
+        self.db
+            .write()
+            .await
+            .insert_with_idempotency_receipt(input, receipt)
+            .map_err(to_io_error)
+    }
+
     pub async fn put(&self, request: RecordPutRequest) -> std::io::Result<Epoch> {
         self.db.write().await.put(request).map_err(to_io_error)
+    }
+
+    pub async fn put_with_idempotency_receipt(
+        &self,
+        request: RecordPutRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> std::io::Result<Epoch> {
+        self.db
+            .write()
+            .await
+            .put_with_idempotency_receipt(request, receipt)
+            .map_err(to_io_error)
     }
 
     pub async fn put_batch(&self, request: RecordPutBatchRequest) -> std::io::Result<Epoch> {
@@ -148,6 +183,18 @@ impl EngineHandle {
             .write()
             .await
             .put_batch(request)
+            .map_err(to_io_error)
+    }
+
+    pub async fn put_batch_with_idempotency_receipt(
+        &self,
+        request: RecordPutBatchRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> std::io::Result<Epoch> {
+        self.db
+            .write()
+            .await
+            .put_batch_with_idempotency_receipt(request, receipt)
             .map_err(to_io_error)
     }
 
@@ -166,8 +213,32 @@ impl EngineHandle {
         self.db.write().await.patch(request).map_err(to_io_error)
     }
 
+    pub async fn patch_with_idempotency_receipt(
+        &self,
+        request: RecordPatchRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> std::io::Result<Epoch> {
+        self.db
+            .write()
+            .await
+            .patch_with_idempotency_receipt(request, receipt)
+            .map_err(to_io_error)
+    }
+
     pub async fn delete(&self, request: RecordDeleteRequest) -> std::io::Result<Epoch> {
         self.db.write().await.delete(request).map_err(to_io_error)
+    }
+
+    pub async fn delete_with_idempotency_receipt(
+        &self,
+        request: RecordDeleteRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> std::io::Result<Epoch> {
+        self.db
+            .write()
+            .await
+            .delete_with_idempotency_receipt(request, receipt)
+            .map_err(to_io_error)
     }
 
     pub async fn get_as(
@@ -235,6 +306,25 @@ impl EngineHandle {
             .map_err(to_io_error)
     }
 
+    pub async fn idempotency_receipts(&self) -> std::io::Result<Vec<IdempotencyReceipt>> {
+        self.db
+            .read()
+            .await
+            .idempotency_receipts()
+            .map_err(to_io_error)
+    }
+
+    pub async fn record_idempotency_receipt(
+        &self,
+        receipt: IdempotencyReceipt,
+    ) -> std::io::Result<Epoch> {
+        self.db
+            .write()
+            .await
+            .record_idempotency_receipt(receipt)
+            .map_err(to_io_error)
+    }
+
     #[cfg(test)]
     async fn hold_read_snapshot_for_test(&self) -> RwLockReadGuard<'_, TraceDb> {
         self.db.read().await
@@ -246,30 +336,55 @@ struct IdempotencyCacheKey {
     method: String,
     path: String,
     key: String,
+    actor_tenant_id: String,
+    database_id: String,
+    branch_id: String,
+    token_identity: String,
 }
 
 impl IdempotencyCacheKey {
-    fn new(method: &str, path: &str, key: &str) -> Self {
+    fn new(method: &str, path: &str, key: &str, actor: &ActorContext) -> Self {
         Self {
             method: method.to_string(),
             path: path.to_string(),
             key: key.to_string(),
+            actor_tenant_id: actor.tenant_id.clone(),
+            database_id: actor.database_id.clone(),
+            branch_id: actor.branch_id.clone(),
+            token_identity: actor.token_identity.clone(),
+        }
+    }
+
+    fn from_receipt(receipt: &IdempotencyReceipt) -> Self {
+        Self {
+            method: receipt.method.clone(),
+            path: receipt.path.clone(),
+            key: receipt.key.clone(),
+            actor_tenant_id: receipt.actor_tenant_id.clone(),
+            database_id: receipt.database_id.clone(),
+            branch_id: receipt.branch_id.clone(),
+            token_identity: receipt.token_identity.clone(),
+        }
+    }
+
+    fn to_receipt(&self, body_hash: String) -> IdempotencyReceipt {
+        IdempotencyReceipt {
+            method: self.method.clone(),
+            path: self.path.clone(),
+            key: self.key.clone(),
+            body_hash,
+            actor_tenant_id: self.actor_tenant_id.clone(),
+            database_id: self.database_id.clone(),
+            branch_id: self.branch_id.clone(),
+            token_identity: self.token_identity.clone(),
+            response: String::new(),
         }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct IdempotencyEntry {
-    body: String,
-    response: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct DurableIdempotencyEntry {
-    method: String,
-    path: String,
-    key: String,
-    body: String,
+    body_hash: String,
     response: String,
 }
 
@@ -285,73 +400,32 @@ struct GraphQlQueryRequest {
 
 #[derive(Debug)]
 struct IdempotencyCacheState {
-    path: PathBuf,
     entries: HashMap<IdempotencyCacheKey, IdempotencyEntry>,
 }
 
 impl IdempotencyCacheState {
-    fn load(path: PathBuf) -> std::io::Result<Self> {
-        if !path.exists() {
-            return Ok(Self {
-                path,
-                entries: HashMap::new(),
-            });
-        }
-        let entries =
-            serde_json::from_str::<Vec<DurableIdempotencyEntry>>(&fs::read_to_string(&path)?)
-                .map_err(to_io_error)?
-                .into_iter()
-                .map(|entry| {
-                    (
-                        IdempotencyCacheKey {
-                            method: entry.method,
-                            path: entry.path,
-                            key: entry.key,
-                        },
-                        IdempotencyEntry {
-                            body: entry.body,
-                            response: entry.response,
-                        },
-                    )
-                })
-                .collect();
-        Ok(Self { path, entries })
+    fn from_receipts(receipts: Vec<IdempotencyReceipt>) -> Self {
+        let entries = receipts
+            .into_iter()
+            .map(|receipt| {
+                (
+                    IdempotencyCacheKey::from_receipt(&receipt),
+                    IdempotencyEntry {
+                        body_hash: receipt.body_hash,
+                        response: receipt.response,
+                    },
+                )
+            })
+            .collect();
+        Self { entries }
     }
 
     fn get(&self, key: &IdempotencyCacheKey) -> Option<IdempotencyEntry> {
         self.entries.get(key).cloned()
     }
 
-    fn insert(&mut self, key: IdempotencyCacheKey, entry: IdempotencyEntry) -> std::io::Result<()> {
-        self.entries.insert(key.clone(), entry);
-        if let Err(error) = self.persist() {
-            self.entries.remove(&key);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    fn persist(&self) -> std::io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let entries = self
-            .entries
-            .iter()
-            .map(|(key, entry)| DurableIdempotencyEntry {
-                method: key.method.clone(),
-                path: key.path.clone(),
-                key: key.key.clone(),
-                body: entry.body.clone(),
-                response: entry.response.clone(),
-            })
-            .collect::<Vec<_>>();
-        let tmp = self.path.with_extension("json.tmp");
-        fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(&entries).map_err(to_io_error)?,
-        )?;
-        fs::rename(tmp, &self.path)
+    fn insert(&mut self, key: IdempotencyCacheKey, entry: IdempotencyEntry) {
+        self.entries.insert(key, entry);
     }
 }
 
@@ -486,10 +560,11 @@ fn open_server_state(
     db_path: impl AsRef<Path>,
 ) -> std::io::Result<(EngineHandle, IdempotencyCache)> {
     let db_path = db_path.as_ref().to_path_buf();
+    let receipts = TraceDb::open(&db_path)
+        .and_then(|db| db.idempotency_receipts())
+        .map_err(to_io_error)?;
     let engine = EngineHandle::open(&db_path)?;
-    let idempotency_cache = Arc::new(Mutex::new(IdempotencyCacheState::load(
-        db_path.join("http-idempotency-cache.json"),
-    )?));
+    let idempotency_cache = Arc::new(Mutex::new(IdempotencyCacheState::from_receipts(receipts)));
     Ok((engine, idempotency_cache))
 }
 
@@ -600,14 +675,15 @@ async fn handle_request_text(
         .or_else(|| request.split("\n\n").nth(1))
         .unwrap_or_default();
     let actor = actor_context_from_request(request, body, &request_id);
+    let body_hash = stable_body_hash(body.as_bytes());
     let idempotency_cache_key = header_value(&request, "idempotency-key")
         .filter(|key| !key.is_empty())
         .filter(|_| supports_http_idempotency(method, path))
-        .map(|key| IdempotencyCacheKey::new(method, path, key));
+        .map(|key| IdempotencyCacheKey::new(method, path, key, &actor));
     if let Some(cache_key) = idempotency_cache_key.as_ref() {
         let cached_entry = idempotency_cache.lock().unwrap().get(cache_key);
         if let Some(entry) = cached_entry {
-            if entry.body == body {
+            if entry.body_hash == body_hash {
                 return Ok(entry.response);
             }
             return Ok(conflict(
@@ -665,17 +741,32 @@ async fn handle_request_text(
         }
         ("POST", "/v1/schema/apply") => {
             let schema: TableSchema = serde_json::from_str(body).map_err(to_io_error)?;
-            let epoch = engine.apply_schema(schema).await?;
+            let receipt = idempotency_cache_key
+                .as_ref()
+                .map(|key| key.to_receipt(body_hash.clone()));
+            let epoch = engine
+                .apply_schema_with_idempotency_receipt(schema, receipt)
+                .await?;
             ok(json!({ "epoch": epoch.get() }))
         }
         ("POST", "/v1/insert") => {
             let input: RecordInput = serde_json::from_str(body).map_err(to_io_error)?;
-            let epoch = engine.insert(input).await?;
+            let receipt = idempotency_cache_key
+                .as_ref()
+                .map(|key| key.to_receipt(body_hash.clone()));
+            let epoch = engine
+                .insert_with_idempotency_receipt(input, receipt)
+                .await?;
             ok(json!({ "epoch": epoch.get() }))
         }
         ("POST", "/v1/records/put") => {
             let input = parse_record_put_body(body)?;
-            let epoch = engine.put(RecordPutRequest::new(input)).await?;
+            let receipt = idempotency_cache_key
+                .as_ref()
+                .map(|key| key.to_receipt(body_hash.clone()));
+            let epoch = engine
+                .put_with_idempotency_receipt(RecordPutRequest::new(input), receipt)
+                .await?;
             ok(json!({ "epoch": epoch.get() }))
         }
         ("POST", "/v1/records/put-batch") => {
@@ -689,18 +780,33 @@ async fn handle_request_text(
                     "write_timing": timing,
                 }))
             } else {
-                let epoch = engine.put_batch(request).await?;
+                let receipt = idempotency_cache_key
+                    .as_ref()
+                    .map(|key| key.to_receipt(body_hash.clone()));
+                let epoch = engine
+                    .put_batch_with_idempotency_receipt(request, receipt)
+                    .await?;
                 ok(json!({ "epoch": epoch.get(), "record_count": record_count }))
             }
         }
         ("POST", "/v1/records/patch") => {
             let request: RecordPatchRequest = serde_json::from_str(body).map_err(to_io_error)?;
-            let epoch = engine.patch(request).await?;
+            let receipt = idempotency_cache_key
+                .as_ref()
+                .map(|key| key.to_receipt(body_hash.clone()));
+            let epoch = engine
+                .patch_with_idempotency_receipt(request, receipt)
+                .await?;
             ok(json!({ "epoch": epoch.get() }))
         }
         ("POST", "/v1/records/delete") => {
             let request: RecordDeleteRequest = serde_json::from_str(body).map_err(to_io_error)?;
-            let epoch = engine.delete(request).await?;
+            let receipt = idempotency_cache_key
+                .as_ref()
+                .map(|key| key.to_receipt(body_hash.clone()));
+            let epoch = engine
+                .delete_with_idempotency_receipt(request, receipt)
+                .await?;
             ok(json!({ "deleted": true, "epoch": epoch.get() }))
         }
         ("POST", "/v1/records/get") => {
@@ -820,15 +926,18 @@ async fn handle_request_text(
     };
     if let Some(cache_key) = idempotency_cache_key {
         if response.starts_with("HTTP/1.1 200 OK") {
-            if let Err(error) = idempotency_cache.lock().unwrap().insert(
+            if records_receipt_after_response(method, path) {
+                let mut receipt = cache_key.to_receipt(body_hash.clone());
+                receipt.response = response.clone();
+                engine.record_idempotency_receipt(receipt).await?;
+            }
+            idempotency_cache.lock().unwrap().insert(
                 cache_key,
                 IdempotencyEntry {
-                    body: body.to_string(),
+                    body_hash,
                     response: response.clone(),
                 },
-            ) {
-                tracing::warn!(service = "tracedb-engine", error = %error, "failed to persist idempotency response");
-            }
+            );
         }
     }
     Ok(response)
@@ -862,6 +971,15 @@ fn supports_http_idempotency(method: &str, path: &str) -> bool {
             | ("POST", "/v1/records/patch")
             | ("POST", "/v1/records/delete")
             | ("POST", "/v1/admin/compact")
+            | ("POST", "/v1/admin/snapshot")
+            | ("POST", "/v1/admin/restore")
+    )
+}
+
+fn records_receipt_after_response(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/v1/admin/compact")
             | ("POST", "/v1/admin/snapshot")
             | ("POST", "/v1/admin/restore")
     )

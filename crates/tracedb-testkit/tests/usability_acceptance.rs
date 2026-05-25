@@ -1,6 +1,5 @@
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
-use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -457,20 +456,30 @@ fn http_idempotency_key_replays_after_engine_reopen_from_same_data_dir() {
         "unexpected first response: {first_response}"
     );
     assert_eq!(http_json_body(&first_response)["epoch"], json!(2));
-    let cache_json: Value = serde_json::from_str(
-        &fs::read_to_string(data_dir.join("http-idempotency-cache.json"))
-            .expect("idempotency cache file"),
-    )
-    .expect("idempotency cache JSON");
-    assert!(
-        cache_json.as_array().unwrap().iter().any(|entry| {
-            entry["method"] == json!("POST")
-                && entry["path"] == json!("/v1/records/put")
-                && entry["key"] == json!("put-a-reopen-1")
-        }),
-        "first engine should persist the replay entry before clean reopen: {cache_json}"
-    );
     stop_stoppable_server(first_shutdown, first_handle);
+
+    assert!(
+        !data_dir.join("http-idempotency-cache.json").exists(),
+        "legacy JSON idempotency cache must not be production authority"
+    );
+    let wal_entries = TraceDb::open(&data_dir)
+        .expect("inspect reopened db")
+        .inspect_wal()
+        .expect("inspect WAL");
+    assert!(
+        wal_entries.iter().any(|entry| {
+            entry.commit.idempotency_receipts.iter().any(|receipt| {
+                receipt.method == "POST"
+                    && receipt.path == "/v1/records/put"
+                    && receipt.key == "put-a-reopen-1"
+                    && receipt.database_id == "local"
+                    && receipt.branch_id == "main"
+                    && receipt.actor_tenant_id == "tenant-a"
+                    && receipt.token_identity == "anonymous"
+            })
+        }),
+        "first engine should persist the replay entry inside the WAL before clean reopen"
+    );
 
     let (reopened_addr, reopened_shutdown, reopened_handle) = start_stoppable_server(data_dir);
 

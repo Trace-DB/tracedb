@@ -1,13 +1,25 @@
 #![forbid(unsafe_code)]
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use chacha20poly1305::{
+    aead::rand_core::RngCore,
+    aead::{Aead, AeadCore, KeyInit, OsRng, Payload},
+    XChaCha20Poly1305,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, TraceDbError>;
+
+pub const ENCRYPTED_ARTIFACT_MAGIC: &[u8; 8] = b"TDBENC01";
+const XCHACHA20POLY1305_NONCE_LEN: usize = 24;
 
 #[derive(Debug, Error)]
 pub enum TraceDbError {
@@ -31,6 +43,8 @@ pub enum TraceDbError {
     WalCorruption(String),
     #[error("manifest corruption: {0}")]
     ManifestCorruption(String),
+    #[error("crypto error: {0}")]
+    Crypto(String),
     #[error("module {module} rejected: {reason}")]
     ModuleRejected { module: String, reason: String },
     #[error("not found: {0}")]
@@ -443,6 +457,14 @@ pub struct ManifestChecksums {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EncryptionMetadata {
+    pub algorithm: String,
+    pub key_id: String,
+    pub wrapped_dek_b64: String,
+    pub dek_nonce_b64: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraceDbManifest {
     pub format_version: u32,
     pub manifest_generation: u64,
@@ -465,6 +487,8 @@ pub struct TraceDbManifest {
     pub modules: Vec<ModuleManifest>,
     pub job_queues: Vec<String>,
     pub snapshots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<EncryptionMetadata>,
     pub checksums: ManifestChecksums,
 }
 
@@ -503,6 +527,7 @@ impl TraceDbManifest {
                 "tracedb.retention.cleanup".to_string(),
             ],
             snapshots: Vec::new(),
+            encryption: None,
             checksums: ManifestChecksums::default(),
         }
     }
@@ -510,6 +535,312 @@ impl TraceDbManifest {
     pub fn table(&self, name: &str) -> Option<&TableSchema> {
         self.schemas.iter().find(|schema| schema.name == name)
     }
+}
+
+#[derive(Clone)]
+pub struct MasterKey {
+    bytes: [u8; 32],
+    key_id: String,
+}
+
+impl fmt::Debug for MasterKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MasterKey")
+            .field("key_id", &self.key_id)
+            .field("bytes", &"<redacted>")
+            .finish()
+    }
+}
+
+impl MasterKey {
+    pub fn from_env() -> Result<Option<Self>> {
+        match std::env::var("TRACEDB_MASTER_KEY_B64") {
+            Ok(value) if value.trim().is_empty() => Ok(None),
+            Ok(value) => Self::from_base64(&value, "TRACEDB_MASTER_KEY_B64").map(Some),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(error) => Err(TraceDbError::InvalidCommand(format!(
+                "failed to read TRACEDB_MASTER_KEY_B64: {error}"
+            ))),
+        }
+    }
+
+    pub fn from_base64(value: &str, label: &str) -> Result<Self> {
+        if value.chars().any(char::is_whitespace) {
+            return Err(TraceDbError::InvalidCommand(format!(
+                "{label} must be strict base64 without whitespace"
+            )));
+        }
+        let decoded = BASE64_STANDARD
+            .decode(value)
+            .map_err(|_| TraceDbError::InvalidCommand(format!("{label} must be strict base64")))?;
+        let bytes: [u8; 32] = decoded.try_into().map_err(|decoded: Vec<u8>| {
+            TraceDbError::InvalidCommand(format!(
+                "{label} must decode to exactly 32 bytes, got {}",
+                decoded.len()
+            ))
+        })?;
+        let digest = Sha256::digest(bytes);
+        Ok(Self {
+            bytes,
+            key_id: format!("tracedb-root:{}", hex_prefix(&digest, 12)),
+        })
+    }
+
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+}
+
+#[derive(Clone)]
+pub struct EncryptionContext {
+    key_id: String,
+    dek: [u8; 32],
+}
+
+impl fmt::Debug for EncryptionContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncryptionContext")
+            .field("key_id", &self.key_id)
+            .field("dek", &"<redacted>")
+            .finish()
+    }
+}
+
+impl EncryptionContext {
+    pub fn create(master_key: &MasterKey, database_id: &str) -> Result<(Self, EncryptionMetadata)> {
+        let mut dek = [0u8; 32];
+        let mut rng = OsRng;
+        rng.fill_bytes(&mut dek);
+        let cipher = XChaCha20Poly1305::new_from_slice(&master_key.bytes)
+            .map_err(|error| TraceDbError::Crypto(error.to_string()))?;
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let aad = dek_wrap_aad(database_id, master_key.key_id());
+        let wrapped = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: &dek,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|error| TraceDbError::Crypto(error.to_string()))?;
+        let metadata = EncryptionMetadata {
+            algorithm: "XChaCha20Poly1305".to_string(),
+            key_id: master_key.key_id().to_string(),
+            wrapped_dek_b64: BASE64_STANDARD.encode(wrapped),
+            dek_nonce_b64: BASE64_STANDARD.encode(nonce),
+        };
+        Ok((
+            Self {
+                key_id: metadata.key_id.clone(),
+                dek,
+            },
+            metadata,
+        ))
+    }
+
+    pub fn from_metadata(
+        master_key: &MasterKey,
+        database_id: &str,
+        metadata: &EncryptionMetadata,
+    ) -> Result<Self> {
+        if metadata.algorithm != "XChaCha20Poly1305" {
+            return Err(TraceDbError::Crypto(format!(
+                "unsupported encryption algorithm {}",
+                metadata.algorithm
+            )));
+        }
+        if metadata.key_id != master_key.key_id() {
+            return Err(TraceDbError::Crypto(format!(
+                "failed to unwrap database encryption key for key_id {}",
+                metadata.key_id
+            )));
+        }
+        let wrapped = BASE64_STANDARD
+            .decode(&metadata.wrapped_dek_b64)
+            .map_err(|_| TraceDbError::Crypto("invalid wrapped database key base64".to_string()))?;
+        let nonce = BASE64_STANDARD
+            .decode(&metadata.dek_nonce_b64)
+            .map_err(|_| TraceDbError::Crypto("invalid database key nonce base64".to_string()))?;
+        if nonce.len() != XCHACHA20POLY1305_NONCE_LEN {
+            return Err(TraceDbError::Crypto(format!(
+                "invalid database key nonce length {}, expected {XCHACHA20POLY1305_NONCE_LEN}",
+                nonce.len()
+            )));
+        }
+        let cipher = XChaCha20Poly1305::new_from_slice(&master_key.bytes)
+            .map_err(|error| TraceDbError::Crypto(error.to_string()))?;
+        let aad = dek_wrap_aad(database_id, master_key.key_id());
+        let dek = cipher
+            .decrypt(
+                nonce.as_slice().into(),
+                Payload {
+                    msg: &wrapped,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|_| {
+                TraceDbError::Crypto(format!(
+                    "failed to unwrap database encryption key for key_id {}",
+                    metadata.key_id
+                ))
+            })?;
+        let dek: [u8; 32] = dek.try_into().map_err(|decoded: Vec<u8>| {
+            TraceDbError::Crypto(format!(
+                "invalid unwrapped database key length {}, expected 32",
+                decoded.len()
+            ))
+        })?;
+        Ok(Self {
+            key_id: metadata.key_id.clone(),
+            dek,
+        })
+    }
+
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    pub fn encrypt_artifact(&self, artifact_kind: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+        let cipher = XChaCha20Poly1305::new_from_slice(&self.dek)
+            .map_err(|error| TraceDbError::Crypto(error.to_string()))?;
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let aad = artifact_aad(artifact_kind, &self.key_id);
+        let ciphertext = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|error| TraceDbError::Crypto(error.to_string()))?;
+        let mut body =
+            Vec::with_capacity(ENCRYPTED_ARTIFACT_MAGIC.len() + nonce.len() + ciphertext.len());
+        body.extend_from_slice(ENCRYPTED_ARTIFACT_MAGIC);
+        body.extend_from_slice(&nonce);
+        body.extend_from_slice(&ciphertext);
+        Ok(body)
+    }
+
+    pub fn decrypt_artifact(&self, artifact_kind: &str, body: &[u8]) -> Result<Vec<u8>> {
+        if !is_encrypted_artifact(body) {
+            return Ok(body.to_vec());
+        }
+        let nonce_start = ENCRYPTED_ARTIFACT_MAGIC.len();
+        let nonce_end = nonce_start + XCHACHA20POLY1305_NONCE_LEN;
+        if body.len() <= nonce_end {
+            return Err(TraceDbError::Crypto(format!(
+                "encrypted {artifact_kind} artifact is missing ciphertext"
+            )));
+        }
+        let nonce = &body[nonce_start..nonce_end];
+        let ciphertext = &body[nonce_end..];
+        let cipher = XChaCha20Poly1305::new_from_slice(&self.dek)
+            .map_err(|error| TraceDbError::Crypto(error.to_string()))?;
+        let aad = artifact_aad(artifact_kind, &self.key_id);
+        cipher
+            .decrypt(
+                nonce.into(),
+                Payload {
+                    msg: ciphertext,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|_| {
+                TraceDbError::Crypto(format!(
+                    "failed to decrypt {artifact_kind} artifact with key_id {}",
+                    self.key_id
+                ))
+            })
+    }
+}
+
+pub fn is_encrypted_artifact(body: &[u8]) -> bool {
+    body.starts_with(ENCRYPTED_ARTIFACT_MAGIC)
+}
+
+pub fn decrypt_artifact_if_needed(
+    context: Option<&EncryptionContext>,
+    artifact_kind: &str,
+    body: &[u8],
+) -> Result<Vec<u8>> {
+    if !is_encrypted_artifact(body) {
+        return Ok(body.to_vec());
+    }
+    let context = context.ok_or_else(|| {
+        TraceDbError::Crypto(
+            "TRACEDB_MASTER_KEY_B64 is required to open encrypted TraceDB data".to_string(),
+        )
+    })?;
+    context.decrypt_artifact(artifact_kind, body)
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IdempotencyReceipt {
+    pub method: String,
+    pub path: String,
+    pub key: String,
+    pub body_hash: String,
+    pub actor_tenant_id: String,
+    pub database_id: String,
+    pub branch_id: String,
+    pub token_identity: String,
+    pub response: String,
+}
+
+pub fn stable_body_hash(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{}", hex_bytes(&digest))
+}
+
+pub fn recover_stale_pid_lock(path: &Path, lock_label: &str) -> Result<bool> {
+    let body = fs::read_to_string(path)?;
+    let owner_pid = body.trim().parse::<u32>().map_err(|_| {
+        TraceDbError::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "{lock_label} lock {} has an invalid owner; manual operator recovery is required",
+                path.display()
+            ),
+        ))
+    })?;
+    if owner_pid == std::process::id() || pid_is_running(owner_pid) {
+        return Ok(false);
+    }
+    fs::remove_file(path)?;
+    Ok(true)
+}
+
+fn dek_wrap_aad(database_id: &str, key_id: &str) -> String {
+    format!("tracedb:dek-wrap:v1:{database_id}:{key_id}")
+}
+
+fn artifact_aad(artifact_kind: &str, key_id: &str) -> String {
+    format!("tracedb:artifact:v1:{artifact_kind}:{key_id}")
+}
+
+fn hex_prefix(bytes: &[u8], len: usize) -> String {
+    hex_bytes(&bytes[..bytes.len().min(len)])
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn pid_is_running(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(true)
 }
 
 pub fn compute_manifest_checksum(manifest: &TraceDbManifest) -> Result<u32> {
@@ -537,6 +868,42 @@ pub fn builtin_module_manifests() -> Vec<ModuleManifest> {
         trust_level: "FIRST_PARTY_SIGNED".to_string(),
     })
     .collect()
+}
+
+#[cfg(test)]
+mod crypto_tests {
+    use super::*;
+
+    #[test]
+    fn master_key_base64_validation_is_strict() {
+        let key = MasterKey::from_base64(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "TRACEDB_MASTER_KEY_B64",
+        )
+        .expect("valid 32-byte key");
+        assert_eq!(key.key_id().len(), "tracedb-root:".len() + 24);
+
+        let invalid_base64 = MasterKey::from_base64("not base64", "TRACEDB_MASTER_KEY_B64")
+            .expect_err("invalid base64 rejected");
+        assert!(
+            invalid_base64
+                .to_string()
+                .contains("TRACEDB_MASTER_KEY_B64 must be strict base64"),
+            "unexpected invalid-base64 error: {invalid_base64}"
+        );
+
+        let wrong_len = MasterKey::from_base64(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+            "TRACEDB_MASTER_KEY_B64",
+        )
+        .expect_err("31-byte key rejected");
+        assert!(
+            wrong_len
+                .to_string()
+                .contains("TRACEDB_MASTER_KEY_B64 must decode to exactly 32 bytes"),
+            "unexpected wrong-length error: {wrong_len}"
+        );
+    }
 }
 
 pub fn checksum_bytes(bytes: &[u8]) -> u32 {

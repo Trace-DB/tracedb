@@ -6,7 +6,10 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
-use tracedb_core::{checksum_bytes, Result, SegmentManifest, SegmentState, TraceDbError};
+use tracedb_core::{
+    checksum_bytes, decrypt_artifact_if_needed, EncryptionContext, Result, SegmentManifest,
+    SegmentState, TraceDbError,
+};
 
 pub const SEGMENT_OBJECT_FORMAT_VERSION: u32 = 1;
 
@@ -192,25 +195,51 @@ pub fn publish_segment_records(
     generation: u64,
     records: Vec<SegmentRecord>,
 ) -> Result<SegmentObject> {
+    publish_segment_records_with_encryption(path, segment_id, generation, records, None)
+}
+
+pub fn publish_segment_records_with_encryption(
+    path: impl AsRef<Path>,
+    segment_id: &str,
+    generation: u64,
+    records: Vec<SegmentRecord>,
+    encryption: Option<&EncryptionContext>,
+) -> Result<SegmentObject> {
     let path = path.as_ref();
     if path.exists() {
-        return read_segment_object(path);
+        return read_segment_object_with_encryption(path, encryption);
     }
     let object = SegmentObject::from_records(segment_id, generation, records)?;
-    write_segment_object(path, &object)?;
-    read_segment_object(path)
+    write_segment_object_with_encryption(path, &object, encryption)?;
+    read_segment_object_with_encryption(path, encryption)
 }
 
 pub fn read_segment_object(path: impl AsRef<Path>) -> Result<SegmentObject> {
+    read_segment_object_with_encryption(path, None)
+}
+
+pub fn read_segment_object_with_encryption(
+    path: impl AsRef<Path>,
+    encryption: Option<&EncryptionContext>,
+) -> Result<SegmentObject> {
     let mut file = File::open(path)?;
     let mut body = Vec::new();
     file.read_to_end(&mut body)?;
+    let body = decrypt_artifact_if_needed(encryption, "segment", &body)?;
     let object: SegmentObject = serde_json::from_slice(&body)?;
     verify_segment_object(&object)?;
     Ok(object)
 }
 
 pub fn write_segment_object(path: impl AsRef<Path>, object: &SegmentObject) -> Result<()> {
+    write_segment_object_with_encryption(path, object, None)
+}
+
+pub fn write_segment_object_with_encryption(
+    path: impl AsRef<Path>,
+    object: &SegmentObject,
+    encryption: Option<&EncryptionContext>,
+) -> Result<()> {
     verify_segment_object(object)?;
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
@@ -218,6 +247,10 @@ pub fn write_segment_object(path: impl AsRef<Path>, object: &SegmentObject) -> R
     }
     let tmp_path = path.with_extension("tseg.tmp");
     let body = serde_json::to_vec_pretty(object)?;
+    let body = match encryption {
+        Some(encryption) => encryption.encrypt_artifact("segment", &body)?,
+        None => body,
+    };
     let mut file = File::create(&tmp_path)?;
     file.write_all(&body)?;
     file.sync_all()?;

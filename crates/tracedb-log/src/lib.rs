@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracedb_core::{
-    checksum_bytes, Epoch, FeatureInvalidation, Lsn, ModuleCommitEvent, RecordDeletion,
-    RecordInput, Result, TableSchema, TraceDbError,
+    checksum_bytes, decrypt_artifact_if_needed, recover_stale_pid_lock, EncryptionContext, Epoch,
+    FeatureInvalidation, IdempotencyReceipt, Lsn, ModuleCommitEvent, RecordDeletion, RecordInput,
+    Result, TableSchema, TraceDbError,
 };
 
 const WAL_MAGIC: u32 = 0x5444_574c;
@@ -53,6 +54,8 @@ pub struct CommitRecord {
     pub deletions: Vec<RecordDeletion>,
     pub feature_invalidations: Vec<FeatureInvalidation>,
     pub module_events: Vec<ModuleCommitEvent>,
+    #[serde(default)]
+    pub idempotency_receipts: Vec<IdempotencyReceipt>,
     pub commit_marker: String,
 }
 
@@ -74,6 +77,7 @@ impl CommitRecord {
             deletions: Vec::new(),
             feature_invalidations: Vec::new(),
             module_events: Vec::new(),
+            idempotency_receipts: Vec::new(),
             commit_marker: "COMMITTED".to_string(),
         }
     }
@@ -115,6 +119,7 @@ pub struct WalScan {
 pub struct Wal {
     path: PathBuf,
     tail: Arc<Mutex<WalTail>>,
+    encryption: Option<EncryptionContext>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -162,22 +167,31 @@ struct CommitRecordForFrame<'a> {
     deletions: &'a [RecordDeletion],
     feature_invalidations: &'a [FeatureInvalidation],
     module_events: &'a [ModuleCommitEvent],
+    idempotency_receipts: &'a [IdempotencyReceipt],
     commit_marker: &'a str,
 }
 
 impl Wal {
     pub fn open(db_dir: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_encryption(db_dir, None)
+    }
+
+    pub fn open_with_encryption(
+        db_dir: impl AsRef<Path>,
+        encryption: Option<EncryptionContext>,
+    ) -> Result<Self> {
         let wal_dir = db_dir.as_ref().join("wal");
         fs::create_dir_all(&wal_dir)?;
         let path = wal_dir.join("000001.twal");
         if !path.exists() {
             File::create(&path)?;
         }
-        let scan = scan_file(&path)?;
+        let scan = scan_file(&path, encryption.as_ref())?;
         let tail = tail_from_scan(&path, &scan)?;
         Ok(Self {
             path,
             tail: Arc::new(Mutex::new(tail)),
+            encryption,
         })
     }
 
@@ -192,7 +206,7 @@ impl Wal {
             .map_err(|_| TraceDbError::WalCorruption("wal tail cache lock poisoned".to_string()))?;
         let file_len = fs::metadata(&self.path)?.len();
         if file_len != tail.file_len {
-            let scan = scan_file(&self.path)?;
+            let scan = scan_file(&self.path, self.encryption.as_ref())?;
             *tail = tail_from_scan(&self.path, &scan)?;
         }
         Ok(tail.last_epoch)
@@ -206,7 +220,7 @@ impl Wal {
             .map_err(|_| TraceDbError::WalCorruption("wal tail cache lock poisoned".to_string()))?;
         let file_len = fs::metadata(&self.path)?.len();
         if file_len != tail.file_len {
-            let scan = scan_file(&self.path)?;
+            let scan = scan_file(&self.path, self.encryption.as_ref())?;
             *tail = tail_from_scan(&self.path, &scan)?;
         }
         let lsn = tail
@@ -214,7 +228,12 @@ impl Wal {
             .map(|last_lsn| last_lsn.next())
             .unwrap_or_else(|| Lsn::new(1));
         let prev_checksum = tail.last_checksum;
-        let frame = build_commit_frame(commit, lsn, prev_checksum)?;
+        let frame = build_commit_frame_with_encryption(
+            commit,
+            lsn,
+            prev_checksum,
+            self.encryption.as_ref(),
+        )?;
 
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
         file.write_all(&frame.frame)?;
@@ -239,7 +258,7 @@ impl Wal {
             .map_err(|_| TraceDbError::WalCorruption("wal tail cache lock poisoned".to_string()))?;
         let file_len = fs::metadata(&self.path)?.len();
         if file_len != tail.file_len {
-            let scan = scan_file(&self.path)?;
+            let scan = scan_file(&self.path, self.encryption.as_ref())?;
             *tail = tail_from_scan(&self.path, &scan)?;
         }
         let lsn = tail
@@ -249,7 +268,12 @@ impl Wal {
         let prev_checksum = tail.last_checksum;
         let lock_tail_ms = elapsed_ms(lock_tail_started);
 
-        let (frame, frame_timing) = build_commit_frame_with_timing(commit, lsn, prev_checksum)?;
+        let (frame, frame_timing) = build_commit_frame_with_timing_encryption(
+            commit,
+            lsn,
+            prev_checksum,
+            self.encryption.as_ref(),
+        )?;
 
         let write_started = Instant::now();
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
@@ -288,7 +312,7 @@ impl Wal {
     }
 
     pub fn scan_with_metadata(&self) -> Result<WalScan> {
-        scan_file(&self.path)
+        scan_file(&self.path, self.encryption.as_ref())
     }
 }
 
@@ -296,12 +320,23 @@ fn elapsed_ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 
+#[cfg(test)]
 fn build_commit_frame(
     commit: &CommitRecord,
     lsn: Lsn,
     previous_checksum: u32,
 ) -> Result<CommitFrame> {
+    build_commit_frame_with_encryption(commit, lsn, previous_checksum, None)
+}
+
+fn build_commit_frame_with_encryption(
+    commit: &CommitRecord,
+    lsn: Lsn,
+    previous_checksum: u32,
+    encryption: Option<&EncryptionContext>,
+) -> Result<CommitFrame> {
     let payload = serialize_commit_payload_for_frame(commit, previous_checksum, lsn)?;
+    let payload = encrypt_payload_if_needed(encryption, "wal", &payload, lsn)?;
     let payload_checksum = checksum_bytes(&payload);
     let frame = assemble_commit_frame(lsn, previous_checksum, payload_checksum, &payload);
     let payload_bytes = payload.len() as u64;
@@ -315,10 +350,20 @@ fn build_commit_frame(
     })
 }
 
+#[cfg(test)]
 fn build_commit_frame_with_timing(
     commit: &CommitRecord,
     lsn: Lsn,
     previous_checksum: u32,
+) -> Result<(CommitFrame, CommitFrameBuildTiming)> {
+    build_commit_frame_with_timing_encryption(commit, lsn, previous_checksum, None)
+}
+
+fn build_commit_frame_with_timing_encryption(
+    commit: &CommitRecord,
+    lsn: Lsn,
+    previous_checksum: u32,
+    encryption: Option<&EncryptionContext>,
 ) -> Result<(CommitFrame, CommitFrameBuildTiming)> {
     let frame_build_started = Instant::now();
     let commit_prepare_started = Instant::now();
@@ -327,6 +372,7 @@ fn build_commit_frame_with_timing(
 
     let serialize_started = Instant::now();
     let payload = serialize_prepared_commit_payload(&commit_for_frame, lsn)?;
+    let payload = encrypt_payload_if_needed(encryption, "wal", &payload, lsn)?;
     let serialize_ms = elapsed_ms(serialize_started);
 
     let payload_checksum_started = Instant::now();
@@ -380,6 +426,7 @@ fn prepare_commit_for_frame<'a>(
         deletions: &commit.deletions,
         feature_invalidations: &commit.feature_invalidations,
         module_events: &commit.module_events,
+        idempotency_receipts: &commit.idempotency_receipts,
         commit_marker: &commit.commit_marker,
     }
 }
@@ -420,6 +467,20 @@ fn check_payload_len(payload: &[u8], lsn: Lsn) -> Result<()> {
     Ok(())
 }
 
+fn encrypt_payload_if_needed(
+    encryption: Option<&EncryptionContext>,
+    artifact_kind: &str,
+    payload: &[u8],
+    lsn: Lsn,
+) -> Result<Vec<u8>> {
+    let payload = match encryption {
+        Some(encryption) => encryption.encrypt_artifact(artifact_kind, payload)?,
+        None => payload.to_vec(),
+    };
+    check_payload_len(&payload, lsn)?;
+    Ok(payload)
+}
+
 fn assemble_commit_frame(
     lsn: Lsn,
     previous_checksum: u32,
@@ -449,7 +510,7 @@ fn tail_from_scan(path: &Path, scan: &WalScan) -> Result<WalTail> {
     })
 }
 
-fn scan_file(path: &Path) -> Result<WalScan> {
+fn scan_file(path: &Path, encryption: Option<&EncryptionContext>) -> Result<WalScan> {
     let mut file = File::open(path)?;
     let mut entries: Vec<WalEntry> = Vec::new();
     let mut offset = 0u64;
@@ -552,7 +613,8 @@ fn scan_file(path: &Path) -> Result<WalScan> {
                 "commit footer mismatch at lsn {lsn}"
             )));
         }
-        let commit: CommitRecord = serde_json::from_slice(&payload)?;
+        let plaintext = decrypt_artifact_if_needed(encryption, "wal", &payload)?;
+        let commit: CommitRecord = serde_json::from_slice(&plaintext)?;
         if commit.commit_marker != "COMMITTED" {
             return Err(TraceDbError::WalCorruption(format!(
                 "missing commit marker at lsn {lsn}"
@@ -599,6 +661,9 @@ impl WalWriteLock {
                     return Ok(Self { path });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if recover_stale_pid_lock(&path, "WAL")? {
+                        continue;
+                    }
                     if Instant::now() >= deadline {
                         return Err(TraceDbError::Io(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
@@ -740,6 +805,7 @@ mod tests {
                 module_id: "text".to_string(),
                 event: "indexed".to_string(),
             }],
+            idempotency_receipts: Vec::new(),
             commit_marker: "COMMITTED".to_string(),
         };
         let previous_checksum = 0xCAFE_BABE;

@@ -12,8 +12,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracedb_core::{
     builtin_module_manifests, checksum_bytes, compute_manifest_checksum, database_id_from_path,
-    value_as_f32_vec, DerivedFeatureState, Epoch, FeatureStatus, IndexManifest, IndexState,
-    ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
+    decrypt_artifact_if_needed, recover_stale_pid_lock, value_as_f32_vec, DerivedFeatureState,
+    EncryptionContext, Epoch, FeatureStatus, IdempotencyReceipt, IndexManifest, IndexState,
+    MasterKey, ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
 };
 use tracedb_log::{CommitRecord, TornWalTail, Wal, WalAppendTiming};
 use tracedb_modules::{ModuleRegistry, RegisteredModule};
@@ -95,6 +96,61 @@ pub struct QueryExecutionTiming {
 pub struct TimedQueryOutput {
     pub output: QueryOutput,
     pub timing: QueryExecutionTiming,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TraceDbOpenOptions {
+    master_key: Option<MasterKey>,
+    encryption_context: Option<EncryptionContext>,
+    use_env_master_key: bool,
+}
+
+impl TraceDbOpenOptions {
+    pub fn from_env() -> Self {
+        Self {
+            master_key: None,
+            encryption_context: None,
+            use_env_master_key: true,
+        }
+    }
+
+    pub fn with_master_key_b64(value: &str) -> Self {
+        Self {
+            master_key: Some(
+                MasterKey::from_base64(value, "TRACEDB_MASTER_KEY_B64")
+                    .expect("valid TraceDB master key base64"),
+            ),
+            encryption_context: None,
+            use_env_master_key: false,
+        }
+    }
+
+    pub fn without_tde() -> Self {
+        Self {
+            master_key: None,
+            encryption_context: None,
+            use_env_master_key: false,
+        }
+    }
+
+    fn with_existing_encryption_context(encryption_context: Option<EncryptionContext>) -> Self {
+        Self {
+            master_key: None,
+            encryption_context,
+            use_env_master_key: false,
+        }
+    }
+
+    fn master_key(&self) -> Result<Option<MasterKey>> {
+        if let Some(key) = &self.master_key {
+            return Ok(Some(key.clone()));
+        }
+        if self.use_env_master_key {
+            MasterKey::from_env()
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -349,6 +405,8 @@ pub struct TraceDb {
     manifest: TraceDbManifest,
     store: RecordStore,
     wal: Wal,
+    encryption: Option<EncryptionContext>,
+    idempotency_receipts: Vec<IdempotencyReceipt>,
     last_recovery_torn_tail: Option<TornWalTail>,
     lexical_cache: Arc<Mutex<LexicalCorpusCache>>,
 }
@@ -374,6 +432,8 @@ struct CheckpointFile {
     epoch: Epoch,
     schemas: Vec<TableSchema>,
     records: Vec<StoredRecord>,
+    #[serde(default)]
+    idempotency_receipts: Vec<IdempotencyReceipt>,
     checksum: u32,
 }
 
@@ -383,6 +443,8 @@ struct CheckpointPayload {
     epoch: Epoch,
     schemas: Vec<TableSchema>,
     records: Vec<StoredRecord>,
+    #[serde(default)]
+    idempotency_receipts: Vec<IdempotencyReceipt>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -480,11 +542,20 @@ impl WritePathTiming {
 
 impl TraceDb {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_options(dir, TraceDbOpenOptions::from_env())
+    }
+
+    pub fn open_with_options(dir: impl AsRef<Path>, options: TraceDbOpenOptions) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         initialize_layout(&dir)?;
         let manifest_path = dir.join("manifest.tdb");
+        let master_key = options.master_key()?;
         if !manifest_path.exists() {
             let mut manifest = TraceDbManifest::empty(database_id_from_path(&dir));
+            if let Some(master_key) = master_key.as_ref() {
+                let (_, metadata) = EncryptionContext::create(master_key, &manifest.database_id)?;
+                manifest.encryption = Some(metadata);
+            }
             write_manifest(&manifest_path, &mut manifest)?;
         }
 
@@ -492,7 +563,43 @@ impl TraceDb {
         if manifest.modules.is_empty() {
             manifest.modules = builtin_module_manifests();
         }
-        let wal = Wal::open(&dir)?;
+        let mut encryption = match manifest.encryption.as_ref() {
+            Some(metadata) => {
+                if let Some(context) = options.encryption_context.as_ref() {
+                    if context.key_id() == metadata.key_id {
+                        Some(context.clone())
+                    } else {
+                        return Err(TraceDbError::Crypto(format!(
+                            "failed to unwrap database encryption key for key_id {}",
+                            metadata.key_id
+                        )));
+                    }
+                } else {
+                    let master_key = master_key.as_ref().ok_or_else(|| {
+                        TraceDbError::Crypto(
+                            "TRACEDB_MASTER_KEY_B64 is required to open encrypted TraceDB data"
+                                .to_string(),
+                        )
+                    })?;
+                    Some(EncryptionContext::from_metadata(
+                        master_key,
+                        &manifest.database_id,
+                        metadata,
+                    )?)
+                }
+            }
+            None => None,
+        };
+        if encryption.is_none() {
+            if let Some(master_key) = master_key.as_ref() {
+                let (context, metadata) =
+                    EncryptionContext::create(master_key, &manifest.database_id)?;
+                manifest.encryption = Some(metadata);
+                write_manifest(&manifest_path, &mut manifest)?;
+                encryption = Some(context);
+            }
+        }
+        let wal = Wal::open_with_encryption(&dir, encryption.clone())?;
         let wal_scan = wal.scan_with_metadata()?;
         let entries = wal_scan.entries;
         let all_commits = entries
@@ -505,8 +612,10 @@ impl TraceDb {
                 manifest.checkpoint_epoch, manifest.latest_epoch
             )));
         }
+        let mut checkpoint_receipts = Vec::new();
         let mut store = if manifest.checkpoint_epoch.get() > 0 {
-            let checkpoint = read_checkpoint_file(&dir, manifest.checkpoint_epoch)?;
+            let checkpoint =
+                read_checkpoint_file(&dir, manifest.checkpoint_epoch, encryption.as_ref())?;
             if checkpoint.epoch != manifest.checkpoint_epoch {
                 return Err(TraceDbError::ManifestCorruption(format!(
                     "checkpoint epoch mismatch: manifest {}, file {}",
@@ -516,6 +625,7 @@ impl TraceDb {
             if manifest.schemas.is_empty() {
                 manifest.schemas = checkpoint.schemas.clone();
             }
+            checkpoint_receipts = checkpoint.idempotency_receipts.clone();
             RecordStore::from_checkpoint_records(checkpoint.records)?
         } else {
             RecordStore::default()
@@ -529,6 +639,12 @@ impl TraceDb {
                 upsert_schema(&mut manifest.schemas, schema.clone());
             }
         }
+        let mut idempotency_receipts = checkpoint_receipts;
+        idempotency_receipts.extend(
+            commits
+                .iter()
+                .flat_map(|commit| commit.idempotency_receipts.clone()),
+        );
         store.apply_commits(&manifest.schemas, &commits)?;
         if let Some(last_commit) = commits.last() {
             if last_commit.epoch > manifest.latest_epoch {
@@ -544,21 +660,34 @@ impl TraceDb {
             manifest,
             store,
             wal,
+            encryption,
+            idempotency_receipts,
             last_recovery_torn_tail: wal_scan.torn_tail,
             lexical_cache: Arc::new(Mutex::new(LexicalCorpusCache::default())),
         })
     }
 
     pub fn apply_schema(&mut self, schema: TableSchema) -> Result<Epoch> {
+        self.apply_schema_with_idempotency_receipt(schema, None)
+    }
+
+    pub fn apply_schema_with_idempotency_receipt(
+        &mut self,
+        schema: TableSchema,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
         self.refresh_from_disk_if_stale()?;
         schema.validate()?;
         self.validate_schema_compatible(&schema)?;
         let epoch = self.manifest.latest_epoch.next();
+        let idempotency_receipts =
+            idempotency_receipts_for_response(receipt, serde_json::json!({ "epoch": epoch.get() }));
         let mut commit = CommitRecord::empty(epoch.get(), epoch).for_database(
             self.manifest.database_id.clone(),
             self.manifest.branch_id.clone(),
         );
+        commit.idempotency_receipts = idempotency_receipts;
         commit.schema_changes.push(schema.clone());
         commit.module_events.push(ModuleCommitEvent {
             module_id: "tracedb-kernel".to_string(),
@@ -569,12 +698,22 @@ impl TraceDb {
             .extend(module_events_for_schema("schema.apply", &schema));
         self.wal.append_commit(&commit)?;
         upsert_schema(&mut self.manifest.schemas, schema);
+        self.idempotency_receipts
+            .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
     }
 
     pub fn insert(&mut self, input: RecordInput) -> Result<Epoch> {
+        self.insert_with_idempotency_receipt(input, None)
+    }
+
+    pub fn insert_with_idempotency_receipt(
+        &mut self,
+        input: RecordInput,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
         self.refresh_from_disk_if_stale()?;
         let schema = self
@@ -586,6 +725,8 @@ impl TraceDb {
         let mut staged = self.store.clone();
         staged.apply_mutation(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
+        let idempotency_receipts =
+            idempotency_receipts_for_response(receipt, serde_json::json!({ "epoch": epoch.get() }));
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
             policy_epoch: self.manifest.latest_epoch,
@@ -593,6 +734,7 @@ impl TraceDb {
             mutations: vec![input.clone()],
             feature_invalidations,
             module_events: module_events_for_schema("insert.index", &schema),
+            idempotency_receipts,
             ..CommitRecord::empty(epoch.get(), epoch).for_database(
                 self.manifest.database_id.clone(),
                 self.manifest.branch_id.clone(),
@@ -600,12 +742,22 @@ impl TraceDb {
         };
         self.wal.append_commit(&commit)?;
         self.store = staged;
+        self.idempotency_receipts
+            .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
     }
 
     pub fn put(&mut self, request: RecordPutRequest) -> Result<Epoch> {
+        self.put_with_idempotency_receipt(request, None)
+    }
+
+    pub fn put_with_idempotency_receipt(
+        &mut self,
+        request: RecordPutRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
         self.refresh_from_disk_if_stale()?;
         let input = request.record;
@@ -618,6 +770,8 @@ impl TraceDb {
         let mut staged = self.store.clone();
         staged.apply_replacement_without_return(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
+        let idempotency_receipts =
+            idempotency_receipts_for_response(receipt, serde_json::json!({ "epoch": epoch.get() }));
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
             policy_epoch: self.manifest.latest_epoch,
@@ -627,6 +781,7 @@ impl TraceDb {
             deletions: Vec::new(),
             feature_invalidations,
             module_events: module_events_for_schema("record.put", &schema),
+            idempotency_receipts,
             ..CommitRecord::empty(epoch.get(), epoch).for_database(
                 self.manifest.database_id.clone(),
                 self.manifest.branch_id.clone(),
@@ -634,12 +789,55 @@ impl TraceDb {
         };
         self.wal.append_commit(&commit)?;
         self.store = staged;
+        self.idempotency_receipts
+            .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
     }
 
+    pub fn idempotency_receipts(&self) -> Result<Vec<IdempotencyReceipt>> {
+        Ok(self.idempotency_receipts.clone())
+    }
+
+    pub fn record_idempotency_receipt(&mut self, receipt: IdempotencyReceipt) -> Result<Epoch> {
+        let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
+        let epoch = self.manifest.latest_epoch.next();
+        let commit = CommitRecord {
+            schema_epoch: self.manifest.latest_epoch,
+            policy_epoch: self.manifest.latest_epoch,
+            schema_changes: Vec::new(),
+            replacements: Vec::new(),
+            mutations: Vec::new(),
+            deletions: Vec::new(),
+            feature_invalidations: Vec::new(),
+            module_events: vec![ModuleCommitEvent {
+                module_id: "tracedb-kernel".to_string(),
+                event: "idempotency.receipt".to_string(),
+            }],
+            idempotency_receipts: vec![receipt],
+            ..CommitRecord::empty(epoch.get(), epoch).for_database(
+                self.manifest.database_id.clone(),
+                self.manifest.branch_id.clone(),
+            )
+        };
+        self.wal.append_commit(&commit)?;
+        self.idempotency_receipts
+            .extend(commit.idempotency_receipts.clone());
+        self.bump_manifest(epoch)?;
+        Ok(epoch)
+    }
+
     pub fn put_batch(&mut self, request: RecordPutBatchRequest) -> Result<Epoch> {
+        self.put_batch_with_idempotency_receipt(request, None)
+    }
+
+    pub fn put_batch_with_idempotency_receipt(
+        &mut self,
+        request: RecordPutBatchRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
         self.refresh_from_disk_if_stale()?;
         if request.records.is_empty() {
@@ -668,6 +866,11 @@ impl TraceDb {
             }
         }
 
+        let record_count = request.records.len();
+        let idempotency_receipts = idempotency_receipts_for_response(
+            receipt,
+            serde_json::json!({ "epoch": epoch.get(), "record_count": record_count }),
+        );
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
             policy_epoch: self.manifest.latest_epoch,
@@ -677,6 +880,7 @@ impl TraceDb {
             deletions: Vec::new(),
             feature_invalidations,
             module_events,
+            idempotency_receipts,
             ..CommitRecord::empty(epoch.get(), epoch).for_database(
                 self.manifest.database_id.clone(),
                 self.manifest.branch_id.clone(),
@@ -684,6 +888,8 @@ impl TraceDb {
         };
         self.wal.append_commit(&commit)?;
         self.store = staged;
+        self.idempotency_receipts
+            .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
@@ -881,6 +1087,14 @@ impl TraceDb {
     }
 
     pub fn patch(&mut self, request: RecordPatchRequest) -> Result<Epoch> {
+        self.patch_with_idempotency_receipt(request, None)
+    }
+
+    pub fn patch_with_idempotency_receipt(
+        &mut self,
+        request: RecordPatchRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
         self.refresh_from_disk_if_stale()?;
         let input = request.into_record_input();
@@ -893,6 +1107,8 @@ impl TraceDb {
         let mut staged = self.store.clone();
         staged.apply_mutation(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
+        let idempotency_receipts =
+            idempotency_receipts_for_response(receipt, serde_json::json!({ "epoch": epoch.get() }));
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
             policy_epoch: self.manifest.latest_epoch,
@@ -902,6 +1118,7 @@ impl TraceDb {
             deletions: Vec::new(),
             feature_invalidations,
             module_events: module_events_for_schema("record.patch", &schema),
+            idempotency_receipts,
             ..CommitRecord::empty(epoch.get(), epoch).for_database(
                 self.manifest.database_id.clone(),
                 self.manifest.branch_id.clone(),
@@ -909,12 +1126,22 @@ impl TraceDb {
         };
         self.wal.append_commit(&commit)?;
         self.store = staged;
+        self.idempotency_receipts
+            .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
     }
 
     pub fn delete(&mut self, request: RecordDeleteRequest) -> Result<Epoch> {
+        self.delete_with_idempotency_receipt(request, None)
+    }
+
+    pub fn delete_with_idempotency_receipt(
+        &mut self,
+        request: RecordDeleteRequest,
+        receipt: Option<IdempotencyReceipt>,
+    ) -> Result<Epoch> {
         let _guard = WriteLock::acquire(&self.dir)?;
         self.refresh_from_disk_if_stale()?;
         let deletion = request.into_deletion();
@@ -926,6 +1153,10 @@ impl TraceDb {
         let epoch = self.manifest.latest_epoch.next();
         let mut staged = self.store.clone();
         staged.apply_delete(&schema, &deletion, epoch)?;
+        let idempotency_receipts = idempotency_receipts_for_response(
+            receipt,
+            serde_json::json!({ "deleted": true, "epoch": epoch.get() }),
+        );
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
             policy_epoch: self.manifest.latest_epoch,
@@ -935,6 +1166,7 @@ impl TraceDb {
             deletions: vec![deletion],
             feature_invalidations: Vec::new(),
             module_events: module_events_for_schema("record.delete", &schema),
+            idempotency_receipts,
             ..CommitRecord::empty(epoch.get(), epoch).for_database(
                 self.manifest.database_id.clone(),
                 self.manifest.branch_id.clone(),
@@ -942,6 +1174,8 @@ impl TraceDb {
         };
         self.wal.append_commit(&commit)?;
         self.store = staged;
+        self.idempotency_receipts
+            .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
@@ -1447,6 +1681,8 @@ impl TraceDb {
             epoch,
             self.manifest.schemas.clone(),
             self.store.checkpoint_records(epoch),
+            self.idempotency_receipts.clone(),
+            self.encryption.as_ref(),
         )?;
         let mut manifest = read_manifest(self.dir.join("manifest.tdb"))?;
         if manifest.latest_epoch != epoch {
@@ -1461,7 +1697,7 @@ impl TraceDb {
         manifest.checksums.parent_checksum = previous_checksum;
         write_manifest(self.dir.join("manifest.tdb"), &mut manifest)?;
         truncate_active_wal(&self.dir)?;
-        self.wal = Wal::open(&self.dir)?;
+        self.wal = Wal::open_with_encryption(&self.dir, self.encryption.clone())?;
         self.manifest = manifest;
         self.clear_lexical_cache();
         Ok(epoch)
@@ -1551,7 +1787,10 @@ impl TraceDb {
                 )));
             }
             let object_path = self.dir.join("segments").join(format!("{segment_id}.tseg"));
-            let object = tracedb_segment::read_segment_object(&object_path)?;
+            let object = tracedb_segment::read_segment_object_with_encryption(
+                &object_path,
+                self.encryption.as_ref(),
+            )?;
             if object.generation != existing.generation {
                 return Err(TraceDbError::ManifestCorruption(format!(
                     "segment object generation mismatch: manifest {}, object {}",
@@ -1565,11 +1804,12 @@ impl TraceDb {
         let generation = durable_manifest.segments.len() as u64 + 1;
         let object_path = self.dir.join("segments").join(format!("{segment_id}.tseg"));
         let records = self.segment_records_for_snapshot()?;
-        let object = tracedb_segment::publish_segment_records(
+        let object = tracedb_segment::publish_segment_records_with_encryption(
             &object_path,
             &segment_id,
             generation,
             records,
+            self.encryption.as_ref(),
         )?;
         let index_manifests = self.build_segment_indexes(&object, parent_manifest_generation)?;
         let mut manifest = durable_manifest;
@@ -1666,12 +1906,19 @@ impl TraceDb {
             manifest,
             store,
             wal,
+            encryption,
+            idempotency_receipts,
             last_recovery_torn_tail,
             ..
-        } = TraceDb::open(&self.dir)?;
+        } = TraceDb::open_with_options(
+            &self.dir,
+            TraceDbOpenOptions::with_existing_encryption_context(self.encryption.clone()),
+        )?;
         self.manifest = manifest;
         self.store = store;
         self.wal = wal;
+        self.encryption = encryption;
+        self.idempotency_receipts = idempotency_receipts;
         self.last_recovery_torn_tail = last_recovery_torn_tail;
         self.clear_lexical_cache();
         Ok(RefreshTiming {
@@ -1779,7 +2026,10 @@ impl TraceDb {
             if !path.exists() {
                 continue;
             }
-            let object = tracedb_segment::read_segment_object(path)?;
+            let object = tracedb_segment::read_segment_object_with_encryption(
+                path,
+                self.encryption.as_ref(),
+            )?;
             out.extend(
                 object
                     .records
@@ -1820,6 +2070,10 @@ impl TraceDb {
                 "record_count": object.records.len(),
             });
             let bytes = serde_json::to_vec_pretty(&body)?;
+            let bytes = match self.encryption.as_ref() {
+                Some(encryption) => encryption.encrypt_artifact("index", &bytes)?,
+                None => bytes,
+            };
             let checksum = checksum_bytes(&bytes);
             let index_path = self.dir.join(&object_path);
             if let Some(parent) = index_path.parent() {
@@ -2109,6 +2363,28 @@ fn access_path_timing(access_path_id: impl Into<String>, build_ms: f64) -> Acces
 
 fn elapsed_ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
+}
+
+fn http_ok_json(value: &Value) -> String {
+    let body = value.to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
+fn idempotency_receipts_for_response(
+    receipt: Option<IdempotencyReceipt>,
+    response: Value,
+) -> Vec<IdempotencyReceipt> {
+    receipt
+        .map(|mut receipt| {
+            receipt.response = http_ok_json(&response);
+            receipt
+        })
+        .into_iter()
+        .collect()
 }
 
 fn lexical_scores_are_tied(candidates: &[FusedCandidate]) -> bool {
@@ -2935,6 +3211,9 @@ impl WriteLock {
                     return Ok(Self { path });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if recover_stale_pid_lock(&path, "engine write")? {
+                        continue;
+                    }
                     if Instant::now() >= deadline {
                         return Err(TraceDbError::Io(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
@@ -3058,6 +3337,8 @@ fn write_checkpoint_file(
     epoch: Epoch,
     schemas: Vec<TableSchema>,
     records: Vec<StoredRecord>,
+    idempotency_receipts: Vec<IdempotencyReceipt>,
+    encryption: Option<&EncryptionContext>,
 ) -> Result<String> {
     let relative = checkpoint_relative_path(epoch);
     let path = dir.join(&relative);
@@ -3069,8 +3350,13 @@ fn write_checkpoint_file(
         epoch,
         schemas,
         records,
+        idempotency_receipts,
     };
     let payload = serde_json::to_vec(&payload)?;
+    let payload = match encryption {
+        Some(encryption) => encryption.encrypt_artifact("checkpoint", &payload)?,
+        None => payload,
+    };
     let checksum = checksum_bytes(&payload);
     let mut body = Vec::with_capacity(CHECKPOINT_MAGIC_V3.len() + 4 + payload.len());
     body.extend_from_slice(CHECKPOINT_MAGIC_V3);
@@ -3088,15 +3374,22 @@ fn write_checkpoint_file(
     Ok(relative)
 }
 
-fn read_checkpoint_file(dir: &Path, epoch: Epoch) -> Result<CheckpointFile> {
+fn read_checkpoint_file(
+    dir: &Path,
+    epoch: Epoch,
+    encryption: Option<&EncryptionContext>,
+) -> Result<CheckpointFile> {
     let path = dir.join(checkpoint_binary_relative_path(epoch));
     if path.exists() {
-        return read_binary_checkpoint_file(&path);
+        return read_binary_checkpoint_file(&path, encryption);
     }
     read_json_checkpoint_file(&dir.join(checkpoint_json_relative_path(epoch)))
 }
 
-fn read_binary_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
+fn read_binary_checkpoint_file(
+    path: &Path,
+    encryption: Option<&EncryptionContext>,
+) -> Result<CheckpointFile> {
     let body = fs::read(path).map_err(|err| {
         TraceDbError::ManifestCorruption(format!(
             "failed to read checkpoint file at {}: {err}",
@@ -3104,7 +3397,7 @@ fn read_binary_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
         ))
     })?;
     if body.starts_with(CHECKPOINT_MAGIC_V3) {
-        return read_framed_checkpoint_file(path, &body);
+        return read_framed_checkpoint_file(path, &body, encryption);
     }
     if body.starts_with(CHECKPOINT_MAGIC_V2) {
         return read_legacy_binary_checkpoint_file(path, &body);
@@ -3115,7 +3408,11 @@ fn read_binary_checkpoint_file(path: &Path) -> Result<CheckpointFile> {
     )))
 }
 
-fn read_framed_checkpoint_file(path: &Path, body: &[u8]) -> Result<CheckpointFile> {
+fn read_framed_checkpoint_file(
+    path: &Path,
+    body: &[u8],
+    encryption: Option<&EncryptionContext>,
+) -> Result<CheckpointFile> {
     if body.len() <= CHECKPOINT_MAGIC_V3.len() + 4 {
         return Err(TraceDbError::ManifestCorruption(format!(
             "checkpoint payload missing at {}",
@@ -3146,7 +3443,8 @@ fn read_framed_checkpoint_file(path: &Path, body: &[u8]) -> Result<CheckpointFil
             path.display()
         )));
     }
-    let payload: CheckpointPayload = serde_json::from_slice(payload).map_err(|err| {
+    let payload = decrypt_artifact_if_needed(encryption, "checkpoint", payload)?;
+    let payload: CheckpointPayload = serde_json::from_slice(&payload).map_err(|err| {
         TraceDbError::ManifestCorruption(format!(
             "failed to parse checkpoint file at {}: {err}",
             path.display()
@@ -3163,6 +3461,7 @@ fn read_framed_checkpoint_file(path: &Path, body: &[u8]) -> Result<CheckpointFil
         epoch: payload.epoch,
         schemas: payload.schemas,
         records: payload.records,
+        idempotency_receipts: payload.idempotency_receipts,
         checksum: expected,
     })
 }
@@ -4545,6 +4844,9 @@ mod tests {
     use tracedb_core::VersionId;
     use tracedb_store::RecordHeader;
 
+    const GOOD_MASTER_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const OTHER_MASTER_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+
     fn schema() -> TableSchema {
         TableSchema {
             name: "docs".to_string(),
@@ -5218,6 +5520,197 @@ mod tests {
             vec!["sealed-only"]
         );
         assert_eq!(output.explain.final_visibility_guard_removed, 0);
+    }
+
+    #[test]
+    fn tde_encrypted_artifacts_reopen_with_correct_key() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open_with_options(
+            temp.path(),
+            TraceDbOpenOptions::with_master_key_b64(GOOD_MASTER_KEY),
+        )
+        .expect("open encrypted db");
+        db.apply_schema(schema()).expect("schema");
+        db.put(RecordPutRequest::new(record(
+            "secret",
+            "secret encrypted wal checkpoint segment index",
+        )))
+        .expect("put");
+        let wal_bytes = fs::read(temp.path().join("wal/000001.twal")).expect("wal bytes");
+        let wal_text = String::from_utf8_lossy(&wal_bytes);
+        assert!(
+            !wal_text.contains("secret encrypted wal checkpoint segment index"),
+            "encrypted WAL must not expose plaintext record body"
+        );
+        assert!(
+            !wal_text.contains("\"mutations\""),
+            "encrypted WAL must not expose plaintext commit JSON"
+        );
+        let checkpoint_epoch = db.checkpoint().expect("checkpoint");
+        db.compact().expect("compact");
+
+        let manifest = db.inspect_manifest().expect("manifest");
+        let encryption = manifest.encryption.expect("manifest encryption metadata");
+        assert_eq!(encryption.algorithm, "XChaCha20Poly1305");
+        assert!(encryption.key_id.starts_with("tracedb-root:"));
+        assert!(!encryption.wrapped_dek_b64.is_empty());
+
+        let checkpoint_bytes =
+            fs::read(temp.path().join(checkpoint_relative_path(checkpoint_epoch)))
+                .expect("checkpoint bytes");
+        assert_eq!(
+            &checkpoint_bytes[..CHECKPOINT_MAGIC_V3.len()],
+            CHECKPOINT_MAGIC_V3
+        );
+        assert!(
+            !String::from_utf8_lossy(&checkpoint_bytes)
+                .contains("secret encrypted wal checkpoint segment index"),
+            "encrypted checkpoint must not expose plaintext record body"
+        );
+
+        let segment = manifest.segments.first().expect("segment manifest");
+        let segment_bytes = fs::read(
+            temp.path()
+                .join("segments")
+                .join(format!("{}.tseg", segment.segment_id)),
+        )
+        .expect("segment bytes");
+        assert!(
+            !String::from_utf8_lossy(&segment_bytes)
+                .contains("secret encrypted wal checkpoint segment index"),
+            "encrypted segment must not expose plaintext record body"
+        );
+        let index = manifest.indexes.first().expect("index manifest");
+        let index_bytes = fs::read(temp.path().join(&index.object_path)).expect("index bytes");
+        assert!(
+            !String::from_utf8_lossy(&index_bytes).contains("secret"),
+            "encrypted index must not expose plaintext tokens"
+        );
+
+        drop(db);
+        let reopened = TraceDb::open_with_options(
+            temp.path(),
+            TraceDbOpenOptions::with_master_key_b64(GOOD_MASTER_KEY),
+        )
+        .expect("reopen encrypted db");
+        let record = reopened
+            .get(RecordGetRequest::new("docs", "tenant-a", "secret"))
+            .expect("get encrypted record")
+            .expect("record exists");
+        assert_eq!(
+            record.fields["body"],
+            json!("secret encrypted wal checkpoint segment index")
+        );
+    }
+
+    #[test]
+    fn tde_wrong_or_missing_master_key_fails_open() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open_with_options(
+            temp.path(),
+            TraceDbOpenOptions::with_master_key_b64(GOOD_MASTER_KEY),
+        )
+        .expect("open encrypted db");
+        db.apply_schema(schema()).expect("schema");
+        db.put(RecordPutRequest::new(record("a", "wrong key protected")))
+            .expect("put");
+        drop(db);
+
+        let wrong = TraceDb::open_with_options(
+            temp.path(),
+            TraceDbOpenOptions::with_master_key_b64(OTHER_MASTER_KEY),
+        )
+        .expect_err("wrong key must fail open");
+        assert!(
+            wrong
+                .to_string()
+                .contains("failed to unwrap database encryption key"),
+            "unexpected wrong-key error: {wrong}"
+        );
+
+        let missing = TraceDb::open_with_options(temp.path(), TraceDbOpenOptions::without_tde())
+            .expect_err("missing key must fail open");
+        assert!(
+            missing
+                .to_string()
+                .contains("TRACEDB_MASTER_KEY_B64 is required to open encrypted TraceDB data"),
+            "unexpected missing-key error: {missing}"
+        );
+    }
+
+    #[test]
+    fn legacy_plaintext_artifacts_remain_readable_when_tde_is_enabled() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut plain = TraceDb::open_with_options(temp.path(), TraceDbOpenOptions::without_tde())
+            .expect("open plaintext db");
+        plain.apply_schema(schema()).expect("schema");
+        plain
+            .put(RecordPutRequest::new(record(
+                "legacy",
+                "legacy plaintext body",
+            )))
+            .expect("put");
+        let checkpoint_epoch = plain.checkpoint().expect("checkpoint");
+        let wal_before = fs::read(temp.path().join("wal/000001.twal")).expect("wal before");
+        let checkpoint_before =
+            fs::read(temp.path().join(checkpoint_relative_path(checkpoint_epoch)))
+                .expect("checkpoint before");
+        drop(plain);
+
+        let mut encrypted = TraceDb::open_with_options(
+            temp.path(),
+            TraceDbOpenOptions::with_master_key_b64(GOOD_MASTER_KEY),
+        )
+        .expect("open legacy db with tde configured");
+        let legacy = encrypted
+            .get(RecordGetRequest::new("docs", "tenant-a", "legacy"))
+            .expect("get legacy")
+            .expect("legacy record exists");
+        assert_eq!(legacy.fields["body"], json!("legacy plaintext body"));
+        assert_eq!(
+            fs::read(temp.path().join("wal/000001.twal")).expect("wal after tde open"),
+            wal_before,
+            "opening legacy plaintext with TDE must not rewrite existing WAL bytes"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(checkpoint_relative_path(checkpoint_epoch)))
+                .expect("checkpoint after tde open"),
+            checkpoint_before,
+            "opening legacy plaintext with TDE must not rewrite existing checkpoint bytes"
+        );
+
+        encrypted
+            .put(RecordPutRequest::new(record("new", "new encrypted body")))
+            .expect("new encrypted put");
+        let mixed_wal = fs::read(temp.path().join("wal/000001.twal")).expect("mixed wal");
+        assert!(
+            mixed_wal.starts_with(&wal_before),
+            "legacy WAL prefix should remain intact after encrypted append"
+        );
+        assert!(
+            !String::from_utf8_lossy(&mixed_wal[wal_before.len()..]).contains("new encrypted body"),
+            "new TDE-configured WAL frame must be encrypted"
+        );
+    }
+
+    #[test]
+    fn stale_engine_and_wal_lock_files_are_recovered_with_owner_checks() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        fs::write(temp.path().join("engine.write.lock"), "999999999").expect("engine lock");
+        fs::write(temp.path().join("wal/000001.twal.lock"), "999999999").expect("wal lock");
+
+        db.apply_schema(schema())
+            .expect("stale engine and WAL locks should be recovered");
+
+        assert!(
+            !temp.path().join("engine.write.lock").exists(),
+            "engine stale lock should be removed"
+        );
+        assert!(
+            !temp.path().join("wal/000001.twal.lock").exists(),
+            "WAL stale lock should be removed"
+        );
     }
 
     #[test]
