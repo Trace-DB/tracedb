@@ -973,6 +973,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "tracedb-core",
  "tracedb-gateway",
  "tracedb-policy",
  "tracedb-query",
@@ -1068,6 +1069,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tracedb-jobs",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

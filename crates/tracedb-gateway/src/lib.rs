@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
 use axum::body::{to_bytes, Body, Bytes};
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri};
 use axum::routing::any;
-use axum::Router;
+use axum::{BoxError, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::Infallible;
@@ -13,6 +14,11 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tower::limit::ConcurrencyLimitLayer;
+use tower::load_shed::LoadShedLayer;
+use tower::timeout::TimeoutLayer;
+use tower::ServiceBuilder;
 use tracedb_catalog::Catalog;
 use tracedb_metering::{MeterKind, UsageMeter};
 
@@ -144,6 +150,8 @@ pub struct GatewayServerConfig {
     pub meter: Arc<Mutex<UsageMeter>>,
     pub rate_limit_enabled: bool,
     pub rate_limit_requests: u64,
+    pub request_timeout: Duration,
+    pub max_concurrent_requests: usize,
 }
 
 impl GatewayServerConfig {
@@ -171,6 +179,8 @@ impl GatewayServerConfig {
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(60_000),
+            request_timeout: env_duration_ms("TRACEDB_REQUEST_TIMEOUT_MS", 30_000),
+            max_concurrent_requests: env_usize("TRACEDB_MAX_CONCURRENT_REQUESTS", 1024).max(1),
         }
     }
 }
@@ -194,8 +204,27 @@ pub async fn serve_tokio_listener(
     let app = Router::new()
         .fallback(any(handle_axum_gateway_request))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(runtime_handle_error))
+                .layer(LoadShedLayer::new())
+                .layer(ConcurrencyLimitLayer::new(config.max_concurrent_requests))
+                .layer(TimeoutLayer::new(config.request_timeout)),
+        )
         .with_state(config);
     axum::serve(listener, app).await
+}
+
+async fn runtime_handle_error(error: BoxError) -> Response<Body> {
+    if error.is::<tower::timeout::error::Elapsed>() {
+        return response_from_http_text(runtime_error_response(RuntimeRouteError::Timeout));
+    }
+    if error.is::<tower::load_shed::error::Overloaded>() {
+        return response_from_http_text(runtime_error_response(RuntimeRouteError::Overloaded));
+    }
+    response_from_http_text(runtime_error_response(RuntimeRouteError::Internal(
+        error.to_string(),
+    )))
 }
 
 async fn handle_axum_gateway_request(
@@ -617,16 +646,57 @@ fn next_request_id() -> String {
     )
 }
 
+#[cfg(test)]
+fn request_log_fields(service: &str, request_id: &str, method: &str, path: &str) -> Value {
+    json!({
+        "service": service,
+        "request_id": request_id,
+        "method": method,
+        "path": path,
+    })
+}
+
 fn log_request(service: &str, request_id: &str, method: &str, path: &str) {
-    println!(
-        "{}",
-        json!({
-            "service": service,
-            "request_id": request_id,
-            "method": method,
-            "path": path,
-        })
+    tracing::info!(
+        service = service,
+        request_id = request_id,
+        method = method,
+        path = path,
+        "request"
     );
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RuntimeRouteError {
+    Timeout,
+    Overloaded,
+    Internal(String),
+}
+
+fn runtime_error_response(error: RuntimeRouteError) -> String {
+    match error {
+        RuntimeRouteError::Timeout => http_json_response(
+            "504 Gateway Timeout",
+            json!({ "error": "request timed out", "code": "timeout" }),
+        ),
+        RuntimeRouteError::Overloaded => http_json_response(
+            "503 Service Unavailable",
+            json!({ "error": "request capacity exceeded", "code": "overloaded" }),
+        ),
+        RuntimeRouteError::Internal(message) => http_json_response(
+            "500 Internal Server Error",
+            json!({ "error": message, "code": "internal_error" }),
+        ),
+    }
+}
+
+fn http_json_response(status: &str, body: Value) -> String {
+    let body = body.to_string();
+    format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -876,6 +946,22 @@ fn engine_internal_token_from_env() -> Option<String> {
         .filter(|token| !token.trim().is_empty())
 }
 
+fn env_duration_ms(name: &str, default_ms: u64) -> Duration {
+    Duration::from_millis(
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default_ms),
+    )
+}
+
+fn env_usize(name: &str, default_value: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default_value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -907,6 +993,8 @@ mod tests {
             meter,
             rate_limit_enabled: false,
             rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
         };
         let body = json!({
             "database_id": database.database_id,
@@ -948,6 +1036,8 @@ mod tests {
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,
             rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
         };
         let response = handle_axum_gateway_request(
             State(config),
@@ -968,6 +1058,26 @@ mod tests {
             body.contains("failed to read request body"),
             "oversized Axum body should be rejected by production path: {body}"
         );
+    }
+
+    #[test]
+    fn gateway_runtime_errors_are_stable_json() {
+        let timeout = runtime_error_response(RuntimeRouteError::Timeout);
+        assert!(timeout.starts_with("HTTP/1.1 504 Gateway Timeout"));
+        assert!(timeout.contains("\"code\":\"timeout\""));
+
+        let overload = runtime_error_response(RuntimeRouteError::Overloaded);
+        assert!(overload.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(overload.contains("\"code\":\"overloaded\""));
+    }
+
+    #[test]
+    fn gateway_request_log_fields_are_structured_for_tracing() {
+        let fields = request_log_fields("tracedb-gateway", "request-1", "POST", "/v1/query");
+        assert_eq!(fields["service"], json!("tracedb-gateway"));
+        assert_eq!(fields["request_id"], json!("request-1"));
+        assert_eq!(fields["method"], json!("POST"));
+        assert_eq!(fields["path"], json!("/v1/query"));
     }
 
     fn spawn_header_echo_engine() -> String {

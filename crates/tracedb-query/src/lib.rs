@@ -2,12 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracedb_core::{
@@ -350,7 +350,7 @@ pub struct TraceDb {
     store: RecordStore,
     wal: Wal,
     last_recovery_torn_tail: Option<TornWalTail>,
-    lexical_cache: RefCell<LexicalCorpusCache>,
+    lexical_cache: Arc<Mutex<LexicalCorpusCache>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -545,7 +545,7 @@ impl TraceDb {
             store,
             wal,
             last_recovery_torn_tail: wal_scan.torn_tail,
-            lexical_cache: RefCell::new(LexicalCorpusCache::default()),
+            lexical_cache: Arc::new(Mutex::new(LexicalCorpusCache::default())),
         })
     }
 
@@ -2459,7 +2459,14 @@ impl TraceDb {
             text_columns: selected_text_columns(schema, text_field),
         };
 
-        if let Some(corpus) = self.lexical_cache.borrow().entries.get(&key) {
+        if let Some(corpus) = self
+            .lexical_cache
+            .lock()
+            .unwrap()
+            .entries
+            .get(&key)
+            .cloned()
+        {
             return LexicalQueryReport {
                 cache_hit: true,
                 cache_miss: false,
@@ -2474,7 +2481,11 @@ impl TraceDb {
                 &lexical_documents(schema, visible, sealed_records, text_field),
             );
         let indexed_documents = corpus.document_count();
-        self.lexical_cache.borrow_mut().entries.insert(key, corpus);
+        self.lexical_cache
+            .lock()
+            .unwrap()
+            .entries
+            .insert(key, corpus);
         LexicalQueryReport {
             cache_hit: false,
             cache_miss: true,
@@ -2484,7 +2495,7 @@ impl TraceDb {
     }
 
     fn clear_lexical_cache(&self) {
-        self.lexical_cache.borrow_mut().entries.clear();
+        self.lexical_cache.lock().unwrap().entries.clear();
     }
 }
 

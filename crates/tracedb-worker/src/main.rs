@@ -5,6 +5,7 @@ use tracedb_jobs::{JobCatalog, JobKind, WorkerId};
 static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn main() {
+    init_json_tracing("info");
     if std::env::var("TRACEDB_WORKER_ONCE").as_deref() != Ok("true") {
         if let Err(error) = serve_healthcheck_worker() {
             eprintln!("tracedb-worker: {error}");
@@ -71,13 +72,11 @@ fn serve_healthcheck_worker() -> std::io::Result<()> {
                 let request_id = header_value(&request, "x-request-id")
                     .map(str::to_string)
                     .unwrap_or_else(next_request_id);
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "service": "tracedb-worker",
-                        "request_id": request_id,
-                        "path": path,
-                    })
+                tracing::info!(
+                    service = "tracedb-worker",
+                    request_id = request_id,
+                    path = path,
+                    "request"
                 );
                 let (status, body) = if matches!(path, "/health" | "/ready") {
                     match tracedb_worker::probe_private_engine_health(&engine_url) {
@@ -162,4 +161,14 @@ fn bind_addr_from_env() -> String {
             .map(|port| format!("[::]:{port}"))
             .unwrap_or_else(|_| "[::]:8080".to_string())
     })
+}
+
+fn init_json_tracing(default_filter: &str) {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .or_else(|_| tracing_subscriber::EnvFilter::try_new(default_filter))
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(filter)
+        .try_init();
 }

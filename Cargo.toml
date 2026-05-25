@@ -50,6 +50,6 @@ serde_json = "1.0"
 tempfile = "3.10"
 thiserror = "1.0"
 tokio = { version = "1.48", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
-tower = { version = "0.5", features = ["limit", "timeout"] }
+tower = { version = "0.5", features = ["limit", "load-shed", "timeout", "util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

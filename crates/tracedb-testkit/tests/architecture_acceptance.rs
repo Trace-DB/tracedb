@@ -4,6 +4,7 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::{BranchState, Catalog};
 use tracedb_core::Epoch;
@@ -355,6 +356,8 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
         meter: Arc::clone(&runtime_meter),
         rate_limit_enabled: true,
         rate_limit_requests: 10,
+        request_timeout: Duration::from_secs(30),
+        max_concurrent_requests: 1024,
     };
     let runtime_body = json!({
         "database_id": database.database_id,
@@ -406,6 +409,8 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
         meter: Arc::clone(&runtime_meter),
         rate_limit_enabled: true,
         rate_limit_requests: 10,
+        request_timeout: Duration::from_secs(30),
+        max_concurrent_requests: 1024,
     };
     let batch_response = tracedb_gateway::handle_gateway_request_text(&batch_request, batch_config);
     assert!(
@@ -429,6 +434,8 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
         meter: Arc::clone(&runtime_meter),
         rate_limit_enabled: true,
         rate_limit_requests: 10,
+        request_timeout: Duration::from_secs(30),
+        max_concurrent_requests: 1024,
     };
     let admin_jobs_response =
         tracedb_gateway::handle_gateway_request_text(&admin_jobs_request, admin_jobs_config);

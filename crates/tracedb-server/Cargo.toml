@@ -16,6 +16,7 @@ tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracedb-core = { path = "../tracedb-core" }
 tracedb-gateway = { path = "../tracedb-gateway" }
 tracedb-policy = { path = "../tracedb-policy" }
 tracedb-query = { path = "../tracedb-query" }
