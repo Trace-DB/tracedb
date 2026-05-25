@@ -339,6 +339,8 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
         "/v1/query",
         br#"{"table":"docs"}"#,
         "application/json",
+        None,
+        &[],
     )
     .expect("gateway proxy");
     assert_eq!(proxied.status_code, 200);
@@ -347,6 +349,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     let runtime_config = GatewayServerConfig {
         bind: "127.0.0.1:0".to_string(),
         engine_url: engine_url.clone(),
+        engine_internal_token: None,
         required_token: Some("secret-token".to_string()),
         catalog: reloaded,
         meter: Arc::clone(&runtime_meter),
@@ -397,6 +400,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     let batch_config = GatewayServerConfig {
         bind: "127.0.0.1:0".to_string(),
         engine_url: engine_url.clone(),
+        engine_internal_token: None,
         required_token: Some("secret-token".to_string()),
         catalog: catalog.clone(),
         meter: Arc::clone(&runtime_meter),
@@ -419,6 +423,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     let admin_jobs_config = GatewayServerConfig {
         bind: "127.0.0.1:0".to_string(),
         engine_url: engine_url.clone(),
+        engine_internal_token: None,
         required_token: Some("secret-token".to_string()),
         catalog: catalog.clone(),
         meter: Arc::clone(&runtime_meter),

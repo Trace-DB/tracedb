@@ -1,8 +1,14 @@
 #![forbid(unsafe_code)]
 
+use axum::body::{to_bytes, Body, Bytes};
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri};
+use axum::routing::any;
+use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -11,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tracedb_policy::ActorContext;
 use tracedb_query::{
     graphql_query_from_str, graphql_schema_sdl_from_tables, traceql_query_from_str, HybridQuery,
     RecordDeleteRequest, RecordGetRequest, RecordInput, RecordPatchRequest, RecordPutBatchRequest,
@@ -20,6 +27,41 @@ use tracedb_query::{
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 type IdempotencyCache = Arc<Mutex<IdempotencyCacheState>>;
+
+#[derive(Clone)]
+struct EngineAppState {
+    db: Arc<Mutex<TraceDb>>,
+    idempotency_cache: IdempotencyCache,
+    config: EngineServerConfig,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EngineServerConfig {
+    pub internal_token: Option<String>,
+}
+
+impl EngineServerConfig {
+    pub fn from_env() -> Self {
+        Self {
+            internal_token: std::env::var("TRACEDB_ENGINE_INTERNAL_TOKEN")
+                .ok()
+                .or_else(|| std::env::var("TRACEDB_ENGINE_TOKEN").ok())
+                .filter(|token| !token.trim().is_empty()),
+        }
+    }
+
+    pub fn with_internal_token(mut self, token: impl Into<String>) -> Self {
+        self.internal_token = Some(token.into());
+        self
+    }
+
+    fn authorizes_private_request(&self, request: &str) -> bool {
+        let Some(required) = self.internal_token.as_deref() else {
+            return true;
+        };
+        header_value(request, "x-tracedb-engine-token") == Some(required)
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct IdempotencyCacheKey {
@@ -136,14 +178,60 @@ impl IdempotencyCacheState {
 }
 
 pub fn serve(db_path: impl AsRef<Path>, bind: &str) -> std::io::Result<()> {
-    let listener = TcpListener::bind(bind)?;
-    serve_listener(db_path, listener)
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(serve_async(
+        db_path.as_ref().to_path_buf(),
+        bind.to_string(),
+        EngineServerConfig::from_env(),
+    ))
+}
+
+pub async fn serve_async(
+    db_path: impl AsRef<Path>,
+    bind: impl AsRef<str>,
+    config: EngineServerConfig,
+) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(bind.as_ref()).await?;
+    serve_tokio_listener(db_path, listener, config).await
+}
+
+pub async fn serve_tokio_listener(
+    db_path: impl AsRef<Path>,
+    listener: tokio::net::TcpListener,
+    config: EngineServerConfig,
+) -> std::io::Result<()> {
+    let (db, idempotency_cache) = open_server_state(db_path)?;
+    let state = EngineAppState {
+        db,
+        idempotency_cache,
+        config,
+    };
+    let app = Router::new()
+        .fallback(any(handle_axum_request))
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .with_state(state);
+    axum::serve(listener, app).await
 }
 
 pub fn serve_listener(db_path: impl AsRef<Path>, listener: TcpListener) -> std::io::Result<()> {
+    serve_listener_with_config(db_path, listener, EngineServerConfig::from_env())
+}
+
+pub fn serve_listener_with_config(
+    db_path: impl AsRef<Path>,
+    listener: TcpListener,
+    config: EngineServerConfig,
+) -> std::io::Result<()> {
     let (db, idempotency_cache) = open_server_state(db_path)?;
     for stream in listener.incoming() {
-        spawn_handler(stream?, Arc::clone(&db), Arc::clone(&idempotency_cache));
+        spawn_handler_with_config(
+            stream?,
+            Arc::clone(&db),
+            Arc::clone(&idempotency_cache),
+            config.clone(),
+        );
     }
     Ok(())
 }
@@ -162,12 +250,31 @@ pub fn serve_listener_with_shutdown(
     listener: TcpListener,
     should_shutdown: impl Fn() -> bool,
 ) -> std::io::Result<()> {
+    serve_listener_with_shutdown_and_config(
+        db_path,
+        listener,
+        should_shutdown,
+        EngineServerConfig::from_env(),
+    )
+}
+
+pub fn serve_listener_with_shutdown_and_config(
+    db_path: impl AsRef<Path>,
+    listener: TcpListener,
+    should_shutdown: impl Fn() -> bool,
+    config: EngineServerConfig,
+) -> std::io::Result<()> {
     let (db, idempotency_cache) = open_server_state(db_path)?;
     listener.set_nonblocking(true)?;
     while !should_shutdown() {
         match listener.accept() {
             Ok((stream, _)) => {
-                spawn_handler(stream, Arc::clone(&db), Arc::clone(&idempotency_cache));
+                spawn_handler_with_config(
+                    stream,
+                    Arc::clone(&db),
+                    Arc::clone(&idempotency_cache),
+                    config.clone(),
+                );
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(10));
@@ -190,9 +297,14 @@ fn open_server_state(
     Ok((db, idempotency_cache))
 }
 
-fn spawn_handler(stream: TcpStream, db: Arc<Mutex<TraceDb>>, idempotency_cache: IdempotencyCache) {
+fn spawn_handler_with_config(
+    stream: TcpStream,
+    db: Arc<Mutex<TraceDb>>,
+    idempotency_cache: IdempotencyCache,
+    config: EngineServerConfig,
+) {
     thread::spawn(move || {
-        let _ = handle(stream, db, idempotency_cache);
+        let _ = handle(stream, db, idempotency_cache, config);
     });
 }
 
@@ -200,8 +312,9 @@ fn handle(
     mut stream: TcpStream,
     db: Arc<Mutex<TraceDb>>,
     idempotency_cache: IdempotencyCache,
+    config: EngineServerConfig,
 ) -> std::io::Result<()> {
-    let response = match handle_inner(&mut stream, db, idempotency_cache) {
+    let response = match handle_inner(&mut stream, db, idempotency_cache, config) {
         Ok(response) => response,
         Err(error) => bad_request(error.to_string()),
     };
@@ -220,9 +333,43 @@ fn handle_inner(
     stream: &mut TcpStream,
     db: Arc<Mutex<TraceDb>>,
     idempotency_cache: IdempotencyCache,
+    config: EngineServerConfig,
+) -> std::io::Result<String> {
+    let request = read_request(stream)?;
+    handle_request_text(&request, db, idempotency_cache, config)
+}
+
+async fn handle_axum_request(
+    State(state): State<EngineAppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Response<Body>, Infallible> {
+    let body = match to_bytes(body, 16 * 1024 * 1024).await {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(response_from_http_text(bad_request(format!(
+                "failed to read request body: {error}"
+            ))));
+        }
+    };
+    let request = request_text_from_parts(&method, &uri, &headers, &body);
+    let response =
+        match handle_request_text(&request, state.db, state.idempotency_cache, state.config) {
+            Ok(response) => response,
+            Err(error) => bad_request(error.to_string()),
+        };
+    Ok(response_from_http_text(response))
+}
+
+fn handle_request_text(
+    request: &str,
+    db: Arc<Mutex<TraceDb>>,
+    idempotency_cache: IdempotencyCache,
+    config: EngineServerConfig,
 ) -> std::io::Result<String> {
     let request_start = Instant::now();
-    let request = read_request(stream)?;
     let read_ms = elapsed_ms(request_start);
     let mut lines = request.lines();
     let request_line = lines.next().unwrap_or_default();
@@ -234,11 +381,15 @@ fn handle_inner(
         .map(str::to_string)
         .unwrap_or_else(next_request_id);
     log_request("tracedb-engine", &request_id, method, path);
+    if !is_public_engine_route(method, path) && !config.authorizes_private_request(request) {
+        return Ok(unauthorized("missing or invalid private engine token"));
+    }
     let body = request
         .split("\r\n\r\n")
         .nth(1)
         .or_else(|| request.split("\n\n").nth(1))
         .unwrap_or_default();
+    let actor = actor_context_from_request(request, body, &request_id);
     let idempotency_cache_key = header_value(&request, "idempotency-key")
         .filter(|key| !key.is_empty())
         .filter(|_| supports_http_idempotency(method, path))
@@ -374,33 +525,41 @@ fn handle_inner(
         }
         ("POST", "/v1/records/get") => {
             let request: RecordGetRequest = serde_json::from_str(body).map_err(to_io_error)?;
-            let record = db.lock().unwrap().get(request).map_err(to_io_error)?;
+            let record = db
+                .lock()
+                .unwrap()
+                .get_as(&actor, request)
+                .map_err(to_io_error)?;
             ok(json!({ "record": record }))
         }
         ("POST", "/v1/records/scan") => {
             let request: RecordScanRequest = serde_json::from_str(body).map_err(to_io_error)?;
-            let output = db.lock().unwrap().scan(request).map_err(to_io_error)?;
+            let output = db
+                .lock()
+                .unwrap()
+                .scan_as(&actor, request)
+                .map_err(to_io_error)?;
             ok(serde_json::to_value(output).map_err(to_io_error)?)
         }
         ("POST", "/v1/query") => {
             let parse_start = Instant::now();
             let query: HybridQuery = serde_json::from_str(body).map_err(to_io_error)?;
             let parse_ms = elapsed_ms(parse_start);
-            query_response(&db, query, request_start, read_ms, parse_ms)?
+            query_response(&db, actor, query, request_start, read_ms, parse_ms)?
         }
         ("POST", "/v1/traceql") => {
             let parse_start = Instant::now();
             let request: TraceQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
             let query = traceql_query_from_str(&request.query).map_err(to_io_error)?;
             let parse_ms = elapsed_ms(parse_start);
-            query_response(&db, query, request_start, read_ms, parse_ms)?
+            query_response(&db, actor, query, request_start, read_ms, parse_ms)?
         }
         ("POST", "/v1/graphql") => {
             let parse_start = Instant::now();
             let request: GraphQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
             let query = graphql_query_from_str(&request.query).map_err(to_io_error)?;
             let parse_ms = elapsed_ms(parse_start);
-            query_response(&db, query, request_start, read_ms, parse_ms)?
+            query_response(&db, actor, query, request_start, read_ms, parse_ms)?
         }
         ("GET", "/v1/graphql/schema") => {
             let db = db.lock().unwrap();
@@ -423,11 +582,17 @@ fn handle_inner(
             let mut query: HybridQuery = serde_json::from_str(body).map_err(to_io_error)?;
             query.explain = true;
             let parse_ms = elapsed_ms(parse_start);
+            let mut actor = actor.clone();
+            if actor.tenant_id == "local" {
+                actor.tenant_id = query.tenant_id.clone();
+            }
             let lock_start = Instant::now();
             let guard = db.lock().unwrap();
             let lock_wait_ms = elapsed_ms(lock_start);
             let engine_start = Instant::now();
-            let timed_output = guard.query_with_timing(query).map_err(to_io_error)?;
+            let timed_output = guard
+                .query_with_timing_as(&actor, query)
+                .map_err(to_io_error)?;
             let engine_ms = elapsed_ms(engine_start);
             let query_timing = timed_output.timing;
             drop(guard);
@@ -523,6 +688,16 @@ fn handle_inner(
     Ok(response)
 }
 
+#[cfg(test)]
+fn handle_request_text_for_test(
+    request: &str,
+    db: Arc<Mutex<TraceDb>>,
+    idempotency_cache: IdempotencyCache,
+    config: EngineServerConfig,
+) -> std::io::Result<String> {
+    handle_request_text(request, db, idempotency_cache, config)
+}
+
 fn supports_http_idempotency(method: &str, path: &str) -> bool {
     matches!(
         (method, path),
@@ -538,6 +713,10 @@ fn supports_http_idempotency(method: &str, path: &str) -> bool {
     )
 }
 
+fn is_public_engine_route(method: &str, path: &str) -> bool {
+    matches!((method, path), ("GET", "/health") | ("GET", "/v1/health"))
+}
+
 fn parse_record_put_body(body: &str) -> std::io::Result<RecordInput> {
     let value: Value = serde_json::from_str(body).map_err(to_io_error)?;
     if value.get("record").is_some() {
@@ -550,17 +729,23 @@ fn parse_record_put_body(body: &str) -> std::io::Result<RecordInput> {
 
 fn query_response(
     db: &Arc<Mutex<TraceDb>>,
+    mut actor: ActorContext,
     query: HybridQuery,
     request_start: Instant,
     read_ms: f64,
     parse_ms: f64,
 ) -> std::io::Result<String> {
     let include_explain = query.explain;
+    if actor.tenant_id == "local" {
+        actor.tenant_id = query.tenant_id.clone();
+    }
     let lock_start = Instant::now();
     let guard = db.lock().unwrap();
     let lock_wait_ms = elapsed_ms(lock_start);
     let engine_start = Instant::now();
-    let timed_output = guard.query_with_timing(query).map_err(to_io_error)?;
+    let timed_output = guard
+        .query_with_timing_as(&actor, query)
+        .map_err(to_io_error)?;
     let engine_ms = elapsed_ms(engine_start);
     let query_timing = timed_output.timing;
     drop(guard);
@@ -663,11 +848,173 @@ fn find_header_end(buffer: &[u8]) -> Option<(usize, usize)> {
         })
 }
 
+fn request_text_from_parts(
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> String {
+    let mut request = format!("{method} {uri} HTTP/1.1\r\n");
+    for (name, value) in headers {
+        if name.as_str().eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        if let Ok(value) = value.to_str() {
+            request.push_str(name.as_str());
+            request.push_str(": ");
+            request.push_str(value);
+            request.push_str("\r\n");
+        }
+    }
+    request.push_str("content-length: ");
+    request.push_str(&body.len().to_string());
+    request.push_str("\r\n\r\n");
+    request.push_str(&String::from_utf8_lossy(body));
+    request
+}
+
+fn response_from_http_text(response: String) -> Response<Body> {
+    let Some((head, body)) = response
+        .split_once("\r\n\r\n")
+        .or_else(|| response.split_once("\n\n"))
+    else {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from(response))
+            .expect("internal response");
+    };
+    let mut lines = head.lines();
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .and_then(|status| StatusCode::from_u16(status).ok())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut builder = Response::builder().status(status);
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let Ok(name) = HeaderName::from_bytes(name.trim().as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = HeaderValue::from_str(value.trim()) else {
+            continue;
+        };
+        builder = builder.header(name, value);
+    }
+    builder
+        .header("connection", "close")
+        .body(Body::from(body.to_string()))
+        .expect("response builder")
+}
+
 fn header_value<'a>(request: &'a str, name: &str) -> Option<&'a str> {
     request.lines().skip(1).find_map(|line| {
         let (header, value) = line.split_once(':')?;
         header.eq_ignore_ascii_case(name).then(|| value.trim())
     })
+}
+
+fn actor_context_from_request(request: &str, body: &str, request_id: &str) -> ActorContext {
+    let body_json = serde_json::from_str::<Value>(body).ok();
+    let body_tenant = body_json
+        .as_ref()
+        .and_then(|value| json_string(value, "tenant_id"))
+        .or_else(|| first_record_json_string(body_json.as_ref(), "tenant_id"))
+        .or_else(|| graphql_tenant_from_body(body_json.as_ref()))
+        .or_else(|| traceql_tenant_from_body(body_json.as_ref()));
+    let database_id = header_value(request, "x-tracedb-database-id")
+        .map(str::to_string)
+        .or_else(|| {
+            body_json
+                .as_ref()
+                .and_then(|value| json_string(value, "database_id"))
+        })
+        .unwrap_or_else(|| "local".to_string());
+    let branch_id = header_value(request, "x-tracedb-branch-id")
+        .map(str::to_string)
+        .or_else(|| {
+            body_json
+                .as_ref()
+                .and_then(|value| json_string(value, "branch_id"))
+        })
+        .unwrap_or_else(|| "main".to_string());
+    let tenant_id = header_value(request, "x-tracedb-tenant-id")
+        .map(str::to_string)
+        .or(body_tenant)
+        .unwrap_or_else(|| "local".to_string());
+    let token_identity = header_value(request, "x-tracedb-token-identity")
+        .map(str::to_string)
+        .or_else(|| {
+            header_value(request, "authorization")
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .map(|_| "bearer".to_string())
+        })
+        .unwrap_or_else(|| "anonymous".to_string());
+    let actor_request_id = header_value(request, "x-tracedb-request-id")
+        .unwrap_or(request_id)
+        .to_string();
+    let policy_epoch = header_value(request, "x-tracedb-policy-epoch")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let scopes = header_value(request, "x-tracedb-scopes")
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|scope| !scope.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    ActorContext::managed_request(
+        tenant_id,
+        database_id,
+        branch_id,
+        token_identity,
+        actor_request_id,
+        policy_epoch,
+        scopes,
+    )
+}
+
+fn json_string(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(Value::as_str).map(str::to_string)
+}
+
+fn first_record_json_string(value: Option<&Value>, field: &str) -> Option<String> {
+    value?
+        .get("records")
+        .and_then(Value::as_array)
+        .and_then(|records| records.first())
+        .and_then(|record| record.get(field))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn graphql_tenant_from_body(value: Option<&Value>) -> Option<String> {
+    let query = value?.get("query")?.as_str()?;
+    let marker = "tenant_id:";
+    let after_marker = query.split(marker).nth(1)?.trim_start();
+    quoted_prefix(after_marker)
+}
+
+fn traceql_tenant_from_body(value: Option<&Value>) -> Option<String> {
+    let query = value?.get("query")?.as_str()?;
+    query.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("TENANT ")
+            .map(str::trim)
+            .filter(|tenant| !tenant.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn quoted_prefix(value: &str) -> Option<String> {
+    let value = value.strip_prefix('"')?;
+    let end = value.find('"')?;
+    Some(value[..end].to_string())
 }
 
 fn next_request_id() -> String {
@@ -763,6 +1110,15 @@ fn bad_request(message: String) -> String {
     )
 }
 
+fn unauthorized(message: impl Into<String>) -> String {
+    let body = json!({ "error": message.into(), "code": "unauthorized" }).to_string();
+    format!(
+        "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
 fn conflict(message: impl Into<String>) -> String {
     let body = json!({ "error": message.into(), "code": "idempotency_conflict" }).to_string();
     format!(
@@ -774,4 +1130,122 @@ fn conflict(message: impl Into<String>) -> String {
 
 fn to_io_error(error: impl std::error::Error) -> std::io::Error {
     std::io::Error::other(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_health_requires_private_token_when_configured() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (db, idempotency_cache) = open_server_state(temp.path()).expect("server state");
+        let config = EngineServerConfig::default().with_internal_token("engine-secret");
+
+        let missing = handle_request_text_for_test(
+            "GET /internal/health HTTP/1.1\r\ncontent-length: 0\r\n\r\n",
+            Arc::clone(&db),
+            Arc::clone(&idempotency_cache),
+            config.clone(),
+        )
+        .expect("missing token response");
+        assert!(
+            missing.starts_with("HTTP/1.1 401 Unauthorized"),
+            "missing token should be rejected: {missing}"
+        );
+
+        let authorized = handle_request_text_for_test(
+            "GET /internal/health HTTP/1.1\r\nx-tracedb-engine-token: engine-secret\r\ncontent-length: 0\r\n\r\n",
+            db,
+            idempotency_cache,
+            config,
+        )
+        .expect("authorized token response");
+        assert!(
+            authorized.starts_with("HTTP/1.1 200 OK"),
+            "authorized token should pass: {authorized}"
+        );
+    }
+
+    #[test]
+    fn stateful_v1_routes_require_private_token_when_configured() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (db, idempotency_cache) = open_server_state(temp.path()).expect("server state");
+        let config = EngineServerConfig::default().with_internal_token("engine-secret");
+        let schema = json!({
+            "name": "docs",
+            "primary_id_column": "id",
+            "tenant_id_column": "tenant",
+            "scalar_columns": ["status"],
+            "text_indexed_columns": ["body"],
+            "vector_columns": [{
+                "name": "embedding",
+                "dimensions": 2,
+                "source_columns": ["body"]
+            }]
+        })
+        .to_string();
+
+        let missing = handle_request_text_for_test(
+            &format!(
+                "POST /v1/schema/apply HTTP/1.1\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                schema.len(),
+                schema
+            ),
+            Arc::clone(&db),
+            Arc::clone(&idempotency_cache),
+            config.clone(),
+        )
+        .expect("missing token response");
+        assert!(
+            missing.starts_with("HTTP/1.1 401 Unauthorized"),
+            "stateful route without private token should be rejected: {missing}"
+        );
+
+        let authorized = handle_request_text_for_test(
+            &format!(
+                "POST /v1/schema/apply HTTP/1.1\r\ncontent-type: application/json\r\nx-tracedb-engine-token: engine-secret\r\ncontent-length: {}\r\n\r\n{}",
+                schema.len(),
+                schema
+            ),
+            db,
+            idempotency_cache,
+            config,
+        )
+        .expect("authorized token response");
+        assert!(
+            authorized.starts_with("HTTP/1.1 200 OK"),
+            "stateful route with private token should pass: {authorized}"
+        );
+    }
+
+    #[tokio::test]
+    async fn axum_entrypoint_rejects_oversized_body() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (db, idempotency_cache) = open_server_state(temp.path()).expect("server state");
+        let state = EngineAppState {
+            db,
+            idempotency_cache,
+            config: EngineServerConfig::default(),
+        };
+        let response = handle_axum_request(
+            State(state),
+            Method::POST,
+            "/v1/query".parse().expect("uri"),
+            HeaderMap::new(),
+            Body::from(vec![b'x'; 16 * 1024 * 1024 + 1]),
+        )
+        .await
+        .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body bytes");
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            body.contains("failed to read request body"),
+            "oversized Axum body should be rejected by production path: {body}"
+        );
+    }
 }

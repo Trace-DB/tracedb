@@ -23,6 +23,7 @@ use tracedb_planner::{
     ExplainOutput, FeatureFreshness, PlannerFeedback, Predicates, QueryFragment, QueryOutput,
     QueryPhaseTiming, QueryRow, ScoreComponents, Stats, TraceQuery, WorkBudget,
 };
+use tracedb_policy::ActorContext;
 use tracedb_segment::SegmentRecord;
 use tracedb_store::{ReadSnapshot, RecordStore, ReplacementApplyTiming, StoredRecord};
 
@@ -325,6 +326,16 @@ fn parse_cursor_offset(cursor: Option<&str>) -> Result<usize> {
             .map_err(|_| TraceDbError::InvalidCommand(format!("invalid cursor offset: {value}"))),
         None => Ok(0),
     }
+}
+
+fn validate_actor_tenant(actor: &ActorContext, tenant_id: &str) -> Result<()> {
+    if actor.tenant_id == tenant_id {
+        return Ok(());
+    }
+    Err(TraceDbError::InvalidCommand(format!(
+        "actor tenant {} cannot query tenant {}",
+        actor.tenant_id, tenant_id
+    )))
 }
 
 pub trait BackupRestore {
@@ -951,6 +962,15 @@ impl TraceDb {
             .map(record_output))
     }
 
+    pub fn get_as(
+        &self,
+        actor: &ActorContext,
+        request: RecordGetRequest,
+    ) -> Result<Option<RecordOutput>> {
+        validate_actor_tenant(actor, &request.tenant_id)?;
+        self.get(request)
+    }
+
     pub fn scan(&self, request: RecordScanRequest) -> Result<RecordScanOutput> {
         self.manifest
             .table(&request.table)
@@ -978,12 +998,34 @@ impl TraceDb {
         })
     }
 
+    pub fn scan_as(
+        &self,
+        actor: &ActorContext,
+        request: RecordScanRequest,
+    ) -> Result<RecordScanOutput> {
+        validate_actor_tenant(actor, &request.tenant_id)?;
+        self.scan(request)
+    }
+
     pub fn snapshot(&self) -> Result<ReadSnapshot> {
         Ok(self.store.snapshot(self.manifest.latest_epoch))
     }
 
     pub fn query(&self, query: HybridQuery) -> Result<QueryOutput> {
         Ok(self.query_with_timing(query)?.output)
+    }
+
+    pub fn query_as(&self, actor: &ActorContext, query: HybridQuery) -> Result<QueryOutput> {
+        Ok(self.query_with_timing_as(actor, query)?.output)
+    }
+
+    pub fn query_with_timing_as(
+        &self,
+        actor: &ActorContext,
+        query: HybridQuery,
+    ) -> Result<TimedQueryOutput> {
+        validate_actor_tenant(actor, &query.tenant_id)?;
+        self.query_with_timing(query)
     }
 
     pub fn query_with_timing(&self, query: HybridQuery) -> Result<TimedQueryOutput> {
@@ -4964,6 +5006,50 @@ mod tests {
         let second = db.query(query).expect("second page");
         assert_eq!(second.results.len(), 1);
         assert_eq!(second.next_cursor, None);
+    }
+
+    #[test]
+    fn actor_aware_query_rejects_tenant_mismatch_below_route_layer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        db.put(RecordPutRequest::new(record("a", "actor scoped query")))
+            .expect("put");
+        let actor = tracedb_policy::ActorContext::managed_request(
+            "tenant-b",
+            "local",
+            "main",
+            "token:other",
+            "request-tenant-mismatch",
+            1,
+            vec!["records:read".to_string()],
+        );
+        let query = HybridQuery {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            cursor: None,
+            text_field: Some("body".to_string()),
+            text: Some("actor".to_string()),
+            vector_field: None,
+            vector: None,
+            scalar_eq: Default::default(),
+            graph_seed: None,
+            temporal_as_of: None,
+            top_k: 2,
+            freshness: FreshnessMode::Strict,
+            explain: true,
+        };
+
+        let error = db
+            .query_as(&actor, query)
+            .expect_err("actor tenant mismatch should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("actor tenant tenant-b cannot query tenant tenant-a"),
+            "unexpected actor mismatch error: {error}"
+        );
     }
 
     #[test]

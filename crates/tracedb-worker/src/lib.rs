@@ -19,7 +19,10 @@ pub fn run_once_through_engine_api(
     worker_id: WorkerId,
     engine_url: &str,
 ) -> Result<WorkerRunReport, String> {
-    let status = probe_private_engine_health(engine_url)?;
+    let status = probe_private_engine_health_with_token(
+        engine_url,
+        engine_internal_token_from_env().as_deref(),
+    )?;
     let leased = jobs
         .lease_next(worker_id, JobKind::VerifyDatabase)?
         .map(|job| job.job_id);
@@ -33,14 +36,24 @@ pub fn run_once_through_engine_api(
 }
 
 pub fn probe_private_engine_health(engine_url: &str) -> Result<u16, String> {
+    probe_private_engine_health_with_token(engine_url, engine_internal_token_from_env().as_deref())
+}
+
+pub fn probe_private_engine_health_with_token(
+    engine_url: &str,
+    internal_token: Option<&str>,
+) -> Result<u16, String> {
     let target = EngineTarget::parse(engine_url)?;
     if !target.is_private() {
         return Err("worker must use private engine API".to_string());
     }
     let mut stream = TcpStream::connect(&target.address).map_err(|error| error.to_string())?;
     let path = target.join("/internal/health");
+    let token_header = internal_token
+        .map(|token| format!("x-tracedb-engine-token: {token}\r\n"))
+        .unwrap_or_default();
     let request = format!(
-        "GET {path} HTTP/1.1\r\nhost: {}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        "GET {path} HTTP/1.1\r\nhost: {}\r\n{token_header}content-length: 0\r\nconnection: close\r\n\r\n",
         target.host
     );
     stream
@@ -60,6 +73,13 @@ pub fn probe_private_engine_health(engine_url: &str) -> Result<u16, String> {
         return Err("private engine health response was not ok".to_string());
     }
     Ok(status)
+}
+
+fn engine_internal_token_from_env() -> Option<String> {
+    std::env::var("TRACEDB_ENGINE_INTERNAL_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("TRACEDB_ENGINE_TOKEN").ok())
+        .filter(|token| !token.trim().is_empty())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

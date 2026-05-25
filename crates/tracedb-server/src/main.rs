@@ -25,7 +25,7 @@ fn run() -> std::io::Result<()> {
 fn bind_addr_from_env() -> String {
     env::var("TRACEDB_BIND").unwrap_or_else(|_| {
         env::var("PORT")
-            .map(|port| format!("0.0.0.0:{port}"))
-            .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+            .map(|port| format!("[::]:{port}"))
+            .unwrap_or_else(|_| "[::]:8080".to_string())
     })
 }

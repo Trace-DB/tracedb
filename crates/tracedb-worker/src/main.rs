@@ -159,7 +159,7 @@ fn next_request_id() -> String {
 fn bind_addr_from_env() -> String {
     std::env::var("TRACEDB_BIND").unwrap_or_else(|_| {
         std::env::var("PORT")
-            .map(|port| format!("0.0.0.0:{port}"))
-            .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+            .map(|port| format!("[::]:{port}"))
+            .unwrap_or_else(|_| "[::]:8080".to_string())
     })
 }

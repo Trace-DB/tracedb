@@ -9,7 +9,16 @@ name = "tracedb-server"
 path = "src/main.rs"
 
 [dependencies]
+axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 tracedb-gateway = { path = "../tracedb-gateway" }
+tracedb-policy = { path = "../tracedb-policy" }
 tracedb-query = { path = "../tracedb-query" }
+
+[dev-dependencies]
+tempfile.workspace = true

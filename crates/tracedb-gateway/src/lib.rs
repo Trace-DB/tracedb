@@ -1,13 +1,18 @@
 #![forbid(unsafe_code)]
 
+use axum::body::{to_bytes, Body, Bytes};
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri};
+use axum::routing::any;
+use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::convert::Infallible;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use tracedb_catalog::Catalog;
 use tracedb_metering::{MeterKind, UsageMeter};
 
@@ -133,6 +138,7 @@ impl Gateway {
 pub struct GatewayServerConfig {
     pub bind: String,
     pub engine_url: String,
+    pub engine_internal_token: Option<String>,
     pub required_token: Option<String>,
     pub catalog: Catalog,
     pub meter: Arc<Mutex<UsageMeter>>,
@@ -147,6 +153,7 @@ impl GatewayServerConfig {
         Self {
             bind: bind_addr_from_env(),
             engine_url: engine_url.clone(),
+            engine_internal_token: engine_internal_token_from_env(),
             required_token: if std::env::var("TRACEDB_REQUIRE_API_KEY")
                 .map(|value| value == "true")
                 .unwrap_or(false)
@@ -169,22 +176,47 @@ impl GatewayServerConfig {
 }
 
 pub fn serve(config: GatewayServerConfig) -> std::io::Result<()> {
-    let listener = TcpListener::bind(&config.bind)?;
-    for stream in listener.incoming() {
-        let stream = stream?;
-        let config = config.clone();
-        thread::spawn(move || {
-            let _ = handle_gateway(stream, config);
-        });
-    }
-    Ok(())
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(serve_async(config))
 }
 
-fn handle_gateway(mut stream: TcpStream, config: GatewayServerConfig) -> std::io::Result<()> {
-    let request = read_request(&mut stream)?;
-    let response = handle_gateway_request_text(&request, config);
-    stream.write_all(response.as_bytes())?;
-    stream.flush()
+pub async fn serve_async(config: GatewayServerConfig) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
+    serve_tokio_listener(listener, config).await
+}
+
+pub async fn serve_tokio_listener(
+    listener: tokio::net::TcpListener,
+    config: GatewayServerConfig,
+) -> std::io::Result<()> {
+    let app = Router::new()
+        .fallback(any(handle_axum_gateway_request))
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .with_state(config);
+    axum::serve(listener, app).await
+}
+
+async fn handle_axum_gateway_request(
+    State(config): State<GatewayServerConfig>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Response<Body>, Infallible> {
+    let body = match to_bytes(body, 16 * 1024 * 1024).await {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(response_from_http_text(bad_request(format!(
+                "failed to read request body: {error}"
+            ))));
+        }
+    };
+    let request = request_text_from_parts(&method, &uri, &headers, &body);
+    Ok(response_from_http_text(handle_gateway_request_text(
+        &request, config,
+    )))
 }
 
 pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -> String {
@@ -226,6 +258,8 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
                 "/internal/health",
                 &[],
                 "application/json",
+                config.engine_internal_token.as_deref(),
+                &[],
             ) {
                 Ok(response) if (200..300).contains(&response.status_code) => ok(json!({
                     "ok": true,
@@ -272,15 +306,21 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
         })),
         _ if is_proxied_gateway_route(method, path) => {
             match authorize_route_and_meter(&config, path, &body, bearer_token, query) {
-                Ok(target) => proxy_or_gateway_error(
-                    &target.url,
-                    method,
-                    path,
-                    &body,
-                    content_type,
-                    Some(&request_id),
-                    idempotency_key.as_deref(),
-                ),
+                Ok(authorized) => {
+                    let mut actor_headers = authorized.actor_headers;
+                    actor_headers.push(("x-tracedb-request-id".to_string(), request_id.clone()));
+                    proxy_or_gateway_error(
+                        &authorized.target.url,
+                        method,
+                        path,
+                        &body,
+                        content_type,
+                        Some(&request_id),
+                        idempotency_key.as_deref(),
+                        config.engine_internal_token.as_deref(),
+                        &actor_headers,
+                    )
+                }
                 Err(GatewayRuntimeError::Unauthorized) => unauthorized(),
                 Err(GatewayRuntimeError::RateLimited) => too_many_requests(),
                 Err(GatewayRuntimeError::BadRequest(message)) => bad_request(message),
@@ -319,8 +359,9 @@ fn authorize_route_and_meter(
     body: &[u8],
     bearer_token: Option<String>,
     query: Option<&str>,
-) -> Result<EngineTarget, GatewayRuntimeError> {
-    let (database_id, branch_id) = gateway_ids_from_request(body, query)?;
+) -> Result<AuthorizedGatewayRoute, GatewayRuntimeError> {
+    let mut ids = gateway_ids_from_request(body, query)?;
+    ids.bearer_token = bearer_token;
     let gateway = match &config.required_token {
         Some(token) => Gateway::new(config.catalog.clone(), token.clone()),
         None => Gateway::open(config.catalog.clone()),
@@ -333,10 +374,10 @@ fn authorize_route_and_meter(
     let response = gateway
         .route(
             GatewayRequest {
-                database_id,
-                branch_id,
+                database_id: ids.database_id.clone(),
+                branch_id: ids.branch_id.clone(),
                 path: path.to_string(),
-                bearer_token,
+                bearer_token: ids.bearer_token.clone(),
             },
             &mut meter,
         )
@@ -347,19 +388,63 @@ fn authorize_route_and_meter(
                 GatewayRuntimeError::BadRequest(error)
             }
         })?;
-    Ok(response.engine_target)
+    Ok(AuthorizedGatewayRoute {
+        target: response.engine_target,
+        actor_headers: ids.actor_headers(),
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuthorizedGatewayRoute {
+    target: EngineTarget,
+    actor_headers: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GatewayRequestIds {
+    database_id: String,
+    branch_id: String,
+    tenant_id: String,
+    bearer_token: Option<String>,
+}
+
+impl GatewayRequestIds {
+    fn actor_headers(&self) -> Vec<(String, String)> {
+        vec![
+            (
+                "x-tracedb-database-id".to_string(),
+                self.database_id.clone(),
+            ),
+            ("x-tracedb-branch-id".to_string(), self.branch_id.clone()),
+            ("x-tracedb-tenant-id".to_string(), self.tenant_id.clone()),
+            (
+                "x-tracedb-token-identity".to_string(),
+                if self.bearer_token.is_some() {
+                    "bearer".to_string()
+                } else {
+                    "anonymous".to_string()
+                },
+            ),
+        ]
+    }
 }
 
 fn gateway_ids_from_request(
     body: &[u8],
     query: Option<&str>,
-) -> Result<(String, String), GatewayRuntimeError> {
+) -> Result<GatewayRequestIds, GatewayRuntimeError> {
     if body.is_empty() {
         let database_id =
             query_value(query, "database_id").unwrap_or_else(|| "db_local".to_string());
         let branch_id =
             query_value(query, "branch_id").unwrap_or_else(|| format!("{database_id}:main"));
-        return Ok((database_id, branch_id));
+        let tenant_id = query_value(query, "tenant_id").unwrap_or_else(|| "local".to_string());
+        return Ok(GatewayRequestIds {
+            database_id,
+            branch_id,
+            tenant_id,
+            bearer_token: None,
+        });
     }
     let value = serde_json::from_slice::<Value>(body)
         .map_err(|error| GatewayRuntimeError::BadRequest(error.to_string()))?;
@@ -373,7 +458,25 @@ fn gateway_ids_from_request(
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| format!("{database_id}:main"));
-    Ok((database_id, branch_id))
+    let tenant_id = value
+        .get("tenant_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("records")
+                .and_then(Value::as_array)
+                .and_then(|records| records.first())
+                .and_then(|record| record.get("tenant_id"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("local")
+        .to_string();
+    Ok(GatewayRequestIds {
+        database_id,
+        branch_id,
+        tenant_id,
+        bearer_token: None,
+    })
 }
 
 fn split_request_target(target: &str) -> (&str, Option<&str>) {
@@ -423,8 +526,20 @@ pub fn proxy_engine_request(
     path: &str,
     body: &[u8],
     content_type: &str,
+    engine_internal_token: Option<&str>,
+    actor_headers: &[(String, String)],
 ) -> std::io::Result<EngineHttpResponse> {
-    proxy_engine_request_with_id(engine_url, method, path, body, content_type, None, None)
+    proxy_engine_request_with_id(
+        engine_url,
+        method,
+        path,
+        body,
+        content_type,
+        None,
+        None,
+        engine_internal_token,
+        actor_headers,
+    )
 }
 
 fn proxy_engine_request_with_id(
@@ -435,6 +550,8 @@ fn proxy_engine_request_with_id(
     content_type: &str,
     request_id: Option<&str>,
     idempotency_key: Option<&str>,
+    engine_internal_token: Option<&str>,
+    actor_headers: &[(String, String)],
 ) -> std::io::Result<EngineHttpResponse> {
     let target = HttpTarget::parse(engine_url)?;
     let route = target.join(path);
@@ -445,8 +562,15 @@ fn proxy_engine_request_with_id(
     let idempotency_key_header = idempotency_key
         .map(|idempotency_key| format!("idempotency-key: {idempotency_key}\r\n"))
         .unwrap_or_default();
+    let engine_token_header = engine_internal_token
+        .map(|token| format!("x-tracedb-engine-token: {token}\r\n"))
+        .unwrap_or_default();
+    let actor_header_text = actor_headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
     let request = format!(
-        "{method} {route} HTTP/1.1\r\nhost: {}\r\ncontent-type: {content_type}\r\n{request_id_header}{idempotency_key_header}content-length: {}\r\nconnection: close\r\n\r\n{}",
+        "{method} {route} HTTP/1.1\r\nhost: {}\r\ncontent-type: {content_type}\r\n{request_id_header}{idempotency_key_header}{engine_token_header}{actor_header_text}content-length: {}\r\nconnection: close\r\n\r\n{}",
         target.host,
         body.len(),
         String::from_utf8_lossy(body)
@@ -466,6 +590,8 @@ fn proxy_or_gateway_error(
     content_type: &str,
     request_id: Option<&str>,
     idempotency_key: Option<&str>,
+    engine_internal_token: Option<&str>,
+    actor_headers: &[(String, String)],
 ) -> String {
     match proxy_engine_request_with_id(
         engine_url,
@@ -475,6 +601,8 @@ fn proxy_or_gateway_error(
         content_type,
         request_id,
         idempotency_key,
+        engine_internal_token,
+        actor_headers,
     ) {
         Ok(response) => response.to_http_response(),
         Err(error) => bad_gateway(format!("engine proxy failed: {error}")),
@@ -602,72 +730,65 @@ fn parse_engine_response(response: &[u8]) -> std::io::Result<EngineHttpResponse>
     })
 }
 
-fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 8192];
-    let (header_end, delimiter_len);
-    loop {
-        let read = stream.read(&mut chunk)?;
-        if read == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "connection closed before headers",
-            ));
+fn request_text_from_parts(
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> String {
+    let mut request = format!("{method} {uri} HTTP/1.1\r\n");
+    for (name, value) in headers {
+        if name.as_str().eq_ignore_ascii_case("content-length") {
+            continue;
         }
-        buffer.extend_from_slice(&chunk[..read]);
-        if let Some((end, len)) = find_header_end(&buffer) {
-            header_end = end;
-            delimiter_len = len;
-            break;
-        }
-        if buffer.len() > 1024 * 1024 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "request headers exceed 1MiB",
-            ));
+        if let Ok(value) = value.to_str() {
+            request.push_str(name.as_str());
+            request.push_str(": ");
+            request.push_str(value);
+            request.push_str("\r\n");
         }
     }
-    let headers = String::from_utf8_lossy(&buffer[..header_end]).to_string();
-    let content_length = headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())
-                .flatten()
-        })
-        .unwrap_or(0);
-    let body_start = header_end + delimiter_len;
-    while buffer.len() < body_start + content_length {
-        let read = stream.read(&mut chunk)?;
-        if read == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "connection closed before full body",
-            ));
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-        if content_length > 16 * 1024 * 1024 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "request body exceeds 16MiB",
-            ));
-        }
-    }
-    Ok(String::from_utf8_lossy(&buffer[..body_start + content_length]).to_string())
+    request.push_str("content-length: ");
+    request.push_str(&body.len().to_string());
+    request.push_str("\r\n\r\n");
+    request.push_str(&String::from_utf8_lossy(body));
+    request
 }
 
-fn find_header_end(buffer: &[u8]) -> Option<(usize, usize)> {
-    buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|pos| (pos, 4))
-        .or_else(|| {
-            buffer
-                .windows(2)
-                .position(|window| window == b"\n\n")
-                .map(|pos| (pos, 2))
-        })
+fn response_from_http_text(response: String) -> Response<Body> {
+    let Some((head, body)) = response
+        .split_once("\r\n\r\n")
+        .or_else(|| response.split_once("\n\n"))
+    else {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from(response))
+            .expect("internal response");
+    };
+    let mut lines = head.lines();
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .and_then(|status| StatusCode::from_u16(status).ok())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut builder = Response::builder().status(status);
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let Ok(name) = HeaderName::from_bytes(name.trim().as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = HeaderValue::from_str(value.trim()) else {
+            continue;
+        };
+        builder = builder.header(name, value);
+    }
+    builder
+        .header("connection", "close")
+        .body(Body::from(body.to_string()))
+        .expect("response builder")
 }
 
 fn header_value<'a>(request: &'a str, name: &str) -> Option<&'a str> {
@@ -743,9 +864,16 @@ fn too_many_requests() -> String {
 fn bind_addr_from_env() -> String {
     std::env::var("TRACEDB_BIND").unwrap_or_else(|_| {
         std::env::var("PORT")
-            .map(|port| format!("0.0.0.0:{port}"))
-            .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+            .map(|port| format!("[::]:{port}"))
+            .unwrap_or_else(|_| "[::]:8080".to_string())
     })
+}
+
+fn engine_internal_token_from_env() -> Option<String> {
+    std::env::var("TRACEDB_ENGINE_INTERNAL_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("TRACEDB_ENGINE_TOKEN").ok())
+        .filter(|token| !token.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -757,5 +885,119 @@ mod tests {
         assert!(is_proxied_gateway_route("POST", "/v1/traceql"));
         assert!(is_proxied_gateway_route("POST", "/v1/graphql"));
         assert!(is_proxied_gateway_route("GET", "/v1/graphql/schema"));
+    }
+
+    #[test]
+    fn gateway_injects_actor_context_and_private_engine_token() {
+        let engine = spawn_header_echo_engine();
+        let mut catalog = Catalog::default();
+        let database = catalog
+            .create_database("org-a", "project-a", "memory", "us-west")
+            .expect("database");
+        let branch = catalog
+            .create_branch(&database.database_id, "main", None)
+            .expect("branch");
+        let meter = Arc::new(Mutex::new(UsageMeter::default()));
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: engine,
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: Some("public-secret".to_string()),
+            catalog,
+            meter,
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+        };
+        let body = json!({
+            "database_id": database.database_id,
+            "branch_id": branch.branch_id,
+            "tenant_id": "tenant-a",
+            "table": "docs",
+            "top_k": 1,
+            "freshness": "Strict"
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/query HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer public-secret\r\nx-request-id: request-123\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = handle_gateway_request_text(&request, config);
+
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "gateway response should be OK: {response}"
+        );
+        assert!(response.contains("\"x-tracedb-engine-token\":\"engine-secret\""));
+        assert!(response.contains("\"x-tracedb-database-id\":\"db_"));
+        assert!(response.contains("\"x-tracedb-branch-id\":\""));
+        assert!(response.contains("\"x-tracedb-tenant-id\":\"tenant-a\""));
+        assert!(response.contains("\"x-tracedb-request-id\":\"request-123\""));
+        assert!(response.contains("\"x-tracedb-token-identity\":\"bearer\""));
+    }
+
+    #[tokio::test]
+    async fn axum_entrypoint_rejects_oversized_body() {
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: "http://127.0.0.1:1".to_string(),
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: Some("public-secret".to_string()),
+            catalog: Catalog::default(),
+            meter: Arc::new(Mutex::new(UsageMeter::default())),
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+        };
+        let response = handle_axum_gateway_request(
+            State(config),
+            Method::POST,
+            "/v1/query".parse().expect("uri"),
+            HeaderMap::new(),
+            Body::from(vec![b'x'; 16 * 1024 * 1024 + 1]),
+        )
+        .await
+        .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body bytes");
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            body.contains("failed to read request body"),
+            "oversized Axum body should be rejected by production path: {body}"
+        );
+    }
+
+    fn spawn_header_echo_engine() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind engine");
+        let addr = listener.local_addr().expect("engine addr");
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept engine request");
+            let mut buffer = [0u8; 8192];
+            let read = stream.read(&mut buffer).expect("read engine request");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let mut echoed = serde_json::Map::new();
+            for line in request.lines().skip(1) {
+                let Some((name, value)) = line.split_once(':') else {
+                    continue;
+                };
+                let name = name.trim().to_ascii_lowercase();
+                if name.starts_with("x-tracedb-") {
+                    echoed.insert(name, json!(value.trim()));
+                }
+            }
+            let body = Value::Object(echoed).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        });
+        format!("http://{addr}")
     }
 }

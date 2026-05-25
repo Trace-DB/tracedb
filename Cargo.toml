@@ -43,8 +43,13 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+axum = "0.8"
 crc32fast = "1.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.10"
 thiserror = "1.0"
+tokio = { version = "1.48", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tower = { version = "0.5", features = ["limit", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

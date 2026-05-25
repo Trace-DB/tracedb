@@ -88,16 +88,93 @@ impl Policy {
 pub struct ActorContext {
     pub tenant_id: String,
     pub user_id: String,
+    #[serde(default = "default_database_id")]
+    pub database_id: String,
+    #[serde(default = "default_branch_id")]
+    pub branch_id: String,
+    #[serde(default)]
+    pub token_identity: String,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub policy_epoch: u64,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(default)]
     pub audit: bool,
 }
 
 impl ActorContext {
     pub fn tenant_user(tenant_id: impl Into<String>, user_id: impl Into<String>) -> Self {
+        let user_id = user_id.into();
         Self {
             tenant_id: tenant_id.into(),
-            user_id: user_id.into(),
+            user_id: user_id.clone(),
+            database_id: default_database_id(),
+            branch_id: default_branch_id(),
+            token_identity: format!("user:{user_id}"),
+            request_id: String::new(),
+            policy_epoch: 0,
+            scopes: Vec::new(),
             audit: false,
         }
+    }
+
+    pub fn managed_request(
+        tenant_id: impl Into<String>,
+        database_id: impl Into<String>,
+        branch_id: impl Into<String>,
+        token_identity: impl Into<String>,
+        request_id: impl Into<String>,
+        policy_epoch: u64,
+        scopes: Vec<String>,
+    ) -> Self {
+        let token_identity = token_identity.into();
+        Self {
+            tenant_id: tenant_id.into(),
+            user_id: token_identity.clone(),
+            database_id: database_id.into(),
+            branch_id: branch_id.into(),
+            token_identity,
+            request_id: request_id.into(),
+            policy_epoch,
+            scopes,
+            audit: true,
+        }
+    }
+}
+
+fn default_database_id() -> String {
+    "local".to_string()
+}
+
+fn default_branch_id() -> String {
+    "main".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actor_context_carries_managed_request_identity() {
+        let actor = ActorContext::managed_request(
+            "tenant-a",
+            "db-prod",
+            "db-prod:main",
+            "token:api-key-1",
+            "request-123",
+            44,
+            vec!["records:read".to_string(), "records:write".to_string()],
+        );
+
+        assert_eq!(actor.tenant_id, "tenant-a");
+        assert_eq!(actor.database_id, "db-prod");
+        assert_eq!(actor.branch_id, "db-prod:main");
+        assert_eq!(actor.token_identity, "token:api-key-1");
+        assert_eq!(actor.request_id, "request-123");
+        assert_eq!(actor.policy_epoch, 44);
+        assert_eq!(actor.scopes, vec!["records:read", "records:write"]);
     }
 }
 
