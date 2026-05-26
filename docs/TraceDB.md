@@ -7,7 +7,7 @@ tags:
   - docs
 status: current-public-handoff
 type: repo-handoff
-updated: 2026-05-22
+updated: 2026-05-25
 ---
 
 # TraceDB
@@ -35,22 +35,22 @@ is not implemented.
 `docs/durability-semantics-v0.md` is the current local-first durability
 boundary. It documents WAL commit frames, manifest and checkpoint checksums,
 torn-tail recovery, hard corruption failures, snapshot/restore copy semantics,
-write/WAL lock-file behavior, and the local HTTP idempotency cache. It also
-states the non-guarantees: no managed-cloud backup/DR, no cross-replica
-idempotency, no crash-atomic exactly-once semantics, and no multi-process active
-writer claim for one data directory.
+write/WAL lock-file behavior, TDE artifact behavior, and local
+WAL/checkpoint-backed idempotency receipts. It also states the non-guarantees:
+no managed-cloud backup/DR, no cross-replica idempotency, no crash-atomic
+exactly-once semantics, and no multi-process active writer claim for one data
+directory.
 
 ## HTTP Stack Boundary
 
 The current HTTP stack boundary is explicit. `tracedb-server` and
-`tracedb-gateway` use stdlib `TcpListener` / `TcpStream`, one thread per
-accepted connection, and JSON over HTTP/1.1 for the local product path and
-gateway proof path. Engine mode stores the opened local database behind
-`Arc<Mutex<TraceDb>>`, so `Arc<Mutex<TraceDb>>` serializes engine access across
-accepted connections. The stack requires `Content-Length`, reads request bodies
-into memory with current header/body caps, and does not implement chunked
-transfer encoding. The current server path does not provide TLS or HTTP/2 and
-is not a production web-server stack.
+`tracedb-gateway` default to Tokio/Axum product paths with Tower body limits,
+timeouts, load shedding, concurrency limits, graceful shutdown, structured JSON
+tracing, and private engine-token enforcement where configured. Engine mode
+uses an async handle with serialized writes/admin work and cheap read snapshots.
+Legacy stdlib listener helpers remain for compatibility tests and local
+harnesses. The current server path does not provide TLS or HTTP/2 and is not a
+complete managed-service runtime.
 
 ## Local Product Smoke
 
@@ -70,6 +70,7 @@ The consolidated local product regression gate is:
 ```bash
 cargo run -p tracedb-cli -- product-regression
 cargo run -p tracedb-cli -- product-quickstart
+cargo run -p tracedb-cli -- durability-faults
 ```
 
 It emits one machine-readable `local-product-regression` summary for the
@@ -105,6 +106,11 @@ machines without Node tooling: it still writes
 `python_sdk_smoke`, and omits `typescript_check`, `typescript_http_smoke`, and
 `typescript_gateway_smoke`. Treat it as a reduced local evidence path, not the
 full product gate.
+`durability-faults` emits `target/tracedb/durability-faults.json` with
+`mode: "local-durability-faults"` and `claims.tde_scope:
+"local_artifacts_when_configured"`. It covers wrong/missing master key, torn
+WAL tail, manifest corruption, checkpoint corruption, stale lock recovery,
+encrypted snapshot restore, and WAL idempotency replay after reopen.
 `product-quickstart --inject-failure embedded_demo` is the quick failure receipt
 check: it exits nonzero, writes the same default report artifact, keeps
 `report_file`, reports `human_summary.status: "failed"`, and records
@@ -475,9 +481,8 @@ support, resolver runtime, GraphQL data-envelope execution, and full adapter
 parity remain unimplemented.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
-survives a clean engine reopen from the same data directory after a successful
-local cache write; filesystem cache-write failures are logged and do not roll
-back the original mutation. Cross-replica idempotency, crash-atomic exactly-once
-semantics, and managed-cloud exactly-once guarantees remain future work. SDK
-write/admin retries are opt-in, bounded, transient-only, and require an
-idempotency key.
+survives a clean engine reopen from the same data directory through
+WAL/checkpoint-backed idempotency receipts. Cross-replica idempotency,
+crash-atomic exactly-once semantics, and managed-cloud exactly-once guarantees
+remain future work. SDK write/admin retries are opt-in, bounded, transient-only,
+and require an idempotency key.

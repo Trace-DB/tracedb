@@ -88,13 +88,15 @@ class ProductFramingDocsTests(unittest.TestCase):
     def test_http_stack_boundary_is_documented(self) -> None:
         required_phrases = [
             "current HTTP stack boundary",
-            "stdlib `TcpListener` / `TcpStream`",
-            "one thread per accepted connection",
-            "`Arc<Mutex<TraceDb>>` serializes engine access",
-            "requires `Content-Length`",
-            "does not implement chunked transfer encoding",
+            "Tokio/Axum product paths",
+            "Tower body limits",
+            "timeouts",
+            "load shedding",
+            "concurrency limits",
+            "structured JSON tracing",
+            "Legacy stdlib listener helpers remain",
             "does not provide TLS or HTTP/2",
-            "not a production web-server stack",
+            "not a complete managed-service runtime",
         ]
         for path in [
             ROOT / "README.md",

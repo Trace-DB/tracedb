@@ -372,13 +372,12 @@ await managedClient.putBatch({
 ## Idempotency Boundary
 
 Mutation and admin methods accept `TraceDbRequestOptions.idempotencyKey`, which
-sends `Idempotency-Key`. Current TraceDB support is local data-dir-backed replay
-for mutation/admin routes and survives a clean engine reopen from the same data
-directory after a successful local cache write. It is not cross-replica, not
-crash-atomic exactly-once, and not managed-cloud exactly-once semantics. The
-generated client rejects empty or CR/LF-containing idempotency keys before
-network I/O with
-`TraceDbRequestError`.
+sends `Idempotency-Key`. Current TraceDB support is local data-dir replay from
+WAL/checkpoint-backed idempotency receipts for mutation/admin routes and
+survives a clean engine reopen from the same data directory. It is not
+cross-replica, not crash-atomic exactly-once, and not managed-cloud exactly-once
+semantics. The generated client rejects empty or CR/LF-containing idempotency keys
+before network I/O with `TraceDbRequestError`.
 The public wrapper's `safeRetries` / `TRACEDB_SAFE_RETRIES` setting is separate:
 it retries transient HTTP 5xx responses only for health/ready, GraphQL schema
 export, get, scan, query, native TraceQL, bounded GraphQL, and explain. It does

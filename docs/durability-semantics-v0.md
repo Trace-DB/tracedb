@@ -6,7 +6,7 @@ tags:
   - platform-contract
 status: draft
 type: contract-note
-updated: 2026-05-22
+updated: 2026-05-25
 ---
 
 # TraceDB Durability Semantics v0
@@ -52,9 +52,25 @@ The local data directory contains the durability contract:
 - `engine.write.lock` serializes TraceDB engine write sections. `000001.twal.lock`
   serializes WAL appends. Both are create-new lock files that are removed when
   their guards drop.
-- `http-idempotency-cache.json` stores local HTTP replay entries for supported
-  mutation/admin routes. It is a server-side convenience cache, not part of the
-  WAL or engine transaction record.
+- `IdempotencyReceipt` entries for supported mutation/admin routes are stored
+  in WAL commit frames and checkpoint payloads. On open, the server rebuilds
+  its in-memory replay cache from those receipts; there is no separate durable
+  `http-idempotency-cache.json` authority.
+
+## Transparent Data Encryption
+
+When `TRACEDB_MASTER_KEY_B64` or `TraceDbOpenOptions` provides a 32-byte root
+key, TraceDB creates a per-database data encryption key and stores wrapped DEK
+metadata in `manifest.tdb`. The manifest remains plaintext metadata; WAL
+payloads, framed v3 checkpoints, segment objects, and index artifacts are
+encrypted when written under that configured TDE context.
+
+Wrong-key and missing-key opens fail closed for encrypted data. Legacy
+plaintext WAL, checkpoint, and segment artifacts remain readable and are not
+rewritten merely by opening with TDE configured. New WAL/checkpoint/segment/index
+artifacts written after TDE is configured are encrypted. WAL/checkpoint-backed
+idempotency receipts inherit the same artifact behavior as the frames that
+carry them.
 
 ## Recovery Semantics
 
@@ -118,10 +134,10 @@ local scratch/admin workflows and Railway lab checks. It is not managed-cloud
 backup/DR, cross-region restore, point-in-time recovery across many WAL files,
 or a replacement for operator-managed backups.
 
-The HTTP server holds the engine mutex while running snapshot and restore route
-handlers. That avoids concurrent requests through the same server handler while
-the copy runs, but it does not make external filesystem mutation safe and does
-not coordinate with another process writing the same data directory.
+Snapshot and restore route handlers run through the async engine handle with
+bounded admin work. That avoids request-path global mutex blocking for health,
+readiness, and metrics, but it does not make external filesystem mutation safe
+and does not coordinate with another process writing the same data directory.
 
 ## Idempotency Semantics
 
@@ -130,12 +146,13 @@ method, path, key, and request body, the server returns the cached successful
 response. If the same method, path, and key are reused with a different request
 body, the server returns `409` with code `idempotency_conflict`.
 
-The cache is stored in `http-idempotency-cache.json`. It is persisted by writing
-a temporary JSON file and renaming it into place. It is not WAL-backed, not
-cross-replica, not shared across independent data directories, and not
-crash-atomic exactly-once. A crash after a mutation commits but before the
-idempotency cache persists can leave the write durable while losing the replay
-entry.
+The replay authority is local-engine-only and WAL/checkpoint-backed. Mutation
+routes embed receipts in the mutation WAL commit; successful admin responses
+record a receipt-only WAL entry. Receipts are scoped by method, path, key, body
+hash, actor tenant, database, branch, and token identity. They are not
+cross-replica, not shared across independent data directories, not a
+managed-cloud exactly-once guarantee, and not crash-atomic exactly-once across
+all failure points.
 
 SDK idempotency retries remain opt-in and only apply to mutation/admin requests
 that carry a caller-provided idempotency key.
@@ -150,15 +167,15 @@ TraceDB v0 does not yet claim:
 - cross-replica exactly-once semantics
 - crash-atomic exactly-once semantics
 - managed-cloud backup/DR semantics
-- automatic stale-lock repair for `engine.write.lock` or `000001.twal.lock`
 - SQL/PostgreSQL durability semantics
 - managed service RPO/RTO
 - online snapshot isolation against external filesystem mutation
 - production web-server behavior, TLS, HTTP/2, or proxy-hardening semantics
 
-If a process exits while holding `engine.write.lock` or `000001.twal.lock`, the
-stale lock file can block writes until an operator confirms no TraceDB process
-is using the directory and removes the stale lock manually.
+Stale PID lock files for `engine.write.lock` and `000001.twal.lock` are
+best-effort recovered after explicit owner checks. Active-owner locks,
+invalid-owner lock files, timeout cases, or ambiguous process ownership still
+require operator judgment instead of blind removal.
 
 ## Operator Checks
 
@@ -172,8 +189,11 @@ claims:
 - After any restart/redeploy, write a marker before restart and read it after
   restart through the same product surface.
 - After snapshot/restore, verify a known marker record from the restored target.
-- Treat `engine.write.lock` and `000001.twal.lock` as operator-intervention
-  files if a process crash leaves them behind.
+- Inspect `engine.write.lock` and `000001.twal.lock` errors carefully: stale
+  dead-PID locks should recover, while active/invalid-owner cases remain
+  operator-visible safety stops.
+- Run `cargo run -p tracedb-cli -- durability-faults` for the local durability
+  receipt at `target/tracedb/durability-faults.json`.
 - Keep exported performance or durability claims separate from internal-only
   development evidence unless the Railway/Modal gate and backup receipt are
   present for that run.

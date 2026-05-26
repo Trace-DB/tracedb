@@ -917,6 +917,7 @@ dependencies = [
  "tempfile",
  "tracedb-bench",
  "tracedb-catalog",
+ "tracedb-core",
  "tracedb-query",
  "tracedb-sdk",
  "tracedb-server",

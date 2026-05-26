@@ -1017,7 +1017,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
 
     for boundary in [
         "SQL compatibility is not implemented",
-        "Idempotency-Key supports local data-dir-backed replay",
+        "Idempotency-Key supports local data-dir replay from WAL/checkpoint-backed",
         "exits non-zero when any check fails while preserving the JSON summary",
         "server_error_code",
         "TraceDbAsyncClient",
@@ -1459,7 +1459,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
     for boundary in [
         "SQL compatibility is not implemented",
         "Internal TraceDB-only runs are development evidence",
-        "Idempotency-Key supports local data-dir-backed replay for mutation and admin routes",
+        "Idempotency-Key supports local data-dir replay from WAL/checkpoint-backed idempotency receipts for mutation and admin routes",
     ] {
         assert!(
             description.contains(boundary),

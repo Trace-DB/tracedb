@@ -34,7 +34,7 @@ draft. `docs/platform-contract-v0.json` is the machine-readable conformance
 manifest for HTTP direct, Rust SDK, TypeScript SDK, Python SDK, TraceQL/SQL-ish,
 and GraphQL parity work. `docs/durability-semantics-v0.md` is the local-first
 engine durability boundary for WAL, manifest, checkpoint, snapshot/restore,
-lock-file, and HTTP idempotency semantics.
+lock-file, TDE, and WAL/checkpoint-backed idempotency semantics.
 `scripts/platform_conformance.py` is the first executable harness over that
 manifest. It currently runs `http_direct` through raw HTTP requests and maps
 the existing Rust SDK quickstart product path into `rust_sdk` scenario results.
@@ -83,6 +83,7 @@ Consolidated local product regression:
 ```bash
 cargo run -p tracedb-cli -- product-regression
 cargo run -p tracedb-cli -- product-quickstart
+cargo run -p tracedb-cli -- durability-faults
 ```
 
 This is local product regression evidence only; it does not claim SQL
@@ -112,6 +113,11 @@ keeps `report_file`, reports `typescript_enabled: false`, passes the six
 non-TypeScript local steps including `python_sdk_smoke`, and omits `typescript_check`,
 `typescript_http_smoke`, and `typescript_gateway_smoke`. Treat it as a
 reduced local evidence path, not the full product gate.
+`durability-faults` writes `target/tracedb/durability-faults.json` and emits a
+`local-durability-faults` summary for wrong/missing master key, torn WAL tail,
+manifest/checkpoint corruption, stale-lock recovery, encrypted snapshot restore,
+and WAL idempotency replay after reopen. It is local durability evidence only,
+not managed-cloud backup/DR evidence.
 When local executable policy or machine resources block product verification,
 use Modal for remote Linux product verification:
 

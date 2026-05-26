@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 static PRODUCT_QUICKSTART_REPORT_LOCK: Mutex<()> = Mutex::new(());
 static PRODUCT_REGRESSION_SMOKE_LOCK: Mutex<()> = Mutex::new(());
+static DURABILITY_FAULTS_REPORT_LOCK: Mutex<()> = Mutex::new(());
 
 fn read_json_file(path: &Path) -> Value {
     let body =
@@ -289,6 +290,111 @@ fn product_quickstart_injected_failure_uses_default_report_file() {
     assert_eq!(
         summary["steps"]["embedded_demo"]["error"],
         "injected product-regression failure"
+    );
+}
+
+#[test]
+fn durability_faults_emit_machine_readable_default_report() {
+    let _report_lock = DURABILITY_FAULTS_REPORT_LOCK
+        .lock()
+        .expect("lock durability faults report path");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("durability-faults-data");
+    let report_file = workspace_root().join("target/tracedb/durability-faults.json");
+    let _ = std::fs::remove_file(&report_file);
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("durability-faults")
+        .arg("--data-root")
+        .arg(&data_root)
+        .output()
+        .expect("run tracedb durability-faults");
+    assert!(
+        output.status.success(),
+        "durability-faults failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("durability faults json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(summary, report_summary);
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-durability-faults");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
+    assert_eq!(summary["data_root"], data_root.display().to_string());
+    assert_eq!(summary["statuses"]["passed"], 8);
+    assert_eq!(summary["statuses"]["failed"], 0);
+    assert_eq!(summary["statuses"]["not_applicable"], 0);
+    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
+    assert_eq!(
+        summary["claims"]["cross_replica_exactly_once"],
+        "not_claimed"
+    );
+    assert_eq!(
+        summary["claims"]["tde_scope"],
+        "local_artifacts_when_configured"
+    );
+
+    for scenario in [
+        "wrong_master_key",
+        "missing_master_key",
+        "torn_wal_tail",
+        "manifest_corruption",
+        "checkpoint_corruption",
+        "stale_lock_recovery",
+        "encrypted_snapshot_restore",
+        "wal_idempotency_replay_after_reopen",
+    ] {
+        assert_eq!(
+            summary["scenarios"][scenario]["status"], "passed",
+            "scenario {scenario} should pass: {summary}"
+        );
+        assert!(
+            summary["scenarios"][scenario]["evidence"]
+                .as_str()
+                .is_some_and(|evidence| !evidence.is_empty()),
+            "scenario {scenario} should include evidence: {summary}"
+        );
+    }
+}
+
+#[test]
+fn durability_faults_injected_failure_exits_nonzero_and_preserves_json_report() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("durability-faults-failure-data");
+    let report_file = temp.path().join("reports/durability-faults-failure.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("durability-faults")
+        .arg("--data-root")
+        .arg(&data_root)
+        .arg("--report-file")
+        .arg(&report_file)
+        .arg("--inject-failure")
+        .arg("checkpoint_corruption")
+        .output()
+        .expect("run failing tracedb durability-faults");
+    assert!(
+        !output.status.success(),
+        "injected durability-faults failure should exit nonzero\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&output.stdout).expect("durability faults failure json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(summary, report_summary);
+    assert_eq!(summary["ok"], false);
+    assert_eq!(summary["statuses"]["failed"], 1);
+    assert_eq!(
+        summary["scenarios"]["checkpoint_corruption"]["status"],
+        "failed"
+    );
+    assert!(
+        summary["scenarios"]["checkpoint_corruption"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("injected durability fault failure")),
+        "failure scenario should preserve injected error: {summary}"
     );
 }
 

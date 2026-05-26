@@ -6,7 +6,7 @@ tags:
   - http
 status: current-product-surface
 type: api-reference
-updated: 2026-05-22
+updated: 2026-05-25
 ---
 
 # TraceDB v1 HTTP API Reference
@@ -110,18 +110,16 @@ node --experimental-strip-types clients/typescript/smoke.ts
   data state: `GET /v1/health`, `GET /v1/ready`, `GET /v1/graphql/schema`,
   `POST /v1/records/get`, `POST /v1/records/scan`, `POST /v1/query`,
   `POST /v1/traceql`, `POST /v1/graphql`, and `POST /v1/explain`.
-- Idempotency-Key supports local data-dir-backed replay for mutation and admin
-  routes. Same key plus same method/path/raw body replays the first successful
-  response; same key with a different body returns `409 Conflict`.
-- The idempotency cache is local-engine-only and scoped to the same data
+- Idempotency-Key supports local data-dir replay from WAL/checkpoint-backed
+  idempotency receipts for mutation and admin routes. Same key plus same
+  method/path/raw body replays the first successful response; same key with a
+  different body returns `409 Conflict`.
+- The idempotency authority is local-engine-only and scoped to the same data
   directory. It survives a clean engine reopen from that data directory, but it
   is not cross-replica, not crash-atomic exactly-once, and not a managed-cloud
   exactly-once guarantee. The full local WAL, manifest, checkpoint,
-  snapshot/restore, lock-file, and idempotency boundary is documented in
+  snapshot/restore, lock-file, TDE, and idempotency boundary is documented in
   `docs/durability-semantics-v0.md`.
-- Filesystem cache-write failures are logged and do not roll back the original
-  successful mutation; clean-reopen replay requires the local cache write to
-  have succeeded.
 - The generated TypeScript client rejects empty or CR/LF-containing
   `idempotencyKey` options before network I/O as `TraceDbRequestError`.
 - The Rust SDK can manually send `Idempotency-Key` with
@@ -135,19 +133,18 @@ node --experimental-strip-types clients/typescript/smoke.ts
 ## Current HTTP Stack Boundary
 
 The current HTTP stack boundary is explicit: `tracedb-server` and
-`tracedb-gateway` use the Rust standard library path, stdlib `TcpListener` /
-`TcpStream`, one thread per accepted connection, and JSON over HTTP/1.1 for the
-local product and gateway proof lanes. Engine mode holds the opened local
-`TraceDb` behind `Arc<Mutex<TraceDb>>`, so `Arc<Mutex<TraceDb>>` serializes
-engine access even when multiple TCP connections are accepted.
+`tracedb-gateway` default to Tokio/Axum product paths with Tower body limits,
+timeouts, load shedding, concurrency limits, graceful shutdown, structured
+JSON tracing, and private engine-token enforcement where configured. Engine
+mode uses an async handle with serialized writes/admin work and cheap read
+snapshots, so health, readiness, and public-safe metrics do not wait behind
+long query execution.
 
-Requests are read into memory after headers are parsed. The stack requires
-`Content-Length`, enforces a 1 MiB header cap and 16 MiB request body cap, and
-does not implement chunked transfer encoding. The current server path does not
-provide TLS or HTTP/2, does not implement a production proxy feature set, and
-does not claim robust public internet server behavior. Treat it as TraceDB's
-local/development HTTP wire contract and gateway product proof surface, not a
-production web-server stack.
+Requests are bounded by the configured Axum/Tower layers. Legacy stdlib
+listener helpers remain for compatibility tests and local harnesses, but they
+are not the production `serve()` path. The current server path does not provide
+TLS or HTTP/2, does not implement a full public-internet proxy feature set, and
+is not a complete managed-service runtime.
 
 ## Transport
 
@@ -297,13 +294,13 @@ claims.
 | `GET /v1/admin/jobs` | No body. | Idle job queue state for segment compaction, snapshot creation, and feature indexing. |
 
 Admin routes can mutate durable files or create out-of-band filesystem state.
-They accept optional `Idempotency-Key` for local data-dir-backed replay. Replay
-survives a clean engine reopen from the same data directory, but the contract is
-not cross-replica or crash-atomic exactly-once, and filesystem cache-write
-failures are logged without rolling back the original successful operation. The
-SDK idempotency retry options are default-off and only retry admin requests
-when the individual request includes an `Idempotency-Key`; `safe_retries` alone
-never retries admin requests.
+They accept optional `Idempotency-Key` for local data-dir replay from
+WAL/checkpoint-backed idempotency receipts. Replay survives a clean engine
+reopen from the same data directory, but the contract is not cross-replica,
+not managed-cloud exactly-once, and not crash-atomic exactly-once. The SDK
+idempotency retry options are default-off and only retry admin requests when
+the individual request includes an `Idempotency-Key`; `safe_retries` alone never
+retries admin requests.
 
 The Rust SDK provides typed `SnapshotRequest`, `SnapshotResponse`,
 `RestoreRequest`, `RestoreResponse`, and optional `RestoreVerification` wrappers
@@ -317,6 +314,7 @@ Run the consolidated local product regression gate with one command:
 ```bash
 cargo run -p tracedb-cli -- product-regression
 cargo run -p tracedb-cli -- product-quickstart
+cargo run -p tracedb-cli -- durability-faults
 ```
 
 The gate emits one `local-product-regression` JSON summary for the embedded
@@ -353,6 +351,12 @@ receipt path without running later product steps: the command exits nonzero,
 writes the same default report artifact, keeps `report_file`, reports
 `human_summary.status: "failed"`, and records the injected `embedded_demo`
 failure.
+`durability-faults` writes `target/tracedb/durability-faults.json` and emits
+`mode: "local-durability-faults"` with `claims.tde_scope:
+"local_artifacts_when_configured"`. It covers wrong/missing master key, torn
+WAL tail, manifest/checkpoint corruption, stale-lock recovery, encrypted
+snapshot restore, and WAL idempotency replay after reopen. This is local
+durability evidence, not managed-cloud backup/DR evidence.
 `--skip-typescript` is for the full product gate and non-TypeScript selectors; a
 TypeScript `--only` selector conflicts with --skip-typescript.
 `product-regression --only embedded_demo` runs only

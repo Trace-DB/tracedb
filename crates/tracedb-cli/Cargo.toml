@@ -12,6 +12,7 @@ path = "src/main.rs"
 serde_json.workspace = true
 tracedb-bench = { path = "../tracedb-bench" }
 tracedb-catalog = { path = "../tracedb-catalog" }
+tracedb-core = { path = "../tracedb-core" }
 tracedb-query = { path = "../tracedb-query" }
 tracedb-sdk = { path = "../tracedb-sdk" }
 tracedb-server = { path = "../tracedb-server" }

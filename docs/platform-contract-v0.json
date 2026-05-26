@@ -278,7 +278,7 @@
   "retry_idempotency": {
     "safe_retries": "health and read routes only",
     "idempotency_retries": "mutation/admin routes only when the individual request carries a non-empty Idempotency-Key",
-    "durability": "local data-dir reopen for successful cache writes; not cross-replica and not crash-atomic exactly-once"
+    "durability": "local data-dir replay from WAL/checkpoint-backed idempotency receipts; not cross-replica, not managed-cloud exactly-once, and not crash-atomic exactly-once"
   },
   "maintenance_mode_definition": "A platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics."
 }

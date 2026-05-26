@@ -27,18 +27,18 @@ GraphQL.
 
 The current local durability boundary is `docs/durability-semantics-v0.md`.
 It states the WAL, manifest, checkpoint, snapshot/restore, lock-file, and
-HTTP idempotency semantics for the local-first engine, including the current
-non-guarantees around cross-replica idempotency, crash-atomic exactly-once, and
-managed-cloud backup/DR.
+WAL/checkpoint-backed idempotency semantics for the local-first engine,
+including the current non-guarantees around cross-replica idempotency,
+crash-atomic exactly-once, and managed-cloud backup/DR.
 
 The current HTTP stack boundary is also explicit. `tracedb-server` and
-`tracedb-gateway` use stdlib `TcpListener` / `TcpStream`, one thread per
-accepted connection, and JSON over HTTP/1.1. Engine mode keeps the opened local
-database behind `Arc<Mutex<TraceDb>>`, so `Arc<Mutex<TraceDb>>` serializes
-engine access. The server requires `Content-Length`, reads request bodies into
-memory with current header/body caps, does not implement chunked transfer
-encoding, and does not provide TLS or HTTP/2. This is TraceDB's local
-HTTP/gateway product-proof surface, not a production web-server stack.
+`tracedb-gateway` default to Tokio/Axum product paths with Tower body limits,
+timeouts, load shedding, concurrency limits, graceful shutdown, structured JSON
+tracing, and private engine-token enforcement where configured. Engine mode
+uses an async handle with serialized writes/admin work and cheap read snapshots.
+Legacy stdlib listener helpers remain for compatibility tests and local
+harnesses. The current server path does not provide TLS or HTTP/2 and is not a
+complete managed-service runtime.
 
 Run the initial executable contract harness with:
 
@@ -130,33 +130,39 @@ Run the consolidated local product regression gate:
 ```bash
 cargo run -p tracedb-cli -- product-regression
 cargo run -p tracedb-cli -- product-quickstart
+cargo run -p tracedb-cli -- durability-faults
 ```
 
-The gate emits one JSON summary with `mode: "local-product-regression"`,
-`scope: "local_only"`, a compact top-level `human_summary`, and explicit
-`not_checked` markers for managed-cloud and benchmark claims. It orchestrates
-the embedded demo/verify path, `http-demo`, local `doctor http`, the Rust SDK
-quickstart, the Python sync SDK smoke, and generated TypeScript
-check/http/gateway smoke paths. It is
-local product regression evidence, not SQL compatibility, managed-cloud proof,
-or benchmark evidence. Use
-`--skip-typescript` when the local Node tooling is not installed. For CI
+The product gate emits one JSON summary with `mode:
+"local-product-regression"`, `scope: "local_only"`, a compact top-level
+`human_summary`, and explicit `not_checked` markers for managed-cloud and
+benchmark claims. It orchestrates the embedded demo/verify path, `http-demo`,
+local `doctor http`, the Rust SDK quickstart, the Python sync SDK smoke, and
+generated TypeScript check/http/gateway smoke paths. It is local product
+regression evidence, not SQL compatibility, managed-cloud proof, or benchmark
+evidence.
+
+Use `--skip-typescript` when the local Node tooling is not installed. For CI
 failure-path coverage, use test-only `--inject-failure STEP` to verify that the
 gate exits nonzero while still emitting the failed-step JSON summary. Use
 `--report-file PATH` to write the same JSON summary to a predictable file while
 preserving JSON stdout for automation; this applies to full runs, `--only`,
 `--inject-failure`, and `--list-steps`, and creates parent directories. Use
 `--list-steps` to print JSON step metadata, including `human_summary` and
-`only_supported`, for operator and CI wiring without running demo, HTTP, SDK,
-or TypeScript smoke steps. `--skip-typescript` is for the full product gate and
-non-TypeScript selectors; a TypeScript `--only` selector conflicts with --skip-typescript
-for steps such as `typescript_check`, `typescript_http_smoke`, or
-`typescript_gateway_smoke`. `product-quickstart` is the same local product gate
-with a default report file at `target/tracedb/product-quickstart.json`; it
-accepts the same product-regression options, including `--only` and
-`--skip-typescript`, still writes JSON to stdout, and includes a top-level
-`report_file` field when a report artifact is configured. A copy-paste local
-receipt check is:
+`only_supported`, for operator and CI wiring without running demo, HTTP, SDK, or
+TypeScript checks. A TypeScript `--only` selector conflicts with --skip-typescript
+for steps such as `typescript_check`,
+`typescript_http_smoke`, or `typescript_gateway_smoke`.
+
+`product-quickstart` is the same local product gate with a default report file
+at `target/tracedb/product-quickstart.json`; it accepts the same
+product-regression options, including `--only` and `--skip-typescript`, still
+writes JSON to stdout, and includes a top-level `report_file` field when a
+report artifact is configured. Use `durability-faults` for the local durability
+closeout receipt at `target/tracedb/durability-faults.json`; it reports `mode:
+"local-durability-faults"` and `claims.tde_scope:
+"local_artifacts_when_configured"` for the TDE/WAL recovery scenarios. A
+copy-paste local receipt check is:
 
 ```bash
 cargo run -q -p tracedb-cli -- product-quickstart
@@ -674,12 +680,11 @@ columns before WAL append.
   `responseCode` when the server or gateway returns the current JSON error
   envelope; stable machine-readable error `code` is preserved when present.
 - HTTP mutation and admin routes accept optional `Idempotency-Key` for local
-  data-dir-backed replay on the engine, and the gateway forwards that header.
-  After a successful local cache write, replay survives a clean engine reopen
-  from the same data directory; filesystem cache-write failures are logged and
-  do not roll back the original mutation. This is not cross-replica, not
-  crash-atomic exactly-once, and not a managed-cloud exactly-once guarantee. The
-  Rust SDK can manually send the header per request through
+  data-dir replay from WAL/checkpoint-backed idempotency receipts on the
+  engine, and the gateway forwards that header. Replay survives a clean engine
+  reopen from the same data directory. This is not cross-replica, not
+  crash-atomic exactly-once, and not a managed-cloud exactly-once guarantee.
+  The Rust SDK can manually send the header per request through
   `TraceDbRequestOptions`, and opt-in SDK idempotent retries require that
   header.
 - Internal TraceDB-only runs are development evidence. Exported performance

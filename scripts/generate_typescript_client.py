@@ -185,9 +185,9 @@ def render_header() -> str:
 // SQL compatibility is not implemented.
 // Internal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.
 // This is a generated transport artifact, not a published managed SDK package.
-// Idempotency-Key is caller supplied and local data-dir-backed on current mutation/admin routes.
-// It survives clean engine reopen from the same data directory after successful cache writes,
-// but is not cross-replica, crash-atomic exactly-once, or managed-cloud exactly-once semantics.
+// Idempotency-Key is caller supplied and backed by local WAL/checkpoint receipts on current mutation/admin routes.
+// It survives clean engine reopen from the same data directory, but is not cross-replica,
+// crash-atomic exactly-once, or managed-cloud exactly-once semantics.
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];

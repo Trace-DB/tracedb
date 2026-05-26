@@ -3,6 +3,7 @@
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -10,10 +11,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::Catalog;
+use tracedb_core::{stable_body_hash, IdempotencyReceipt};
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema,
-    TraceDb, VectorColumnSchema,
+    TraceDb, TraceDbOpenOptions, VectorColumnSchema,
 };
 use tracedb_sdk::{
     RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
@@ -293,6 +295,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "product-quickstart" => {
             let config = parse_product_quickstart_config(&args[1..])?;
             run_product_regression(config)?;
+        }
+        "durability-faults" => {
+            let config = parse_durability_faults_config(&args[1..])?;
+            run_durability_faults(config)?;
         }
         "compose" => {
             let action = args.get(1).map(String::as_str).unwrap_or("status");
@@ -1044,6 +1050,505 @@ const PRODUCT_REGRESSION_STEPS: &[&str] = &[
 
 const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = PRODUCT_REGRESSION_STEPS;
 const PRODUCT_QUICKSTART_REPORT_FILE: &str = "target/tracedb/product-quickstart.json";
+const DURABILITY_FAULTS_REPORT_FILE: &str = "target/tracedb/durability-faults.json";
+const DURABILITY_GOOD_MASTER_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+const DURABILITY_OTHER_MASTER_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+const DURABILITY_FAULT_SCENARIOS: &[&str] = &[
+    "wrong_master_key",
+    "missing_master_key",
+    "torn_wal_tail",
+    "manifest_corruption",
+    "checkpoint_corruption",
+    "stale_lock_recovery",
+    "encrypted_snapshot_restore",
+    "wal_idempotency_replay_after_reopen",
+];
+
+struct DurabilityFaultsConfig {
+    data_root: PathBuf,
+    cleanup_data: bool,
+    keep_data: bool,
+    inject_failure: Option<String>,
+    report_file: Option<PathBuf>,
+}
+
+fn parse_durability_faults_config(
+    args: &[String],
+) -> Result<DurabilityFaultsConfig, Box<dyn std::error::Error>> {
+    let mut data_root = None;
+    let mut keep_data = false;
+    let mut inject_failure = None;
+    let mut report_file = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--data-root" => {
+                idx += 1;
+                data_root = Some(PathBuf::from(
+                    args.get(idx).ok_or("missing value for --data-root")?,
+                ));
+            }
+            "--keep-data" => keep_data = true,
+            "--report-file" => {
+                idx += 1;
+                report_file = Some(PathBuf::from(
+                    args.get(idx).ok_or("missing value for --report-file")?,
+                ));
+            }
+            "--inject-failure" => {
+                idx += 1;
+                let scenario = args
+                    .get(idx)
+                    .ok_or("missing value for --inject-failure")?
+                    .to_string();
+                if !DURABILITY_FAULT_SCENARIOS.contains(&scenario.as_str()) {
+                    return Err(format!(
+                        "unknown durability-faults failure injection scenario {scenario}; expected one of {}",
+                        DURABILITY_FAULT_SCENARIOS.join(", ")
+                    )
+                    .into());
+                }
+                inject_failure = Some(scenario);
+            }
+            other => return Err(format!("unknown durability-faults option {other}").into()),
+        }
+        idx += 1;
+    }
+    let cleanup_data = data_root.is_none() && !keep_data;
+    let data_root = data_root.unwrap_or_else(default_durability_faults_root);
+    if report_file.is_none() {
+        report_file = Some(default_durability_faults_report_file()?);
+    }
+    Ok(DurabilityFaultsConfig {
+        data_root,
+        cleanup_data,
+        keep_data,
+        inject_failure,
+        report_file,
+    })
+}
+
+fn default_durability_faults_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(product_regression_workspace_root()?.join(DURABILITY_FAULTS_REPORT_FILE))
+}
+
+fn default_durability_faults_root() -> PathBuf {
+    let suffix = product_regression_run_id().unwrap_or_else(|_| std::process::id().to_string());
+    env::temp_dir().join(format!("tracedb-durability-faults-{suffix}"))
+}
+
+fn run_durability_faults(config: DurabilityFaultsConfig) -> Result<(), Box<dyn std::error::Error>> {
+    if config.data_root.exists() && config.cleanup_data {
+        fs::remove_dir_all(&config.data_root)?;
+    }
+    fs::create_dir_all(&config.data_root)?;
+
+    let mut scenarios = serde_json::Map::new();
+    for scenario in DURABILITY_FAULT_SCENARIOS {
+        let dir = config.data_root.join(scenario);
+        let result = if config.inject_failure.as_deref() == Some(*scenario) {
+            Err("injected durability fault failure".into())
+        } else {
+            run_durability_fault_scenario(scenario, &dir)
+        };
+        scenarios.insert(
+            (*scenario).to_string(),
+            durability_fault_scenario_summary(result),
+        );
+    }
+    let statuses = durability_fault_status_counts(&scenarios);
+    let ok = statuses.get("failed").and_then(Value::as_u64).unwrap_or(0) == 0;
+    let summary = json!({
+        "ok": ok,
+        "mode": "local-durability-faults",
+        "scope": "local_only",
+        "data_root": config.data_root.display().to_string(),
+        "report_file": product_regression_report_file_json(config.report_file.as_deref()),
+        "data_cleanup": config.cleanup_data,
+        "keep_data": config.keep_data,
+        "failure_injection": config.inject_failure,
+        "claims": {
+            "managed_cloud": "not_checked",
+            "cross_replica_exactly_once": "not_claimed",
+            "tde_scope": "local_artifacts_when_configured",
+        },
+        "statuses": statuses,
+        "scenarios": scenarios,
+    });
+    if config.cleanup_data {
+        let _ = fs::remove_dir_all(&config.data_root);
+    }
+    emit_json(summary, config.report_file.as_deref())?;
+    if ok {
+        Ok(())
+    } else {
+        Err("durability-faults local gate failed".into())
+    }
+}
+
+fn run_durability_fault_scenario(
+    scenario: &str,
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    match scenario {
+        "wrong_master_key" => durability_fault_wrong_master_key(dir),
+        "missing_master_key" => durability_fault_missing_master_key(dir),
+        "torn_wal_tail" => durability_fault_torn_wal_tail(dir),
+        "manifest_corruption" => durability_fault_manifest_corruption(dir),
+        "checkpoint_corruption" => durability_fault_checkpoint_corruption(dir),
+        "stale_lock_recovery" => durability_fault_stale_lock_recovery(dir),
+        "encrypted_snapshot_restore" => durability_fault_encrypted_snapshot_restore(dir),
+        "wal_idempotency_replay_after_reopen" => durability_fault_idempotency_replay(dir),
+        other => Err(format!("unknown durability fault scenario {other}").into()),
+    }
+}
+
+fn durability_fault_scenario_summary(result: Result<Value, Box<dyn std::error::Error>>) -> Value {
+    match result {
+        Ok(details) => json!({
+            "ok": true,
+            "status": "passed",
+            "evidence": details.get("evidence").and_then(Value::as_str).unwrap_or("scenario completed"),
+            "details": details,
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "status": "failed",
+            "error": error.to_string(),
+        }),
+    }
+}
+
+fn durability_fault_status_counts(scenarios: &serde_json::Map<String, Value>) -> Value {
+    let mut passed = 0_u64;
+    let mut failed = 0_u64;
+    let mut not_applicable = 0_u64;
+    for scenario in scenarios.values() {
+        match scenario
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("failed")
+        {
+            "passed" => passed += 1,
+            "not_applicable" => not_applicable += 1,
+            _ => failed += 1,
+        }
+    }
+    json!({
+        "passed": passed,
+        "failed": failed,
+        "not_applicable": not_applicable,
+    })
+}
+
+fn durability_fault_wrong_master_key(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    seed_encrypted_db(dir, "wrong-key-marker", "wrong key protected body")?;
+    let error = TraceDb::open_with_options(
+        dir,
+        TraceDbOpenOptions::with_master_key_b64(DURABILITY_OTHER_MASTER_KEY),
+    )
+    .expect_err("wrong master key must fail open")
+    .to_string();
+    if !error.contains("failed to unwrap database encryption key") {
+        return Err(format!("unexpected wrong-key error: {error}").into());
+    }
+    Ok(json!({
+        "evidence": "encrypted database rejected a different 32-byte master key",
+        "stable_error_contains": "failed to unwrap database encryption key",
+        "error": error,
+    }))
+}
+
+fn durability_fault_missing_master_key(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    seed_encrypted_db(dir, "missing-key-marker", "missing key protected body")?;
+    let error = TraceDb::open_with_options(dir, TraceDbOpenOptions::without_tde())
+        .expect_err("missing master key must fail open")
+        .to_string();
+    if !error.contains("TRACEDB_MASTER_KEY_B64 is required to open encrypted TraceDB data") {
+        return Err(format!("unexpected missing-key error: {error}").into());
+    }
+    Ok(json!({
+        "evidence": "encrypted database rejected open without TRACEDB_MASTER_KEY_B64",
+        "stable_error_contains": "TRACEDB_MASTER_KEY_B64 is required",
+        "error": error,
+    }))
+}
+
+fn durability_fault_torn_wal_tail(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.apply_schema(demo_schema("docs"))?;
+    db.put(RecordPutRequest::new(demo_record(
+        "docs",
+        "tenant-a",
+        "torn",
+        "Torn WAL",
+        "committed before torn tail",
+        [1.0, 0.0, 0.0],
+    )))?;
+    drop(db);
+
+    let wal_path = dir.join("wal/000001.twal");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&wal_path)?
+        .write_all(b"torn")?;
+    let reopened = TraceDb::open(dir)?;
+    let torn = reopened
+        .last_recovery_torn_tail()
+        .ok_or("expected torn WAL tail recovery metadata")?;
+    if torn.reason != "short_header" {
+        return Err(format!("unexpected torn WAL reason {}", torn.reason).into());
+    }
+    Ok(json!({
+        "evidence": "open ignored short torn WAL tail and exposed recovery metadata",
+        "reason": torn.reason,
+        "offset": torn.offset,
+        "actual_len": torn.actual_len,
+        "expected_len": torn.expected_len,
+    }))
+}
+
+fn durability_fault_manifest_corruption(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.apply_schema(demo_schema("docs"))?;
+    drop(db);
+
+    let manifest_path = dir.join("manifest.tdb");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+    manifest["checksums"]["manifest_checksum"] = json!(1_u32);
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+    let error = TraceDb::open(dir)
+        .expect_err("corrupt manifest checksum must fail open")
+        .to_string();
+    if !error.contains("manifest checksum mismatch") {
+        return Err(format!("unexpected manifest corruption error: {error}").into());
+    }
+    Ok(json!({
+        "evidence": "manifest checksum mismatch stopped open",
+        "stable_error_contains": "manifest checksum mismatch",
+        "error": error,
+    }))
+}
+
+fn durability_fault_checkpoint_corruption(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.apply_schema(demo_schema("docs"))?;
+    db.put(RecordPutRequest::new(demo_record(
+        "docs",
+        "tenant-a",
+        "checkpoint",
+        "Checkpoint",
+        "checkpoint protected body",
+        [0.0, 1.0, 0.0],
+    )))?;
+    let epoch = db.checkpoint()?;
+    drop(db);
+
+    let checkpoint_path = dir.join(format!("checkpoints/checkpoint-{}.tchk", epoch.get()));
+    let mut checkpoint = fs::read(&checkpoint_path)?;
+    let last = checkpoint
+        .last_mut()
+        .ok_or("checkpoint file unexpectedly empty")?;
+    *last ^= 0xff;
+    fs::write(&checkpoint_path, checkpoint)?;
+    let error = TraceDb::open(dir)
+        .expect_err("corrupt checkpoint must fail open")
+        .to_string();
+    if !error.contains("checkpoint checksum mismatch") {
+        return Err(format!("unexpected checkpoint corruption error: {error}").into());
+    }
+    Ok(json!({
+        "evidence": "checkpoint checksum mismatch stopped open",
+        "stable_error_contains": "checkpoint checksum mismatch",
+        "error": error,
+    }))
+}
+
+fn durability_fault_stale_lock_recovery(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    fs::write(dir.join("engine.write.lock"), "999999999")?;
+    fs::create_dir_all(dir.join("wal"))?;
+    fs::write(dir.join("wal/000001.twal.lock"), "999999999")?;
+    db.apply_schema(demo_schema("docs"))?;
+    let engine_lock_removed = !dir.join("engine.write.lock").exists();
+    let wal_lock_removed = !dir.join("wal/000001.twal.lock").exists();
+    if !engine_lock_removed || !wal_lock_removed {
+        return Err("stale engine/WAL locks were not recovered".into());
+    }
+    Ok(json!({
+        "evidence": "stale owner PID lock files were removed after explicit safety checks",
+        "engine_lock_removed": engine_lock_removed,
+        "wal_lock_removed": wal_lock_removed,
+    }))
+}
+
+fn durability_fault_encrypted_snapshot_restore(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let marker_body = "encrypted snapshot restore marker body";
+    let mut db = TraceDb::open_with_options(
+        dir,
+        TraceDbOpenOptions::with_master_key_b64(DURABILITY_GOOD_MASTER_KEY),
+    )?;
+    db.apply_schema(demo_schema("docs"))?;
+    db.put(RecordPutRequest::new(demo_record(
+        "docs",
+        "tenant-a",
+        "snapshot-marker",
+        marker_body,
+        "snapshot_marker",
+        [0.0, 0.0, 1.0],
+    )))?;
+    db.checkpoint()?;
+    let wal_bytes = fs::read(dir.join("wal/000001.twal"))?;
+    if String::from_utf8_lossy(&wal_bytes).contains(marker_body) {
+        return Err("encrypted WAL exposed plaintext marker body".into());
+    }
+    let snapshot_dir = dir.with_extension("snapshot");
+    let restore_dir = dir.with_extension("restore");
+    db.create_snapshot(&snapshot_dir)?;
+    drop(db);
+
+    durability_restore_snapshot_copy(&snapshot_dir, &restore_dir)?;
+    let restored = TraceDb::open_with_options(
+        &restore_dir,
+        TraceDbOpenOptions::with_master_key_b64(DURABILITY_GOOD_MASTER_KEY),
+    )?;
+    let record = restored
+        .get(RecordGetRequest::new("docs", "tenant-a", "snapshot-marker"))?
+        .ok_or("restored marker record missing")?;
+    if record.fields["body"] != json!(marker_body) {
+        return Err("restored marker body did not match".into());
+    }
+    Ok(json!({
+        "evidence": "encrypted snapshot restored into a fresh target and marker read succeeded",
+        "snapshot_dir": snapshot_dir.display().to_string(),
+        "restore_dir": restore_dir.display().to_string(),
+        "marker_id": "snapshot-marker",
+        "restored_marker_visible": true,
+    }))
+}
+
+fn durability_fault_idempotency_replay(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.apply_schema(demo_schema("docs"))?;
+    let record = demo_record(
+        "docs",
+        "tenant-a",
+        "idem-marker",
+        "wal receipt replay marker body",
+        "idempotency_marker",
+        [1.0, 1.0, 0.0],
+    );
+    let body = serde_json::to_vec(&json!({ "record": record }))?;
+    let receipt = IdempotencyReceipt {
+        method: "POST".to_string(),
+        path: "/v1/records/put".to_string(),
+        key: "durability-fault-idempotency".to_string(),
+        body_hash: stable_body_hash(&body),
+        actor_tenant_id: "tenant-a".to_string(),
+        database_id: "db_local".to_string(),
+        branch_id: "db_local:main".to_string(),
+        token_identity: "local-dev".to_string(),
+        response: json!({ "epoch": 2 }).to_string(),
+    };
+    db.put_with_idempotency_receipt(RecordPutRequest::new(record), Some(receipt.clone()))?;
+    drop(db);
+
+    let reopened = TraceDb::open(dir)?;
+    let receipts = reopened.idempotency_receipts()?;
+    let replayed = receipts.iter().any(|candidate| {
+        candidate.method == receipt.method
+            && candidate.path == receipt.path
+            && candidate.key == receipt.key
+            && candidate.body_hash == receipt.body_hash
+            && candidate.actor_tenant_id == receipt.actor_tenant_id
+            && candidate.database_id == receipt.database_id
+            && candidate.branch_id == receipt.branch_id
+            && candidate.token_identity == receipt.token_identity
+            && candidate.response.contains("\"epoch\":2")
+    });
+    if !replayed {
+        return Err("WAL-backed idempotency receipt was not replayed after reopen".into());
+    }
+    if dir.join("http-idempotency-cache.json").exists() {
+        return Err("legacy http-idempotency-cache.json was created".into());
+    }
+    Ok(json!({
+        "evidence": "idempotency receipt replayed from WAL after clean reopen without JSON cache authority",
+        "receipt_key": receipt.key,
+        "body_hash": receipt.body_hash,
+        "receipt_count": receipts.len(),
+        "legacy_json_cache_present": false,
+    }))
+}
+
+fn durability_restore_snapshot_copy(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if source == target {
+        return Err("source and target directories must differ".into());
+    }
+    if target.exists() {
+        fs::remove_dir_all(target)?;
+    }
+    durability_copy_dir_all(source, target)?;
+    Ok(())
+}
+
+fn durability_copy_dir_all(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let child_target = target.join(entry.file_name());
+        if ty.is_dir() {
+            durability_copy_dir_all(&entry.path(), &child_target)?;
+        } else if ty.is_file() {
+            fs::copy(entry.path(), child_target)?;
+        }
+    }
+    Ok(())
+}
+
+fn seed_encrypted_db(
+    dir: &std::path::Path,
+    record_id: &str,
+    body: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open_with_options(
+        dir,
+        TraceDbOpenOptions::with_master_key_b64(DURABILITY_GOOD_MASTER_KEY),
+    )?;
+    db.apply_schema(demo_schema("docs"))?;
+    db.put(RecordPutRequest::new(demo_record(
+        "docs",
+        "tenant-a",
+        record_id,
+        body,
+        "tde_marker",
+        [1.0, 0.0, 0.0],
+    )))?;
+    Ok(())
+}
 
 fn parse_product_regression_config(
     args: &[String],
@@ -1881,7 +2386,7 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|durability-faults [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
         PRODUCT_REGRESSION_ONLY_STEPS.join("|"),
         PRODUCT_REGRESSION_ONLY_STEPS.join("|")
     );
