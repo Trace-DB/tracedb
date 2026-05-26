@@ -1,185 +1,46 @@
+# TraceDB Documentation
+
+TraceDB is an AI-native transactional candidate-stream database.
+One logical record. One commit epoch. Many native views. No external sync drift. Explain every candidate.
+
+This directory contains the canonical documentation for the TraceDB engine, SDKs, deployment operations, and performance benchmarks, migrated from the Grogan Development Vault.
+
 ---
-title: TraceDB Repo Docs Stub
-tags:
-  - tracedb
-  - docs
-status: stub
-type: repo-handoff
-updated: 2026-05-22
----
 
-# TraceDB Repo Docs
+## Documentation Map
 
-Canonical TraceDB technical docs moved to the Grogan Development Vault:
+### 0. [Project Intent Ledger](project-intent.md)
+*   **Purpose:** Memory-derived intent for future project setup, agents, automations, and handoffs.
+*   **Preserves:** product identity, architecture boundaries, evidence rules, Modal/Railway verification policy, SDK/MCP intent, and repo/vault operating boundaries.
 
-```text
-/Users/zgrogan/Repos/grogan-development-vault/10_Projects/TraceField Suite/TraceDB/
-```
+### 1. [Product Thesis](product/thesis.md)
+*   **Vision:** Single logical record, transactional consistency, and native views.
+*   **What it Replaces:** Collapses complex stacks like Postgres + pgvector + Qdrant + Elasticsearch + Neo4j.
+*   **Scope:** defines alpha constraints (what TraceDB is not) and defines winning criteria.
+*   **User Personas:** AI App Developers, Coding Agents, Business Software Developers, and Memory Runtime researchers.
 
-This repo keeps only lightweight stubs required for local handoff and test stability.
+### 2. Architecture
+*   **[Top-Down System Architecture](architecture/top-down.md):** 6 serverless planes (Control, Gateway, Compute, Storage, Index, Feature), crate/workspace topology, repository directory layouts, and epoch-based MVCC visibility.
+*   **[Kernel & Module Design](architecture/kernel-and-modules.md):** Minimality boundaries of the kernel, extension module interfaces (Levels 0-6), and strict cryptographic trust/conformance levels.
+*   **[Candidate Stream Planner](architecture/candidate-streams.md):** Transactional candidate stream scheduling, `AccessPath` trait interface, Reciprocal Rank Fusion (RRF), feature freshness lifecycles, and policy-safe retrieval pushdowns.
 
-Start with:
+### 3. API & Protocols
+*   **[Platform Contract v0](platform-contract-v0.md):** The DX-facing contract that SDKs and query adapters (TraceQL, SQL-ish, GraphQL) must converge on.
+*   **[Platform Contract v0 Manifest](platform-contract-v0.json):** Machine-readable conformance scenario and surface manifest consumed by `scripts/platform_conformance.py`.
+*   **Contract Paths:** `docs/platform-contract-v0.md`, `docs/platform-contract-v0.json`, and `scripts/platform_conformance.py` are the stable repository paths for contract review and automation.
+*   **[Durability Semantics v0](durability-semantics-v0.md):** Local-first engine durability specifications, WAL framing, TDE artifact behavior, recovery checkpoints, snapshot copies, and WAL/checkpoint-backed idempotency.
+*   **[v1 HTTP API Reference](api/v1-http.md):** Direct REST route reference.
+*   **[OpenAPI v1 Spec](api/v1-openapi.json):** Machine-readable OpenAPI schema.
 
-- `README.md`
-- `docs/TraceDB.md`
-- `docs/platform-contract-v0.md`
-- `docs/platform-contract-v0.json`
-- `docs/durability-semantics-v0.md`
-- `docs/api/v1-http.md`
-- `docs/api/v1-openapi.json`
-- `docs/Operations/Local Cloud.md`
+### 4. Operations
+*   **[Railway Operations & Topology](Operations/railway-lab.md):** Multi-service Railway architecture, internal routing domains, volume mount rules, buckets, and backup/restore workflows.
+*   **[Architecture Decisions (Docker over Railpack)](decisions/docker-over-railpack.md):** ADR justifying Dockerfile container builds over Railpack autoconfig for engine portability.
 
-`docs/platform-contract-v0.md` is the DX-facing SDK/adaptor contract freeze
-draft. `docs/platform-contract-v0.json` is the machine-readable conformance
-manifest for HTTP direct, Rust SDK, TypeScript SDK, Python SDK, TraceQL/SQL-ish,
-and GraphQL parity work. `docs/durability-semantics-v0.md` is the local-first
-engine durability boundary for WAL, manifest, checkpoint, snapshot/restore,
-lock-file, TDE, and WAL/checkpoint-backed idempotency semantics.
-`scripts/platform_conformance.py` is the first executable harness over that
-manifest. It currently runs `http_direct` through raw HTTP requests and maps
-the existing Rust SDK quickstart product path into `rust_sdk` scenario results.
-It also maps the public TypeScript SDK HTTP smoke into `typescript_sdk` scenario
-results and installs the Python SDK package before running the sync HTTP smoke
-for `python_sdk` scenario results. The `traceql_sqlish` lane now executes the
-bounded SQL-ish adapter through `/v1/traceql` and reports query, TraceQL string
-execution, explain, and error-envelope behavior against the same manifest.
-The `graphql` lane starts local HTTP, exports generated SDL through
-`GET /v1/graphql/schema`, drives the bounded `POST /v1/graphql` adapter, and
-reports schema apply, query, explain, and error-envelope behavior as checked;
-write/admin scenarios remain explicit `not_checked` results.
-The current HTTP direct, Rust SDK, TypeScript SDK, and Python SDK lanes cover
-all required v0 scenarios; unimplemented future lanes must keep explicit
-`not_checked` results until they reach parity. The SQL-ish adapter lane remains
-partial, with schema/write/admin scenarios intentionally `not_checked`.
-The `traceql_sqlish` lane now has native HTTP execution evidence through
-`POST /v1/traceql`, which parses line-oriented TraceQL with
-`traceql_query_from_str` and compiles it into `HybridQuery`. The same route now
-accepts the bounded SQL-ish adapter form `EXPLAIN? SELECT * FROM <table> WHERE
-tenant_id = <value> [AND field = value]* [LIMIT n]`; broader SQL,
-PostgreSQL compatibility, GraphQL mutations, subscriptions, resolver runtime,
-GraphQL data-envelope execution, and full GraphQL adapter parity remain
-unimplemented. The current GraphQL evidence is limited to generated
-`graphql_schema_sdl_from_tables` SDL export through `GET /v1/graphql/schema`,
-bounded `graphql_query_from_str` compilation, `POST /v1/graphql`
-query/explain/error conformance, the Rust SDK schema helper methods
-`TraceDbClient::graphql_schema_typed` and
-`TraceDbAsyncClient::graphql_schema_typed`, the TypeScript public SDK
-`TraceDB.graphqlSchema()` helper for generated SDL export, the Python sync SDK
-`TraceDB.graphql_schema()` helper for generated SDL export, and the Rust SDK
-execution helpers `TraceDbClient::graphql_typed` and
-`TraceDbAsyncClient::graphql_typed` plus the TypeScript public SDK
-`TraceDB.graphql()` helper and Python sync SDK `TraceDB.graphql()` helper over
-that same HTTP route.
+### 5. Benchmarks
+*   **[KPI Closeout & Benchmarks](benchmarks/kpi-closeout.md):** Median benchmarks vs pgvector at 1024 records, store-apply latency attribution breakdowns, footprint metrics, and 10-stage scientific loop logs.
 
-Local product smoke:
-
-```bash
-cargo run -p tracedb-cli -- --data /tmp/tracedb-demo demo
-cargo run -p tracedb-cli -- --data /tmp/tracedb-demo verify
-```
-
-Consolidated local product regression:
-
-```bash
-cargo run -p tracedb-cli -- product-regression
-cargo run -p tracedb-cli -- product-quickstart
-cargo run -p tracedb-cli -- durability-faults
-```
-
-This is local product regression evidence only; it does not claim SQL
-compatibility, managed-cloud proof, or benchmark results. The command emits a
-compact top-level `human_summary` in its JSON output and also has test-only
-`--inject-failure STEP` coverage for JSON failure output and nonzero exit
-behavior. Use `--report-file PATH` to write the same JSON summary to a
-predictable file while preserving JSON stdout; this applies to full runs,
-`--only`, `--inject-failure`, and `--list-steps`, and creates parent
-directories. For product-regression step discovery, `--list-steps` emits JSON
-step metadata including `human_summary` and `only_supported` and exits without
-running product steps. `--skip-typescript` is for the full product gate and
-non-TypeScript selectors; a TypeScript `--only` selector conflicts with --skip-typescript.
-The first single-step execution mode is `--only embedded_demo`, which runs only the
-embedded demo step and emits the normal local product-regression JSON summary.
-`product-quickstart` runs the same local product gate with a default report file
-at `target/tracedb/product-quickstart.json`; it accepts the same
-product-regression options, still writes JSON to stdout, and includes a
-top-level `report_file` field when a report artifact is configured. Treat
-`target/tracedb/product-quickstart.json` as the local quickstart receipt: it
-should report `ok: true`, `mode: "local-product-regression"`,
-`scope: "local_only"`, `human_summary.status: "passed"`, SQL as
-`not_implemented`, and managed-cloud/benchmark claims as `not_checked`.
-`product-quickstart --skip-typescript` is the reduced fallback receipt for
-machines without Node tooling: it still writes the same default report artifact,
-keeps `report_file`, reports `typescript_enabled: false`, passes the six
-non-TypeScript local steps including `python_sdk_smoke`, and omits `typescript_check`,
-`typescript_http_smoke`, and `typescript_gateway_smoke`. Treat it as a
-reduced local evidence path, not the full product gate.
-`durability-faults` writes `target/tracedb/durability-faults.json` and emits a
-`local-durability-faults` summary for wrong/missing master key, torn WAL tail,
-manifest/checkpoint corruption, stale-lock recovery, encrypted snapshot restore,
-and WAL idempotency replay after reopen. It is local durability evidence only,
-not managed-cloud backup/DR evidence.
-When local executable policy or machine resources block product verification,
-use Modal for remote Linux product verification:
-
-```bash
-modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json
-```
-
-The Modal lane uploads the current checkout without `.git`, `target/`, local
-env files, benchmark reports, caches, or Node modules, then runs
-`cargo fmt --all -- --check`, the focused quickstart receipt test, the docs
-contract test, and `product-quickstart --skip-typescript`. It validates the
-default quickstart receipt against stdout, including `report_file`,
-`typescript_enabled: false`, the six non-TypeScript steps including
-`python_sdk_smoke`, SQL as
-`not_implemented`, and managed-cloud/benchmark claims as `not_checked`.
-`--mode workspace` additionally runs the full CLI demo test file, usability
-acceptance test file, and `cargo test --workspace --all-targets`. This remains remote Linux product verification, not proof that the local Mac can execute the
-same binaries.
-`product-quickstart --inject-failure embedded_demo` is the quick failure receipt
-check: it exits nonzero, writes the same default report artifact, keeps
-`report_file`, reports `human_summary.status: "failed"`, and marks the injected
-`embedded_demo` step as failed. The
-dependency-aware `--only embedded_verify` mode verifies an existing embedded
-demo data root, typically after `--only embedded_demo` with the same
-`--data-root`. `--only http_demo` runs the self-contained local HTTP demo step
-and emits the normal one-step `local-product-regression` JSON summary. It does
-not run local `doctor http`, the Rust SDK quickstart, generated TypeScript
-smoke steps, managed-cloud checks, benchmark controls, or SQL compatibility
-checks.
-`--only local_doctor` runs only the local HTTP doctor diagnostic against a
-managed local server and emits one-step `local-product-regression` JSON. It is
-endpoint diagnostics evidence only, not full product-regression gate coverage.
-`--only rust_sdk_quickstart` starts a managed local server, creates/uses the
-quickstart admin dir, runs only the Rust SDK quickstart step, and emits
-one-step `local-product-regression` JSON. It is local Rust SDK quickstart
-evidence for typed HTTP plus table-handle row batch ingestion only, not full
-product-regression gate coverage.
-`--only python_sdk_smoke` runs only `python3 clients/python/http_smoke.py`
-from the workspace root and emits one-step `local-product-regression` JSON. It
-is local sync Python SDK HTTP smoke evidence only, not full product-regression
-gate coverage, not embedded demo/verify, not local HTTP demo, not endpoint
-diagnostics, not Rust SDK quickstart, not TypeScript smoke coverage, not
-managed-cloud proof, not benchmark evidence, and not SQL compatibility.
-`--only typescript_check` runs only `(cd clients/typescript && npm run check)`
-and emits one-step `local-product-regression` JSON. It is generated TypeScript
-check evidence only, not full product-regression gate coverage, not local HTTP
-demo, not endpoint diagnostics, not Rust SDK quickstart, not TypeScript HTTP or
-gateway smoke coverage, not managed-cloud proof, not benchmark evidence, and
-not SQL compatibility.
-`--only typescript_http_smoke` runs only `(cd clients/typescript && npm run
-http-smoke)` and emits one-step `local-product-regression` JSON. It is local
-generated TypeScript HTTP smoke evidence only, not full product-regression gate
-coverage, not embedded demo/verify, not local HTTP demo, not endpoint
-diagnostics, not Rust SDK quickstart, not `typescript_check`, not TypeScript
-gateway smoke coverage, not managed-cloud proof, not benchmark evidence, and
-not SQL compatibility.
-`--only typescript_gateway_smoke` runs only `(cd clients/typescript && npm run
-gateway-smoke)` and emits one-step `local-product-regression` JSON. It now
-covers native TraceQL, GraphQL SDL export, and bounded GraphQL query execution
-through the gateway. It is local
-public TypeScript SDK gateway auth/routing evidence only, not full
-product-regression gate coverage, not embedded demo/verify, not local HTTP
-demo, not endpoint diagnostics, not Rust SDK quickstart, not `typescript_check`,
-not TypeScript HTTP smoke coverage, not managed-cloud proof, not benchmark
-evidence, and not SQL compatibility.
+### 6. Developer Guides
+*   **[Codex CLI Developer Handoff](handoffs/codex-cli.md):** System setup workarounds (macOS binary AMFI bypass via Modal, PEP 668 virtualenv rules), CLI commands index, and comprehensive validation runbooks for local and remote lanes.
+*   **Local Product Regression:** `cargo run -p tracedb-cli -- product-regression` is the local product regression smoke runner. It supports `--inject-failure STEP`, `--list-steps`, and `--report-file PATH`, and reports `only_supported`, `human_summary`, and `report_file` metadata. `product-quickstart` writes `target/tracedb/product-quickstart.json` by default. For remote Linux product verification, run `modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json`.
+*   **Product Gate Selectors:** `product-quickstart --skip-typescript` is a reduced local evidence path and records `typescript_enabled`. `product-quickstart --inject-failure embedded_demo` verifies failure receipts. The local gate supports `--only embedded_demo`, `--only embedded_verify`, `--only http_demo`, `--only local_doctor`, `--only rust_sdk_quickstart`, `--only python_sdk_smoke`, `--only typescript_check`, `--only typescript_http_smoke`, and `--only typescript_gateway_smoke`; TypeScript-only selectors report `conflicts with --skip-typescript`.
+*   **Durability Fault Harness:** `cargo run -p tracedb-cli -- durability-faults` writes `target/tracedb/durability-faults.json` and checks wrong/missing TDE keys, torn WAL tail handling, manifest/checkpoint corruption, stale-lock recovery, encrypted snapshot restore, and WAL-backed idempotency replay after reopen.

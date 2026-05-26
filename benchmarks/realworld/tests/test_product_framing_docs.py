@@ -49,6 +49,9 @@ def read_doc(path: Path) -> str:
 
 def public_docs() -> list[Path]:
     paths = {ROOT / "README.md"}
+    excluded_parts = {
+        "gemini-report",
+    }
     for pattern in [
         "docs/**/*.md",
         "clients/**/README.md",
@@ -57,7 +60,11 @@ def public_docs() -> list[Path]:
         "deploy/**/README.md",
     ]:
         paths.update(ROOT.glob(pattern))
-    return sorted(paths)
+    return sorted(
+        path
+        for path in paths
+        if excluded_parts.isdisjoint(path.relative_to(ROOT).parts)
+    )
 
 
 def normalize(markdown: str) -> str:

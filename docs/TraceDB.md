@@ -7,7 +7,7 @@ tags:
   - docs
 status: current-public-handoff
 type: repo-handoff
-updated: 2026-05-25
+updated: 2026-05-26
 ---
 
 # TraceDB
@@ -19,6 +19,12 @@ drift. Explain every candidate.
 This repo-local file is the public TraceDB handoff for the current product
 surface: local/embedded engine, HTTP/CLI, SDKs, durability semantics, platform
 contract, and benchmark evidence boundaries.
+
+Read `docs/project-intent.md` first when creating a new project, prompt,
+automation, or handoff for this folder. It preserves the memory-derived intent
+behind the current docs: product identity, architecture boundaries, evidence
+rules, Modal/Railway verification policy, SDK/MCP direction, and repo/vault
+operating boundaries.
 
 TraceField is the memory/runtime research program and a future runtime
 direction, not the current TraceDB product and not an implemented runtime in
