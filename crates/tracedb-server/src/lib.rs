@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 #[cfg(test)]
 use tokio::sync::RwLockReadGuard;
@@ -322,6 +322,75 @@ impl EngineHandle {
             .write()
             .await
             .record_idempotency_receipt(receipt)
+            .map_err(to_io_error)
+    }
+
+    pub async fn enqueue_job(
+        &self,
+        kind: tracedb_jobs::JobKind,
+        target: impl Into<String>,
+        idempotency_key: impl Into<String>,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        self.db
+            .write()
+            .await
+            .enqueue_job(kind, target, idempotency_key)
+            .map_err(to_io_error)
+    }
+
+    pub async fn jobs(&self) -> std::io::Result<Vec<tracedb_jobs::TraceJob>> {
+        self.db.read().await.jobs().map_err(to_io_error)
+    }
+
+    pub async fn lease_job(
+        &self,
+        worker_id: tracedb_jobs::WorkerId,
+        kind: tracedb_jobs::JobKind,
+        lease_ms: u64,
+    ) -> std::io::Result<Option<tracedb_jobs::TraceJob>> {
+        self.db
+            .write()
+            .await
+            .lease_job(worker_id, kind, now_ms(), lease_ms)
+            .map_err(to_io_error)
+    }
+
+    pub async fn heartbeat_job(
+        &self,
+        job_id: &str,
+        lease_token: &str,
+        lease_ms: u64,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        self.db
+            .write()
+            .await
+            .heartbeat_job(job_id, lease_token, now_ms(), lease_ms)
+            .map_err(to_io_error)
+    }
+
+    pub async fn complete_job(
+        &self,
+        job_id: &str,
+        lease_token: &str,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        self.db
+            .write()
+            .await
+            .complete_job(job_id, lease_token)
+            .map_err(to_io_error)
+    }
+
+    pub async fn fail_job(
+        &self,
+        job_id: &str,
+        lease_token: Option<&str>,
+        error: &str,
+        permanent: bool,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        self.db
+            .write()
+            .await
+            .fail_job(job_id, lease_token, error, permanent, now_ms())
             .map_err(to_io_error)
     }
 
@@ -915,13 +984,79 @@ async fn handle_request_text(
             }
             ok(response)
         }
-        ("GET", "/v1/admin/jobs") => ok(json!({
-            "jobs": [
-                { "queue": "tracedb.segment.compact", "state": "idle" },
-                { "queue": "tracedb.snapshot.create", "state": "idle" },
-                { "queue": "tracedb.feature.index", "state": "idle" }
-            ]
-        })),
+        ("POST", "/internal/jobs/lease") => {
+            let value: Value = serde_json::from_str(body).map_err(to_io_error)?;
+            let worker_id = value
+                .get("worker_id")
+                .and_then(Value::as_str)
+                .unwrap_or("worker")
+                .to_string();
+            let kind = value
+                .get("kind")
+                .and_then(Value::as_str)
+                .and_then(parse_job_kind)
+                .unwrap_or(tracedb_jobs::JobKind::VerifyDatabase);
+            let lease_ms = value
+                .get("lease_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(30_000);
+            let job = engine
+                .lease_job(tracedb_jobs::WorkerId::new(worker_id), kind, lease_ms)
+                .await?;
+            ok(json!({ "leased": job.is_some(), "job": job }))
+        }
+        ("POST", "/internal/jobs/heartbeat") => {
+            let value: Value = serde_json::from_str(body).map_err(to_io_error)?;
+            let job_id = required_str(&value, "job_id")?;
+            let lease_token = required_str(&value, "lease_token")?;
+            let lease_ms = value
+                .get("lease_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(30_000);
+            let job = engine.heartbeat_job(job_id, lease_token, lease_ms).await?;
+            ok(json!({ "heartbeat": true, "job": job }))
+        }
+        ("POST", "/internal/jobs/complete") => {
+            let value: Value = serde_json::from_str(body).map_err(to_io_error)?;
+            let job_id = required_str(&value, "job_id")?;
+            let lease_token = required_str(&value, "lease_token")?;
+            let job = engine.complete_job(job_id, lease_token).await?;
+            ok(json!({ "completed": true, "job": job }))
+        }
+        ("POST", "/internal/jobs/fail") => {
+            let value: Value = serde_json::from_str(body).map_err(to_io_error)?;
+            let job_id = required_str(&value, "job_id")?;
+            let lease_token = value.get("lease_token").and_then(Value::as_str);
+            let error = value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("job failed");
+            let permanent = value
+                .get("permanent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let job = engine
+                .fail_job(job_id, lease_token, error, permanent)
+                .await?;
+            ok(json!({ "failed": true, "job": job }))
+        }
+        ("GET", "/v1/admin/jobs") => {
+            let durable_jobs = engine.jobs().await?;
+            ok(json!({
+                "durable": true,
+                "queues": [
+                    "tracedb.segment.compact",
+                    "tracedb.snapshot.create",
+                    "tracedb.feature.index"
+                ],
+                "jobs": [
+                    { "queue": "tracedb.segment.compact", "state": "idle" },
+                    { "queue": "tracedb.snapshot.create", "state": "idle" },
+                    { "queue": "tracedb.feature.index", "state": "idle" }
+                ],
+                "durable_jobs": durable_jobs,
+            }))
+        }
         _ => not_found(),
     };
     if let Some(cache_key) = idempotency_cache_key {
@@ -974,6 +1109,42 @@ fn supports_http_idempotency(method: &str, path: &str) -> bool {
             | ("POST", "/v1/admin/snapshot")
             | ("POST", "/v1/admin/restore")
     )
+}
+
+fn required_str<'a>(value: &'a Value, field: &str) -> std::io::Result<&'a str> {
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        to_io_error(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{field} is required"),
+        ))
+    })
+}
+
+fn parse_job_kind(value: &str) -> Option<tracedb_jobs::JobKind> {
+    match value {
+        "GenerateEmbedding" | "generate_embedding" => {
+            Some(tracedb_jobs::JobKind::GenerateEmbedding)
+        }
+        "RegenerateEmbedding" | "regenerate_embedding" => {
+            Some(tracedb_jobs::JobKind::RegenerateEmbedding)
+        }
+        "BuildTextIndex" | "build_text_index" => Some(tracedb_jobs::JobKind::BuildTextIndex),
+        "BuildVectorIndex" | "build_vector_index" => Some(tracedb_jobs::JobKind::BuildVectorIndex),
+        "CompactSegment" | "compact_segment" => Some(tracedb_jobs::JobKind::CompactSegment),
+        "VacuumArtifacts" | "vacuum_artifacts" => Some(tracedb_jobs::JobKind::VacuumArtifacts),
+        "ReindexTable" | "reindex_table" => Some(tracedb_jobs::JobKind::ReindexTable),
+        "ValidatePolicy" | "validate_policy" => Some(tracedb_jobs::JobKind::ValidatePolicy),
+        "RefreshSummary" | "refresh_summary" => Some(tracedb_jobs::JobKind::RefreshSummary),
+        "FeatureRefresh" | "feature_refresh" => Some(tracedb_jobs::JobKind::FeatureRefresh),
+        "ExportSubject" | "export_subject" => Some(tracedb_jobs::JobKind::ExportSubject),
+        "PurgeSubject" | "purge_subject" => Some(tracedb_jobs::JobKind::PurgeSubject),
+        "BackupDatabase" | "backup_database" => Some(tracedb_jobs::JobKind::BackupDatabase),
+        "RestoreVerification" | "restore_verification" => {
+            Some(tracedb_jobs::JobKind::RestoreVerification)
+        }
+        "VerifyDatabase" | "verify_database" => Some(tracedb_jobs::JobKind::VerifyDatabase),
+        _ => None,
+    }
 }
 
 fn records_receipt_after_response(method: &str, path: &str) -> bool {
@@ -1376,6 +1547,13 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn not_found() -> String {
     let body = json!({ "error": "not found", "code": "not_found" }).to_string();
     format!(
@@ -1700,6 +1878,103 @@ mod tests {
             authorized.starts_with("HTTP/1.1 200 OK"),
             "stateful route with private token should pass: {authorized}"
         );
+    }
+
+    #[tokio::test]
+    async fn admin_jobs_lists_persisted_job_catalog_state() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (engine, idempotency_cache) = open_server_state(temp.path()).expect("server state");
+        engine
+            .enqueue_job(
+                tracedb_jobs::JobKind::CompactSegment,
+                "segment:seg-1",
+                "compact:seg-1",
+            )
+            .await
+            .expect("enqueue job");
+        let config = EngineServerConfig::default().with_internal_token("engine-secret");
+
+        let response = handle_request_text(
+            "GET /v1/admin/jobs HTTP/1.1\r\nx-tracedb-engine-token: engine-secret\r\ncontent-length: 0\r\n\r\n",
+            engine,
+            idempotency_cache,
+            config,
+        )
+        .await
+        .expect("admin jobs response");
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains("\"job_id\":\"job:compact_segment:compact:seg-1\""));
+        assert!(response.contains("\"status\":\"Queued\""));
+        assert!(response.contains("\"durable\":true"));
+    }
+
+    #[tokio::test]
+    async fn private_worker_job_endpoints_lease_heartbeat_complete_and_fail() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (engine, idempotency_cache) = open_server_state(temp.path()).expect("server state");
+        engine
+            .enqueue_job(
+                tracedb_jobs::JobKind::BuildTextIndex,
+                "segment:seg-1",
+                "text:seg-1",
+            )
+            .await
+            .expect("enqueue job");
+        let config = EngineServerConfig::default().with_internal_token("engine-secret");
+        let lease_body = r#"{"worker_id":"worker-1","kind":"BuildTextIndex","lease_ms":5000}"#;
+
+        let lease = handle_request_text(
+            &format!(
+                "POST /internal/jobs/lease HTTP/1.1\r\ncontent-type: application/json\r\nx-tracedb-engine-token: engine-secret\r\ncontent-length: {}\r\n\r\n{}",
+                lease_body.len(),
+                lease_body
+            ),
+            engine.clone(),
+            Arc::clone(&idempotency_cache),
+            config.clone(),
+        )
+        .await
+        .expect("lease response");
+
+        assert!(lease.starts_with("HTTP/1.1 200 OK"));
+        assert!(lease.contains("\"leased\":true"));
+        assert!(lease.contains("\"lease_token\""));
+
+        let body = lease.split("\r\n\r\n").nth(1).expect("lease body");
+        let parsed: Value = serde_json::from_str(body).expect("lease json");
+        let job_id = parsed["job"]["job_id"].as_str().expect("job id");
+        let lease_token = parsed["job"]["lease_token"].as_str().expect("lease token");
+        let heartbeat_body =
+            json!({ "job_id": job_id, "lease_token": lease_token, "lease_ms": 5000 }).to_string();
+        let heartbeat = handle_request_text(
+            &format!(
+                "POST /internal/jobs/heartbeat HTTP/1.1\r\ncontent-type: application/json\r\nx-tracedb-engine-token: engine-secret\r\ncontent-length: {}\r\n\r\n{}",
+                heartbeat_body.len(),
+                heartbeat_body
+            ),
+            engine.clone(),
+            Arc::clone(&idempotency_cache),
+            config.clone(),
+        )
+        .await
+        .expect("heartbeat response");
+        assert!(heartbeat.contains("\"heartbeat\":true"));
+
+        let complete_body = json!({ "job_id": job_id, "lease_token": lease_token }).to_string();
+        let complete = handle_request_text(
+            &format!(
+                "POST /internal/jobs/complete HTTP/1.1\r\ncontent-type: application/json\r\nx-tracedb-engine-token: engine-secret\r\ncontent-length: {}\r\n\r\n{}",
+                complete_body.len(),
+                complete_body
+            ),
+            engine,
+            idempotency_cache,
+            config,
+        )
+        .await
+        .expect("complete response");
+        assert!(complete.contains("\"completed\":true"));
     }
 
     #[tokio::test]

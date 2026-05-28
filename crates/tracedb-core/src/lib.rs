@@ -19,6 +19,7 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, TraceDbError>;
 
 pub const ENCRYPTED_ARTIFACT_MAGIC: &[u8; 8] = b"TDBENC01";
+pub const ARTIFACT_ENVELOPE_MAGIC: &[u8; 8] = b"TDBART01";
 const XCHACHA20POLY1305_NONCE_LEN: usize = 24;
 
 #[derive(Debug, Error)]
@@ -45,12 +46,156 @@ pub enum TraceDbError {
     ManifestCorruption(String),
     #[error("crypto error: {0}")]
     Crypto(String),
+    #[error("artifact corruption: {0}")]
+    ArtifactCorruption(String),
     #[error("module {module} rejected: {reason}")]
     ModuleRejected { module: String, reason: String },
     #[error("not found: {0}")]
     NotFound(String),
     #[error("invalid command: {0}")]
     InvalidCommand(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactEnvelopeHeader {
+    pub version: u32,
+    pub kind: String,
+    pub codec: String,
+    pub segment_id: String,
+    pub generation: u64,
+    pub manifest_generation: u64,
+    pub epoch_min: u64,
+    pub epoch_max: u64,
+    pub source_segment_checksum: u32,
+    pub payload_len: u64,
+    pub payload_checksum: u32,
+    pub object_checksum: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArtifactEnvelope {
+    pub header: ArtifactEnvelopeHeader,
+    pub payload: Vec<u8>,
+}
+
+impl ArtifactEnvelopeHeader {
+    pub fn new(
+        kind: impl Into<String>,
+        codec: impl Into<String>,
+        segment_id: impl Into<String>,
+        generation: u64,
+        manifest_generation: u64,
+        epoch_min: u64,
+        epoch_max: u64,
+        source_segment_checksum: u32,
+        payload: &[u8],
+    ) -> Self {
+        Self {
+            version: 1,
+            kind: kind.into(),
+            codec: codec.into(),
+            segment_id: segment_id.into(),
+            generation,
+            manifest_generation,
+            epoch_min,
+            epoch_max,
+            source_segment_checksum,
+            payload_len: payload.len() as u64,
+            payload_checksum: checksum_bytes(payload),
+            object_checksum: 0,
+        }
+    }
+}
+
+pub fn encode_artifact_envelope(
+    mut header: ArtifactEnvelopeHeader,
+    payload: &[u8],
+) -> Result<Vec<u8>> {
+    if header.payload_len != payload.len() as u64 {
+        return Err(TraceDbError::ArtifactCorruption(format!(
+            "artifact payload length mismatch: header {}, actual {}",
+            header.payload_len,
+            payload.len()
+        )));
+    }
+    let payload_checksum = checksum_bytes(payload);
+    if header.payload_checksum != payload_checksum {
+        return Err(TraceDbError::ArtifactCorruption(format!(
+            "artifact payload checksum mismatch: header {}, actual {payload_checksum}",
+            header.payload_checksum
+        )));
+    }
+    header.object_checksum = 0;
+    let header_without_checksum = serialize_artifact_header(&header)?;
+    header.object_checksum =
+        checksum_bytes(&[header_without_checksum.as_slice(), payload].concat());
+    let header_bytes = serialize_artifact_header(&header)?;
+    let mut out =
+        Vec::with_capacity(ARTIFACT_ENVELOPE_MAGIC.len() + 4 + header_bytes.len() + payload.len());
+    out.extend_from_slice(ARTIFACT_ENVELOPE_MAGIC);
+    out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&header_bytes);
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+
+pub fn decode_artifact_envelope(bytes: &[u8]) -> Result<ArtifactEnvelope> {
+    if !bytes.starts_with(ARTIFACT_ENVELOPE_MAGIC) {
+        return Err(TraceDbError::ArtifactCorruption(
+            "artifact envelope magic mismatch".to_string(),
+        ));
+    }
+    let header_len_offset = ARTIFACT_ENVELOPE_MAGIC.len();
+    let header_len_end = header_len_offset + 4;
+    if bytes.len() < header_len_end {
+        return Err(TraceDbError::ArtifactCorruption(
+            "artifact envelope truncated before header length".to_string(),
+        ));
+    }
+    let header_len = u32::from_le_bytes(
+        bytes[header_len_offset..header_len_end]
+            .try_into()
+            .expect("slice length"),
+    ) as usize;
+    let header_end = header_len_end + header_len;
+    if bytes.len() < header_end {
+        return Err(TraceDbError::ArtifactCorruption(
+            "artifact envelope truncated before header".to_string(),
+        ));
+    }
+    let header: ArtifactEnvelopeHeader =
+        bincode::deserialize(&bytes[header_len_end..header_end])
+            .map_err(|error| TraceDbError::ArtifactCorruption(error.to_string()))?;
+    let payload = bytes[header_end..].to_vec();
+    if header.payload_len != payload.len() as u64 {
+        return Err(TraceDbError::ArtifactCorruption(format!(
+            "artifact payload length mismatch: header {}, actual {}",
+            header.payload_len,
+            payload.len()
+        )));
+    }
+    let payload_checksum = checksum_bytes(&payload);
+    if header.payload_checksum != payload_checksum {
+        return Err(TraceDbError::ArtifactCorruption(format!(
+            "artifact payload checksum mismatch: expected {}, got {payload_checksum}",
+            header.payload_checksum
+        )));
+    }
+    let mut header_without_checksum = header.clone();
+    header_without_checksum.object_checksum = 0;
+    let header_bytes = serialize_artifact_header(&header_without_checksum)?;
+    let object_checksum = checksum_bytes(&[header_bytes.as_slice(), payload.as_slice()].concat());
+    if header.object_checksum != object_checksum {
+        return Err(TraceDbError::ArtifactCorruption(format!(
+            "artifact object checksum mismatch: expected {}, got {object_checksum}",
+            header.object_checksum
+        )));
+    }
+    Ok(ArtifactEnvelope { header, payload })
+}
+
+fn serialize_artifact_header(header: &ArtifactEnvelopeHeader) -> Result<Vec<u8>> {
+    bincode::serialize(header).map_err(|error| TraceDbError::ArtifactCorruption(error.to_string()))
 }
 
 #[derive(
@@ -446,6 +591,14 @@ pub struct IndexManifest {
     pub parent_manifest_generation: u64,
     pub object_path: String,
     pub checksum: u32,
+    #[serde(default)]
+    pub source_segment_checksum: u32,
+    #[serde(default)]
+    pub payload_checksum: u32,
+    #[serde(default)]
+    pub artifact_format_version: u32,
+    #[serde(default)]
+    pub codec: String,
     pub created_epoch: Epoch,
     pub ready_epoch: Option<Epoch>,
 }

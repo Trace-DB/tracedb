@@ -7,11 +7,13 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 use tracedb_core::{
-    checksum_bytes, decrypt_artifact_if_needed, EncryptionContext, Result, SegmentManifest,
-    SegmentState, TraceDbError,
+    checksum_bytes, decode_artifact_envelope, decrypt_artifact_if_needed, encode_artifact_envelope,
+    ArtifactEnvelopeHeader, EncryptionContext, Result, SegmentManifest, SegmentState, TraceDbError,
+    ARTIFACT_ENVELOPE_MAGIC,
 };
 
-pub const SEGMENT_OBJECT_FORMAT_VERSION: u32 = 1;
+pub const SEGMENT_OBJECT_FORMAT_VERSION: u32 = 2;
+pub const SEGMENT_LEGACY_JSON_FORMAT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SegmentObject {
@@ -86,7 +88,9 @@ impl SegmentObject {
         records: Vec<SegmentRecord>,
     ) -> Result<Self> {
         let segment_id = segment_id.into();
-        let payload_checksum = checksum_bytes(&serde_json::to_vec(&records)?);
+        let payload_checksum = checksum_bytes(&bincode::serialize(&records).map_err(|error| {
+            TraceDbError::ArtifactCorruption(format!("serialize segment records: {error}"))
+        })?);
         let state_history = publication_state_history();
         let table_set = sorted_unique(records.iter().map(|record| record.table.clone()));
         let tenant_set = sorted_unique(records.iter().map(|record| record.tenant_id.clone()));
@@ -226,7 +230,21 @@ pub fn read_segment_object_with_encryption(
     let mut body = Vec::new();
     file.read_to_end(&mut body)?;
     let body = decrypt_artifact_if_needed(encryption, "segment", &body)?;
-    let object: SegmentObject = serde_json::from_slice(&body)?;
+    let object: SegmentObject = if body.starts_with(ARTIFACT_ENVELOPE_MAGIC) {
+        let envelope = decode_artifact_envelope(&body)?;
+        if envelope.header.kind != "segment" {
+            return Err(TraceDbError::ArtifactCorruption(format!(
+                "segment artifact kind mismatch: {}",
+                envelope.header.kind
+            )));
+        }
+        let json_bytes: Vec<u8> = bincode::deserialize(&envelope.payload).map_err(|error| {
+            TraceDbError::ArtifactCorruption(format!("decode binary segment payload: {error}"))
+        })?;
+        serde_json::from_slice(&json_bytes)?
+    } else {
+        serde_json::from_slice(&body)?
+    };
     verify_segment_object(&object)?;
     Ok(object)
 }
@@ -246,7 +264,22 @@ pub fn write_segment_object_with_encryption(
         fs::create_dir_all(parent)?;
     }
     let tmp_path = path.with_extension("tseg.tmp");
-    let body = serde_json::to_vec_pretty(object)?;
+    let json_bytes = serde_json::to_vec(object)?;
+    let payload = bincode::serialize(&json_bytes).map_err(|error| {
+        TraceDbError::ArtifactCorruption(format!("encode binary segment payload: {error}"))
+    })?;
+    let header = ArtifactEnvelopeHeader::new(
+        "segment",
+        "bincode",
+        object.segment_id.clone(),
+        object.generation,
+        object.generation,
+        object.epoch_min,
+        object.epoch_max,
+        object.object_checksum,
+        &payload,
+    );
+    let body = encode_artifact_envelope(header, &payload)?;
     let body = match encryption {
         Some(encryption) => encryption.encrypt_artifact("segment", &body)?,
         None => body,
@@ -263,7 +296,10 @@ pub fn write_segment_object_with_encryption(
 }
 
 pub fn verify_segment_object(object: &SegmentObject) -> Result<()> {
-    if object.format_version != SEGMENT_OBJECT_FORMAT_VERSION {
+    if !matches!(
+        object.format_version,
+        SEGMENT_OBJECT_FORMAT_VERSION | SEGMENT_LEGACY_JSON_FORMAT_VERSION
+    ) {
         return Err(TraceDbError::ManifestCorruption(format!(
             "unsupported segment object format {}",
             object.format_version
@@ -281,7 +317,10 @@ pub fn verify_segment_object(object: &SegmentObject) -> Result<()> {
         )));
     }
     let actual = compute_segment_object_checksum(object)?;
-    if actual != object.object_checksum {
+    let checksum_matches = actual == object.object_checksum
+        || (object.format_version == SEGMENT_LEGACY_JSON_FORMAT_VERSION
+            && compute_segment_object_checksum_legacy_json(object)? == object.object_checksum);
+    if !checksum_matches {
         return Err(TraceDbError::ManifestCorruption(format!(
             "segment object checksum mismatch: expected {}, got {actual}",
             object.object_checksum
@@ -291,6 +330,14 @@ pub fn verify_segment_object(object: &SegmentObject) -> Result<()> {
 }
 
 pub fn compute_segment_object_checksum(object: &SegmentObject) -> Result<u32> {
+    let mut normalized = object.clone();
+    normalized.object_checksum = 0;
+    let bytes = serde_json::to_vec(&normalized)?;
+    let round_tripped: SegmentObject = serde_json::from_slice(&bytes)?;
+    Ok(checksum_bytes(&serde_json::to_vec(&round_tripped)?))
+}
+
+fn compute_segment_object_checksum_legacy_json(object: &SegmentObject) -> Result<u32> {
     let mut normalized = object.clone();
     normalized.object_checksum = 0;
     let bytes = serde_json::to_vec(&normalized)?;
@@ -358,5 +405,55 @@ mod tests {
         let round_tripped: SegmentObject = serde_json::from_slice(&bytes).expect("parse");
 
         verify_segment_object(&round_tripped).expect("round-tripped checksum remains valid");
+    }
+
+    #[test]
+    fn segment_writer_uses_binary_envelope_and_reader_accepts_legacy_json() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let record = SegmentRecord {
+            table: "docs".to_string(),
+            record_id: "a".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            version_id: 1,
+            fields: BTreeMap::from([
+                ("id".to_string(), json!("a")),
+                ("tenant".to_string(), json!("tenant-a")),
+                ("body".to_string(), json!("legacy and binary")),
+            ]),
+            text: BTreeMap::from([("body".to_string(), "legacy and binary".to_string())]),
+            vectors: BTreeMap::from([("embedding".to_string(), vec![1.0, 0.0])]),
+        };
+        let object =
+            SegmentObject::from_records("seg-binary", 1, vec![record.clone()]).expect("object");
+        let binary_path = temp.path().join("seg-binary.tseg");
+        write_segment_object(&binary_path, &object).expect("write binary segment");
+
+        let raw = std::fs::read(&binary_path).expect("raw segment");
+        assert!(raw.starts_with(tracedb_core::ARTIFACT_ENVELOPE_MAGIC));
+        let envelope = tracedb_core::decode_artifact_envelope(&raw).expect("segment envelope");
+        assert_eq!(envelope.header.kind, "segment");
+        assert_eq!(envelope.header.codec, "bincode");
+        assert_eq!(
+            envelope.header.payload_checksum,
+            checksum_bytes(&envelope.payload)
+        );
+
+        let binary_read = read_segment_object(&binary_path).expect("read binary segment");
+        assert_eq!(binary_read, object);
+
+        let legacy_path = temp.path().join("legacy-json.tseg");
+        let mut legacy =
+            SegmentObject::from_records("legacy-json", 1, vec![record]).expect("legacy object");
+        legacy.format_version = 1;
+        legacy.object_checksum =
+            compute_segment_object_checksum_legacy_json(&legacy).expect("legacy checksum");
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_vec_pretty(&legacy).expect("legacy json"),
+        )
+        .expect("write legacy json");
+        let legacy_read = read_segment_object(&legacy_path).expect("read legacy json");
+        assert_eq!(legacy_read.segment_id, "legacy-json");
+        assert_eq!(legacy_read.format_version, 1);
     }
 }

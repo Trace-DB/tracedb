@@ -12,6 +12,7 @@ use tracedb_core::{
     FeatureInvalidation, IdempotencyReceipt, Lsn, ModuleCommitEvent, RecordDeletion, RecordInput,
     Result, TableSchema, TraceDbError,
 };
+use tracedb_jobs::JobEvent;
 
 const WAL_MAGIC: u32 = 0x5444_574c;
 const WAL_FORMAT_VERSION: u32 = 1;
@@ -56,6 +57,8 @@ pub struct CommitRecord {
     pub module_events: Vec<ModuleCommitEvent>,
     #[serde(default)]
     pub idempotency_receipts: Vec<IdempotencyReceipt>,
+    #[serde(default)]
+    pub job_events: Vec<JobEvent>,
     pub commit_marker: String,
 }
 
@@ -78,6 +81,7 @@ impl CommitRecord {
             feature_invalidations: Vec::new(),
             module_events: Vec::new(),
             idempotency_receipts: Vec::new(),
+            job_events: Vec::new(),
             commit_marker: "COMMITTED".to_string(),
         }
     }
@@ -168,6 +172,7 @@ struct CommitRecordForFrame<'a> {
     feature_invalidations: &'a [FeatureInvalidation],
     module_events: &'a [ModuleCommitEvent],
     idempotency_receipts: &'a [IdempotencyReceipt],
+    job_events: &'a [JobEvent],
     commit_marker: &'a str,
 }
 
@@ -427,6 +432,7 @@ fn prepare_commit_for_frame<'a>(
         feature_invalidations: &commit.feature_invalidations,
         module_events: &commit.module_events,
         idempotency_receipts: &commit.idempotency_receipts,
+        job_events: &commit.job_events,
         commit_marker: &commit.commit_marker,
     }
 }
@@ -806,6 +812,7 @@ mod tests {
                 event: "indexed".to_string(),
             }],
             idempotency_receipts: Vec::new(),
+            job_events: Vec::new(),
             commit_marker: "COMMITTED".to_string(),
         };
         let previous_checksum = 0xCAFE_BABE;
@@ -818,5 +825,29 @@ mod tests {
             .expect("borrowed payload");
 
         assert_eq!(borrowed_payload, cloned_payload);
+    }
+
+    #[test]
+    fn commit_record_deserializes_legacy_payload_without_job_events() {
+        let payload = serde_json::json!({
+            "database_id": "local",
+            "branch_id": "main",
+            "transaction_id": 1,
+            "epoch": 1,
+            "parent_epoch": 0,
+            "previous_commit_hash": 0,
+            "idempotency_key": null,
+            "schema_epoch": 1,
+            "policy_epoch": 1,
+            "schema_changes": [],
+            "mutations": [],
+            "feature_invalidations": [],
+            "module_events": [],
+            "commit_marker": "COMMITTED"
+        });
+
+        let commit: CommitRecord = serde_json::from_value(payload).expect("legacy commit");
+
+        assert!(commit.job_events.is_empty());
     }
 }

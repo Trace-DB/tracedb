@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -11,7 +12,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::Catalog;
-use tracedb_core::{stable_body_hash, IdempotencyReceipt};
+use tracedb_core::{stable_body_hash, IdempotencyReceipt, IndexState, ARTIFACT_ENVELOPE_MAGIC};
+use tracedb_jobs::{JobKind, JobStatus, WorkerId};
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
     RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema,
@@ -251,29 +253,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "jobs" if args.get(1).map(String::as_str) == Some("list") => {
             let db = TraceDb::open(&data_dir)?;
+            let jobs = db.jobs()?;
             print_json(json!({
+                "durable": true,
                 "queues": db.inspect_manifest()?.job_queues,
                 "local_worker_queues": [
                     "tracedb.segment.compact",
                     "tracedb.snapshot.create",
                     "tracedb.feature.index"
                 ],
+                "status_counts": job_status_counts(&jobs),
+                "jobs": jobs,
             }));
         }
         "jobs" if args.get(1).map(String::as_str) == Some("run") => {
             let job = args.get(2).map(String::as_str).unwrap_or("compact");
-            match job {
-                "compact" | "tracedb.segment.compact" => {
-                    let mut db = TraceDb::open(&data_dir)?;
-                    db.compact()?;
-                    print_json(json!({ "job": "tracedb.segment.compact", "completed": true }));
-                }
-                other => {
-                    print_json(
-                        json!({ "job": other, "completed": false, "reason": "no local runner registered" }),
-                    );
-                }
-            }
+            let mut db = TraceDb::open(&data_dir)?;
+            print_json(run_local_job(&mut db, job, &data_dir)?);
         }
         "doctor" if args.get(1).map(String::as_str) == Some("http") => {
             let config = parse_http_doctor_config(&args[2..])?;
@@ -299,6 +295,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "durability-faults" => {
             let config = parse_durability_faults_config(&args[1..])?;
             run_durability_faults(config)?;
+        }
+        "storage-index-jobs" => {
+            let config = parse_storage_index_jobs_config(&args[1..])?;
+            run_storage_index_jobs(config)?;
         }
         "compose" => {
             let action = args.get(1).map(String::as_str).unwrap_or("status");
@@ -1051,6 +1051,7 @@ const PRODUCT_REGRESSION_STEPS: &[&str] = &[
 const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = PRODUCT_REGRESSION_STEPS;
 const PRODUCT_QUICKSTART_REPORT_FILE: &str = "target/tracedb/product-quickstart.json";
 const DURABILITY_FAULTS_REPORT_FILE: &str = "target/tracedb/durability-faults.json";
+const STORAGE_INDEX_JOBS_REPORT_FILE: &str = "target/tracedb/storage-index-jobs.json";
 const DURABILITY_GOOD_MASTER_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const DURABILITY_OTHER_MASTER_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 const DURABILITY_FAULT_SCENARIOS: &[&str] = &[
@@ -1063,8 +1064,36 @@ const DURABILITY_FAULT_SCENARIOS: &[&str] = &[
     "encrypted_snapshot_restore",
     "wal_idempotency_replay_after_reopen",
 ];
+const STORAGE_INDEX_JOB_SCENARIOS: &[&str] = &[
+    "delta_writes",
+    "binary_segment_roundtrip",
+    "legacy_json_segment_read",
+    "checksum_corruption",
+    "encrypted_binary_artifacts",
+    "bm25_query_parity",
+    "hnsw_vector_parity",
+    "bitmap_policy_filtering",
+    "stale_sealed_candidate_hot_materialization",
+    "vacuum_safety",
+    "durable_enqueue_replay",
+    "lease_expiry",
+    "retry_dead_letter",
+    "interrupted_compaction",
+    "failed_index_build_recovery",
+    "backup_job_failure",
+    "restore_verification_job",
+    "reopen_after_job_state_change",
+];
 
 struct DurabilityFaultsConfig {
+    data_root: PathBuf,
+    cleanup_data: bool,
+    keep_data: bool,
+    inject_failure: Option<String>,
+    report_file: Option<PathBuf>,
+}
+
+struct StorageIndexJobsConfig {
     data_root: PathBuf,
     cleanup_data: bool,
     keep_data: bool,
@@ -1548,6 +1577,868 @@ fn seed_encrypted_db(
         [1.0, 0.0, 0.0],
     )))?;
     Ok(())
+}
+
+fn parse_storage_index_jobs_config(
+    args: &[String],
+) -> Result<StorageIndexJobsConfig, Box<dyn std::error::Error>> {
+    let mut data_root = None;
+    let mut keep_data = false;
+    let mut inject_failure = None;
+    let mut report_file = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--data-root" => {
+                idx += 1;
+                data_root = Some(PathBuf::from(
+                    args.get(idx).ok_or("missing value for --data-root")?,
+                ));
+            }
+            "--keep-data" => keep_data = true,
+            "--report-file" => {
+                idx += 1;
+                report_file = Some(PathBuf::from(
+                    args.get(idx).ok_or("missing value for --report-file")?,
+                ));
+            }
+            "--inject-failure" => {
+                idx += 1;
+                let scenario = args
+                    .get(idx)
+                    .ok_or("missing value for --inject-failure")?
+                    .to_string();
+                if !STORAGE_INDEX_JOB_SCENARIOS.contains(&scenario.as_str()) {
+                    return Err(format!(
+                        "unknown storage-index-jobs failure injection scenario {scenario}; expected one of {}",
+                        STORAGE_INDEX_JOB_SCENARIOS.join(", ")
+                    )
+                    .into());
+                }
+                inject_failure = Some(scenario);
+            }
+            other => return Err(format!("unknown storage-index-jobs option {other}").into()),
+        }
+        idx += 1;
+    }
+    let cleanup_data = data_root.is_none() && !keep_data;
+    let data_root = data_root.unwrap_or_else(default_storage_index_jobs_root);
+    if report_file.is_none() {
+        report_file = Some(default_storage_index_jobs_report_file()?);
+    }
+    Ok(StorageIndexJobsConfig {
+        data_root,
+        cleanup_data,
+        keep_data,
+        inject_failure,
+        report_file,
+    })
+}
+
+fn default_storage_index_jobs_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(product_regression_workspace_root()?.join(STORAGE_INDEX_JOBS_REPORT_FILE))
+}
+
+fn default_storage_index_jobs_root() -> PathBuf {
+    let suffix = product_regression_run_id().unwrap_or_else(|_| std::process::id().to_string());
+    env::temp_dir().join(format!("tracedb-storage-index-jobs-{suffix}"))
+}
+
+fn run_storage_index_jobs(
+    config: StorageIndexJobsConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if config.data_root.exists() && config.cleanup_data {
+        fs::remove_dir_all(&config.data_root)?;
+    }
+    fs::create_dir_all(&config.data_root)?;
+
+    let mut scenarios = serde_json::Map::new();
+    for scenario in STORAGE_INDEX_JOB_SCENARIOS {
+        let dir = config.data_root.join(scenario);
+        let result = if config.inject_failure.as_deref() == Some(*scenario) {
+            Err("injected storage-index-jobs failure".into())
+        } else {
+            run_storage_index_job_scenario(scenario, &dir)
+        };
+        scenarios.insert(
+            (*scenario).to_string(),
+            storage_index_job_scenario_summary(result),
+        );
+    }
+    let statuses = durability_fault_status_counts(&scenarios);
+    let ok = statuses.get("failed").and_then(Value::as_u64).unwrap_or(0) == 0;
+    let summary = json!({
+        "ok": ok,
+        "mode": "local-storage-index-jobs",
+        "scope": "local_only",
+        "data_root": config.data_root.display().to_string(),
+        "report_file": product_regression_report_file_json(config.report_file.as_deref()),
+        "data_cleanup": config.cleanup_data,
+        "keep_data": config.keep_data,
+        "failure_injection": config.inject_failure,
+        "claims": {
+            "managed_cloud": "not_checked",
+            "api_parity_expansion": "not_checked",
+            "storage_foundation": "checked",
+            "durable_jobs": "checked",
+        },
+        "statuses": statuses,
+        "scenarios": scenarios,
+    });
+    if config.cleanup_data {
+        let _ = fs::remove_dir_all(&config.data_root);
+    }
+    emit_json(summary, config.report_file.as_deref())?;
+    if ok {
+        Ok(())
+    } else {
+        Err("storage-index-jobs local gate failed".into())
+    }
+}
+
+fn run_storage_index_job_scenario(
+    scenario: &str,
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    match scenario {
+        "delta_writes" => storage_delta_writes(dir),
+        "binary_segment_roundtrip" => storage_binary_segment_roundtrip(dir),
+        "legacy_json_segment_read" => storage_legacy_json_segment_read(dir),
+        "checksum_corruption" => storage_checksum_corruption(dir),
+        "encrypted_binary_artifacts" => storage_encrypted_binary_artifacts(dir),
+        "bm25_query_parity" => storage_bm25_query_parity(dir),
+        "hnsw_vector_parity" => storage_hnsw_vector_parity(dir),
+        "bitmap_policy_filtering" => storage_bitmap_policy_filtering(dir),
+        "stale_sealed_candidate_hot_materialization" => {
+            storage_stale_sealed_candidate_hot_materialization(dir)
+        }
+        "vacuum_safety" => storage_vacuum_safety(dir),
+        "durable_enqueue_replay" => storage_durable_enqueue_replay(dir),
+        "lease_expiry" => storage_lease_expiry(dir),
+        "retry_dead_letter" => storage_retry_dead_letter(dir),
+        "interrupted_compaction" => storage_interrupted_compaction(dir),
+        "failed_index_build_recovery" => storage_failed_index_build_recovery(dir),
+        "backup_job_failure" => storage_backup_job_failure(dir),
+        "restore_verification_job" => storage_restore_verification_job(dir),
+        "reopen_after_job_state_change" => storage_reopen_after_job_state_change(dir),
+        other => Err(format!("unknown storage-index-jobs scenario {other}").into()),
+    }
+}
+
+fn storage_index_job_scenario_summary(result: Result<Value, Box<dyn std::error::Error>>) -> Value {
+    match result {
+        Ok(details) => json!({
+            "ok": true,
+            "status": "passed",
+            "evidence": details.get("evidence").and_then(Value::as_str).unwrap_or("scenario completed"),
+            "details": details,
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "status": "failed",
+            "error": error.to_string(),
+        }),
+    }
+}
+
+fn storage_delta_writes(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.apply_schema(demo_schema("docs"))?;
+    let (_epoch, timing) =
+        db.put_batch_with_write_timing(RecordPutBatchRequest::new(storage_demo_records("docs")))?;
+    if timing.store_clone_ms != 0.0 {
+        return Err(format!(
+            "store_clone_ms should be 0.0, got {}",
+            timing.store_clone_ms
+        )
+        .into());
+    }
+    if timing.store_delta_apply_ms < 0.0 || timing.store_delta_plan_ms < 0.0 {
+        return Err("delta timing fields must be present and non-negative".into());
+    }
+    let record = db
+        .get(RecordGetRequest::new("docs", "tenant-a", "alpha"))?
+        .ok_or("delta write record missing")?;
+    Ok(json!({
+        "evidence": "batch write used delta planning and materialized after WAL append",
+        "record_id": record.id,
+        "store_clone_ms": timing.store_clone_ms,
+        "store_delta_plan_ms": timing.store_delta_plan_ms,
+        "store_delta_apply_ms": timing.store_delta_apply_ms,
+        "wal_frame_bytes": timing.wal_frame_bytes,
+    }))
+}
+
+fn storage_binary_segment_roundtrip(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    db.compact()?;
+    let manifest = db.inspect_manifest()?;
+    let segment = manifest
+        .segments
+        .first()
+        .ok_or("segment manifest missing")?;
+    let path = dir
+        .join("segments")
+        .join(format!("{}.tseg", segment.segment_id));
+    let bytes = fs::read(&path)?;
+    if !bytes.starts_with(ARTIFACT_ENVELOPE_MAGIC) {
+        return Err("new segment artifact did not use TraceDB binary envelope".into());
+    }
+    let object = tracedb_segment::read_segment_object(&path)?;
+    Ok(json!({
+        "evidence": "segment artifact roundtripped through TraceDB binary envelope",
+        "segment_id": object.segment_id,
+        "format_version": object.format_version,
+        "records": object.records.len(),
+        "object_checksum": object.object_checksum,
+    }))
+}
+
+fn storage_legacy_json_segment_read(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    fs::create_dir_all(dir)?;
+    let mut object =
+        tracedb_segment::SegmentObject::from_records("legacy-json", 1, storage_segment_records())?;
+    object.format_version = tracedb_segment::SEGMENT_LEGACY_JSON_FORMAT_VERSION;
+    object.object_checksum = 0;
+    object.object_checksum = tracedb_segment::compute_segment_object_checksum(&object)?;
+    let path = dir.join("legacy-json.tseg");
+    fs::write(&path, serde_json::to_vec_pretty(&object)?)?;
+    let bytes = fs::read(&path)?;
+    if bytes.starts_with(ARTIFACT_ENVELOPE_MAGIC) {
+        return Err("legacy JSON fixture unexpectedly used binary envelope".into());
+    }
+    let read = tracedb_segment::read_segment_object(&path)?;
+    Ok(json!({
+        "evidence": "legacy plaintext JSON segment reader remains available",
+        "segment_id": read.segment_id,
+        "format_version": read.format_version,
+        "records": read.records.len(),
+    }))
+}
+
+fn storage_checksum_corruption(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    db.compact()?;
+    let manifest = db.inspect_manifest()?;
+    let index = manifest
+        .indexes
+        .iter()
+        .find(|index| index.state == IndexState::Ready)
+        .ok_or("ready index manifest missing")?;
+    let path = dir.join(&index.object_path);
+    let mut bytes = fs::read(&path)?;
+    let last = bytes.last_mut().ok_or("index artifact was empty")?;
+    *last ^= 0xff;
+    fs::write(&path, bytes)?;
+    let error = tracedb_index::read_index_artifact(&path, None)
+        .expect_err("corrupt index artifact must fail verification")
+        .to_string();
+    Ok(json!({
+        "evidence": "corrupt binary index artifact failed checksum verification",
+        "index_id": index.index_id,
+        "stable_error": error,
+    }))
+}
+
+fn storage_encrypted_binary_artifacts(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let marker = "encrypted storage marker body";
+    let mut db = TraceDb::open_with_options(
+        dir,
+        TraceDbOpenOptions::with_master_key_b64(DURABILITY_GOOD_MASTER_KEY),
+    )?;
+    db.apply_schema(demo_schema("docs"))?;
+    db.put(RecordPutRequest::new(demo_record(
+        "docs",
+        "tenant-a",
+        "encrypted-alpha",
+        marker,
+        "encrypted",
+        [1.0, 0.0, 0.0],
+    )))?;
+    db.compact()?;
+    let manifest = db.inspect_manifest()?;
+    let segment = manifest
+        .segments
+        .first()
+        .ok_or("encrypted segment missing")?;
+    let segment_path = dir
+        .join("segments")
+        .join(format!("{}.tseg", segment.segment_id));
+    let bytes = fs::read(&segment_path)?;
+    if bytes.starts_with(ARTIFACT_ENVELOPE_MAGIC)
+        || String::from_utf8_lossy(&bytes).contains(marker)
+    {
+        return Err("encrypted binary segment exposed plaintext envelope or marker".into());
+    }
+    drop(db);
+    let reopened = TraceDb::open_with_options(
+        dir,
+        TraceDbOpenOptions::with_master_key_b64(DURABILITY_GOOD_MASTER_KEY),
+    )?;
+    let record = reopened
+        .get(RecordGetRequest::new("docs", "tenant-a", "encrypted-alpha"))?
+        .ok_or("encrypted marker record missing after reopen")?;
+    Ok(json!({
+        "evidence": "TDE wrapped binary artifacts while reopened reads remained available",
+        "segment_id": segment.segment_id,
+        "raw_segment_plaintext_marker_present": false,
+        "record_id": record.id,
+        "key_id": manifest.encryption.as_ref().map(|metadata| metadata.key_id.clone()),
+    }))
+}
+
+fn storage_bm25_query_parity(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    let before = query_record_ids(&db, "banana neural", None, "tenant-a")?;
+    db.compact()?;
+    let after = query_record_ids(&db, "banana neural", None, "tenant-a")?;
+    if before != after {
+        return Err(format!("BM25 query parity mismatch before={before:?} after={after:?}").into());
+    }
+    let text_index = first_index_artifact(dir, &db, "text")?;
+    let scores = text_index
+        .as_text()
+        .ok_or("text index artifact payload missing")?
+        .score_text("banana neural", Some("body"));
+    if scores.is_empty() {
+        return Err("text index produced no postings-backed scores".into());
+    }
+    Ok(json!({
+        "evidence": "BM25 postings artifact produced scores and query parity held with sealed records",
+        "record_ids": after,
+        "text_scores": scores.len(),
+        "top_text_score_record": scores[0].record_id,
+    }))
+}
+
+fn storage_hnsw_vector_parity(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    let before = query_record_ids(&db, "", Some(vec![1.0, 0.0, 0.0]), "tenant-a")?;
+    db.compact()?;
+    let after = query_record_ids(&db, "", Some(vec![1.0, 0.0, 0.0]), "tenant-a")?;
+    if before != after {
+        return Err(
+            format!("HNSW vector parity mismatch before={before:?} after={after:?}").into(),
+        );
+    }
+    let vector_index = first_index_artifact(dir, &db, "vector")?;
+    let vector = vector_index
+        .as_vector()
+        .ok_or("vector index artifact payload missing")?;
+    let nearest = vector.search_vector("embedding", &[1.0, 0.0, 0.0], 2);
+    let neighbors = vector
+        .hnsw_neighbors("embedding", "alpha")
+        .cloned()
+        .unwrap_or_default();
+    if nearest.first().map(|score| score.record_id.as_str()) != Some("alpha") {
+        return Err("vector artifact nearest neighbor did not match exact result".into());
+    }
+    Ok(json!({
+        "evidence": "segment-local deterministic HNSW artifact matched exact vector query top result",
+        "record_ids": after,
+        "nearest": nearest.iter().map(|score| score.record_id.clone()).collect::<Vec<_>>(),
+        "alpha_neighbors": neighbors,
+    }))
+}
+
+fn storage_bitmap_policy_filtering(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    db.compact()?;
+    let output = db.query(storage_query(None, None, "tenant-b"))?;
+    if output.results.iter().any(|row| row.tenant_id != "tenant-b") {
+        return Err("policy query returned a row from the wrong tenant".into());
+    }
+    let policy_index = first_index_artifact(dir, &db, "policy")?;
+    let visible = policy_index
+        .as_bitmap()
+        .ok_or("policy bitmap payload missing")?
+        .visible_record_ids("tenant-b", &serde_json::Map::new());
+    if !visible.contains("tenant-b-only") {
+        return Err("policy bitmap did not include tenant-b record".into());
+    }
+    Ok(json!({
+        "evidence": "policy bitmap artifact and final materialization guard kept tenant visibility scoped",
+        "query_rows": output.results.len(),
+        "bitmap_visible": visible.into_iter().collect::<Vec<_>>(),
+    }))
+}
+
+fn storage_stale_sealed_candidate_hot_materialization(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    db.compact()?;
+    db.put(RecordPutRequest::new(demo_record(
+        "docs",
+        "tenant-a",
+        "alpha",
+        "fresh overlay body",
+        "fresh",
+        [1.0, 0.0, 0.0],
+    )))?;
+    let output = db.query(storage_query(Some("fresh"), None, "tenant-a"))?;
+    let row = output
+        .results
+        .first()
+        .ok_or("fresh hot overlay row missing")?;
+    if row.fields.get("body") != Some(&json!("fresh overlay body")) {
+        return Err("sealed candidate materialized stale body instead of hot overlay".into());
+    }
+    Ok(json!({
+        "evidence": "fresh hot overlay materialization won over stale sealed candidate",
+        "record_id": row.record_id,
+        "body": row.fields.get("body").cloned(),
+    }))
+}
+
+fn storage_vacuum_safety(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    db.compact()?;
+    fs::write(dir.join("segments/orphan.tseg"), b"orphan")?;
+    fs::write(dir.join("indexes/orphan.tidx"), b"orphan")?;
+    let removed = db.vacuum()?;
+    let manifest = db.inspect_manifest()?;
+    let referenced_segments_exist = manifest.segments.iter().all(|segment| {
+        dir.join("segments")
+            .join(format!("{}.tseg", segment.segment_id))
+            .exists()
+    });
+    let referenced_indexes_exist = manifest
+        .indexes
+        .iter()
+        .all(|index| dir.join(&index.object_path).exists());
+    if removed < 2 || !referenced_segments_exist || !referenced_indexes_exist {
+        return Err("vacuum did not remove only unreferenced artifacts safely".into());
+    }
+    Ok(json!({
+        "evidence": "vacuum removed unreferenced artifacts and preserved manifest references",
+        "removed": removed,
+        "referenced_segments_exist": referenced_segments_exist,
+        "referenced_indexes_exist": referenced_indexes_exist,
+    }))
+}
+
+fn storage_durable_enqueue_replay(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    let job = db.enqueue_job(
+        JobKind::CompactSegment,
+        "segment:all",
+        "storage-durable-enqueue",
+    )?;
+    drop(db);
+    let reopened = TraceDb::open(dir)?;
+    let jobs = reopened.jobs()?;
+    if !jobs.iter().any(|candidate| candidate.job_id == job.job_id) {
+        return Err("durable job was not replayed from WAL after reopen".into());
+    }
+    Ok(json!({
+        "evidence": "job enqueue replayed from WAL after reopen",
+        "job_id": job.job_id,
+        "jobs": jobs.len(),
+    }))
+}
+
+fn storage_lease_expiry(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.enqueue_job(JobKind::BuildVectorIndex, "segment:seg-1", "lease-expiry")?;
+    let first = db
+        .lease_job(
+            WorkerId::new("worker-1"),
+            JobKind::BuildVectorIndex,
+            1_000,
+            100,
+        )?
+        .ok_or("first lease missing")?;
+    let blocked = db.lease_job(
+        WorkerId::new("worker-2"),
+        JobKind::BuildVectorIndex,
+        1_050,
+        100,
+    )?;
+    if blocked.is_some() {
+        return Err("unexpired job lease was stolen".into());
+    }
+    let expired = db
+        .lease_job(
+            WorkerId::new("worker-2"),
+            JobKind::BuildVectorIndex,
+            1_101,
+            100,
+        )?
+        .ok_or("expired job did not lease")?;
+    if first.lease_token == expired.lease_token {
+        return Err("expired lease reused the same lease token".into());
+    }
+    Ok(json!({
+        "evidence": "lease expiry allowed a new worker to acquire the durable job",
+        "first_lease_token": first.lease_token,
+        "expired_lease_token": expired.lease_token,
+        "lease_owner": expired.lease_owner.map(|worker| worker.0),
+    }))
+}
+
+fn storage_retry_dead_letter(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.enqueue_job(
+        JobKind::BuildTextIndex,
+        "segment:seg-1",
+        "retry-dead-letter",
+    )?;
+    let first = db
+        .lease_job(
+            WorkerId::new("worker-1"),
+            JobKind::BuildTextIndex,
+            1_000,
+            100,
+        )?
+        .ok_or("first lease missing")?;
+    db.fail_job(
+        &first.job_id,
+        first.lease_token.as_deref(),
+        "first failure",
+        false,
+        1_100,
+    )?;
+    let retry = db
+        .lease_job(
+            WorkerId::new("worker-2"),
+            JobKind::BuildTextIndex,
+            1_100,
+            100,
+        )?
+        .ok_or("retry lease missing")?;
+    db.fail_job(
+        &retry.job_id,
+        retry.lease_token.as_deref(),
+        "second failure",
+        false,
+        1_200,
+    )?;
+    let final_retry = db
+        .lease_job(
+            WorkerId::new("worker-3"),
+            JobKind::BuildTextIndex,
+            1_200,
+            100,
+        )?
+        .ok_or("final retry lease missing")?;
+    let failed = db.fail_job(
+        &final_retry.job_id,
+        final_retry.lease_token.as_deref(),
+        "third failure",
+        false,
+        1_300,
+    )?;
+    if failed.status != JobStatus::DeadLettered {
+        return Err(format!(
+            "job status should be dead-lettered, got {:?}",
+            failed.status
+        )
+        .into());
+    }
+    Ok(json!({
+        "evidence": "retryable failures transitioned to dead-letter state after max attempts",
+        "job_id": failed.job_id,
+        "status": format!("{:?}", failed.status),
+        "attempts": failed.attempts,
+        "last_error": failed.last_error,
+    }))
+}
+
+fn storage_interrupted_compaction(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    db.compact()?;
+    fs::write(
+        dir.join("segments/interrupted.tseg.tmp"),
+        b"partial segment",
+    )?;
+    fs::write(dir.join("indexes/interrupted.tidx.tmp"), b"partial index")?;
+    let removed = db.vacuum()?;
+    if dir.join("segments/interrupted.tseg.tmp").exists()
+        || dir.join("indexes/interrupted.tidx.tmp").exists()
+    {
+        return Err("interrupted staged compaction artifacts were not recovered by vacuum".into());
+    }
+    Ok(json!({
+        "evidence": "interrupted staged compaction/index artifacts were vacuumed without manifest changes",
+        "removed": removed,
+    }))
+}
+
+fn storage_failed_index_build_recovery(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.enqueue_job(
+        JobKind::BuildTextIndex,
+        "segment:seg-1",
+        "failed-index-build",
+    )?;
+    let leased = db
+        .lease_job(
+            WorkerId::new("index-worker"),
+            JobKind::BuildTextIndex,
+            1_000,
+            100,
+        )?
+        .ok_or("index build lease missing")?;
+    let failed = db.fail_job(
+        &leased.job_id,
+        leased.lease_token.as_deref(),
+        "checksum mismatch while writing text index",
+        false,
+        1_010,
+    )?;
+    let retry = db
+        .lease_job(
+            WorkerId::new("index-worker-2"),
+            JobKind::BuildTextIndex,
+            1_010,
+            100,
+        )?
+        .ok_or("retry lease missing")?;
+    let completed = db.complete_job(&retry.job_id, retry.lease_token.as_deref().unwrap_or(""))?;
+    if failed.status != JobStatus::FailedRetryable || completed.status != JobStatus::Succeeded {
+        return Err("failed index build did not recover through retry and completion".into());
+    }
+    Ok(json!({
+        "evidence": "failed index build became retryable and recovered on a later lease",
+        "job_id": completed.job_id,
+        "retry_status": format!("{:?}", failed.status),
+        "final_status": format!("{:?}", completed.status),
+    }))
+}
+
+fn storage_backup_job_failure(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.enqueue_job(
+        JobKind::BackupDatabase,
+        "backup:s3://example/trace",
+        "backup-failure",
+    )?;
+    let leased = db
+        .lease_job(
+            WorkerId::new("backup-worker"),
+            JobKind::BackupDatabase,
+            1_000,
+            100,
+        )?
+        .ok_or("backup lease missing")?;
+    let failed = db.fail_job(
+        &leased.job_id,
+        leased.lease_token.as_deref(),
+        "object upload failed",
+        true,
+        1_100,
+    )?;
+    if failed.status != JobStatus::FailedPermanent {
+        return Err("backup failure did not become permanent".into());
+    }
+    Ok(json!({
+        "evidence": "failed backup upload was represented as durable permanent failure",
+        "job_id": failed.job_id,
+        "status": format!("{:?}", failed.status),
+        "last_error": failed.last_error,
+    }))
+}
+
+fn storage_restore_verification_job(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = seed_storage_index_db(dir)?;
+    db.enqueue_job(
+        JobKind::RestoreVerification,
+        "restore:local-snapshot",
+        "restore-verification",
+    )?;
+    let leased = db
+        .lease_job(
+            WorkerId::new("restore-worker"),
+            JobKind::RestoreVerification,
+            1_000,
+            100,
+        )?
+        .ok_or("restore verification lease missing")?;
+    let completed = db.complete_job(&leased.job_id, leased.lease_token.as_deref().unwrap_or(""))?;
+    if completed.status != JobStatus::Succeeded {
+        return Err("restore verification job did not complete".into());
+    }
+    Ok(json!({
+        "evidence": "restore verification used the same durable lease and completion lifecycle",
+        "job_id": completed.job_id,
+        "status": format!("{:?}", completed.status),
+    }))
+}
+
+fn storage_reopen_after_job_state_change(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.enqueue_job(JobKind::FeatureRefresh, "feature:all", "reopen-job-state")?;
+    let leased = db
+        .lease_job(
+            WorkerId::new("feature-worker"),
+            JobKind::FeatureRefresh,
+            1_000,
+            100,
+        )?
+        .ok_or("feature refresh lease missing")?;
+    let completed = db.complete_job(&leased.job_id, leased.lease_token.as_deref().unwrap_or(""))?;
+    drop(db);
+    let reopened = TraceDb::open(dir)?;
+    let replayed = reopened
+        .jobs()?
+        .into_iter()
+        .find(|job| job.job_id == completed.job_id)
+        .ok_or("completed job missing after reopen")?;
+    if replayed.status != JobStatus::Succeeded {
+        return Err("completed job status did not replay after reopen".into());
+    }
+    Ok(json!({
+        "evidence": "job state changes replayed after reopen",
+        "job_id": replayed.job_id,
+        "status": format!("{:?}", replayed.status),
+    }))
+}
+
+fn seed_storage_index_db(dir: &std::path::Path) -> Result<TraceDb, Box<dyn std::error::Error>> {
+    let mut db = TraceDb::open(dir)?;
+    db.apply_schema(demo_schema("docs"))?;
+    db.put_batch_with_write_timing(RecordPutBatchRequest::new(storage_demo_records("docs")))?;
+    Ok(db)
+}
+
+fn storage_demo_records(table: &str) -> Vec<RecordInput> {
+    vec![
+        demo_record(
+            table,
+            "tenant-a",
+            "alpha",
+            "banana neural retrieval memory",
+            "ready",
+            [1.0, 0.0, 0.0],
+        ),
+        demo_record(
+            table,
+            "tenant-a",
+            "beta",
+            "orange graph planning notes",
+            "ready",
+            [0.0, 1.0, 0.0],
+        ),
+        demo_record(
+            table,
+            "tenant-b",
+            "tenant-b-only",
+            "banana private tenant document",
+            "ready",
+            [0.0, 0.0, 1.0],
+        ),
+    ]
+}
+
+fn storage_segment_records() -> Vec<tracedb_segment::SegmentRecord> {
+    storage_demo_records("docs")
+        .into_iter()
+        .enumerate()
+        .map(|(index, record)| {
+            let mut fields = BTreeMap::new();
+            let mut text = BTreeMap::new();
+            let mut vectors = BTreeMap::new();
+            for (key, value) in record.fields {
+                if key == "body" {
+                    if let Some(body) = value.as_str() {
+                        text.insert(key.clone(), body.to_string());
+                    }
+                }
+                if key == "embedding" {
+                    if let Some(vector) = value_as_f32_vec_for_cli(&value) {
+                        vectors.insert(key.clone(), vector);
+                    }
+                }
+                fields.insert(key, value);
+            }
+            tracedb_segment::SegmentRecord {
+                table: record.table,
+                record_id: record.id,
+                tenant_id: record.tenant_id,
+                version_id: (index + 1) as u64,
+                fields,
+                text,
+                vectors,
+            }
+        })
+        .collect()
+}
+
+fn value_as_f32_vec_for_cli(value: &Value) -> Option<Vec<f32>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|item| item.as_f64().map(|value| value as f32))
+        .collect()
+}
+
+fn storage_query(text: Option<&str>, vector: Option<Vec<f32>>, tenant_id: &str) -> HybridQuery {
+    HybridQuery {
+        table: "docs".to_string(),
+        tenant_id: tenant_id.to_string(),
+        cursor: None,
+        text_field: text.map(|_| "body".to_string()),
+        text: text.map(str::to_string),
+        vector_field: vector.as_ref().map(|_| "embedding".to_string()),
+        vector,
+        scalar_eq: serde_json::Map::new(),
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k: 3,
+        freshness: FreshnessMode::AllowDirty,
+        explain: true,
+    }
+}
+
+fn query_record_ids(
+    db: &TraceDb,
+    text: &str,
+    vector: Option<Vec<f32>>,
+    tenant_id: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let query = storage_query((!text.is_empty()).then_some(text), vector, tenant_id);
+    Ok(db
+        .query(query)?
+        .results
+        .into_iter()
+        .map(|row| row.record_id)
+        .collect())
+}
+
+fn first_index_artifact(
+    dir: &std::path::Path,
+    db: &TraceDb,
+    kind: &str,
+) -> Result<tracedb_index::IndexArtifact, Box<dyn std::error::Error>> {
+    let manifest = db.inspect_manifest()?;
+    let index = manifest
+        .indexes
+        .iter()
+        .find(|index| index.kind == kind && index.state == IndexState::Ready)
+        .ok_or_else(|| format!("ready {kind} index manifest missing"))?;
+    Ok(tracedb_index::read_index_artifact(
+        dir.join(&index.object_path),
+        None,
+    )?)
 }
 
 fn parse_product_regression_config(
@@ -2288,6 +3179,148 @@ fn demo_record(
     }
 }
 
+fn run_local_job(
+    db: &mut TraceDb,
+    job_name: &str,
+    data_dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let (kind, canonical, target) = parse_cli_job_kind(job_name)?;
+    let run_id = product_regression_run_id()?;
+    let enqueued = db.enqueue_job(kind.clone(), target, format!("cli:{canonical}:{run_id}"))?;
+    let leased = db
+        .lease_job(
+            WorkerId::new("cli-local-worker"),
+            kind.clone(),
+            now_millis()?,
+            30_000,
+        )?
+        .ok_or("local job was not leased")?;
+    let lease_token = leased
+        .lease_token
+        .as_deref()
+        .ok_or("leased job was missing lease token")?
+        .to_string();
+    let mut details = json!({});
+    match canonical {
+        "tracedb.segment.compact" => {
+            db.compact()?;
+            let manifest = db.inspect_manifest()?;
+            details = json!({
+                "segment_count": manifest.segments.len(),
+                "index_count": manifest.indexes.len(),
+            });
+        }
+        "tracedb.artifacts.vacuum" => {
+            let removed = db.vacuum()?;
+            details = json!({ "removed_artifacts": removed });
+        }
+        "tracedb.index.text.build" | "tracedb.index.vector.build" => {
+            db.compact()?;
+            let manifest = db.inspect_manifest()?;
+            let index_count = manifest
+                .indexes
+                .iter()
+                .filter(|index| {
+                    (canonical == "tracedb.index.text.build" && index.kind == "text")
+                        || (canonical == "tracedb.index.vector.build" && index.kind == "vector")
+                })
+                .count();
+            details = json!({ "index_count": index_count });
+        }
+        "tracedb.backup.create" => {
+            let target = data_dir.with_extension("job-backup");
+            db.backup(&target)?;
+            details = json!({ "backup_target": target.display().to_string() });
+        }
+        "tracedb.restore.verify" => {
+            let snapshot = data_dir.with_extension("job-restore-snapshot");
+            let restore = data_dir.with_extension("job-restore-target");
+            db.create_snapshot(&snapshot)?;
+            let restored = TraceDb::restore_snapshot(&snapshot, &restore)?;
+            details = json!({
+                "snapshot": snapshot.display().to_string(),
+                "restore": restore.display().to_string(),
+                "restored_epoch": restored.inspect_manifest()?.latest_epoch.get(),
+            });
+        }
+        "tracedb.feature.refresh" => {
+            details = json!({ "module_count": db.registered_module_catalog().len() });
+        }
+        _ => {}
+    }
+    let completed = db.complete_job(&leased.job_id, &lease_token)?;
+    Ok(json!({
+        "durable": true,
+        "job": canonical,
+        "kind": format!("{:?}", kind),
+        "target": target,
+        "enqueued_job_id": enqueued.job_id,
+        "leased_job_id": leased.job_id,
+        "completed": true,
+        "status": format!("{:?}", completed.status),
+        "attempts": completed.attempts,
+        "details": details,
+    }))
+}
+
+fn parse_cli_job_kind(
+    job_name: &str,
+) -> Result<(JobKind, &'static str, &'static str), Box<dyn std::error::Error>> {
+    match job_name {
+        "compact" | "tracedb.segment.compact" => {
+            Ok((JobKind::CompactSegment, "tracedb.segment.compact", "segment:all"))
+        }
+        "vacuum" | "tracedb.artifacts.vacuum" => Ok((
+            JobKind::VacuumArtifacts,
+            "tracedb.artifacts.vacuum",
+            "artifacts:unreferenced",
+        )),
+        "build-text-index" | "tracedb.index.text.build" => Ok((
+            JobKind::BuildTextIndex,
+            "tracedb.index.text.build",
+            "segment:all",
+        )),
+        "build-vector-index" | "tracedb.index.vector.build" => Ok((
+            JobKind::BuildVectorIndex,
+            "tracedb.index.vector.build",
+            "segment:all",
+        )),
+        "backup" | "tracedb.backup.create" => Ok((
+            JobKind::BackupDatabase,
+            "tracedb.backup.create",
+            "backup:local",
+        )),
+        "restore-verify" | "tracedb.restore.verify" => Ok((
+            JobKind::RestoreVerification,
+            "tracedb.restore.verify",
+            "restore:local",
+        )),
+        "feature-refresh" | "tracedb.feature.refresh" => Ok((
+            JobKind::FeatureRefresh,
+            "tracedb.feature.refresh",
+            "feature:all",
+        )),
+        other => Err(format!(
+            "unknown job runner {other}; expected compact, vacuum, build-text-index, build-vector-index, backup, restore-verify, or feature-refresh"
+        )
+        .into()),
+    }
+}
+
+fn job_status_counts(jobs: &[tracedb_jobs::TraceJob]) -> Value {
+    let mut counts = serde_json::Map::new();
+    for job in jobs {
+        let key = format!("{:?}", job.status);
+        let current = counts.get(&key).and_then(Value::as_u64).unwrap_or(0);
+        counts.insert(key, json!(current + 1));
+    }
+    Value::Object(counts)
+}
+
+fn now_millis() -> Result<u64, std::time::SystemTimeError> {
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64)
+}
+
 fn run_compose(action: &str, extra: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut command = Command::new("docker");
     command.arg("compose").arg("-f").arg("docker-compose.yml");
@@ -2386,7 +3419,7 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|durability-faults [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run compact|vacuum|build-text-index|build-vector-index|backup|restore-verify|feature-refresh|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|durability-faults [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|storage-index-jobs [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
         PRODUCT_REGRESSION_ONLY_STEPS.join("|"),
         PRODUCT_REGRESSION_ONLY_STEPS.join("|")
     );

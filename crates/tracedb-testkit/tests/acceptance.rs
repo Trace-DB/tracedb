@@ -1743,6 +1743,51 @@ fn sealed_segment_text_and_vector_search_participates_in_query() {
 }
 
 #[test]
+fn published_index_artifacts_use_typed_binary_envelope() {
+    let (temp, mut db) = seeded_db();
+    db.publish_segment("sealed-binary-index")
+        .expect("publish segment");
+    let manifest = db.inspect_manifest().expect("manifest");
+    assert!(!manifest.indexes.is_empty());
+
+    for index in &manifest.indexes {
+        let raw = std::fs::read(temp.path().join(&index.object_path)).expect("index artifact");
+        assert!(raw.starts_with(tracedb_core::ARTIFACT_ENVELOPE_MAGIC));
+        let envelope = tracedb_core::decode_artifact_envelope(&raw).expect("index envelope");
+        assert_eq!(envelope.header.kind, format!("index-{}", index.kind));
+        assert_eq!(
+            envelope.header.source_segment_checksum,
+            index.source_segment_checksum
+        );
+        assert_eq!(envelope.header.payload_checksum, index.payload_checksum);
+    }
+}
+
+#[test]
+fn sealed_text_query_rejects_corrupt_ready_text_index_manifest() {
+    let (temp, mut db) = seeded_db();
+    db.publish_segment("sealed-corrupt-index")
+        .expect("publish segment");
+    let manifest = db.inspect_manifest().expect("manifest");
+    let text_index = manifest
+        .indexes
+        .iter()
+        .find(|index| index.kind == "text" && index.state == IndexState::Ready)
+        .expect("ready text index");
+    std::fs::write(
+        temp.path().join(&text_index.object_path),
+        b"not a tracedb index",
+    )
+    .expect("corrupt index");
+
+    let err = db
+        .query(query())
+        .expect_err("corrupt ready index must fail");
+
+    assert!(err.to_string().contains("index artifact"));
+}
+
+#[test]
 fn query_skips_segment_files_when_manifest_table_set_cannot_match() {
     let (temp, mut db) = seeded_db();
     db.compact().expect("compact docs segment");
@@ -2252,7 +2297,12 @@ fn batch_put_write_timing_reports_phase_costs_and_recovers_replacements() {
     assert_eq!(db.inspect_manifest().unwrap().latest_epoch, epoch);
     assert_eq!(db.inspect_wal().unwrap().len(), before_wal_entries + 1);
     assert!(timing.total_ms >= 0.0);
-    assert!(timing.store_clone_ms >= 0.0);
+    assert_eq!(
+        timing.store_clone_ms, 0.0,
+        "production writes must not clone the whole RecordStore"
+    );
+    assert!(timing.store_delta_plan_ms >= 0.0);
+    assert!(timing.store_delta_apply_ms >= 0.0);
     assert!(timing.store_apply_ms >= 0.0);
     assert!(timing.store_apply_validate_identity_ms >= 0.0);
     assert!(timing.store_apply_validate_vector_ms >= 0.0);

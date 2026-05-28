@@ -20,6 +20,7 @@ tracedb-core = { path = "../tracedb-core" }
 tracedb-gateway = { path = "../tracedb-gateway" }
 tracedb-policy = { path = "../tracedb-policy" }
 tracedb-query = { path = "../tracedb-query" }
+tracedb-jobs = { path = "../tracedb-jobs" }
 
 [dev-dependencies]
 tempfile.workspace = true

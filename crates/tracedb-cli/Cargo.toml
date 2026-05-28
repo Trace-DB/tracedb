@@ -13,8 +13,11 @@ serde_json.workspace = true
 tracedb-bench = { path = "../tracedb-bench" }
 tracedb-catalog = { path = "../tracedb-catalog" }
 tracedb-core = { path = "../tracedb-core" }
+tracedb-index = { path = "../tracedb-index" }
+tracedb-jobs = { path = "../tracedb-jobs" }
 tracedb-query = { path = "../tracedb-query" }
 tracedb-sdk = { path = "../tracedb-sdk" }
+tracedb-segment = { path = "../tracedb-segment" }
 tracedb-server = { path = "../tracedb-server" }
 
 [dev-dependencies]

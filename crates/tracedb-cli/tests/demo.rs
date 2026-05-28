@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 static PRODUCT_QUICKSTART_REPORT_LOCK: Mutex<()> = Mutex::new(());
 static PRODUCT_REGRESSION_SMOKE_LOCK: Mutex<()> = Mutex::new(());
 static DURABILITY_FAULTS_REPORT_LOCK: Mutex<()> = Mutex::new(());
+static STORAGE_INDEX_JOBS_REPORT_LOCK: Mutex<()> = Mutex::new(());
 
 fn read_json_file(path: &Path) -> Value {
     let body =
@@ -396,6 +397,69 @@ fn durability_faults_injected_failure_exits_nonzero_and_preserves_json_report() 
             .is_some_and(|error| error.contains("injected durability fault failure")),
         "failure scenario should preserve injected error: {summary}"
     );
+}
+
+#[test]
+fn storage_index_jobs_emit_machine_readable_default_report() {
+    let _report_lock = STORAGE_INDEX_JOBS_REPORT_LOCK
+        .lock()
+        .expect("lock storage index jobs report path");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_root = temp.path().join("storage-index-jobs-data");
+    let report_file = workspace_root().join("target/tracedb/storage-index-jobs.json");
+    let _ = std::fs::remove_file(&report_file);
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("storage-index-jobs")
+        .arg("--data-root")
+        .arg(&data_root)
+        .output()
+        .expect("run tracedb storage-index-jobs");
+    assert!(
+        output.status.success(),
+        "storage-index-jobs failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("storage jobs json");
+    let report_summary = read_json_file(&report_file);
+    assert_eq!(summary, report_summary);
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["mode"], "local-storage-index-jobs");
+    assert_eq!(summary["scope"], "local_only");
+    assert_eq!(summary["report_file"], report_file.display().to_string());
+    assert_eq!(summary["statuses"]["failed"], 0);
+    for scenario in [
+        "delta_writes",
+        "binary_segment_roundtrip",
+        "legacy_json_segment_read",
+        "checksum_corruption",
+        "encrypted_binary_artifacts",
+        "bm25_query_parity",
+        "hnsw_vector_parity",
+        "bitmap_policy_filtering",
+        "stale_sealed_candidate_hot_materialization",
+        "vacuum_safety",
+        "durable_enqueue_replay",
+        "lease_expiry",
+        "retry_dead_letter",
+        "interrupted_compaction",
+        "failed_index_build_recovery",
+        "backup_job_failure",
+        "restore_verification_job",
+        "reopen_after_job_state_change",
+    ] {
+        assert_eq!(
+            summary["scenarios"][scenario]["status"], "passed",
+            "scenario {scenario} should pass: {summary}"
+        );
+        assert!(
+            summary["scenarios"][scenario]["evidence"]
+                .as_str()
+                .is_some_and(|evidence| !evidence.is_empty()),
+            "scenario {scenario} should include evidence: {summary}"
+        );
+    }
 }
 
 #[test]

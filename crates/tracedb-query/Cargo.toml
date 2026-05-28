@@ -12,6 +12,7 @@ tracedb-log = { path = "../tracedb-log" }
 tracedb-modules = { path = "../tracedb-modules" }
 tracedb-planner = { path = "../tracedb-planner" }
 tracedb-segment = { path = "../tracedb-segment" }
+tracedb-index = { path = "../tracedb-index" }
 tracedb-store = { path = "../tracedb-store" }
 tracedb-text = { path = "../tracedb-text" }
 tracedb-vector = { path = "../tracedb-vector" }
@@ -21,6 +22,7 @@ tracedb-policy = { path = "../tracedb-policy" }
 tracedb-provenance = { path = "../tracedb-provenance" }
 tracedb-features = { path = "../tracedb-features" }
 tracedb-retrieval-core = { path = "../tracedb-retrieval-core" }
+tracedb-jobs = { path = "../tracedb-jobs" }
 
 [dev-dependencies]
 tempfile.workspace = true

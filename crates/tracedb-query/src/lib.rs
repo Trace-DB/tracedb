@@ -16,6 +16,7 @@ use tracedb_core::{
     EncryptionContext, Epoch, FeatureStatus, IdempotencyReceipt, IndexManifest, IndexState,
     MasterKey, ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
 };
+use tracedb_jobs::{JobCatalog, JobEvent, JobKind, TraceJob, WorkerId};
 use tracedb_log::{CommitRecord, TornWalTail, Wal, WalAppendTiming};
 use tracedb_modules::{ModuleRegistry, RegisteredModule};
 use tracedb_planner::{
@@ -26,7 +27,9 @@ use tracedb_planner::{
 };
 use tracedb_policy::ActorContext;
 use tracedb_segment::SegmentRecord;
-use tracedb_store::{ReadSnapshot, RecordStore, ReplacementApplyTiming, StoredRecord};
+use tracedb_store::{
+    ReadSnapshot, RecordStore, RecordStoreDelta, ReplacementApplyTiming, StoredRecord,
+};
 
 const CHECKPOINT_MAGIC_V2: &[u8; 8] = b"TDBCHK01";
 const CHECKPOINT_MAGIC_V3: &[u8; 8] = b"TDBCHK02";
@@ -325,6 +328,10 @@ pub struct WritePathTiming {
     pub refresh_performed: bool,
     pub schema_lookup_ms: f64,
     pub store_clone_ms: f64,
+    #[serde(default)]
+    pub store_delta_plan_ms: f64,
+    #[serde(default)]
+    pub store_delta_apply_ms: f64,
     pub store_apply_ms: f64,
     #[serde(default)]
     pub store_apply_validate_identity_ms: f64,
@@ -407,6 +414,7 @@ pub struct TraceDb {
     wal: Wal,
     encryption: Option<EncryptionContext>,
     idempotency_receipts: Vec<IdempotencyReceipt>,
+    job_catalog: JobCatalog,
     last_recovery_torn_tail: Option<TornWalTail>,
     lexical_cache: Arc<Mutex<LexicalCorpusCache>>,
 }
@@ -434,6 +442,8 @@ struct CheckpointFile {
     records: Vec<StoredRecord>,
     #[serde(default)]
     idempotency_receipts: Vec<IdempotencyReceipt>,
+    #[serde(default)]
+    job_catalog: JobCatalog,
     checksum: u32,
 }
 
@@ -445,6 +455,8 @@ struct CheckpointPayload {
     records: Vec<StoredRecord>,
     #[serde(default)]
     idempotency_receipts: Vec<IdempotencyReceipt>,
+    #[serde(default)]
+    job_catalog: JobCatalog,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -483,6 +495,8 @@ impl WritePathTiming {
         refresh: RefreshTiming,
         schema_lookup_ms: f64,
         store_clone_ms: f64,
+        store_delta_plan_ms: f64,
+        store_delta_apply_ms: f64,
         store_apply_ms: f64,
         store_apply_timing: ReplacementApplyTiming,
         feature_invalidation_ms: f64,
@@ -502,6 +516,8 @@ impl WritePathTiming {
             refresh_performed: refresh.performed,
             schema_lookup_ms,
             store_clone_ms,
+            store_delta_plan_ms,
+            store_delta_apply_ms,
             store_apply_ms,
             store_apply_validate_identity_ms: store_apply_timing.validate_identity_ms,
             store_apply_validate_vector_ms: store_apply_timing.validate_vector_ms,
@@ -613,6 +629,7 @@ impl TraceDb {
             )));
         }
         let mut checkpoint_receipts = Vec::new();
+        let mut job_catalog = JobCatalog::default();
         let mut store = if manifest.checkpoint_epoch.get() > 0 {
             let checkpoint =
                 read_checkpoint_file(&dir, manifest.checkpoint_epoch, encryption.as_ref())?;
@@ -626,6 +643,7 @@ impl TraceDb {
                 manifest.schemas = checkpoint.schemas.clone();
             }
             checkpoint_receipts = checkpoint.idempotency_receipts.clone();
+            job_catalog = checkpoint.job_catalog.clone();
             RecordStore::from_checkpoint_records(checkpoint.records)?
         } else {
             RecordStore::default()
@@ -645,6 +663,11 @@ impl TraceDb {
                 .iter()
                 .flat_map(|commit| commit.idempotency_receipts.clone()),
         );
+        for event in commits.iter().flat_map(|commit| commit.job_events.clone()) {
+            job_catalog
+                .apply_event(event)
+                .map_err(TraceDbError::InvalidCommand)?;
+        }
         store.apply_commits(&manifest.schemas, &commits)?;
         if let Some(last_commit) = commits.last() {
             if last_commit.epoch > manifest.latest_epoch {
@@ -662,6 +685,7 @@ impl TraceDb {
             wal,
             encryption,
             idempotency_receipts,
+            job_catalog,
             last_recovery_torn_tail: wal_scan.torn_tail,
             lexical_cache: Arc::new(Mutex::new(LexicalCorpusCache::default())),
         })
@@ -722,8 +746,7 @@ impl TraceDb {
             .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
             .clone();
         let epoch = self.manifest.latest_epoch.next();
-        let mut staged = self.store.clone();
-        staged.apply_mutation(&schema, &input, epoch)?;
+        let delta = self.store.plan_mutation(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
         let idempotency_receipts =
             idempotency_receipts_for_response(receipt, serde_json::json!({ "epoch": epoch.get() }));
@@ -741,7 +764,7 @@ impl TraceDb {
             )
         };
         self.wal.append_commit(&commit)?;
-        self.store = staged;
+        self.store.apply_delta(delta);
         self.idempotency_receipts
             .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
@@ -767,8 +790,7 @@ impl TraceDb {
             .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
             .clone();
         let epoch = self.manifest.latest_epoch.next();
-        let mut staged = self.store.clone();
-        staged.apply_replacement_without_return(&schema, &input, epoch)?;
+        let delta = self.store.plan_replacement(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
         let idempotency_receipts =
             idempotency_receipts_for_response(receipt, serde_json::json!({ "epoch": epoch.get() }));
@@ -788,7 +810,7 @@ impl TraceDb {
             )
         };
         self.wal.append_commit(&commit)?;
-        self.store = staged;
+        self.store.apply_delta(delta);
         self.idempotency_receipts
             .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
@@ -829,6 +851,138 @@ impl TraceDb {
         Ok(epoch)
     }
 
+    pub fn jobs(&self) -> Result<Vec<TraceJob>> {
+        Ok(self.job_catalog.jobs())
+    }
+
+    pub fn enqueue_job(
+        &mut self,
+        kind: JobKind,
+        target: impl Into<String>,
+        idempotency_key: impl Into<String>,
+    ) -> Result<TraceJob> {
+        let mut planned = self.job_catalog.clone();
+        let job = planned
+            .enqueue(kind, target, idempotency_key)
+            .map_err(TraceDbError::InvalidCommand)?;
+        self.append_job_event(JobEvent::enqueued(job.clone()), planned)?;
+        Ok(job)
+    }
+
+    pub fn lease_job(
+        &mut self,
+        worker_id: WorkerId,
+        kind: JobKind,
+        now_ms: u64,
+        lease_ms: u64,
+    ) -> Result<Option<TraceJob>> {
+        let mut planned = self.job_catalog.clone();
+        let Some(job) = planned
+            .lease_next_at(worker_id.clone(), kind, now_ms, lease_ms)
+            .map_err(TraceDbError::InvalidCommand)?
+        else {
+            return Ok(None);
+        };
+        let event = JobEvent::leased(
+            job.job_id.clone(),
+            worker_id,
+            job.lease_token.clone().unwrap_or_default(),
+            job.lease_expires_at_ms
+                .unwrap_or(now_ms.saturating_add(lease_ms)),
+        );
+        self.append_job_event(event, planned)?;
+        Ok(Some(job))
+    }
+
+    pub fn heartbeat_job(
+        &mut self,
+        job_id: &str,
+        lease_token: &str,
+        now_ms: u64,
+        lease_ms: u64,
+    ) -> Result<TraceJob> {
+        let mut planned = self.job_catalog.clone();
+        let job = planned
+            .heartbeat(job_id, lease_token, now_ms, lease_ms)
+            .map_err(TraceDbError::InvalidCommand)?;
+        let event = JobEvent::Heartbeat {
+            job_id: job_id.to_string(),
+            lease_token: lease_token.to_string(),
+            lease_expires_at_ms: job
+                .lease_expires_at_ms
+                .unwrap_or(now_ms.saturating_add(lease_ms)),
+        };
+        self.append_job_event(event, planned)?;
+        Ok(job)
+    }
+
+    pub fn complete_job(&mut self, job_id: &str, lease_token: &str) -> Result<TraceJob> {
+        let mut planned = self.job_catalog.clone();
+        let job = planned
+            .complete(job_id, Some(lease_token))
+            .map_err(TraceDbError::InvalidCommand)?;
+        self.append_job_event(
+            JobEvent::completed(job_id.to_string(), lease_token.to_string()),
+            planned,
+        )?;
+        Ok(job)
+    }
+
+    pub fn fail_job(
+        &mut self,
+        job_id: &str,
+        lease_token: Option<&str>,
+        error: impl Into<String>,
+        permanent: bool,
+        now_ms: u64,
+    ) -> Result<TraceJob> {
+        let error = error.into();
+        let mut planned = self.job_catalog.clone();
+        let job = planned
+            .fail(job_id, lease_token, error.clone(), permanent, now_ms)
+            .map_err(TraceDbError::InvalidCommand)?;
+        self.append_job_event(
+            JobEvent::Failed {
+                job_id: job_id.to_string(),
+                lease_token: lease_token.map(str::to_string),
+                error,
+                permanent,
+                next_attempt_after_ms: now_ms,
+            },
+            planned,
+        )?;
+        Ok(job)
+    }
+
+    fn append_job_event(&mut self, event: JobEvent, planned: JobCatalog) -> Result<Epoch> {
+        let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
+        let epoch = self.manifest.latest_epoch.next();
+        let commit = CommitRecord {
+            schema_epoch: self.manifest.latest_epoch,
+            policy_epoch: self.manifest.latest_epoch,
+            schema_changes: Vec::new(),
+            replacements: Vec::new(),
+            mutations: Vec::new(),
+            deletions: Vec::new(),
+            feature_invalidations: Vec::new(),
+            module_events: vec![ModuleCommitEvent {
+                module_id: "tracedb-jobs".to_string(),
+                event: "job.event".to_string(),
+            }],
+            job_events: vec![event],
+            ..CommitRecord::empty(epoch.get(), epoch).for_database(
+                self.manifest.database_id.clone(),
+                self.manifest.branch_id.clone(),
+            )
+        };
+        self.wal.append_commit(&commit)?;
+        self.job_catalog = planned;
+        self.bump_manifest(epoch)?;
+        write_job_catalog_file(&self.dir, &self.job_catalog, self.encryption.as_ref())?;
+        Ok(epoch)
+    }
+
     pub fn put_batch(&mut self, request: RecordPutBatchRequest) -> Result<Epoch> {
         self.put_batch_with_idempotency_receipt(request, None)
     }
@@ -847,7 +1001,7 @@ impl TraceDb {
         }
 
         let epoch = self.manifest.latest_epoch.next();
-        let mut staged = self.store.clone();
+        let mut delta = RecordStoreDelta::default();
         let mut feature_invalidations = Vec::new();
         let mut module_events = Vec::new();
         let mut seen_module_events = BTreeSet::new();
@@ -857,7 +1011,8 @@ impl TraceDb {
                 .table(&input.table)
                 .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
                 .clone();
-            staged.apply_replacement_without_return(&schema, input, epoch)?;
+            self.store
+                .plan_replacement_into(&mut delta, &schema, input, epoch)?;
             feature_invalidations.extend(feature_invalidations_for_mutation(&schema, input));
             for event in module_events_for_schema("record.put", &schema) {
                 if seen_module_events.insert((event.module_id.clone(), event.event.clone())) {
@@ -887,7 +1042,7 @@ impl TraceDb {
             )
         };
         self.wal.append_commit(&commit)?;
-        self.store = staged;
+        self.store.apply_delta(delta);
         self.idempotency_receipts
             .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
@@ -924,15 +1079,15 @@ impl TraceDb {
         let schema_lookup_ms = elapsed_ms(schema_lookup_started);
 
         let epoch = self.manifest.latest_epoch.next();
-        let store_clone_started = Instant::now();
-        let mut staged = self.store.clone();
-        let store_clone_ms = elapsed_ms(store_clone_started);
+        let store_clone_ms = 0.0;
 
         let mut store_apply_timing = ReplacementApplyTiming::default();
-        let store_apply_started = Instant::now();
+        let store_delta_plan_started = Instant::now();
+        let mut delta = RecordStoreDelta::default();
         for (input, schema) in request.records.iter().zip(schemas.iter()) {
-            let timing =
-                staged.apply_replacement_without_return_with_timing(schema, input, epoch)?;
+            let timing = self
+                .store
+                .plan_replacement_into_with_timing(&mut delta, schema, input, epoch)?;
             store_apply_timing.validate_identity_ms += timing.validate_identity_ms;
             store_apply_timing.validate_vector_ms += timing.validate_vector_ms;
             store_apply_timing.key_ms += timing.key_ms;
@@ -941,7 +1096,7 @@ impl TraceDb {
             store_apply_timing.features_ms += timing.features_ms;
             store_apply_timing.install_ms += timing.install_ms;
         }
-        let store_apply_ms = elapsed_ms(store_apply_started);
+        let store_delta_plan_ms = elapsed_ms(store_delta_plan_started);
 
         let feature_invalidation_started = Instant::now();
         let mut feature_invalidations = Vec::new();
@@ -978,8 +1133,10 @@ impl TraceDb {
 
         let (_lsn, wal_timing) = self.wal.append_commit_with_timing(&commit)?;
         let store_install_started = Instant::now();
-        self.store = staged;
-        let store_install_ms = elapsed_ms(store_install_started);
+        self.store.apply_delta(delta);
+        let store_delta_apply_ms = elapsed_ms(store_install_started);
+        let store_apply_ms = store_delta_plan_ms + store_delta_apply_ms;
+        let store_install_ms = store_delta_apply_ms;
         let manifest_timing = self.bump_manifest_with_timing(epoch)?;
         let cache_clear_started = Instant::now();
         self.clear_lexical_cache();
@@ -993,6 +1150,8 @@ impl TraceDb {
                 refresh_timing,
                 schema_lookup_ms,
                 store_clone_ms,
+                store_delta_plan_ms,
+                store_delta_apply_ms,
                 store_apply_ms,
                 store_apply_timing,
                 feature_invalidation_ms,
@@ -1025,13 +1184,12 @@ impl TraceDb {
         let schema_lookup_ms = elapsed_ms(schema_lookup_started);
 
         let epoch = self.manifest.latest_epoch.next();
-        let store_clone_started = Instant::now();
-        let mut staged = self.store.clone();
-        let store_clone_ms = elapsed_ms(store_clone_started);
-        let store_apply_started = Instant::now();
-        let store_apply_timing =
-            staged.apply_replacement_without_return_with_timing(&schema, &input, epoch)?;
-        let store_apply_ms = elapsed_ms(store_apply_started);
+        let store_clone_ms = 0.0;
+        let store_delta_plan_started = Instant::now();
+        let (delta, store_apply_timing) = self
+            .store
+            .plan_replacement_with_timing(&schema, &input, epoch)?;
+        let store_delta_plan_ms = elapsed_ms(store_delta_plan_started);
         let feature_invalidation_started = Instant::now();
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
         let feature_invalidation_ms = elapsed_ms(feature_invalidation_started);
@@ -1055,8 +1213,10 @@ impl TraceDb {
 
         let (_lsn, wal_timing) = self.wal.append_commit_with_timing(&commit)?;
         let store_install_started = Instant::now();
-        self.store = staged;
-        let store_install_ms = elapsed_ms(store_install_started);
+        self.store.apply_delta(delta);
+        let store_delta_apply_ms = elapsed_ms(store_install_started);
+        let store_apply_ms = store_delta_plan_ms + store_delta_apply_ms;
+        let store_install_ms = store_delta_apply_ms;
         let manifest_timing = self.bump_manifest_with_timing(epoch)?;
         let cache_clear_started = Instant::now();
         self.clear_lexical_cache();
@@ -1070,6 +1230,8 @@ impl TraceDb {
                 refresh_timing,
                 schema_lookup_ms,
                 store_clone_ms,
+                store_delta_plan_ms,
+                store_delta_apply_ms,
                 store_apply_ms,
                 store_apply_timing,
                 feature_invalidation_ms,
@@ -1104,8 +1266,7 @@ impl TraceDb {
             .ok_or_else(|| TraceDbError::UnknownTable(input.table.clone()))?
             .clone();
         let epoch = self.manifest.latest_epoch.next();
-        let mut staged = self.store.clone();
-        staged.apply_mutation(&schema, &input, epoch)?;
+        let delta = self.store.plan_mutation(&schema, &input, epoch)?;
         let feature_invalidations = feature_invalidations_for_mutation(&schema, &input);
         let idempotency_receipts =
             idempotency_receipts_for_response(receipt, serde_json::json!({ "epoch": epoch.get() }));
@@ -1125,7 +1286,7 @@ impl TraceDb {
             )
         };
         self.wal.append_commit(&commit)?;
-        self.store = staged;
+        self.store.apply_delta(delta);
         self.idempotency_receipts
             .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
@@ -1151,8 +1312,7 @@ impl TraceDb {
             .ok_or_else(|| TraceDbError::UnknownTable(deletion.table.clone()))?
             .clone();
         let epoch = self.manifest.latest_epoch.next();
-        let mut staged = self.store.clone();
-        staged.apply_delete(&schema, &deletion, epoch)?;
+        let delta = self.store.plan_delete(&schema, &deletion, epoch)?;
         let idempotency_receipts = idempotency_receipts_for_response(
             receipt,
             serde_json::json!({ "deleted": true, "epoch": epoch.get() }),
@@ -1173,7 +1333,7 @@ impl TraceDb {
             )
         };
         self.wal.append_commit(&commit)?;
-        self.store = staged;
+        self.store.apply_delta(delta);
         self.idempotency_receipts
             .extend(commit.idempotency_receipts.clone());
         self.bump_manifest(epoch)?;
@@ -1647,8 +1807,7 @@ impl TraceDb {
             feature: feature.to_string(),
             status,
         };
-        let mut staged = self.store.clone();
-        staged.apply_feature_invalidation(&invalidation, epoch)?;
+        let delta = self.store.plan_feature_invalidation(&invalidation, epoch)?;
         let commit = CommitRecord {
             schema_epoch: self.manifest.latest_epoch,
             policy_epoch: self.manifest.latest_epoch,
@@ -1667,7 +1826,7 @@ impl TraceDb {
             )
         };
         self.wal.append_commit(&commit)?;
-        self.store = staged;
+        self.store.apply_delta(delta);
         self.bump_manifest(epoch)?;
         self.clear_lexical_cache();
         Ok(epoch)
@@ -1682,6 +1841,7 @@ impl TraceDb {
             self.manifest.schemas.clone(),
             self.store.checkpoint_records(epoch),
             self.idempotency_receipts.clone(),
+            self.job_catalog.clone(),
             self.encryption.as_ref(),
         )?;
         let mut manifest = read_manifest(self.dir.join("manifest.tdb"))?;
@@ -1758,6 +1918,28 @@ impl TraceDb {
             self.manifest.manifest_generation + 1
         );
         self.publish_segment(segment_id)
+    }
+
+    pub fn vacuum(&mut self) -> Result<usize> {
+        let _guard = WriteLock::acquire(&self.dir)?;
+        self.refresh_from_disk_if_stale()?;
+        let referenced_segments = self
+            .manifest
+            .segments
+            .iter()
+            .map(|segment| format!("{}.tseg", segment.segment_id))
+            .collect::<BTreeSet<_>>();
+        let referenced_indexes = self
+            .manifest
+            .indexes
+            .iter()
+            .filter_map(|index| Path::new(&index.object_path).file_name())
+            .map(|file_name| file_name.to_string_lossy().to_string())
+            .collect::<BTreeSet<_>>();
+        let removed_segments =
+            vacuum_artifact_dir(&self.dir.join("segments"), &referenced_segments)?;
+        let removed_indexes = vacuum_artifact_dir(&self.dir.join("indexes"), &referenced_indexes)?;
+        Ok(removed_segments + removed_indexes)
     }
 
     pub fn publish_segment_with_parent_generation(
@@ -2030,6 +2212,7 @@ impl TraceDb {
                 path,
                 self.encryption.as_ref(),
             )?;
+            self.validate_ready_indexes_for_segment(&segment.segment_id)?;
             out.extend(
                 object
                     .records
@@ -2040,62 +2223,85 @@ impl TraceDb {
         Ok(out)
     }
 
+    fn validate_ready_indexes_for_segment(&self, segment_id: &str) -> Result<()> {
+        for index in self
+            .manifest
+            .indexes
+            .iter()
+            .filter(|index| index.segment_id == segment_id && index.state == IndexState::Ready)
+        {
+            let artifact = tracedb_index::read_index_artifact(
+                self.dir.join(&index.object_path),
+                self.encryption.as_ref(),
+            )
+            .map_err(|error| {
+                TraceDbError::ArtifactCorruption(format!(
+                    "index artifact {} failed verification: {error}",
+                    index.index_id
+                ))
+            })?;
+            let payload_checksum = artifact.payload_checksum()?;
+            if index.payload_checksum != 0 && payload_checksum != index.payload_checksum {
+                return Err(TraceDbError::ArtifactCorruption(format!(
+                    "index artifact {} payload checksum mismatch: manifest {}, artifact {payload_checksum}",
+                    index.index_id, index.payload_checksum
+                )));
+            }
+            if index.source_segment_checksum != 0
+                && artifact.source_segment_checksum != index.source_segment_checksum
+            {
+                return Err(TraceDbError::ArtifactCorruption(format!(
+                    "index artifact {} source segment checksum mismatch",
+                    index.index_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn build_segment_indexes(
         &self,
         object: &tracedb_segment::SegmentObject,
         parent_manifest_generation: u64,
     ) -> Result<Vec<IndexManifest>> {
-        let mut kinds = BTreeSet::from(["primary".to_string(), "policy".to_string()]);
-        for record in &object.records {
-            if !record.text.is_empty() {
-                kinds.insert("text".to_string());
-            }
-            if !record.vectors.is_empty() {
-                kinds.insert("vector".to_string());
-            }
-        }
-
+        let records = object
+            .records
+            .iter()
+            .map(index_record_from_segment)
+            .collect::<Vec<_>>();
+        let artifacts = tracedb_index::build_segment_index_artifacts(
+            &object.segment_id,
+            object.generation,
+            parent_manifest_generation,
+            object.object_checksum,
+            &records,
+        )?;
         let mut manifests = Vec::new();
-        for kind in kinds {
-            let index_id = format!("{}:{kind}:{}", object.segment_id, object.generation);
+        for artifact in artifacts {
+            let index_id = artifact.index_id.clone();
             let object_path = format!("indexes/{index_id}.tidx");
-            let body = serde_json::json!({
-                "index_id": index_id,
-                "segment_id": object.segment_id,
-                "segment_generation": object.generation,
-                "kind": kind,
-                "state_history": ["PENDING", "BUILDING", "READY"],
-                "policy_aware": true,
-                "source_segment_checksum": object.object_checksum,
-                "record_count": object.records.len(),
-            });
-            let bytes = serde_json::to_vec_pretty(&body)?;
-            let bytes = match self.encryption.as_ref() {
-                Some(encryption) => encryption.encrypt_artifact("index", &bytes)?,
-                None => bytes,
-            };
-            let checksum = checksum_bytes(&bytes);
             let index_path = self.dir.join(&object_path);
-            if let Some(parent) = index_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let tmp_path = index_path.with_extension("tidx.tmp");
-            let mut file = File::create(&tmp_path)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&tmp_path, &index_path)?;
+            let checksum = tracedb_index::write_index_artifact(
+                &index_path,
+                &artifact,
+                self.encryption.as_ref(),
+            )?;
+            let payload_checksum = artifact.payload_checksum()?;
 
             manifests.push(IndexManifest {
                 index_id,
                 segment_id: object.segment_id.clone(),
                 generation: object.generation,
-                kind,
+                kind: artifact.kind,
                 state: IndexState::Ready,
                 policy_aware: true,
                 parent_manifest_generation,
                 object_path,
                 checksum,
+                source_segment_checksum: object.object_checksum,
+                payload_checksum,
+                artifact_format_version: 1,
+                codec: "bincode".to_string(),
                 created_epoch: self.manifest.latest_epoch,
                 ready_epoch: Some(self.manifest.latest_epoch),
             });
@@ -2820,6 +3026,18 @@ fn segment_candidate(
     }
 }
 
+fn index_record_from_segment(record: &SegmentRecord) -> tracedb_index::IndexRecord {
+    tracedb_index::IndexRecord {
+        table: record.table.clone(),
+        record_id: record.record_id.clone(),
+        tenant_id: record.tenant_id.clone(),
+        version_id: record.version_id,
+        fields: record.fields.clone(),
+        text: record.text.clone(),
+        vectors: record.vectors.clone(),
+    }
+}
+
 fn record_output(record: StoredRecord) -> RecordOutput {
     RecordOutput {
         table: record.header.table_id,
@@ -3191,6 +3409,32 @@ fn initialize_layout(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn write_job_catalog_file(
+    dir: &Path,
+    catalog: &JobCatalog,
+    encryption: Option<&EncryptionContext>,
+) -> Result<()> {
+    let path = dir.join("jobs/catalog.tjobs");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::to_vec(catalog)?;
+    let body = match encryption {
+        Some(encryption) => encryption.encrypt_artifact("jobs", &body)?,
+        None => body,
+    };
+    let tmp_path = path.with_extension("tjobs.tmp");
+    let mut file = File::create(&tmp_path)?;
+    file.write_all(&body)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp_path, &path)?;
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
 struct WriteLock {
     path: PathBuf,
 }
@@ -3338,6 +3582,7 @@ fn write_checkpoint_file(
     schemas: Vec<TableSchema>,
     records: Vec<StoredRecord>,
     idempotency_receipts: Vec<IdempotencyReceipt>,
+    job_catalog: JobCatalog,
     encryption: Option<&EncryptionContext>,
 ) -> Result<String> {
     let relative = checkpoint_relative_path(epoch);
@@ -3351,6 +3596,7 @@ fn write_checkpoint_file(
         schemas,
         records,
         idempotency_receipts,
+        job_catalog,
     };
     let payload = serde_json::to_vec(&payload)?;
     let payload = match encryption {
@@ -3462,6 +3708,7 @@ fn read_framed_checkpoint_file(
         schemas: payload.schemas,
         records: payload.records,
         idempotency_receipts: payload.idempotency_receipts,
+        job_catalog: payload.job_catalog,
         checksum: expected,
     })
 }
@@ -3604,6 +3851,30 @@ fn restore_dir(source: &Path, target: &Path) -> Result<()> {
         fs::remove_dir_all(target)?;
     }
     copy_dir(source, target)
+}
+
+fn vacuum_artifact_dir(dir: &Path, referenced_files: &BTreeSet<String>) -> Result<usize> {
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0usize;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let extension = path.extension().and_then(|value| value.to_str());
+        let is_artifact = matches!(extension, Some("tseg" | "tidx"));
+        let is_staged = extension == Some("tmp");
+        if is_staged || (is_artifact && !referenced_files.contains(&file_name)) {
+            fs::remove_file(&path)?;
+            removed += 1;
+        }
+    }
+    File::open(dir)?.sync_all()?;
+    Ok(removed)
 }
 
 fn validate_copy_paths(source: &Path, target: &Path) -> Result<()> {

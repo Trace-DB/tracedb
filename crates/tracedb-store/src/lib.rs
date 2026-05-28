@@ -45,6 +45,29 @@ pub struct RecordStore {
     versions: BTreeMap<String, Vec<StoredRecord>>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordStoreDelta {
+    versions_by_key: BTreeMap<String, Vec<StoredRecord>>,
+}
+
+impl RecordStoreDelta {
+    pub fn is_empty(&self) -> bool {
+        self.versions_by_key.is_empty()
+    }
+
+    pub fn merge(&mut self, other: RecordStoreDelta) {
+        self.versions_by_key.extend(other.versions_by_key);
+    }
+
+    fn versions_for_key(&self, key: &str) -> Option<&Vec<StoredRecord>> {
+        self.versions_by_key.get(key)
+    }
+
+    fn replace_versions(&mut self, key: String, versions: Vec<StoredRecord>) {
+        self.versions_by_key.insert(key, versions);
+    }
+}
+
 impl RecordStore {
     pub fn from_checkpoint_records(records: Vec<StoredRecord>) -> Result<Self> {
         let mut store = Self::default();
@@ -136,6 +159,73 @@ impl RecordStore {
         let returned = record.clone();
         self.install_replacement(key, record, epoch);
         Ok(returned)
+    }
+
+    pub fn plan_replacement(
+        &self,
+        schema: &TableSchema,
+        input: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<RecordStoreDelta> {
+        let mut delta = RecordStoreDelta::default();
+        self.plan_replacement_into(&mut delta, schema, input, epoch)?;
+        Ok(delta)
+    }
+
+    pub fn plan_replacement_with_timing(
+        &self,
+        schema: &TableSchema,
+        input: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<(RecordStoreDelta, ReplacementApplyTiming)> {
+        let mut delta = RecordStoreDelta::default();
+        let timing = self.plan_replacement_into_with_timing(&mut delta, schema, input, epoch)?;
+        Ok((delta, timing))
+    }
+
+    pub fn plan_replacement_into(
+        &self,
+        delta: &mut RecordStoreDelta,
+        schema: &TableSchema,
+        input: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<()> {
+        let (key, record) = build_replacement_record(schema, input, epoch)?;
+        self.plan_replacement_record(delta, key, record, epoch);
+        Ok(())
+    }
+
+    pub fn plan_replacement_into_with_timing(
+        &self,
+        delta: &mut RecordStoreDelta,
+        schema: &TableSchema,
+        input: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<ReplacementApplyTiming> {
+        let (key, record, mut timing) = build_replacement_record_with_timing(schema, input, epoch)?;
+        let install_started = Instant::now();
+        self.plan_replacement_record(delta, key, record, epoch);
+        timing.install_ms = elapsed_ms(install_started);
+        Ok(timing)
+    }
+
+    fn plan_replacement_record(
+        &self,
+        delta: &mut RecordStoreDelta,
+        key: String,
+        record: StoredRecord,
+        epoch: Epoch,
+    ) {
+        let mut versions = self.versions_for_planning(delta, &key);
+        if let Some(current) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none())
+        {
+            current.header.end_epoch = Some(epoch);
+        }
+        versions.push(record);
+        delta.replace_versions(key, versions);
     }
 
     pub fn apply_replacement_without_return(
@@ -248,6 +338,91 @@ impl RecordStore {
         Ok(record)
     }
 
+    pub fn plan_mutation(
+        &self,
+        schema: &TableSchema,
+        mutation: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<RecordStoreDelta> {
+        let mut delta = RecordStoreDelta::default();
+        self.plan_mutation_into(&mut delta, schema, mutation, epoch)?;
+        Ok(delta)
+    }
+
+    pub fn plan_mutation_into(
+        &self,
+        delta: &mut RecordStoreDelta,
+        schema: &TableSchema,
+        mutation: &RecordInput,
+        epoch: Epoch,
+    ) -> Result<()> {
+        validate_record_identity(schema, mutation, None)?;
+        validate_vector_dimensions(schema, mutation)?;
+        let tenant_id = if mutation.tenant_id.is_empty() {
+            return Err(TraceDbError::InvalidRecord(
+                "tenant id cannot be empty".to_string(),
+            ));
+        } else {
+            mutation.tenant_id.clone()
+        };
+        let key = record_key(&mutation.table, &tenant_id, &mutation.id);
+        let mut versions = self.versions_for_planning(delta, &key);
+        let previous = versions
+            .iter()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+            .cloned();
+
+        if let Some(current) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none())
+        {
+            current.header.end_epoch = Some(epoch);
+        }
+
+        let mut merged_fields = previous
+            .as_ref()
+            .map(|record| record.fields.clone())
+            .unwrap_or_default();
+        for (key, value) in &mutation.fields {
+            merged_fields.insert(key.clone(), value.clone());
+        }
+
+        if !merged_fields.contains_key(&schema.primary_id_column) {
+            merged_fields.insert(
+                schema.primary_id_column.clone(),
+                Value::String(mutation.id.clone()),
+            );
+        }
+        if !merged_fields.contains_key(&schema.tenant_id_column) {
+            merged_fields.insert(
+                schema.tenant_id_column.clone(),
+                Value::String(tenant_id.clone()),
+            );
+        }
+        validate_record_identity(schema, mutation, Some(&merged_fields))?;
+
+        let features = build_features(schema, mutation, &merged_fields, previous.as_ref(), epoch);
+        let record = StoredRecord {
+            header: RecordHeader {
+                record_id: mutation.id.clone(),
+                table_id: mutation.table.clone(),
+                tenant_id,
+                schema_version: 1,
+                begin_epoch: epoch,
+                end_epoch: None,
+                version_id: VersionId::new(epoch.get()),
+                tombstone: None,
+            },
+            fields: merged_fields,
+            features,
+        };
+        versions.push(record);
+        delta.replace_versions(key, versions);
+        Ok(())
+    }
+
     pub fn apply_delete(
         &mut self,
         schema: &TableSchema,
@@ -302,6 +477,76 @@ impl RecordStore {
         };
         versions.push(record.clone());
         Ok(record)
+    }
+
+    pub fn plan_delete(
+        &self,
+        schema: &TableSchema,
+        deletion: &RecordDeletion,
+        epoch: Epoch,
+    ) -> Result<RecordStoreDelta> {
+        let mut delta = RecordStoreDelta::default();
+        self.plan_delete_into(&mut delta, schema, deletion, epoch)?;
+        Ok(delta)
+    }
+
+    pub fn plan_delete_into(
+        &self,
+        delta: &mut RecordStoreDelta,
+        schema: &TableSchema,
+        deletion: &RecordDeletion,
+        epoch: Epoch,
+    ) -> Result<()> {
+        validate_deletion_identity(schema, deletion)?;
+        let key = record_key(&deletion.table, &deletion.tenant_id, &deletion.id);
+        let mut versions = self.versions_for_planning(delta, &key);
+        if versions.is_empty() {
+            return Err(TraceDbError::NotFound(format!(
+                "{}:{}:{}",
+                deletion.table, deletion.tenant_id, deletion.id
+            )));
+        }
+        let previous = versions
+            .iter()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+            .cloned()
+            .ok_or_else(|| {
+                TraceDbError::NotFound(format!(
+                    "{}:{}:{}",
+                    deletion.table, deletion.tenant_id, deletion.id
+                ))
+            })?;
+
+        if let Some(current) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+        {
+            current.header.end_epoch = Some(epoch);
+        }
+
+        let record = StoredRecord {
+            header: RecordHeader {
+                record_id: deletion.id.clone(),
+                table_id: deletion.table.clone(),
+                tenant_id: deletion.tenant_id.clone(),
+                schema_version: previous.header.schema_version,
+                begin_epoch: epoch,
+                end_epoch: None,
+                version_id: VersionId::new(epoch.get()),
+                tombstone: Some(if deletion.tombstone.trim().is_empty() {
+                    "user_delete".to_string()
+                } else {
+                    deletion.tombstone.clone()
+                }),
+            },
+            fields: previous.fields,
+            features: previous.features,
+        };
+        versions.push(record);
+        delta.replace_versions(key, versions);
+        Ok(())
     }
 
     pub fn get_record(
@@ -397,6 +642,71 @@ impl RecordStore {
         state.status = invalidation.status.clone();
         state.valid_for_epoch = epoch;
         Ok(state.clone())
+    }
+
+    pub fn plan_feature_invalidation(
+        &self,
+        invalidation: &FeatureInvalidation,
+        epoch: Epoch,
+    ) -> Result<RecordStoreDelta> {
+        let mut delta = RecordStoreDelta::default();
+        self.plan_feature_invalidation_into(&mut delta, invalidation, epoch)?;
+        Ok(delta)
+    }
+
+    pub fn plan_feature_invalidation_into(
+        &self,
+        delta: &mut RecordStoreDelta,
+        invalidation: &FeatureInvalidation,
+        epoch: Epoch,
+    ) -> Result<()> {
+        let key = record_key(
+            &invalidation.table,
+            &invalidation.tenant_id,
+            &invalidation.record_id,
+        );
+        let mut versions = self.versions_for_planning(delta, &key);
+        if versions.is_empty() {
+            return Err(TraceDbError::NotFound(format!(
+                "{}:{}:{}",
+                invalidation.table, invalidation.tenant_id, invalidation.record_id
+            )));
+        }
+        let Some(record) = versions
+            .iter_mut()
+            .rev()
+            .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
+        else {
+            return Err(TraceDbError::NotFound(format!(
+                "{}:{}:{}",
+                invalidation.table, invalidation.tenant_id, invalidation.record_id
+            )));
+        };
+        let Some(state) = record.features.get_mut(&invalidation.feature) else {
+            return Err(TraceDbError::NotFound(format!(
+                "feature {}.{}.{}",
+                invalidation.table, invalidation.record_id, invalidation.feature
+            )));
+        };
+
+        state.status = invalidation.status.clone();
+        state.valid_for_epoch = epoch;
+        delta.replace_versions(key, versions);
+        Ok(())
+    }
+
+    pub fn apply_delta(&mut self, delta: RecordStoreDelta) {
+        for (key, versions) in delta.versions_by_key {
+            self.versions.insert(key, versions);
+        }
+    }
+
+    fn versions_for_planning(&self, delta: &RecordStoreDelta, key: &str) -> Vec<StoredRecord> {
+        delta
+            .versions_for_key(key)
+            .cloned()
+            .or_else(|| self.versions.get(key).cloned())
+            .unwrap_or_default()
     }
 
     fn resolve_legacy_feature_invalidation(
@@ -997,6 +1307,123 @@ mod tests {
         assert_eq!(
             untimed.checkpoint_records(Epoch::new(2)),
             timed.checkpoint_records(Epoch::new(2))
+        );
+    }
+
+    #[test]
+    fn record_store_delta_plan_does_not_mutate_until_applied() {
+        let schema = schema();
+        let mut store = RecordStore::default();
+        store
+            .apply_replacement(&schema, &record("a", "tenant-a"), Epoch::new(1))
+            .expect("seed original");
+
+        let mut replacement = record("a", "tenant-a");
+        replacement.fields.insert(
+            "body".to_string(),
+            Value::String("planned body".to_string()),
+        );
+        let delta = store
+            .plan_replacement(&schema, &replacement, Epoch::new(2))
+            .expect("plan replacement");
+
+        let before_apply = store.visible_records_at("docs", "tenant-a", Epoch::new(2));
+        assert_eq!(before_apply.len(), 1);
+        assert_eq!(
+            before_apply[0].fields.get("body"),
+            Some(&Value::String("tenant-a a".to_string()))
+        );
+
+        store.apply_delta(delta);
+
+        let after_apply = store.visible_records_at("docs", "tenant-a", Epoch::new(2));
+        assert_eq!(after_apply.len(), 1);
+        assert_eq!(
+            after_apply[0].fields.get("body"),
+            Some(&Value::String("planned body".to_string()))
+        );
+    }
+
+    #[test]
+    fn record_store_delta_apply_matches_existing_helpers_for_writes_and_feature_status() {
+        let schema = schema();
+        let mut helper = RecordStore::default();
+        let mut delta = RecordStore::default();
+        let original = record("a", "tenant-a");
+        helper
+            .apply_replacement(&schema, &original, Epoch::new(1))
+            .expect("helper seed");
+        delta.apply_delta(
+            delta
+                .plan_replacement(&schema, &original, Epoch::new(1))
+                .expect("delta seed"),
+        );
+
+        let mut patch = RecordInput {
+            table: "docs".to_string(),
+            id: "a".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            fields: Map::new(),
+        };
+        patch.fields.insert(
+            "body".to_string(),
+            Value::String("patched body".to_string()),
+        );
+        helper
+            .apply_mutation(&schema, &patch, Epoch::new(2))
+            .expect("helper patch");
+        delta.apply_delta(
+            delta
+                .plan_mutation(&schema, &patch, Epoch::new(2))
+                .expect("delta patch"),
+        );
+
+        let invalidation = FeatureInvalidation {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            record_id: "a".to_string(),
+            feature: "embedding".to_string(),
+            status: FeatureStatus::Pending,
+        };
+        helper
+            .apply_feature_invalidation(&invalidation, Epoch::new(3))
+            .expect("helper feature status");
+        delta.apply_delta(
+            delta
+                .plan_feature_invalidation(&invalidation, Epoch::new(3))
+                .expect("delta feature status"),
+        );
+
+        let deletion = RecordDeletion {
+            table: "docs".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            id: "a".to_string(),
+            tombstone: "delete".to_string(),
+        };
+        helper
+            .apply_delete(&schema, &deletion, Epoch::new(4))
+            .expect("helper delete");
+        delta.apply_delta(
+            delta
+                .plan_delete(&schema, &deletion, Epoch::new(4))
+                .expect("delta delete"),
+        );
+
+        assert_eq!(
+            helper.visible_records_at("docs", "tenant-a", Epoch::new(3)),
+            delta.visible_records_at("docs", "tenant-a", Epoch::new(3))
+        );
+        assert_eq!(
+            helper.feature_state("docs", "tenant-a", "a", "embedding", Epoch::new(3)),
+            delta.feature_state("docs", "tenant-a", "a", "embedding", Epoch::new(3))
+        );
+        assert_eq!(
+            helper.visible_records_at("docs", "tenant-a", Epoch::new(4)),
+            delta.visible_records_at("docs", "tenant-a", Epoch::new(4))
+        );
+        assert_eq!(
+            helper.checkpoint_records(Epoch::new(4)),
+            delta.checkpoint_records(Epoch::new(4))
         );
     }
 }

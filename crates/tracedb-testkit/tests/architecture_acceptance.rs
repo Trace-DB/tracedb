@@ -592,7 +592,7 @@ fn spawn_engine_stub() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind engine stub");
     let addr = listener.local_addr().expect("engine stub address");
     thread::spawn(move || {
-        for _ in 0..5 {
+        for _ in 0..10 {
             let (mut stream, _) = listener.accept().expect("accept engine request");
             let mut buffer = [0u8; 4096];
             let read = stream.read(&mut buffer).expect("read engine request");
@@ -609,6 +609,24 @@ fn spawn_engine_stub() -> String {
             });
             let body = if path == "/internal/health" {
                 json!({ "ok": true, "service": "tracedb-engine" }).to_string()
+            } else if path == "/internal/jobs/lease" {
+                json!({
+                    "leased": true,
+                    "job": {
+                        "job_id": "job:verify_database:verify-main",
+                        "kind": "VerifyDatabase",
+                        "target": "branch/main",
+                        "idempotency_key": "verify-main",
+                        "lease_owner": "worker-1",
+                        "attempts": 1,
+                        "max_attempts": 3,
+                        "status": "Leased",
+                        "last_error": null,
+                        "lease_token": "lease:job:verify_database:verify-main:1",
+                        "lease_expires_at_ms": 30000
+                    }
+                })
+                .to_string()
             } else {
                 json!({
                     "ok": true,

@@ -92,6 +92,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -918,8 +927,11 @@ dependencies = [
  "tracedb-bench",
  "tracedb-catalog",
  "tracedb-core",
+ "tracedb-index",
+ "tracedb-jobs",
  "tracedb-query",
  "tracedb-sdk",
+ "tracedb-segment",
  "tracedb-server",
 ]
 
@@ -928,6 +940,7 @@ name = "tracedb-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bincode",
  "chacha20poly1305",
  "crc32fast",
  "serde",
@@ -972,7 +985,13 @@ dependencies = [
 name = "tracedb-index"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "serde",
+ "serde_json",
+ "tempfile",
+ "tracedb-core",
+ "tracedb-text",
+ "tracedb-vector",
 ]
 
 [[package]]
@@ -1007,6 +1026,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracedb-core",
+ "tracedb-jobs",
 ]
 
 [[package]]
@@ -1074,6 +1094,8 @@ dependencies = [
  "tracedb-core",
  "tracedb-features",
  "tracedb-graph",
+ "tracedb-index",
+ "tracedb-jobs",
  "tracedb-log",
  "tracedb-modules",
  "tracedb-planner",
@@ -1118,8 +1140,10 @@ dependencies = [
 name = "tracedb-segment"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "serde",
  "serde_json",
+ "tempfile",
  "tracedb-core",
 ]
 
@@ -1142,6 +1166,7 @@ dependencies = [
  "tower",
  "tracedb-core",
  "tracedb-gateway",
+ "tracedb-jobs",
  "tracedb-policy",
  "tracedb-query",
  "tracing",
