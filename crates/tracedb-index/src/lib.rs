@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -401,7 +401,11 @@ impl VectorIndexArtifact {
     }
 
     pub fn search_vector(&self, field: &str, query: &[f32], limit: usize) -> Vec<VectorScore> {
-        let mut scores = self
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let exact_scores = self
             .entries
             .iter()
             .filter(|entry| entry.field == field)
@@ -413,7 +417,71 @@ impl VectorIndexArtifact {
                 })
             })
             .collect::<Vec<_>>();
-        scores.sort_by(|left, right| score_order(left.score, right.score));
+        if exact_scores.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scores_by_key = BTreeMap::new();
+        for score in &exact_scores {
+            scores_by_key.insert(vector_node_key(field, &score.record_id), score.clone());
+        }
+
+        let entry_point = exact_scores
+            .iter()
+            .min_by(|left, right| vector_score_order(left, right))
+            .map(|score| vector_node_key(field, &score.record_id))
+            .expect("non-empty exact scores");
+        let target_visits = self.ef_search.max(limit).min(scores_by_key.len()).max(1);
+        let mut visited = BTreeSet::new();
+        let mut frontier = VecDeque::from([entry_point]);
+
+        while visited.len() < target_visits {
+            let Some(node_key) = frontier.pop_front() else {
+                break;
+            };
+            if !visited.insert(node_key.clone()) {
+                continue;
+            }
+
+            let mut neighbors = self
+                .neighbors
+                .get(&node_key)
+                .into_iter()
+                .flat_map(|neighbors| neighbors.iter())
+                .map(|record_id| vector_node_key(field, record_id))
+                .filter(|neighbor_key| scores_by_key.contains_key(neighbor_key))
+                .filter(|neighbor_key| !visited.contains(neighbor_key))
+                .collect::<Vec<_>>();
+            neighbors.sort_by(|left, right| {
+                vector_score_order(
+                    scores_by_key.get(left).expect("known left neighbor"),
+                    scores_by_key.get(right).expect("known right neighbor"),
+                )
+            });
+            for neighbor in neighbors {
+                if !frontier.contains(&neighbor) {
+                    frontier.push_back(neighbor);
+                }
+            }
+        }
+
+        let mut scores = visited
+            .iter()
+            .filter_map(|key| scores_by_key.get(key).cloned())
+            .collect::<Vec<_>>();
+        if scores.len() < limit {
+            let seen = scores
+                .iter()
+                .map(|score| vector_node_key(field, &score.record_id))
+                .collect::<BTreeSet<_>>();
+            scores.extend(
+                exact_scores
+                    .iter()
+                    .filter(|score| !seen.contains(&vector_node_key(field, &score.record_id)))
+                    .cloned(),
+            );
+        }
+        scores.sort_by(vector_score_order);
         scores.truncate(limit);
         scores
     }
@@ -634,7 +702,8 @@ fn deterministic_hnsw_neighbors(
                     .map(|score| (other.record_id.clone(), score))
             })
             .collect::<Vec<_>>();
-        scored.sort_by(|left, right| score_order(left.1, right.1));
+        scored
+            .sort_by(|left, right| score_order(left.1, right.1).then_with(|| left.0.cmp(&right.0)));
         scored.truncate(m);
         out.insert(
             vector_node_key(&entry.field, &entry.record_id),
@@ -674,6 +743,12 @@ fn score_order(left: f32, right: f32) -> std::cmp::Ordering {
         .partial_cmp(&left)
         .unwrap_or(std::cmp::Ordering::Equal)
         .then_with(|| std::cmp::Ordering::Equal)
+}
+
+fn vector_score_order(left: &VectorScore, right: &VectorScore) -> std::cmp::Ordering {
+    score_order(left.score, right.score)
+        .then_with(|| left.record_id.cmp(&right.record_id))
+        .then_with(|| left.version_id.cmp(&right.version_id))
 }
 
 #[cfg(test)]
@@ -758,6 +833,51 @@ mod tests {
                 .into_iter()
                 .collect::<Vec<_>>(),
             vec!["common".to_string(), "rare".to_string()]
+        );
+    }
+
+    #[test]
+    fn vector_search_uses_stable_tie_breaks_and_exact_fallback() {
+        let artifact = VectorIndexArtifact {
+            index_id: "seg-1:vector:1".to_string(),
+            segment_id: "seg-1".to_string(),
+            generation: 1,
+            manifest_generation: 77,
+            source_segment_checksum: 1234,
+            m: 16,
+            ef_construction: 64,
+            ef_search: 1,
+            entries: vec![
+                VectorIndexEntry {
+                    record_id: "b".to_string(),
+                    version_id: 2,
+                    field: "embedding".to_string(),
+                    vector: vec![1.0, 0.0],
+                },
+                VectorIndexEntry {
+                    record_id: "a".to_string(),
+                    version_id: 1,
+                    field: "embedding".to_string(),
+                    vector: vec![1.0, 0.0],
+                },
+                VectorIndexEntry {
+                    record_id: "c".to_string(),
+                    version_id: 3,
+                    field: "embedding".to_string(),
+                    vector: vec![0.0, 1.0],
+                },
+            ],
+            neighbors: BTreeMap::new(),
+        };
+
+        let nearest = artifact.search_vector("embedding", &[1.0, 0.0], 2);
+
+        assert_eq!(
+            nearest
+                .iter()
+                .map(|score| score.record_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
         );
     }
 }

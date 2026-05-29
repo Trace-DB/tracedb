@@ -334,22 +334,30 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     assert!(mismatch.contains("does not belong"));
 
     let engine_url = spawn_engine_stub();
-    let proxied = tracedb_gateway::proxy_engine_request(
-        &engine_url,
-        "POST",
-        "/v1/query",
-        br#"{"table":"docs"}"#,
-        "application/json",
-        None,
-        &[],
-    )
-    .expect("gateway proxy");
+    let proxy_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("proxy runtime");
+    let proxy_client = reqwest::Client::new();
+    let proxied = proxy_runtime
+        .block_on(tracedb_gateway::proxy_engine_request(
+            &proxy_client,
+            &engine_url,
+            "POST",
+            "/v1/query",
+            br#"{"table":"docs"}"#,
+            "application/json",
+            None,
+            &[],
+        ))
+        .expect("gateway proxy");
     assert_eq!(proxied.status_code, 200);
     assert!(String::from_utf8_lossy(&proxied.body).contains("\"engine\":true"));
     let runtime_meter = Arc::new(Mutex::new(UsageMeter::default()));
     let runtime_config = GatewayServerConfig {
         bind: "127.0.0.1:0".to_string(),
         engine_url: engine_url.clone(),
+        http_client: reqwest::Client::new(),
         engine_internal_token: None,
         required_token: Some("secret-token".to_string()),
         catalog: reloaded,
@@ -403,6 +411,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     let batch_config = GatewayServerConfig {
         bind: "127.0.0.1:0".to_string(),
         engine_url: engine_url.clone(),
+        http_client: reqwest::Client::new(),
         engine_internal_token: None,
         required_token: Some("secret-token".to_string()),
         catalog: catalog.clone(),
@@ -428,6 +437,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     let admin_jobs_config = GatewayServerConfig {
         bind: "127.0.0.1:0".to_string(),
         engine_url: engine_url.clone(),
+        http_client: reqwest::Client::new(),
         engine_internal_token: None,
         required_token: Some("secret-token".to_string()),
         catalog: catalog.clone(),
@@ -443,7 +453,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
         admin_jobs_response.starts_with("HTTP/1.1 200 OK"),
         "gateway should route admin jobs with query metadata: {admin_jobs_response}"
     );
-    assert!(admin_jobs_response.contains("\"path\":\"/v1/admin/jobs\""));
+    assert!(admin_jobs_response.contains("\"path\":\"/v1/admin/jobs?"));
     assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 3);
 
     let mut jobs = JobCatalog::default();

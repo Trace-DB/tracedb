@@ -2725,6 +2725,7 @@ fn wal_scan_reports_and_ignores_trailing_short_payload() {
     let wal = Wal::open(temp.path()).unwrap();
     let entries = wal.scan().unwrap();
     let last = entries.last().unwrap();
+    let clean_len = std::fs::metadata(&wal_path).unwrap().len();
     drop(db);
 
     let payload = serde_json::to_vec(&CommitRecord::empty(999, Epoch::new(999))).unwrap();
@@ -2753,13 +2754,39 @@ fn wal_scan_reports_and_ignores_trailing_short_payload() {
     let torn_tail = scan.torn_tail.expect("torn tail");
     assert_eq!(torn_tail.lsn, Some(last.lsn.next()));
     assert_eq!(torn_tail.reason, "short_payload");
+    assert_eq!(std::fs::metadata(&wal_path).unwrap().len(), clean_len);
 
-    let recovered = TraceDb::open(temp.path()).expect("recover");
+    let (recover_temp, recover_db) = seeded_db();
+    let recover_wal_path = recover_temp.path().join("wal/000001.twal");
+    let recover_wal = Wal::open(recover_temp.path()).unwrap();
+    let recover_entries = recover_wal.scan().unwrap();
+    let recover_last = recover_entries.last().unwrap();
+    drop(recover_db);
+
+    let payload = serde_json::to_vec(&CommitRecord::empty(999, Epoch::new(999))).unwrap();
+    let payload_checksum = checksum_bytes(&payload);
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&0x5444_574cu32.to_le_bytes());
+    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&recover_last.lsn.next().get().to_le_bytes());
+    frame.extend_from_slice(&recover_last.checksum.to_le_bytes());
+    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&payload_checksum.to_le_bytes());
+    frame.extend_from_slice(&payload[..payload.len() / 2]);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&recover_wal_path)
+        .unwrap()
+        .write_all(&frame)
+        .unwrap();
+
+    let recovered = TraceDb::open(recover_temp.path()).expect("recover");
     assert_eq!(recovered.inspect_manifest().unwrap().latest_epoch.get(), 4);
     let recovered_torn_tail = recovered
         .last_recovery_torn_tail()
         .expect("recovered torn tail");
-    assert_eq!(recovered_torn_tail.lsn, Some(last.lsn.next()));
+    assert_eq!(recovered_torn_tail.lsn, Some(recover_last.lsn.next()));
     assert_eq!(recovered_torn_tail.reason, "short_payload");
 }
 

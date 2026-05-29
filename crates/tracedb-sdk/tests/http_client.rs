@@ -4,12 +4,10 @@ use std::future::Future;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 use tracedb_features::FeatureFreshnessMode;
 use tracedb_query::{
@@ -313,6 +311,25 @@ fn stalled_then_response_server(
     (format!("http://{addr}"), attempts)
 }
 
+fn dropped_then_response_server(response: &'static [u8]) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen_attempts = Arc::clone(&attempts);
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        seen_attempts.fetch_add(1, Ordering::SeqCst);
+        read_complete_http_request_for_test(&mut stream);
+        drop(stream);
+
+        let (mut stream, _) = listener.accept().unwrap();
+        seen_attempts.fetch_add(1, Ordering::SeqCst);
+        read_complete_http_request_for_test(&mut stream);
+        stream.write_all(response).unwrap();
+    });
+    (format!("http://{addr}"), attempts)
+}
+
 fn read_complete_http_request_for_test(stream: &mut std::net::TcpStream) {
     stream
         .set_read_timeout(Some(Duration::from_millis(250)))
@@ -354,39 +371,12 @@ fn http_request_is_complete(request: &[u8]) -> bool {
     request.len() >= header_end + 4 + content_length
 }
 
-struct TestWake {
-    notified: AtomicBool,
-}
-
-impl Wake for TestWake {
-    fn wake(self: Arc<Self>) {
-        self.notified.store(true, Ordering::SeqCst);
-    }
-}
-
-fn test_waker() -> Waker {
-    Waker::from(Arc::new(TestWake {
-        notified: AtomicBool::new(false),
-    }))
-}
-
-fn poll_once<F: Future>(future: Pin<&mut F>) -> (Poll<F::Output>, Duration) {
-    let waker = test_waker();
-    let mut context = Context::from_waker(&waker);
-    let started = Instant::now();
-    let poll = future.poll(&mut context);
-    (poll, started.elapsed())
-}
-
 fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = Box::pin(future);
-    loop {
-        let (poll, _) = poll_once(future.as_mut());
-        if let Poll::Ready(output) = poll {
-            return output;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio test runtime")
+        .block_on(future)
 }
 
 fn start_real_http_server(data_dir: PathBuf) -> String {
@@ -430,7 +420,7 @@ fn wait_for_ready_endpoint(url: &str) {
 #[test]
 fn async_client_decodes_typed_readiness_response() {
     let url = http_response_server(
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 42\r\nConnection: close\r\n\r\n{\"ready\":true,\"service\":\"tracedb-engine\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 41\r\nConnection: close\r\n\r\n{\"ready\":true,\"service\":\"tracedb-engine\"}",
     );
     let client = TraceDbAsyncClient::new(TraceDbClientConfig::managed(url, "dev-token"));
 
@@ -446,19 +436,26 @@ fn async_client_starts_http_work_without_blocking_first_poll() {
     let client = TraceDbAsyncClient::new(
         TraceDbClientConfig::managed(url, "dev-token").with_timeout(Duration::from_millis(200)),
     );
-    let mut future = Box::pin(client.ready_typed());
-
-    let (poll, elapsed) = poll_once(future.as_mut());
-
+    let started = Instant::now();
+    let first_wait = block_on(async {
+        tokio::time::timeout(Duration::from_millis(50), client.ready_typed()).await
+    });
+    let elapsed = started.elapsed();
     assert!(
-        elapsed < Duration::from_millis(50),
-        "first async poll should not block on socket I/O; elapsed {elapsed:?}"
+        elapsed < Duration::from_millis(100),
+        "async transport should yield while socket I/O is pending; elapsed {elapsed:?}"
     );
     assert!(
-        poll.is_pending(),
-        "first async poll should hand work to the background transport"
+        first_wait.is_err(),
+        "stalled response should still be pending after the short runtime timeout"
     );
-    let error = block_on(future).expect_err("stalled response should time out");
+    let timeout_url = stalled_response_server(Duration::from_millis(250));
+    let timeout_client = TraceDbAsyncClient::new(
+        TraceDbClientConfig::managed(timeout_url, "dev-token")
+            .with_timeout(Duration::from_millis(200)),
+    );
+    let error =
+        block_on(timeout_client.ready_typed()).expect_err("stalled response should time out");
     match error {
         TraceDbClientError::Timeout {
             method,
@@ -504,6 +501,43 @@ fn retryable_health_requests_retry_5xx_then_return_success() {
 
     assert_eq!(response["ok"], true);
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn retryable_health_requests_retry_dropped_connections_then_return_success() {
+    let (url, attempts) = dropped_then_response_server(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    );
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+    let started = Instant::now();
+
+    let response = client.health().expect("health network retry");
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(
+        started.elapsed() >= Duration::from_millis(50),
+        "network retry should wait before the second attempt"
+    );
+}
+
+#[test]
+fn retryable_health_requests_do_not_retry_4xx() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"error\":\"missing\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+
+    let error = client.health().expect_err("4xx should not retry");
+
+    match error {
+        TraceDbClientError::HttpStatus { status, .. } => assert_eq!(status, 404),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
 #[test]

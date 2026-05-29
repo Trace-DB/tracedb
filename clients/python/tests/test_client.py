@@ -107,6 +107,45 @@ class TraceDBClientTests(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 2)
 
+    def test_safe_retries_retry_network_errors_with_backoff_then_return_json(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
+
+        with (
+            mock.patch(
+                "urllib.request.urlopen",
+                side_effect=[
+                    urllib.error.URLError("connection reset"),
+                    _FakeResponse('{"ok":true}'),
+                ],
+            ) as urlopen,
+            mock.patch("random.uniform", return_value=1.0),
+            mock.patch("time.sleep") as sleep,
+        ):
+            self.assertEqual(db.health(), {"ok": True})
+
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once_with(0.1)
+
+    def test_safe_retries_do_not_retry_read_only_4xx(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
+        client_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/health",
+            404,
+            "Not Found",
+            {},
+            io.BytesIO(b'{"error":"not found","code":"not_found"}'),
+        )
+
+        with (
+            mock.patch("urllib.request.urlopen", side_effect=client_error) as urlopen,
+            mock.patch("time.sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(TraceDBHTTPError, "HTTP 404"):
+                db.health()
+
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+
     def test_traceql_posts_query_string_to_canonical_route_with_routing(self) -> None:
         db = TraceDB(
             "http://127.0.0.1:8090",

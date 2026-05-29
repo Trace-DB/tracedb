@@ -755,12 +755,47 @@ function fetchWithRetries(
   }
   return async (input: string, init: TraceDbFetchInit) => {
     const attempts = retryAttemptCount(input, init, safeRetries, idempotencyRetries);
-    let response = await resolvedFetch(input, init);
-    for (let attempt = 1; attempt < attempts && !response.ok && response.status >= 500; attempt += 1) {
-      response = await resolvedFetch(input, init);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const response = await resolvedFetch(input, init);
+        if (response.ok || response.status < 500 || attempt + 1 >= attempts) {
+          return response;
+        }
+      } catch (error) {
+        if (isCallerAbort(error, init) || attempt + 1 >= attempts) {
+          throw error;
+        }
+        lastError = error;
+      }
+      await sleepBeforeRetry(attempt);
     }
-    return response;
+    throw lastError ?? new TraceDbRequestError("CONFIG", "retry", "request retry loop exhausted");
   };
+}
+
+function sleepBeforeRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+}
+
+function retryDelayMs(attempt: number): number {
+  const base = Math.min(5_000, 100 * 2 ** Math.min(attempt, 30));
+  const jitter = 0.75 + Math.random() * 0.5;
+  return Math.min(5_000, Math.max(1, Math.round(base * jitter)));
+}
+
+function isCallerAbort(error: unknown, init: TraceDbFetchInit): boolean {
+  const signal = init.signal as { aborted?: unknown } | undefined;
+  return signal?.aborted === true && isAbortError(error);
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
 }
 
 function retryAttemptCount(

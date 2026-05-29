@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import asyncio
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -165,9 +167,15 @@ class TraceDB:
                     payload = response.read().decode("utf-8")
             except urllib.error.HTTPError as error:
                 if _should_retry_http_error(method, path, error.code, attempt, attempts):
+                    _sleep_before_retry(attempt)
                     continue
                 payload = error.read().decode("utf-8")
                 raise TraceDBHTTPError(method, path, error.code, payload) from error
+            except (urllib.error.URLError, TimeoutError, OSError):
+                if _should_retry_transport_error(attempt, attempts):
+                    _sleep_before_retry(attempt)
+                    continue
+                raise
             if not payload:
                 return {}
             parsed = _loads_json(payload)
@@ -650,6 +658,19 @@ def _attempt_count(
 
 def _should_retry_http_error(method: str, path: str, status: int, attempt: int, attempts: int) -> bool:
     return status >= 500 and attempt + 1 < attempts
+
+
+def _should_retry_transport_error(attempt: int, attempts: int) -> bool:
+    return attempt + 1 < attempts
+
+
+def _sleep_before_retry(attempt: int) -> None:
+    time.sleep(_retry_delay_seconds(attempt))
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    base = min(5.0, 0.1 * (2 ** min(attempt, 30)))
+    return min(5.0, base * random.uniform(0.75, 1.25))
 
 
 def _is_retry_safe_request(method: str, path: str) -> bool:

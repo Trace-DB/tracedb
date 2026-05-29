@@ -10,6 +10,8 @@ tempfile.workspace = true
 tracedb-query = { path = "../tracedb-query" }
 
 [dev-dependencies]
+reqwest.workspace = true
+tokio.workspace = true
 tracedb-core = { path = "../tracedb-core" }
 tracedb-log = { path = "../tracedb-log" }
 tracedb-modules = { path = "../tracedb-modules" }

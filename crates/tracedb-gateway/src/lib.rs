@@ -6,11 +6,10 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri};
 use axum::routing::any;
 use axum::{BoxError, Router};
+use reqwest::header;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::Infallible;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -68,7 +67,7 @@ pub struct EngineHttpResponse {
 }
 
 impl EngineHttpResponse {
-    fn to_http_response(&self) -> String {
+    fn to_http_response_text(&self) -> String {
         format!(
             "HTTP/1.1 {} {}\r\ncontent-type: {}\r\ncontent-length: {}\r\n\r\n{}",
             self.status_code,
@@ -77,6 +76,17 @@ impl EngineHttpResponse {
             self.body.len(),
             String::from_utf8_lossy(&self.body)
         )
+    }
+
+    fn to_axum_response(&self) -> Response<Body> {
+        let status =
+            StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        Response::builder()
+            .status(status)
+            .header("content-type", self.content_type.as_str())
+            .header("connection", "close")
+            .body(Body::from(self.body.clone()))
+            .expect("gateway response builder")
     }
 }
 
@@ -144,6 +154,7 @@ impl Gateway {
 pub struct GatewayServerConfig {
     pub bind: String,
     pub engine_url: String,
+    pub http_client: reqwest::Client,
     pub engine_internal_token: Option<String>,
     pub required_token: Option<String>,
     pub catalog: Catalog,
@@ -161,6 +172,7 @@ impl GatewayServerConfig {
         Self {
             bind: bind_addr_from_env(),
             engine_url: engine_url.clone(),
+            http_client: reqwest::Client::new(),
             engine_internal_token: engine_internal_token_from_env(),
             required_token: if std::env::var("TRACEDB_REQUIRE_API_KEY")
                 .map(|value| value == "true")
@@ -242,10 +254,11 @@ async fn handle_axum_gateway_request(
             ))));
         }
     };
-    let request = request_text_from_parts(&method, &uri, &headers, &body);
-    Ok(response_from_http_text(handle_gateway_request_text(
-        &request, config,
-    )))
+    Ok(
+        handle_gateway_request_parts(config, method, uri, headers, body)
+            .await
+            .to_axum_response(),
+    )
 }
 
 pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -> String {
@@ -273,8 +286,77 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
         .map(str::to_string);
     let inbound_actor_headers = gateway_actor_header_overrides(request);
 
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("gateway compatibility runtime");
+    runtime
+        .block_on(handle_gateway_request_core(
+            config,
+            method,
+            path,
+            query,
+            GatewayInboundHeaders {
+                content_type: content_type.to_string(),
+                request_id,
+                idempotency_key,
+                bearer_token,
+                actor_headers: inbound_actor_headers,
+            },
+            Bytes::from(body),
+        ))
+        .to_http_response_text()
+}
+
+async fn handle_gateway_request_parts(
+    config: GatewayServerConfig,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> EngineHttpResponse {
+    let method = method.as_str().to_string();
+    let path = uri.path().to_string();
+    let query = uri.query().map(str::to_string);
+    let request_id = header_map_value(&headers, "x-request-id").unwrap_or_else(next_request_id);
+    log_request("tracedb-gateway", &request_id, &method, &path);
+    let inbound = GatewayInboundHeaders {
+        content_type: header_map_value(&headers, "content-type")
+            .unwrap_or_else(|| "application/json".to_string()),
+        request_id,
+        idempotency_key: header_map_value(&headers, "idempotency-key"),
+        bearer_token: header_map_value(&headers, "authorization")
+            .and_then(|value| value.strip_prefix("Bearer ").map(str::to_string)),
+        actor_headers: gateway_actor_header_overrides_from_header_map(&headers),
+    };
+    handle_gateway_request_core(config, &method, &path, query.as_deref(), inbound, body).await
+}
+
+#[derive(Clone, Debug)]
+struct GatewayInboundHeaders {
+    content_type: String,
+    request_id: String,
+    idempotency_key: Option<String>,
+    bearer_token: Option<String>,
+    actor_headers: GatewayActorHeaderOverrides,
+}
+
+async fn handle_gateway_request_core(
+    config: GatewayServerConfig,
+    method: &str,
+    path: &str,
+    query: Option<&str>,
+    inbound: GatewayInboundHeaders,
+    body: Bytes,
+) -> EngineHttpResponse {
+    if !is_auth_exempt_gateway_route(method, path) {
+        if let Err(error) = require_auth(&config, inbound.bearer_token.as_deref()) {
+            return error;
+        }
+    }
+
     match (method, path) {
-        ("GET", "/health") | ("GET", "/v1/health") => ok(json!({
+        ("GET", "/health") | ("GET", "/healthz") | ("GET", "/v1/health") => gateway_ok(json!({
             "ok": true,
             "service": "tracedb-gateway",
             "engine_url": config.engine_url,
@@ -283,6 +365,7 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
         })),
         ("GET", "/ready") | ("GET", "/v1/ready") => {
             match proxy_engine_request(
+                &config.http_client,
                 &config.engine_url,
                 "GET",
                 "/internal/health",
@@ -290,8 +373,10 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
                 "application/json",
                 config.engine_internal_token.as_deref(),
                 &[],
-            ) {
-                Ok(response) if (200..300).contains(&response.status_code) => ok(json!({
+            )
+            .await
+            {
+                Ok(response) if (200..300).contains(&response.status_code) => gateway_ok(json!({
                     "ok": true,
                     "ready": true,
                     "service": "tracedb-gateway",
@@ -301,33 +386,39 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
                     "catalog_databases": config.catalog.databases().count(),
                     "metered_requests": config.meter.lock().unwrap().total(MeterKind::Request),
                 })),
-                Ok(response) => service_unavailable(json!({
-                    "ok": false,
-                    "ready": false,
-                    "service": "tracedb-gateway",
-                    "engine_url": config.engine_url,
-                    "engine_health_checked": true,
-                    "engine_status_code": response.status_code,
-                })),
-                Err(error) => service_unavailable(json!({
-                    "ok": false,
-                    "ready": false,
-                    "service": "tracedb-gateway",
-                    "engine_url": config.engine_url,
-                    "engine_health_checked": true,
-                    "error": error.to_string(),
-                })),
+                Ok(response) => gateway_json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({
+                        "ok": false,
+                        "ready": false,
+                        "service": "tracedb-gateway",
+                        "engine_url": config.engine_url,
+                        "engine_health_checked": true,
+                        "engine_status_code": response.status_code,
+                    }),
+                ),
+                Err(error) => gateway_json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({
+                        "ok": false,
+                        "ready": false,
+                        "service": "tracedb-gateway",
+                        "engine_url": config.engine_url,
+                        "engine_health_checked": true,
+                        "error": error.to_string(),
+                    }),
+                ),
             }
         }
-        ("GET", "/v1/databases") => ok(json!({
+        ("GET", "/v1/databases") => gateway_ok(json!({
             "gateway": true,
             "databases": config.catalog.databases().collect::<Vec<_>>(),
         })),
-        ("GET", "/v1/branches") => ok(json!({
+        ("GET", "/v1/branches") => gateway_ok(json!({
             "gateway": true,
             "branches": config.catalog.branches().collect::<Vec<_>>(),
         })),
-        ("GET", "/metrics") | ("GET", "/v1/metrics/public-safe") => ok(json!({
+        ("GET", "/metrics") | ("GET", "/v1/metrics/public-safe") => gateway_ok(json!({
             "gateway": true,
             "service": "tracedb-gateway",
             "requests": config.meter.lock().unwrap().total(MeterKind::Request),
@@ -339,31 +430,39 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
                 &config,
                 path,
                 &body,
-                bearer_token,
+                inbound.bearer_token,
                 query,
-                &inbound_actor_headers,
+                &inbound.actor_headers,
             ) {
                 Ok(authorized) => {
                     let mut actor_headers = authorized.actor_headers;
-                    actor_headers.push(("x-tracedb-request-id".to_string(), request_id.clone()));
+                    actor_headers.push((
+                        "x-tracedb-request-id".to_string(),
+                        inbound.request_id.clone(),
+                    ));
+                    let proxy_path = query
+                        .map(|query| format!("{path}?{query}"))
+                        .unwrap_or_else(|| path.to_string());
                     proxy_or_gateway_error(
+                        &config.http_client,
                         &authorized.target.url,
                         method,
-                        path,
+                        &proxy_path,
                         &body,
-                        content_type,
-                        Some(&request_id),
-                        idempotency_key.as_deref(),
+                        &inbound.content_type,
+                        Some(&inbound.request_id),
+                        inbound.idempotency_key.as_deref(),
                         config.engine_internal_token.as_deref(),
                         &actor_headers,
                     )
+                    .await
                 }
-                Err(GatewayRuntimeError::Unauthorized) => unauthorized(),
-                Err(GatewayRuntimeError::RateLimited) => too_many_requests(),
-                Err(GatewayRuntimeError::BadRequest(message)) => bad_request(message),
+                Err(GatewayRuntimeError::Unauthorized) => gateway_unauthorized(),
+                Err(GatewayRuntimeError::RateLimited) => gateway_too_many_requests(),
+                Err(GatewayRuntimeError::BadRequest(message)) => gateway_bad_request(message),
             }
         }
-        _ => not_found(),
+        _ => gateway_not_found(),
     }
 }
 
@@ -388,6 +487,32 @@ fn is_proxied_gateway_route(method: &str, path: &str) -> bool {
             | ("POST", "/v1/admin/restore")
             | ("GET", "/v1/admin/jobs")
     )
+}
+
+fn is_auth_exempt_gateway_route(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("GET", "/health")
+            | ("GET", "/healthz")
+            | ("GET", "/v1/health")
+            | ("GET", "/ready")
+            | ("GET", "/v1/ready")
+    )
+}
+
+fn require_auth(
+    config: &GatewayServerConfig,
+    bearer_token: Option<&str>,
+) -> Result<(), EngineHttpResponse> {
+    if config
+        .required_token
+        .as_ref()
+        .is_some_and(|required| bearer_token != Some(required.as_str()))
+    {
+        Err(gateway_unauthorized())
+    } else {
+        Ok(())
+    }
 }
 
 fn authorize_route_and_meter(
@@ -520,6 +645,21 @@ fn gateway_ids_from_request(
             scopes: actor_headers.scopes.clone(),
         });
     }
+    if let (Some(database_id), Some(branch_id), Some(tenant_id)) = (
+        actor_headers.database_id.clone(),
+        actor_headers.branch_id.clone(),
+        actor_headers.tenant_id.clone(),
+    ) {
+        return Ok(GatewayRequestIds {
+            database_id,
+            branch_id,
+            tenant_id,
+            bearer_token: None,
+            token_identity: actor_headers.token_identity.clone(),
+            policy_epoch: actor_headers.policy_epoch.clone(),
+            scopes: actor_headers.scopes.clone(),
+        });
+    }
     let value = serde_json::from_slice::<Value>(body)
         .map_err(|error| GatewayRuntimeError::BadRequest(error.to_string()))?;
     let body_database_id = value.get("database_id").and_then(Value::as_str);
@@ -591,6 +731,19 @@ fn gateway_actor_header_overrides(request: &str) -> GatewayActorHeaderOverrides 
     }
 }
 
+fn gateway_actor_header_overrides_from_header_map(
+    headers: &HeaderMap,
+) -> GatewayActorHeaderOverrides {
+    GatewayActorHeaderOverrides {
+        database_id: header_map_value(headers, "x-tracedb-database-id"),
+        branch_id: header_map_value(headers, "x-tracedb-branch-id"),
+        tenant_id: header_map_value(headers, "x-tracedb-tenant-id"),
+        token_identity: header_map_value(headers, "x-tracedb-token-identity"),
+        policy_epoch: header_map_value(headers, "x-tracedb-policy-epoch"),
+        scopes: header_map_value(headers, "x-tracedb-scopes"),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum GatewayRuntimeError {
     Unauthorized,
@@ -618,7 +771,8 @@ fn load_gateway_catalog(engine_url: &str) -> Catalog {
     catalog
 }
 
-pub fn proxy_engine_request(
+pub async fn proxy_engine_request(
+    client: &reqwest::Client,
     engine_url: &str,
     method: &str,
     path: &str,
@@ -628,6 +782,7 @@ pub fn proxy_engine_request(
     actor_headers: &[(String, String)],
 ) -> std::io::Result<EngineHttpResponse> {
     proxy_engine_request_with_id(
+        client,
         engine_url,
         method,
         path,
@@ -638,9 +793,11 @@ pub fn proxy_engine_request(
         engine_internal_token,
         actor_headers,
     )
+    .await
 }
 
-fn proxy_engine_request_with_id(
+async fn proxy_engine_request_with_id(
+    client: &reqwest::Client,
     engine_url: &str,
     method: &str,
     path: &str,
@@ -651,36 +808,61 @@ fn proxy_engine_request_with_id(
     engine_internal_token: Option<&str>,
     actor_headers: &[(String, String)],
 ) -> std::io::Result<EngineHttpResponse> {
-    let target = HttpTarget::parse(engine_url)?;
-    let route = target.join(path);
-    let mut stream = TcpStream::connect(&target.address)?;
-    let request_id_header = request_id
-        .map(|request_id| format!("x-request-id: {request_id}\r\n"))
-        .unwrap_or_default();
-    let idempotency_key_header = idempotency_key
-        .map(|idempotency_key| format!("idempotency-key: {idempotency_key}\r\n"))
-        .unwrap_or_default();
-    let engine_token_header = engine_internal_token
-        .map(|token| format!("x-tracedb-engine-token: {token}\r\n"))
-        .unwrap_or_default();
-    let actor_header_text = actor_headers
-        .iter()
-        .map(|(name, value)| format!("{name}: {value}\r\n"))
-        .collect::<String>();
-    let request = format!(
-        "{method} {route} HTTP/1.1\r\nhost: {}\r\ncontent-type: {content_type}\r\n{request_id_header}{idempotency_key_header}{engine_token_header}{actor_header_text}content-length: {}\r\nconnection: close\r\n\r\n{}",
-        target.host,
-        body.len(),
-        String::from_utf8_lossy(body)
-    );
-    stream.write_all(request.as_bytes())?;
-    stream.flush()?;
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response)?;
-    parse_engine_response(&response)
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid proxy method: {error}"),
+        )
+    })?;
+    let url = join_engine_url(engine_url, path)?;
+    let mut request = client
+        .request(method, url)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(body.to_vec());
+    if let Some(request_id) = request_id {
+        request = request.header("x-request-id", request_id);
+    }
+    if let Some(idempotency_key) = idempotency_key {
+        request = request.header("idempotency-key", idempotency_key);
+    }
+    if let Some(token) = engine_internal_token {
+        request = request.header("x-tracedb-engine-token", token);
+    }
+    for (name, value) in actor_headers {
+        let header_name = header::HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid proxy header name {name}: {error}"),
+            )
+        })?;
+        request = request.header(header_name, value);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?
+        .to_vec();
+    Ok(EngineHttpResponse {
+        status_code: status.as_u16(),
+        reason: status.canonical_reason().unwrap_or("OK").to_string(),
+        content_type,
+        body,
+    })
 }
 
-fn proxy_or_gateway_error(
+async fn proxy_or_gateway_error(
+    client: &reqwest::Client,
     engine_url: &str,
     method: &str,
     path: &str,
@@ -690,8 +872,9 @@ fn proxy_or_gateway_error(
     idempotency_key: Option<&str>,
     engine_internal_token: Option<&str>,
     actor_headers: &[(String, String)],
-) -> String {
+) -> EngineHttpResponse {
     match proxy_engine_request_with_id(
+        client,
         engine_url,
         method,
         path,
@@ -701,10 +884,23 @@ fn proxy_or_gateway_error(
         idempotency_key,
         engine_internal_token,
         actor_headers,
-    ) {
-        Ok(response) => response.to_http_response(),
-        Err(error) => bad_gateway(format!("engine proxy failed: {error}")),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => gateway_bad_gateway(format!("engine proxy failed: {error}")),
     }
+}
+
+fn join_engine_url(engine_url: &str, path: &str) -> std::io::Result<String> {
+    let base = engine_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "engine URL cannot be empty",
+        ));
+    }
+    Ok(format!("{}/{}", base, path.trim_start_matches('/')))
 }
 
 fn next_request_id() -> String {
@@ -768,132 +964,6 @@ fn http_json_response(status: &str, body: Value) -> String {
     )
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct HttpTarget {
-    host: String,
-    address: String,
-    base_path: String,
-}
-
-impl HttpTarget {
-    fn parse(url: &str) -> std::io::Result<Self> {
-        let without_scheme = url.strip_prefix("http://").ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "gateway engine proxy only supports http:// URLs",
-            )
-        })?;
-        let (host, base_path) = without_scheme
-            .split_once('/')
-            .map(|(host, path)| (host, format!("/{path}")))
-            .unwrap_or((without_scheme, "/".to_string()));
-        if host.trim().is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "engine URL host cannot be empty",
-            ));
-        }
-        let address = if host.contains(':') {
-            host.to_string()
-        } else {
-            format!("{host}:80")
-        };
-        Ok(Self {
-            host: host.to_string(),
-            address,
-            base_path,
-        })
-    }
-
-    fn join(&self, path: &str) -> String {
-        if self.base_path == "/" {
-            path.to_string()
-        } else {
-            format!(
-                "{}/{}",
-                self.base_path.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            )
-        }
-    }
-}
-
-fn parse_engine_response(response: &[u8]) -> std::io::Result<EngineHttpResponse> {
-    let delimiter = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|pos| (pos, 4))
-        .or_else(|| {
-            response
-                .windows(2)
-                .position(|window| window == b"\n\n")
-                .map(|pos| (pos, 2))
-        })
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "engine response did not include headers",
-            )
-        })?;
-    let headers = String::from_utf8_lossy(&response[..delimiter.0]);
-    let status_line = headers.lines().next().unwrap_or_default();
-    let mut status_parts = status_line.split_whitespace();
-    let _http = status_parts.next();
-    let status_code = status_parts
-        .next()
-        .and_then(|value| value.parse::<u16>().ok())
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "engine response status code is invalid",
-            )
-        })?;
-    let reason = status_parts.collect::<Vec<_>>().join(" ");
-    let content_type = headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-type")
-                .then(|| value.trim().to_string())
-        })
-        .unwrap_or_else(|| "application/octet-stream".to_string());
-    Ok(EngineHttpResponse {
-        status_code,
-        reason: if reason.is_empty() {
-            "OK".to_string()
-        } else {
-            reason
-        },
-        content_type,
-        body: response[(delimiter.0 + delimiter.1)..].to_vec(),
-    })
-}
-
-fn request_text_from_parts(
-    method: &Method,
-    uri: &Uri,
-    headers: &HeaderMap,
-    body: &Bytes,
-) -> String {
-    let mut request = format!("{method} {uri} HTTP/1.1\r\n");
-    for (name, value) in headers {
-        if name.as_str().eq_ignore_ascii_case("content-length") {
-            continue;
-        }
-        if let Ok(value) = value.to_str() {
-            request.push_str(name.as_str());
-            request.push_str(": ");
-            request.push_str(value);
-            request.push_str("\r\n");
-        }
-    }
-    request.push_str("content-length: ");
-    request.push_str(&body.len().to_string());
-    request.push_str("\r\n\r\n");
-    request.push_str(&String::from_utf8_lossy(body));
-    request
-}
-
 fn response_from_http_text(response: String) -> Response<Body> {
     let Some((head, body)) = response
         .split_once("\r\n\r\n")
@@ -937,64 +1007,65 @@ fn header_value<'a>(request: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-fn ok(value: serde_json::Value) -> String {
-    let body = value.to_string();
-    format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-        body.len(),
-        body
+fn header_map_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+fn gateway_ok(value: serde_json::Value) -> EngineHttpResponse {
+    gateway_json_response(StatusCode::OK, value)
+}
+
+fn gateway_unauthorized() -> EngineHttpResponse {
+    gateway_json_response(
+        StatusCode::UNAUTHORIZED,
+        json!({ "error": "invalid api token", "code": "unauthorized" }),
     )
 }
 
-fn service_unavailable(value: serde_json::Value) -> String {
-    let body = value.to_string();
-    format!(
-        "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-        body.len(),
-        body
+fn gateway_not_found() -> EngineHttpResponse {
+    gateway_json_response(
+        StatusCode::NOT_FOUND,
+        json!({ "error": "not found", "code": "not_found" }),
     )
 }
 
-fn unauthorized() -> String {
-    let body = json!({ "error": "invalid api token", "code": "unauthorized" }).to_string();
-    format!(
-        "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-        body.len(),
-        body
+fn gateway_bad_gateway(message: String) -> EngineHttpResponse {
+    gateway_json_response(
+        StatusCode::BAD_GATEWAY,
+        json!({ "error": message, "code": "bad_gateway" }),
     )
 }
 
-fn not_found() -> String {
-    let body = json!({ "error": "not found", "code": "not_found" }).to_string();
-    format!(
-        "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-        body.len(),
-        body
+fn gateway_bad_request(message: String) -> EngineHttpResponse {
+    gateway_json_response(
+        StatusCode::BAD_REQUEST,
+        json!({ "error": message, "code": "bad_request" }),
     )
 }
 
-fn bad_gateway(message: String) -> String {
-    let body = json!({ "error": message, "code": "bad_gateway" }).to_string();
-    format!(
-        "HTTP/1.1 502 Bad Gateway\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-        body.len(),
-        body
+fn gateway_too_many_requests() -> EngineHttpResponse {
+    gateway_json_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        json!({ "error": "rate limit exceeded", "code": "rate_limited" }),
     )
+}
+
+fn gateway_json_response(status: StatusCode, value: serde_json::Value) -> EngineHttpResponse {
+    EngineHttpResponse {
+        status_code: status.as_u16(),
+        reason: status.canonical_reason().unwrap_or("OK").to_string(),
+        content_type: "application/json".to_string(),
+        body: value.to_string().into_bytes(),
+    }
 }
 
 fn bad_request(message: String) -> String {
     let body = json!({ "error": message, "code": "bad_request" }).to_string();
     format!(
         "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    )
-}
-
-fn too_many_requests() -> String {
-    let body = json!({ "error": "rate limit exceeded", "code": "rate_limited" }).to_string();
-    format!(
-        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
         body.len(),
         body
     )
@@ -1034,12 +1105,47 @@ fn env_usize(name: &str, default_value: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     #[test]
     fn gateway_proxies_traceql_and_graphql_adapter_routes() {
         assert!(is_proxied_gateway_route("POST", "/v1/traceql"));
         assert!(is_proxied_gateway_route("POST", "/v1/graphql"));
         assert!(is_proxied_gateway_route("GET", "/v1/graphql/schema"));
+    }
+
+    #[test]
+    fn gateway_requires_auth_for_metadata_routes() {
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: "http://127.0.0.1:1".to_string(),
+            http_client: reqwest::Client::new(),
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: Some("public-secret".to_string()),
+            catalog: Catalog::default(),
+            meter: Arc::new(Mutex::new(UsageMeter::default())),
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
+        };
+
+        let databases =
+            handle_gateway_request_text("GET /v1/databases HTTP/1.1\r\n\r\n", config.clone());
+        let branches =
+            handle_gateway_request_text("GET /v1/branches HTTP/1.1\r\n\r\n", config.clone());
+        let metrics = handle_gateway_request_text("GET /metrics HTTP/1.1\r\n\r\n", config.clone());
+        let health = handle_gateway_request_text("GET /health HTTP/1.1\r\n\r\n", config.clone());
+        let authorized = handle_gateway_request_text(
+            "GET /v1/databases HTTP/1.1\r\nauthorization: Bearer public-secret\r\n\r\n",
+            config,
+        );
+
+        assert!(databases.starts_with("HTTP/1.1 401 Unauthorized"));
+        assert!(branches.starts_with("HTTP/1.1 401 Unauthorized"));
+        assert!(metrics.starts_with("HTTP/1.1 401 Unauthorized"));
+        assert!(health.starts_with("HTTP/1.1 200 OK"));
+        assert!(authorized.starts_with("HTTP/1.1 200 OK"));
     }
 
     #[test]
@@ -1056,6 +1162,7 @@ mod tests {
         let config = GatewayServerConfig {
             bind: "127.0.0.1:0".to_string(),
             engine_url: engine,
+            http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
             required_token: Some("public-secret".to_string()),
             catalog,
@@ -1108,6 +1215,7 @@ mod tests {
         let config = GatewayServerConfig {
             bind: "127.0.0.1:0".to_string(),
             engine_url: engine,
+            http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
             required_token: Some("public-secret".to_string()),
             catalog,
@@ -1147,10 +1255,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn axum_gateway_proxies_binary_body_without_utf8_loss() {
+        let engine = spawn_binary_echo_engine();
+        let mut catalog = Catalog::default();
+        let database = catalog
+            .create_database("org-a", "project-a", "memory", "us-west")
+            .expect("database");
+        let branch = catalog
+            .create_branch(&database.database_id, "main", None)
+            .expect("branch");
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: engine,
+            http_client: reqwest::Client::new(),
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: Some("public-secret".to_string()),
+            catalog,
+            meter: Arc::new(Mutex::new(UsageMeter::default())),
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer public-secret"),
+        );
+        headers.insert(
+            "content-type",
+            HeaderValue::from_static("application/octet-stream"),
+        );
+        headers.insert(
+            "x-tracedb-database-id",
+            HeaderValue::from_str(&database.database_id).expect("database header"),
+        );
+        headers.insert(
+            "x-tracedb-branch-id",
+            HeaderValue::from_str(&branch.branch_id).expect("branch header"),
+        );
+        headers.insert("x-tracedb-tenant-id", HeaderValue::from_static("tenant-a"));
+        let payload = vec![0, 159, 146, 150, 255, b't', b'd', b'b'];
+
+        let response = handle_axum_gateway_request(
+            State(config),
+            Method::POST,
+            "/v1/query".parse().expect("uri"),
+            headers,
+            Body::from(payload.clone()),
+        )
+        .await
+        .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body bytes");
+        assert_eq!(body.as_ref(), payload.as_slice());
+    }
+
+    #[tokio::test]
     async fn axum_entrypoint_rejects_oversized_body() {
         let config = GatewayServerConfig {
             bind: "127.0.0.1:0".to_string(),
             engine_url: "http://127.0.0.1:1".to_string(),
+            http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
             required_token: Some("public-secret".to_string()),
             catalog: Catalog::default(),
@@ -1228,6 +1397,30 @@ mod tests {
             stream
                 .write_all(response.as_bytes())
                 .expect("write response");
+        });
+        format!("http://{addr}")
+    }
+
+    fn spawn_binary_echo_engine() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind engine");
+        let addr = listener.local_addr().expect("engine addr");
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept engine request");
+            let mut buffer = [0u8; 8192];
+            let read = stream.read(&mut buffer).expect("read engine request");
+            let request = &buffer[..read];
+            let header_end = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|index| index + 4)
+                .expect("header boundary");
+            let body = &request[header_end..];
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).expect("write headers");
+            stream.write_all(body).expect("write body");
         });
         format!("http://{addr}")
     }

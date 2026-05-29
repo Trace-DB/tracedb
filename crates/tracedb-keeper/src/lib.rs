@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -97,17 +98,135 @@ impl BranchWalService {
         let Some(path) = &self.durable_path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let tmp_path = path.with_extension("json.tmp");
         let body = serde_json::to_vec_pretty(self).map_err(|error| error.to_string())?;
-        fs::write(&tmp_path, body).map_err(|error| error.to_string())?;
-        fs::rename(&tmp_path, path).map_err(|error| error.to_string())?;
-        Ok(())
+        persist_body(path, &body)
     }
 }
 
 fn idempotency_key(branch_id: &str, idempotency_key: &str) -> String {
     format!("{branch_id}\u{1f}{idempotency_key}")
+}
+
+trait DurableWriteOps {
+    fn create_dir_all(&mut self, path: &Path) -> Result<(), String>;
+    fn write_file(&mut self, path: &Path, body: &[u8]) -> Result<(), String>;
+    fn sync_file(&mut self, path: &Path) -> Result<(), String>;
+    fn rename(&mut self, source: &Path, target: &Path) -> Result<(), String>;
+    fn sync_dir(&mut self, path: &Path) -> Result<(), String>;
+}
+
+struct StdDurableWriteOps;
+
+impl DurableWriteOps for StdDurableWriteOps {
+    fn create_dir_all(&mut self, path: &Path) -> Result<(), String> {
+        fs::create_dir_all(path).map_err(|error| error.to_string())
+    }
+
+    fn write_file(&mut self, path: &Path, body: &[u8]) -> Result<(), String> {
+        let mut file = File::create(path).map_err(|error| error.to_string())?;
+        file.write_all(body).map_err(|error| error.to_string())
+    }
+
+    fn sync_file(&mut self, path: &Path) -> Result<(), String> {
+        File::open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| error.to_string())
+    }
+
+    fn rename(&mut self, source: &Path, target: &Path) -> Result<(), String> {
+        fs::rename(source, target).map_err(|error| error.to_string())
+    }
+
+    fn sync_dir(&mut self, path: &Path) -> Result<(), String> {
+        File::open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn persist_body(path: &Path, body: &[u8]) -> Result<(), String> {
+    let mut ops = StdDurableWriteOps;
+    persist_body_with_ops(path, body, &mut ops)
+}
+
+fn persist_body_with_ops(
+    path: &Path,
+    body: &[u8],
+    ops: &mut impl DurableWriteOps,
+) -> Result<(), String> {
+    let parent = non_empty_parent(path);
+    if let Some(parent) = parent {
+        ops.create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    ops.write_file(&tmp_path, body)?;
+    ops.sync_file(&tmp_path)?;
+    ops.rename(&tmp_path, path)?;
+    if let Some(parent) = parent {
+        ops.sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+fn non_empty_parent(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingOps {
+        events: Vec<String>,
+    }
+
+    impl DurableWriteOps for RecordingOps {
+        fn create_dir_all(&mut self, path: &Path) -> Result<(), String> {
+            self.events.push(format!("mkdir:{}", path.display()));
+            Ok(())
+        }
+
+        fn write_file(&mut self, path: &Path, body: &[u8]) -> Result<(), String> {
+            self.events
+                .push(format!("write:{}:{}", path.display(), body.len()));
+            Ok(())
+        }
+
+        fn sync_file(&mut self, path: &Path) -> Result<(), String> {
+            self.events.push(format!("sync_file:{}", path.display()));
+            Ok(())
+        }
+
+        fn rename(&mut self, source: &Path, target: &Path) -> Result<(), String> {
+            self.events
+                .push(format!("rename:{}->{}", source.display(), target.display()));
+            Ok(())
+        }
+
+        fn sync_dir(&mut self, path: &Path) -> Result<(), String> {
+            self.events.push(format!("sync_dir:{}", path.display()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn durable_persist_syncs_temp_file_before_rename_and_parent_after() {
+        let mut ops = RecordingOps::default();
+        let path = PathBuf::from("/keeper/state.json");
+
+        persist_body_with_ops(&path, b"{}", &mut ops).expect("persist body");
+
+        assert_eq!(
+            ops.events,
+            vec![
+                "mkdir:/keeper",
+                "write:/keeper/state.json.tmp:2",
+                "sync_file:/keeper/state.json.tmp",
+                "rename:/keeper/state.json.tmp->/keeper/state.json",
+                "sync_dir:/keeper",
+            ]
+        );
+    }
 }

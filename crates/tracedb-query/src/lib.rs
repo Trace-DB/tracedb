@@ -32,7 +32,7 @@ use tracedb_planner::{
     ExplainOutput, FeatureFreshness, PlannerFeedback, Predicates, QueryFragment, QueryOutput,
     QueryPhaseTiming, QueryRow, ScoreComponents, Stats, TraceQuery, WorkBudget,
 };
-use tracedb_policy::ActorContext;
+use tracedb_policy::{ActorContext, Policy, VisibilityOracle};
 use tracedb_segment::SegmentRecord;
 use tracedb_store::{
     ReadSnapshot, RecordStore, RecordStoreDelta, ReplacementApplyTiming, StoredRecord,
@@ -44,6 +44,8 @@ const CHECKPOINT_FORMAT_VERSION: u32 = 3;
 const CHECKPOINT_LEGACY_COMPACT_FORMAT_VERSION: u32 = 2;
 const CHECKPOINT_LEGACY_JSON_FORMAT_VERSION: u32 = 1;
 const MIN_LEXICAL_CACHE_DOCUMENTS: usize = 2_048;
+const DEFAULT_LEXICAL_CACHE_CAPACITY: usize = 64;
+const POLICY_FIELD_NAME: &str = "__tracedb_policy";
 const CURSOR_TOKEN_PREFIX: &str = "tdbc1";
 const CURSOR_VERSION: u32 = 1;
 const DEFAULT_CURSOR_TTL_SECS: u64 = 60 * 60;
@@ -710,9 +712,77 @@ pub struct TraceDb {
     lexical_cache: Arc<Mutex<LexicalCorpusCache>>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct LexicalCorpusCache {
-    entries: BTreeMap<LexicalCacheKey, tracedb_text::PreparedTextCorpus>,
+    entries: BTreeMap<LexicalCacheKey, LexicalCacheEntry>,
+    capacity: usize,
+    tick: u64,
+}
+
+impl Default for LexicalCorpusCache {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            capacity: DEFAULT_LEXICAL_CACHE_CAPACITY,
+            tick: 0,
+        }
+    }
+}
+
+impl LexicalCorpusCache {
+    fn get(&mut self, key: &LexicalCacheKey) -> Option<tracedb_text::PreparedTextCorpus> {
+        let next_tick = self.next_tick();
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used = next_tick;
+        Some(entry.corpus.clone())
+    }
+
+    fn insert(&mut self, key: LexicalCacheKey, corpus: tracedb_text::PreparedTextCorpus) {
+        let next_tick = self.next_tick();
+        self.entries.insert(
+            key,
+            LexicalCacheEntry {
+                corpus,
+                last_used: next_tick,
+            },
+        );
+        self.evict_lru();
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.tick = 0;
+    }
+
+    fn next_tick(&mut self) -> u64 {
+        self.tick = self.tick.saturating_add(1);
+        self.tick
+    }
+
+    fn evict_lru(&mut self) {
+        while self.entries.len() > self.capacity {
+            let Some(key) = self
+                .entries
+                .iter()
+                .min_by(|left, right| {
+                    left.1
+                        .last_used
+                        .cmp(&right.1.last_used)
+                        .then_with(|| left.0.cmp(right.0))
+                })
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&key);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LexicalCacheEntry {
+    corpus: tracedb_text::PreparedTextCorpus,
+    last_used: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1750,7 +1820,7 @@ impl TraceDb {
         let scope = cursor_scope_for_query(actor, &query, limit);
         let cursor =
             resolve_cursor_state(&scope, query.cursor.as_deref(), self.manifest.latest_epoch)?;
-        self.query_with_timing_internal(query, cursor, Some(scope))
+        self.query_with_timing_internal(query, cursor, Some(scope), Some(actor))
     }
 
     pub fn query_with_timing(&self, query: HybridQuery) -> Result<TimedQueryOutput> {
@@ -1758,7 +1828,7 @@ impl TraceDb {
             offset: parse_legacy_cursor_offset(query.cursor.as_deref())?,
             snapshot_epoch: self.manifest.latest_epoch,
         };
-        self.query_with_timing_internal(query, cursor, None)
+        self.query_with_timing_internal(query, cursor, None, None)
     }
 
     fn query_with_timing_internal(
@@ -1766,6 +1836,7 @@ impl TraceDb {
         query: HybridQuery,
         cursor: CursorState,
         cursor_scope: Option<CursorScope>,
+        actor: Option<&ActorContext>,
     ) -> Result<TimedQueryOutput> {
         let total_started = Instant::now();
         let mut timing = QueryExecutionTiming::default();
@@ -1805,13 +1876,22 @@ impl TraceDb {
             });
         }
         let tenant_visibility_started = Instant::now();
+        let default_actor = actor
+            .is_none()
+            .then(|| default_query_actor(&query.tenant_id, read_epoch));
+        let actor = actor.or(default_actor.as_ref()).expect("actor resolved");
+        let visibility_oracle = VisibilityOracle;
         let visible = self
             .store
-            .visible_records_at(&query.table, &query.tenant_id, read_epoch);
+            .visible_records_at(&query.table, &query.tenant_id, read_epoch)
+            .into_iter()
+            .filter(|record| stored_record_visible(record, actor, &visibility_oracle))
+            .collect::<Vec<_>>();
         let sealed_records = self
             .sealed_segment_records(&query.table, &query.tenant_id)?
             .into_iter()
             .filter(|record| record.version_id <= read_epoch.get())
+            .filter(|record| segment_record_visible(record, actor, &visibility_oracle))
             .collect::<Vec<_>>();
         let tenant_mask_visible_records = visible.len();
         let tenant_visibility_ms = elapsed_ms(tenant_visibility_started);
@@ -1925,7 +2005,7 @@ impl TraceDb {
                 freshness: &query.freshness,
                 fallback_candidate_limit: query_has_evidence(&query).then_some(candidate_budget),
             },
-        );
+        )?;
         let access_path_build_ms = elapsed_ms(access_path_build_started);
         let mut planner_candidates = Vec::<Candidate>::new();
         let mut streams = Vec::<RankedStream>::new();
@@ -2273,7 +2353,7 @@ impl TraceDb {
             self.manifest.latest_epoch.get(),
             self.manifest.manifest_generation + 1
         );
-        self.publish_segment(segment_id)
+        self.publish_compacted_segment(segment_id, self.manifest.manifest_generation)
     }
 
     pub fn vacuum(&mut self) -> Result<usize> {
@@ -2351,6 +2431,67 @@ impl TraceDb {
         )?;
         let index_manifests = self.build_segment_indexes(&object, parent_manifest_generation)?;
         let mut manifest = durable_manifest;
+        manifest.segments.push(object.manifest());
+        manifest.indexes.extend(index_manifests);
+        manifest.manifest_generation += 1;
+        let previous_checksum = manifest.checksums.manifest_checksum;
+        manifest.checksums.parent_checksum = previous_checksum;
+        write_manifest(manifest_path, &mut manifest)?;
+        self.manifest = manifest;
+        self.clear_lexical_cache();
+        Ok(())
+    }
+
+    fn publish_compacted_segment(
+        &mut self,
+        segment_id: impl Into<String>,
+        parent_manifest_generation: u64,
+    ) -> Result<()> {
+        let _guard = WriteLock::acquire(&self.dir)?;
+        let segment_id = segment_id.into();
+        let manifest_path = self.dir.join("manifest.tdb");
+        let durable_manifest = read_manifest(&manifest_path)?;
+        if parent_manifest_generation != durable_manifest.manifest_generation {
+            return Err(TraceDbError::ManifestCorruption(format!(
+                "parent manifest generation mismatch: expected {}, got {parent_manifest_generation}",
+                durable_manifest.manifest_generation
+            )));
+        }
+        if durable_manifest
+            .segments
+            .iter()
+            .any(|segment| segment.segment_id == segment_id)
+        {
+            return Err(TraceDbError::ManifestCorruption(format!(
+                "compacted segment {} already exists",
+                segment_id
+            )));
+        }
+
+        let source_segment_ids = durable_manifest
+            .segments
+            .iter()
+            .filter(|segment| segment.state == tracedb_core::SegmentState::Published)
+            .map(|segment| segment.segment_id.clone())
+            .collect::<BTreeSet<_>>();
+        let generation = durable_manifest.manifest_generation + 1;
+        let object_path = self.dir.join("segments").join(format!("{segment_id}.tseg"));
+        let records = self.segment_records_for_snapshot()?;
+        let object = tracedb_segment::publish_segment_records_with_encryption(
+            &object_path,
+            &segment_id,
+            generation,
+            records,
+            self.encryption.as_ref(),
+        )?;
+        let index_manifests = self.build_segment_indexes(&object, parent_manifest_generation)?;
+        let mut manifest = durable_manifest;
+        manifest
+            .segments
+            .retain(|segment| !source_segment_ids.contains(&segment.segment_id));
+        manifest
+            .indexes
+            .retain(|index| !source_segment_ids.contains(&index.segment_id));
         manifest.segments.push(object.manifest());
         manifest.indexes.extend(index_manifests);
         manifest.manifest_generation += 1;
@@ -3023,7 +3164,7 @@ struct LexicalQueryReport {
     score_report: tracedb_text::TextScoreReport,
 }
 
-fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessPaths {
+fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> Result<QueryAccessPaths> {
     let QueryAccessInput {
         schema,
         visible,
@@ -3192,22 +3333,34 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessP
                 })
             })
             .collect();
-        vector_candidates.extend(sealed_records.iter().filter_map(|record| {
-            segment_vector_score(schema, record, vector_field.as_deref(), &vector_query).map(
-                |score| {
-                    segment_candidate(record, "VectorPath", score, |score| ScoreComponents {
-                        vector: Some(score),
-                        final_score: score,
-                        ..ScoreComponents::default()
-                    })
-                },
-            )
-        }));
+        if let Some(index_candidates) = db.sealed_vector_candidates_from_index_artifacts(
+            schema,
+            sealed_records,
+            vector_field.as_deref(),
+            &vector_query,
+            fallback_candidate_limit,
+        )? {
+            vector_candidates.extend(index_candidates);
+        } else {
+            vector_candidates.extend(sealed_records.iter().filter_map(|record| {
+                segment_vector_score(schema, record, vector_field.as_deref(), &vector_query).map(
+                    |score| {
+                        segment_candidate(record, "VectorPath", score, |score| ScoreComponents {
+                            vector: Some(score),
+                            final_score: score,
+                            ..ScoreComponents::default()
+                        })
+                    },
+                )
+            }));
+        }
         vector_candidates.sort_by(|left, right| {
             score_order(
                 left.score_components.final_score,
                 right.score_components.final_score,
             )
+            .then_with(|| left.record_id.cmp(&right.record_id))
+            .then_with(|| left.version_id.cmp(&right.version_id))
         });
     }
     paths.push(MemoryAccessPath {
@@ -3256,17 +3409,117 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> QueryAccessP
         timings.push(access_path_timing("TemporalPath", elapsed_ms(path_started)));
     }
 
-    QueryAccessPaths {
+    Ok(QueryAccessPaths {
         paths,
         timings,
         lexical_cache_hits,
         lexical_cache_misses,
         lexical_indexed_documents,
         lexical_scored_documents,
-    }
+    })
 }
 
 impl TraceDb {
+    fn sealed_vector_candidates_from_index_artifacts(
+        &self,
+        schema: &TableSchema,
+        sealed_records: &[SegmentRecord],
+        vector_field: Option<&str>,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<Option<Vec<Candidate>>> {
+        if sealed_records.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let Some(vector) = selected_vector_column(schema, vector_field) else {
+            return Ok(None);
+        };
+        let eligible = sealed_records
+            .iter()
+            .map(|record| ((record.record_id.clone(), record.version_id), record))
+            .collect::<BTreeMap<_, _>>();
+        let eligible_segment_ids = self
+            .manifest
+            .segments
+            .iter()
+            .filter(|segment| segment.state == tracedb_core::SegmentState::Published)
+            .filter(|segment| {
+                segment.table_set.is_empty()
+                    || segment.table_set.iter().any(|entry| entry == &schema.name)
+            })
+            .map(|segment| segment.segment_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        let mut used_artifact = false;
+        let mut candidates = Vec::new();
+        let mut seen = BTreeSet::new();
+        for index in self.manifest.indexes.iter().filter(|index| {
+            index.kind == "vector"
+                && index.state == IndexState::Ready
+                && eligible_segment_ids.contains(&index.segment_id)
+        }) {
+            let artifact = tracedb_index::read_index_artifact(
+                self.dir.join(&index.object_path),
+                self.encryption.as_ref(),
+            )
+            .map_err(|error| {
+                TraceDbError::ArtifactCorruption(format!(
+                    "index artifact {} failed verification: {error}",
+                    index.index_id
+                ))
+            })?;
+            let Some(vector_artifact) = artifact.as_vector() else {
+                continue;
+            };
+            used_artifact = true;
+            for score in vector_artifact.search_vector(&vector.name, query, limit) {
+                let key = (score.record_id.clone(), score.version_id);
+                let Some(record) = eligible.get(&key).copied() else {
+                    continue;
+                };
+                if seen.insert(key) {
+                    candidates.push(segment_candidate(
+                        record,
+                        "VectorPath",
+                        score.score,
+                        |score| ScoreComponents {
+                            vector: Some(score),
+                            final_score: score,
+                            ..ScoreComponents::default()
+                        },
+                    ));
+                }
+            }
+        }
+
+        if !used_artifact {
+            return Ok(None);
+        }
+
+        candidates.extend(sealed_records.iter().filter_map(|record| {
+            let key = (record.record_id.clone(), record.version_id);
+            if seen.contains(&key) {
+                return None;
+            }
+            segment_vector_score(schema, record, vector_field, query).map(|score| {
+                segment_candidate(record, "VectorPath", score, |score| ScoreComponents {
+                    vector: Some(score),
+                    final_score: score,
+                    ..ScoreComponents::default()
+                })
+            })
+        }));
+        candidates.sort_by(|left, right| {
+            score_order(
+                left.score_components.final_score,
+                right.score_components.final_score,
+            )
+            .then_with(|| left.record_id.cmp(&right.record_id))
+            .then_with(|| left.version_id.cmp(&right.version_id))
+        });
+        Ok(Some(candidates))
+    }
+
     fn score_prepared_lexical_corpus(
         &self,
         schema: &TableSchema,
@@ -3297,14 +3550,7 @@ impl TraceDb {
             text_columns: selected_text_columns(schema, text_field),
         };
 
-        if let Some(corpus) = self
-            .lexical_cache
-            .lock()
-            .unwrap()
-            .entries
-            .get(&key)
-            .cloned()
-        {
+        if let Some(corpus) = self.lexical_cache.lock().unwrap().get(&key) {
             return LexicalQueryReport {
                 cache_hit: true,
                 cache_miss: false,
@@ -3319,11 +3565,7 @@ impl TraceDb {
                 &lexical_documents(schema, visible, sealed_records, text_field),
             );
         let indexed_documents = corpus.document_count();
-        self.lexical_cache
-            .lock()
-            .unwrap()
-            .entries
-            .insert(key, corpus);
+        self.lexical_cache.lock().unwrap().insert(key, corpus);
         LexicalQueryReport {
             cache_hit: false,
             cache_miss: true,
@@ -3333,7 +3575,7 @@ impl TraceDb {
     }
 
     fn clear_lexical_cache(&self) {
-        self.lexical_cache.lock().unwrap().entries.clear();
+        self.lexical_cache.lock().unwrap().clear();
     }
 }
 
@@ -3587,6 +3829,52 @@ impl ScalarFields for BTreeMap<String, Value> {
     fn scalar_value(&self, column: &str) -> Option<&Value> {
         self.get(column)
     }
+}
+
+fn default_query_actor(tenant_id: &str, policy_epoch: Epoch) -> ActorContext {
+    ActorContext::managed_request(
+        tenant_id,
+        "local",
+        "main",
+        "legacy-query",
+        "query",
+        policy_epoch.get(),
+        vec!["records:read".to_string()],
+    )
+}
+
+fn stored_record_visible(
+    record: &StoredRecord,
+    actor: &ActorContext,
+    oracle: &VisibilityOracle,
+) -> bool {
+    let policy = policy_from_fields(&record.fields, &record.header.tenant_id);
+    oracle
+        .visible(
+            &record.header.record_id,
+            record.header.version_id.get(),
+            &policy,
+            actor,
+        )
+        .allowed
+}
+
+fn segment_record_visible(
+    record: &SegmentRecord,
+    actor: &ActorContext,
+    oracle: &VisibilityOracle,
+) -> bool {
+    let policy = policy_from_fields(&record.fields, &record.tenant_id);
+    oracle
+        .visible(&record.record_id, record.version_id, &policy, actor)
+        .allowed
+}
+
+fn policy_from_fields(fields: &impl ScalarFields, tenant_id: &str) -> Policy {
+    fields
+        .scalar_value(POLICY_FIELD_NAME)
+        .and_then(|value| serde_json::from_value::<Policy>(value.clone()).ok())
+        .unwrap_or_else(|| Policy::tenant(tenant_id))
 }
 
 fn scalar_filter_predicates(scalar_eq: &Map<String, Value>) -> Vec<String> {
@@ -4303,9 +4591,13 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
     let mut vector_field = None;
     let mut vector = None;
     let mut scalar_eq = Map::new();
+    let mut seen_scalar_eq = BTreeSet::new();
     let mut top_k = 10;
+    let mut top_k_seen = false;
     let mut freshness = FreshnessMode::Strict;
+    let mut freshness_seen = false;
     let mut explain = false;
+    let mut explain_seen = false;
 
     for (line_idx, raw_line) in input.lines().enumerate() {
         let line_number = line_idx + 1;
@@ -4334,6 +4626,12 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
             }
             "WHERE" => {
                 let (field, value) = parse_traceql_where(body, line_number)?;
+                if !seen_scalar_eq.insert(field.clone()) {
+                    return Err(invalid_traceql(
+                        line_number,
+                        format!("WHERE field {field:?} cannot be specified more than once"),
+                    ));
+                }
                 scalar_eq.insert(field, parse_traceql_value(value, line_number)?);
             }
             "MATCH" => {
@@ -4367,6 +4665,13 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
                 vector = Some(parsed_vector);
             }
             "FRESHNESS" => {
+                if freshness_seen {
+                    return Err(invalid_traceql(
+                        line_number,
+                        "FRESHNESS cannot be specified more than once",
+                    ));
+                }
+                freshness_seen = true;
                 let value = parse_traceql_single_argument("FRESHNESS", body, line_number)?;
                 freshness = match value.to_ascii_uppercase().as_str() {
                     "STRICT" => FreshnessMode::Strict,
@@ -4381,6 +4686,13 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
                 };
             }
             "LIMIT" => {
+                if top_k_seen {
+                    return Err(invalid_traceql(
+                        line_number,
+                        "LIMIT cannot be specified more than once",
+                    ));
+                }
+                top_k_seen = true;
                 let value = parse_traceql_single_argument("LIMIT", body, line_number)?;
                 top_k = value.parse::<usize>().map_err(|err| {
                     invalid_traceql(
@@ -4396,6 +4708,13 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
                 }
             }
             "EXPLAIN" => {
+                if explain_seen {
+                    return Err(invalid_traceql(
+                        line_number,
+                        "EXPLAIN cannot be specified more than once",
+                    ));
+                }
+                explain_seen = true;
                 if !body.trim().is_empty() {
                     return Err(invalid_traceql(
                         line_number,
@@ -4954,10 +5273,18 @@ fn parse_graphql_scalar_object(input: &str, name: &str) -> Result<Map<String, Va
 }
 
 fn parse_graphql_string(input: &str, name: &str) -> Result<String> {
-    match parse_graphql_value(input)? {
+    let input = input.trim();
+    if !input.starts_with('"') {
+        return Err(invalid_graphql_adapter(format!(
+            "{name} must be a quoted non-empty string"
+        )));
+    }
+    match serde_json::from_str::<Value>(input).map_err(|error| {
+        invalid_graphql_adapter(format!("{name} must be a valid JSON string: {error}"))
+    })? {
         Value::String(value) if !value.is_empty() => Ok(value),
         _ => Err(invalid_graphql_adapter(format!(
-            "{name} must be a non-empty string"
+            "{name} must be a quoted non-empty string"
         ))),
     }
 }
@@ -5129,7 +5456,11 @@ fn traceql_sqlish_select_from_str(input: &str) -> Result<HybridQuery> {
                 _ => return Err(invalid_sqlish("tenant_id must be a string value")),
             }
         } else {
-            scalar_eq.insert(field.to_string(), value);
+            if scalar_eq.insert(field.to_string(), value).is_some() {
+                return Err(invalid_sqlish(format!(
+                    "WHERE field {field:?} cannot be specified more than once"
+                )));
+            }
         }
     }
 
@@ -5152,7 +5483,7 @@ fn traceql_sqlish_select_from_str(input: &str) -> Result<HybridQuery> {
 
 fn reject_unsupported_sqlish_keywords(input: &str) -> Result<()> {
     for keyword in [
-        "JOIN", "GROUP", "ORDER", "HAVING", "UNION", "INSERT", "UPDATE", "DELETE", "DROP",
+        "JOIN", "GROUP", "ORDER", "HAVING", "UNION", "OR", "INSERT", "UPDATE", "DELETE", "DROP",
         "CREATE", "ALTER",
     ] {
         if find_sqlish_keyword(input, keyword).is_some() {
@@ -5531,6 +5862,24 @@ mod tests {
         }
     }
 
+    fn vector_record(id: &str, body: &str, embedding: [f32; 3]) -> RecordInput {
+        RecordInput {
+            table: "docs".to_string(),
+            id: id.to_string(),
+            tenant_id: "tenant-a".to_string(),
+            fields: json!({
+                "id": id,
+                "tenant": "tenant-a",
+                "category": "code",
+                "body": body,
+                "embedding": embedding,
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+        }
+    }
+
     fn stored_record(id: &str, body: &str) -> StoredRecord {
         StoredRecord {
             header: RecordHeader {
@@ -5684,6 +6033,43 @@ mod tests {
     }
 
     #[test]
+    fn traceql_query_string_rejects_duplicate_predicates_and_directives() {
+        for query in [
+            r#"
+            FROM docs
+            TENANT tenant-a
+            WHERE category = "code"
+            WHERE category = "notes"
+            "#,
+            r#"
+            FROM docs
+            TENANT tenant-a
+            FRESHNESS strict
+            FRESHNESS lazy
+            "#,
+            r#"
+            FROM docs
+            TENANT tenant-a
+            LIMIT 2
+            LIMIT 3
+            "#,
+            r#"
+            FROM docs
+            TENANT tenant-a
+            EXPLAIN
+            EXPLAIN
+            "#,
+        ] {
+            let error = traceql_query_from_str(query).expect_err("duplicate TraceQL rejected");
+
+            assert!(
+                matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("cannot be specified more than once")),
+                "unexpected duplicate TraceQL error: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn traceql_query_string_requires_table_and_tenant() {
         let error = traceql_query_from_str(
             r#"
@@ -5719,6 +6105,22 @@ mod tests {
     }
 
     #[test]
+    fn traceql_sqlish_select_rejects_duplicate_scalar_predicates() {
+        let error = traceql_query_from_str(
+            r#"
+            SELECT * FROM docs
+            WHERE tenant_id = "tenant-a" AND category = "code" AND category = "notes"
+            "#,
+        )
+        .expect_err("duplicate scalar predicate should fail");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("category") && message.contains("more than once")),
+            "unexpected duplicate SQL-ish error: {error}"
+        );
+    }
+
+    #[test]
     fn traceql_sqlish_select_rejects_join_compatibility_claims() {
         let error = traceql_query_from_str(
             r#"
@@ -5730,6 +6132,22 @@ mod tests {
 
         assert!(
             matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("SQL-ish"))
+        );
+    }
+
+    #[test]
+    fn traceql_sqlish_select_rejects_or_instead_of_dropping_predicate() {
+        let error = traceql_query_from_str(
+            r#"
+            SELECT * FROM docs
+            WHERE tenant_id = "tenant-a" OR status = "published"
+            "#,
+        )
+        .expect_err("OR should not be accepted by bounded SQL-ish adapter");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("OR") && message.contains("SQL-ish")),
+            "unexpected OR SQL-ish error: {error}"
         );
     }
 
@@ -5769,6 +6187,25 @@ mod tests {
         assert_eq!(query.top_k, 7);
         assert_eq!(query.freshness, FreshnessMode::AllowDirty);
         assert!(query.explain);
+    }
+
+    #[test]
+    fn graphql_query_rejects_unquoted_string_arguments() {
+        let error = graphql_query_from_str(
+            r#"
+            query {
+              docs(tenant_id: tenant-a, match: TraceDB) {
+                record_id
+              }
+            }
+            "#,
+        )
+        .expect_err("unquoted strings should not be accepted");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("invalid GraphQL adapter")),
+            "unexpected GraphQL string error: {error}"
+        );
     }
 
     #[test]
@@ -6130,6 +6567,68 @@ mod tests {
     }
 
     #[test]
+    fn query_as_filters_policy_hidden_records_before_candidate_generation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        db.put(RecordPutRequest::new(record(
+            "visible",
+            "policy oracle candidate",
+        )))
+        .expect("put visible");
+        let mut hidden = record("hidden", "policy oracle candidate");
+        hidden.fields.insert(
+            "__tracedb_policy".to_string(),
+            serde_json::to_value(
+                tracedb_policy::Policy::tenant("tenant-a")
+                    .with_visibility(tracedb_policy::VisibilityMode::Hidden),
+            )
+            .expect("policy json"),
+        );
+        db.put(RecordPutRequest::new(hidden)).expect("put hidden");
+
+        let actor = tracedb_policy::ActorContext::tenant_user("tenant-a", "user-a");
+        let output = db
+            .query_as(
+                &actor,
+                HybridQuery {
+                    table: "docs".to_string(),
+                    tenant_id: "tenant-a".to_string(),
+                    cursor: None,
+                    text_field: Some("body".to_string()),
+                    text: Some("policy oracle".to_string()),
+                    vector_field: None,
+                    vector: None,
+                    scalar_eq: Default::default(),
+                    graph_seed: None,
+                    temporal_as_of: None,
+                    top_k: 5,
+                    freshness: FreshnessMode::Strict,
+                    explain: true,
+                },
+            )
+            .expect("query");
+
+        assert_eq!(
+            output
+                .results
+                .iter()
+                .map(|row| row.record_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["visible"]
+        );
+        assert!(
+            output
+                .explain
+                .planner_candidates
+                .iter()
+                .all(|candidate| candidate.record_id != "hidden"),
+            "hidden policy record reached planner candidates: {:?}",
+            output.explain.planner_candidates
+        );
+    }
+
+    #[test]
     fn graphql_query_rejects_resolver_specific_features() {
         for query in [
             r#"
@@ -6248,6 +6747,45 @@ mod tests {
     }
 
     #[test]
+    fn lexical_cache_evicts_least_recently_used_entry_at_default_capacity() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = TraceDb::open(temp.path()).expect("open");
+        let schema = schema();
+        let large_records = (0..MIN_LEXICAL_CACHE_DOCUMENTS)
+            .map(|idx| stored_record(&format!("large-{idx}"), "agent memory lexical cache"))
+            .collect::<Vec<_>>();
+
+        for idx in 0..65 {
+            let report = db.score_prepared_lexical_corpus(
+                &schema,
+                "tenant-a",
+                &format!("key-{idx}"),
+                &large_records,
+                &[],
+                None,
+                "lexical cache",
+            );
+            assert!(report.cache_miss, "key-{idx} should populate cache");
+        }
+
+        let first_again = db.score_prepared_lexical_corpus(
+            &schema,
+            "tenant-a",
+            "key-0",
+            &large_records,
+            &[],
+            None,
+            "lexical cache",
+        );
+
+        assert_eq!(db.lexical_cache.lock().unwrap().entries.len(), 64);
+        assert!(
+            first_again.cache_miss,
+            "oldest cache entry should have been evicted"
+        );
+    }
+
+    #[test]
     fn sealed_segment_records_materialize_without_hot_store_copy() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut db = TraceDb::open(temp.path()).expect("open");
@@ -6284,6 +6822,144 @@ mod tests {
             vec!["sealed-only"]
         );
         assert_eq!(output.explain.final_visibility_guard_removed, 0);
+    }
+
+    #[test]
+    fn sealed_vector_query_uses_ready_vector_index_artifact() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        db.insert(vector_record(
+            "segment-nearest",
+            "sealed vector candidate",
+            [1.0, 0.0, 0.0],
+        ))
+        .expect("insert segment-nearest");
+        db.insert(vector_record(
+            "artifact-nearest",
+            "sealed vector candidate",
+            [0.0, 1.0, 0.0],
+        ))
+        .expect("insert artifact-nearest");
+        db.compact().expect("compact");
+
+        let vector_index = db
+            .manifest
+            .indexes
+            .iter()
+            .find(|index| index.kind == "vector")
+            .expect("vector index manifest")
+            .clone();
+        let index_path = temp.path().join(&vector_index.object_path);
+        let mut artifact =
+            tracedb_index::read_index_artifact(&index_path, None).expect("read vector index");
+        let tracedb_index::IndexPayload::Vector(vector) = &mut artifact.payload else {
+            panic!("vector payload expected");
+        };
+        for entry in &mut vector.entries {
+            if entry.record_id == "segment-nearest" {
+                entry.vector = vec![0.0, 1.0, 0.0];
+            } else if entry.record_id == "artifact-nearest" {
+                entry.vector = vec![1.0, 0.0, 0.0];
+            }
+        }
+        vector.neighbors = BTreeMap::new();
+        let checksum =
+            tracedb_index::write_index_artifact(&index_path, &artifact, None).expect("rewrite");
+        let payload_checksum = artifact.payload_checksum().expect("payload checksum");
+        let manifest_index = db
+            .manifest
+            .indexes
+            .iter_mut()
+            .find(|index| index.index_id == vector_index.index_id)
+            .expect("manifest vector index");
+        manifest_index.checksum = checksum;
+        manifest_index.payload_checksum = payload_checksum;
+        write_manifest(temp.path().join("manifest.tdb"), &mut db.manifest).expect("manifest");
+        db.store = RecordStore::default();
+
+        let output = db
+            .query(HybridQuery {
+                table: "docs".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                cursor: None,
+                text_field: None,
+                text: None,
+                vector_field: Some("embedding".to_string()),
+                vector: Some(vec![1.0, 0.0, 0.0]),
+                scalar_eq: Default::default(),
+                graph_seed: None,
+                temporal_as_of: None,
+                top_k: 1,
+                freshness: FreshnessMode::Strict,
+                explain: true,
+            })
+            .expect("query");
+
+        assert_eq!(
+            output.results.first().map(|row| row.record_id.as_str()),
+            Some("artifact-nearest")
+        );
+    }
+
+    #[test]
+    fn compaction_replaces_source_segments_and_vacuum_removes_superseded_artifacts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = TraceDb::open(temp.path()).expect("open");
+        db.apply_schema(schema()).expect("schema");
+        db.insert(record("a", "first compacted segment"))
+            .expect("insert a");
+
+        db.compact().expect("first compact");
+        let first_manifest = db.inspect_manifest().expect("first manifest");
+        assert_eq!(first_manifest.segments.len(), 1);
+        let old_segment_id = first_manifest.segments[0].segment_id.clone();
+        let old_segment_path = temp
+            .path()
+            .join("segments")
+            .join(format!("{old_segment_id}.tseg"));
+        let old_index_paths = first_manifest
+            .indexes
+            .iter()
+            .map(|index| temp.path().join(&index.object_path))
+            .collect::<Vec<_>>();
+        assert!(old_segment_path.exists());
+        assert!(old_index_paths.iter().all(|path| path.exists()));
+
+        db.insert(record("b", "second compacted segment"))
+            .expect("insert b");
+        db.compact().expect("second compact");
+        let compacted_manifest = db.inspect_manifest().expect("compacted manifest");
+        assert_eq!(
+            compacted_manifest.segments.len(),
+            1,
+            "compaction should replace source segments in the manifest"
+        );
+        assert_ne!(compacted_manifest.segments[0].segment_id, old_segment_id);
+        assert!(
+            compacted_manifest
+                .indexes
+                .iter()
+                .all(|index| index.segment_id == compacted_manifest.segments[0].segment_id),
+            "manifest indexes should only reference the compacted segment"
+        );
+
+        let removed = db.vacuum().expect("vacuum");
+        assert!(
+            removed >= 1 + old_index_paths.len(),
+            "vacuum should remove the old segment and its indexes, removed {removed}"
+        );
+        assert!(!old_segment_path.exists());
+        assert!(old_index_paths.iter().all(|path| !path.exists()));
+        let new_segment_path = temp.path().join("segments").join(format!(
+            "{}.tseg",
+            compacted_manifest.segments[0].segment_id
+        ));
+        assert!(new_segment_path.exists());
+        assert!(compacted_manifest
+            .indexes
+            .iter()
+            .all(|index| temp.path().join(&index.object_path).exists()));
     }
 
     #[test]

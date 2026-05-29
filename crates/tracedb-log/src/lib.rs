@@ -124,6 +124,7 @@ pub struct Wal {
     path: PathBuf,
     tail: Arc<Mutex<WalTail>>,
     encryption: Option<EncryptionContext>,
+    recovery_torn_tail: Option<TornWalTail>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -191,12 +192,17 @@ impl Wal {
         if !path.exists() {
             File::create(&path)?;
         }
-        let scan = scan_file(&path, encryption.as_ref())?;
+        let mut scan = scan_file(&path, encryption.as_ref())?;
+        let recovery_torn_tail = truncate_torn_tail_if_present(&path, &scan)?;
+        if recovery_torn_tail.is_some() {
+            scan.torn_tail = None;
+        }
         let tail = tail_from_scan(&path, &scan)?;
         Ok(Self {
             path,
             tail: Arc::new(Mutex::new(tail)),
             encryption,
+            recovery_torn_tail,
         })
     }
 
@@ -317,7 +323,11 @@ impl Wal {
     }
 
     pub fn scan_with_metadata(&self) -> Result<WalScan> {
-        scan_file(&self.path, self.encryption.as_ref())
+        let mut scan = scan_file(&self.path, self.encryption.as_ref())?;
+        if scan.torn_tail.is_none() {
+            scan.torn_tail = self.recovery_torn_tail.clone();
+        }
+        Ok(scan)
     }
 }
 
@@ -516,12 +526,27 @@ fn tail_from_scan(path: &Path, scan: &WalScan) -> Result<WalTail> {
     })
 }
 
+fn truncate_torn_tail_if_present(path: &Path, scan: &WalScan) -> Result<Option<TornWalTail>> {
+    let Some(torn_tail) = scan.torn_tail.clone() else {
+        return Ok(None);
+    };
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(torn_tail.offset)?;
+    file.sync_all()?;
+    drop(file);
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(Some(torn_tail))
+}
+
 fn scan_file(path: &Path, encryption: Option<&EncryptionContext>) -> Result<WalScan> {
     let mut file = File::open(path)?;
     let mut entries: Vec<WalEntry> = Vec::new();
     let mut offset = 0u64;
 
     loop {
+        let frame_start = offset;
         let mut header = [0u8; HEADER_LEN];
         let read = read_some(&mut file, &mut header)?;
         if read == 0 {
@@ -531,7 +556,7 @@ fn scan_file(path: &Path, encryption: Option<&EncryptionContext>) -> Result<WalS
             return Ok(WalScan {
                 entries,
                 torn_tail: Some(TornWalTail {
-                    offset,
+                    offset: frame_start,
                     lsn: None,
                     reason: "short_header".to_string(),
                     expected_len: HEADER_LEN,
@@ -583,7 +608,7 @@ fn scan_file(path: &Path, encryption: Option<&EncryptionContext>) -> Result<WalS
             return Ok(WalScan {
                 entries,
                 torn_tail: Some(TornWalTail {
-                    offset,
+                    offset: frame_start,
                     lsn: Some(Lsn::new(lsn)),
                     reason: "short_payload".to_string(),
                     expected_len: payload_len + std::mem::size_of::<u32>(),
@@ -604,7 +629,7 @@ fn scan_file(path: &Path, encryption: Option<&EncryptionContext>) -> Result<WalS
             return Ok(WalScan {
                 entries,
                 torn_tail: Some(TornWalTail {
-                    offset,
+                    offset: frame_start,
                     lsn: Some(Lsn::new(lsn)),
                     reason: "missing_commit_footer".to_string(),
                     expected_len: footer.len(),
@@ -849,5 +874,61 @@ mod tests {
         let commit: CommitRecord = serde_json::from_value(payload).expect("legacy commit");
 
         assert!(commit.job_events.is_empty());
+    }
+
+    #[test]
+    fn open_truncates_torn_tail_and_reports_recovery_once() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let wal = Wal::open(temp.path()).expect("wal");
+        let first = CommitRecord::empty(1, Epoch::new(1)).for_database("db", "main");
+        let second = CommitRecord::empty(2, Epoch::new(2)).for_database("db", "main");
+        wal.append_commit(&first).expect("append first");
+        wal.append_commit(&second).expect("append second");
+        let clean_len = std::fs::metadata(wal.path()).expect("clean metadata").len();
+        let last = wal.scan().expect("scan").pop().expect("last entry");
+        drop(wal);
+
+        let torn = CommitRecord::empty(3, Epoch::new(3)).for_database("db", "main");
+        let frame =
+            build_commit_frame(&torn, last.lsn.next(), last.checksum).expect("torn frame bytes");
+        let torn_payload_len = HEADER_LEN + (frame.frame.len() - HEADER_LEN) / 2;
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(temp.path().join("wal/000001.twal"))
+            .expect("open wal for torn append");
+        file.write_all(&frame.frame[..torn_payload_len])
+            .expect("write torn frame");
+        file.sync_data().expect("sync torn frame");
+        drop(file);
+        assert!(
+            std::fs::metadata(temp.path().join("wal/000001.twal"))
+                .expect("torn metadata")
+                .len()
+                > clean_len
+        );
+
+        let recovered = Wal::open(temp.path()).expect("recover torn tail");
+        assert_eq!(
+            std::fs::metadata(recovered.path())
+                .expect("recovered metadata")
+                .len(),
+            clean_len
+        );
+        let scan = recovered.scan_with_metadata().expect("recovered scan");
+        assert_eq!(scan.entries.len(), 2);
+        let torn_tail = scan.torn_tail.expect("recovery metadata");
+        assert_eq!(torn_tail.lsn, Some(last.lsn.next()));
+        assert_eq!(torn_tail.reason, "short_payload");
+        drop(recovered);
+
+        let clean = Wal::open(temp.path()).expect("clean reopen");
+        assert!(
+            clean
+                .scan_with_metadata()
+                .expect("clean scan")
+                .torn_tail
+                .is_none(),
+            "recovery metadata must not persist after the truncated file is reopened"
+        );
     }
 }

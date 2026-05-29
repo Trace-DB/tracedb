@@ -18,6 +18,13 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = Path("docs/platform-contract-v0.json")
 DEFAULT_SURFACES = ["http_direct", "rust_sdk"]
+TENANT_A_ACTOR_HEADERS = {
+    "x-tracedb-tenant-id": "tenant-a",
+    "x-tracedb-database-id": "local",
+    "x-tracedb-branch-id": "main",
+    "x-tracedb-token-identity": "platform-conformance",
+    "x-tracedb-request-id": "platform-conformance",
+}
 PYTHON_SDK_CONFORMANCE_EVIDENCE = "installed package + clients/python/http_smoke.py"
 TRACEQL_NATIVE_CONFORMANCE_EVIDENCE = "POST /v1/traceql native TraceDB command statements"
 GRAPHQL_NATIVE_CONFORMANCE_EVIDENCE = "POST /v1/graphql native GraphQL data/errors envelope"
@@ -877,7 +884,13 @@ def traceql_sqlish_conformance_summary(base_url: str) -> dict[str, Any]:
         'SELECT * FROM docs WHERE tenant_id = "tenant-a" '
         'AND status = "reviewed" LIMIT 3'
     )
-    _, payload = request_json(base_url, "POST", "/v1/traceql", {"query": sqlish_query})
+    _, payload = request_json(
+        base_url,
+        "POST",
+        "/v1/traceql",
+        {"query": sqlish_query},
+        headers=TENANT_A_ACTOR_HEADERS,
+    )
     results = payload.get("results")
     if not isinstance(results, list):
         raise RuntimeError(f"SQL-ish TraceQL response missing results list: {payload}")
@@ -893,6 +906,7 @@ def traceql_sqlish_conformance_summary(base_url: str) -> dict[str, Any]:
         "POST",
         "/v1/traceql",
         {"query": f"EXPLAIN {sqlish_query}"},
+        headers=TENANT_A_ACTOR_HEADERS,
     )
     if not isinstance(explain_payload.get("results"), list) or not isinstance(
         explain_payload.get("explain"),
@@ -911,6 +925,7 @@ def traceql_sqlish_conformance_summary(base_url: str) -> dict[str, Any]:
                 'WHERE tenant_id = "tenant-a"'
             )
         },
+        headers=TENANT_A_ACTOR_HEADERS,
         expected_status=400,
     )
     invalid_error = invalid_payload.get("error")

@@ -11,16 +11,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 #[cfg(test)]
 use tokio::sync::RwLockReadGuard;
+use tokio::sync::{Mutex as AsyncMutex, RwLock};
 use tower::limit::ConcurrencyLimitLayer;
 use tower::load_shed::LoadShedLayer;
 use tower::timeout::TimeoutLayer;
@@ -99,13 +100,119 @@ impl EngineServerConfig {
 #[derive(Clone)]
 pub struct EngineHandle {
     db: Arc<RwLock<TraceDb>>,
+    shard_key: ShardKey,
+    root_dir: Arc<PathBuf>,
+    shards: Arc<RwLock<HashMap<ShardKey, Arc<RwLock<TraceDb>>>>>,
+    job_catalogs: Arc<RwLock<HashMap<ShardKey, Arc<AsyncMutex<ServerJobRuntime>>>>>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ShardKey {
+    database_id: String,
+    branch_id: String,
+}
+
+fn default_shard_key() -> ShardKey {
+    ShardKey {
+        database_id: "local".to_string(),
+        branch_id: "main".to_string(),
+    }
+}
+
+fn is_default_shard_key(key: &ShardKey) -> bool {
+    (key.database_id == "local" && key.branch_id == "main")
+        || (key.database_id == "db_local" && key.branch_id == "db_local:main")
+}
+
+fn shard_path(root_dir: &Path, key: &ShardKey) -> PathBuf {
+    root_dir
+        .join("shards")
+        .join(safe_shard_component(&key.database_id))
+        .join(safe_shard_component(&key.branch_id))
+}
+
+fn safe_shard_component(value: &str) -> String {
+    let mut output = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-' => {
+                output.push(byte as char)
+            }
+            _ => output.push_str(&format!("_{byte:02x}")),
+        }
+    }
+    if output.is_empty() {
+        "_empty".to_string()
+    } else {
+        output
+    }
+}
+
+fn write_shard_receipt(shard_dir: &Path, key: &ShardKey) -> std::io::Result<()> {
+    let receipt = json!({
+        "format_version": 1,
+        "database_id": key.database_id,
+        "branch_id": key.branch_id,
+        "path_encoding": "tracedb-shard-component-v1",
+    })
+    .to_string();
+    fs::write(shard_dir.join("shard.receipt.json"), receipt)
 }
 
 impl EngineHandle {
     pub fn open(db_path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let root_dir = db_path.as_ref().to_path_buf();
+        let db = Arc::new(RwLock::new(TraceDb::open(&root_dir).map_err(to_io_error)?));
+        let default_key = default_shard_key();
+        let mut shards = HashMap::new();
+        shards.insert(default_key.clone(), Arc::clone(&db));
+        shards.insert(
+            ShardKey {
+                database_id: "db_local".to_string(),
+                branch_id: "db_local:main".to_string(),
+            },
+            Arc::clone(&db),
+        );
         Ok(Self {
-            db: Arc::new(RwLock::new(TraceDb::open(db_path).map_err(to_io_error)?)),
+            db,
+            shard_key: default_key,
+            root_dir: Arc::new(root_dir),
+            shards: Arc::new(RwLock::new(shards)),
+            job_catalogs: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    async fn for_actor(&self, actor: &ActorContext) -> std::io::Result<Self> {
+        let key = ShardKey {
+            database_id: actor.database_id.clone(),
+            branch_id: actor.branch_id.clone(),
+        };
+        if is_default_shard_key(&key) {
+            return Ok(self.clone_with_db(key, Arc::clone(&self.db)));
+        }
+        if let Some(db) = self.shards.read().await.get(&key).cloned() {
+            return Ok(self.clone_with_db(key, db));
+        }
+        let mut shards = self.shards.write().await;
+        if let Some(db) = shards.get(&key).cloned() {
+            return Ok(self.clone_with_db(key, db));
+        }
+        let shard_dir = shard_path(&self.root_dir, &key);
+        fs::create_dir_all(&shard_dir)?;
+        write_shard_receipt(&shard_dir, &key)?;
+        let db = Arc::new(RwLock::new(TraceDb::open(&shard_dir).map_err(to_io_error)?));
+        shards.insert(key.clone(), Arc::clone(&db));
+        Ok(self.clone_with_db(key, db))
+    }
+
+    fn clone_with_db(&self, shard_key: ShardKey, db: Arc<RwLock<TraceDb>>) -> Self {
+        Self {
+            db,
+            shard_key,
+            root_dir: Arc::clone(&self.root_dir),
+            shards: Arc::clone(&self.shards),
+            job_catalogs: Arc::clone(&self.job_catalogs),
+        }
     }
 
     async fn inspect_manifest(&self) -> std::io::Result<(TraceDbManifest, bool)> {
@@ -326,21 +433,37 @@ impl EngineHandle {
             .map_err(to_io_error)
     }
 
+    async fn job_runtime(&self) -> std::io::Result<Arc<AsyncMutex<ServerJobRuntime>>> {
+        if let Some(runtime) = self.job_catalogs.read().await.get(&self.shard_key).cloned() {
+            return Ok(runtime);
+        }
+        let mut runtimes = self.job_catalogs.write().await;
+        if let Some(runtime) = runtimes.get(&self.shard_key).cloned() {
+            return Ok(runtime);
+        }
+        let runtime = Arc::new(AsyncMutex::new(ServerJobRuntime::open(
+            &self.root_dir,
+            &self.shard_key,
+        )?));
+        runtimes.insert(self.shard_key.clone(), Arc::clone(&runtime));
+        Ok(runtime)
+    }
+
     pub async fn enqueue_job(
         &self,
         kind: tracedb_jobs::JobKind,
         target: impl Into<String>,
         idempotency_key: impl Into<String>,
     ) -> std::io::Result<tracedb_jobs::TraceJob> {
-        self.db
-            .write()
-            .await
-            .enqueue_job(kind, target, idempotency_key)
-            .map_err(to_io_error)
+        let runtime = self.job_runtime().await?;
+        let mut runtime = runtime.lock().await;
+        runtime.enqueue(kind, target, idempotency_key)
     }
 
     pub async fn jobs(&self) -> std::io::Result<Vec<tracedb_jobs::TraceJob>> {
-        self.db.read().await.jobs().map_err(to_io_error)
+        let runtime = self.job_runtime().await?;
+        let runtime = runtime.lock().await;
+        Ok(runtime.jobs())
     }
 
     pub async fn lease_job(
@@ -349,11 +472,9 @@ impl EngineHandle {
         kind: tracedb_jobs::JobKind,
         lease_ms: u64,
     ) -> std::io::Result<Option<tracedb_jobs::TraceJob>> {
-        self.db
-            .write()
-            .await
-            .lease_job(worker_id, kind, now_ms(), lease_ms)
-            .map_err(to_io_error)
+        let runtime = self.job_runtime().await?;
+        let mut runtime = runtime.lock().await;
+        runtime.lease(worker_id, kind, now_ms(), lease_ms)
     }
 
     pub async fn heartbeat_job(
@@ -362,11 +483,9 @@ impl EngineHandle {
         lease_token: &str,
         lease_ms: u64,
     ) -> std::io::Result<tracedb_jobs::TraceJob> {
-        self.db
-            .write()
-            .await
-            .heartbeat_job(job_id, lease_token, now_ms(), lease_ms)
-            .map_err(to_io_error)
+        let runtime = self.job_runtime().await?;
+        let mut runtime = runtime.lock().await;
+        runtime.heartbeat(job_id, lease_token, now_ms(), lease_ms)
     }
 
     pub async fn complete_job(
@@ -374,11 +493,9 @@ impl EngineHandle {
         job_id: &str,
         lease_token: &str,
     ) -> std::io::Result<tracedb_jobs::TraceJob> {
-        self.db
-            .write()
-            .await
-            .complete_job(job_id, lease_token)
-            .map_err(to_io_error)
+        let runtime = self.job_runtime().await?;
+        let mut runtime = runtime.lock().await;
+        runtime.complete(job_id, lease_token)
     }
 
     pub async fn fail_job(
@@ -388,17 +505,228 @@ impl EngineHandle {
         error: &str,
         permanent: bool,
     ) -> std::io::Result<tracedb_jobs::TraceJob> {
-        self.db
-            .write()
-            .await
-            .fail_job(job_id, lease_token, error, permanent, now_ms())
-            .map_err(to_io_error)
+        let runtime = self.job_runtime().await?;
+        let mut runtime = runtime.lock().await;
+        runtime.fail(job_id, lease_token, error, permanent, now_ms())
     }
 
     #[cfg(test)]
     async fn hold_read_snapshot_for_test(&self) -> RwLockReadGuard<'_, TraceDb> {
         self.db.read().await
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ServerJobCheckpoint {
+    format_version: u32,
+    shard: ServerJobShardReceipt,
+    catalog: tracedb_jobs::JobCatalog,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ServerJobShardReceipt {
+    database_id: String,
+    branch_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct ServerJobRuntime {
+    catalog: tracedb_jobs::JobCatalog,
+    checkpoint_path: PathBuf,
+    events_path: PathBuf,
+    shard: ShardKey,
+}
+
+impl ServerJobRuntime {
+    fn open(root_dir: &Path, shard: &ShardKey) -> std::io::Result<Self> {
+        let dir = job_runtime_dir(root_dir, shard);
+        fs::create_dir_all(&dir)?;
+        let checkpoint_path = dir.join("catalog.json");
+        let events_path = dir.join("events.jsonl");
+        let catalog = if checkpoint_path.exists() {
+            let body = fs::read_to_string(&checkpoint_path)?;
+            serde_json::from_str::<ServerJobCheckpoint>(&body)
+                .map_err(to_io_error)?
+                .catalog
+        } else {
+            tracedb_jobs::JobCatalog::default()
+        };
+        let mut runtime = Self {
+            catalog,
+            checkpoint_path,
+            events_path,
+            shard: shard.clone(),
+        };
+        runtime.replay_events()?;
+        runtime.persist_checkpoint()?;
+        Ok(runtime)
+    }
+
+    fn enqueue(
+        &mut self,
+        kind: tracedb_jobs::JobKind,
+        target: impl Into<String>,
+        idempotency_key: impl Into<String>,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        let job = self
+            .catalog
+            .enqueue(kind, target, idempotency_key)
+            .map_err(invalid_job_command)?;
+        self.persist_event(tracedb_jobs::JobEvent::enqueued(job.clone()))?;
+        self.persist_checkpoint()?;
+        Ok(job)
+    }
+
+    fn jobs(&self) -> Vec<tracedb_jobs::TraceJob> {
+        self.catalog.jobs()
+    }
+
+    fn lease(
+        &mut self,
+        worker_id: tracedb_jobs::WorkerId,
+        kind: tracedb_jobs::JobKind,
+        now_ms: u64,
+        lease_ms: u64,
+    ) -> std::io::Result<Option<tracedb_jobs::TraceJob>> {
+        let Some(job) = self
+            .catalog
+            .lease_next_at(worker_id.clone(), kind, now_ms, lease_ms)
+            .map_err(invalid_job_command)?
+        else {
+            return Ok(None);
+        };
+        self.persist_event(tracedb_jobs::JobEvent::leased(
+            job.job_id.clone(),
+            worker_id,
+            job.lease_token.clone().unwrap_or_default(),
+            job.lease_expires_at_ms
+                .unwrap_or(now_ms.saturating_add(lease_ms)),
+        ))?;
+        self.persist_checkpoint()?;
+        Ok(Some(job))
+    }
+
+    fn heartbeat(
+        &mut self,
+        job_id: &str,
+        lease_token: &str,
+        now_ms: u64,
+        lease_ms: u64,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        let job = self
+            .catalog
+            .heartbeat(job_id, lease_token, now_ms, lease_ms)
+            .map_err(invalid_job_command)?;
+        self.persist_event(tracedb_jobs::JobEvent::Heartbeat {
+            job_id: job_id.to_string(),
+            lease_token: lease_token.to_string(),
+            lease_expires_at_ms: job
+                .lease_expires_at_ms
+                .unwrap_or(now_ms.saturating_add(lease_ms)),
+        })?;
+        self.persist_checkpoint()?;
+        Ok(job)
+    }
+
+    fn complete(
+        &mut self,
+        job_id: &str,
+        lease_token: &str,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        let job = self
+            .catalog
+            .complete(job_id, Some(lease_token))
+            .map_err(invalid_job_command)?;
+        self.persist_event(tracedb_jobs::JobEvent::completed(
+            job_id.to_string(),
+            lease_token.to_string(),
+        ))?;
+        self.persist_checkpoint()?;
+        Ok(job)
+    }
+
+    fn fail(
+        &mut self,
+        job_id: &str,
+        lease_token: Option<&str>,
+        error: &str,
+        permanent: bool,
+        now_ms: u64,
+    ) -> std::io::Result<tracedb_jobs::TraceJob> {
+        let job = self
+            .catalog
+            .fail(job_id, lease_token, error, permanent, now_ms)
+            .map_err(invalid_job_command)?;
+        self.persist_event(tracedb_jobs::JobEvent::Failed {
+            job_id: job_id.to_string(),
+            lease_token: lease_token.map(str::to_string),
+            error: error.to_string(),
+            permanent,
+            next_attempt_after_ms: now_ms,
+        })?;
+        self.persist_checkpoint()?;
+        Ok(job)
+    }
+
+    fn replay_events(&mut self) -> std::io::Result<()> {
+        if !self.events_path.exists() {
+            return Ok(());
+        }
+        let body = fs::read_to_string(&self.events_path)?;
+        for line in body.lines().filter(|line| !line.trim().is_empty()) {
+            let event =
+                serde_json::from_str::<tracedb_jobs::JobEvent>(line).map_err(to_io_error)?;
+            self.catalog
+                .apply_event(event)
+                .map_err(invalid_job_command)?;
+        }
+        Ok(())
+    }
+
+    fn persist_event(&self, event: tracedb_jobs::JobEvent) -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.events_path)?;
+        let body = serde_json::to_string(&event).map_err(to_io_error)?;
+        writeln!(file, "{body}")?;
+        file.sync_all()
+    }
+
+    fn persist_checkpoint(&self) -> std::io::Result<()> {
+        let checkpoint = ServerJobCheckpoint {
+            format_version: 1,
+            shard: ServerJobShardReceipt {
+                database_id: self.shard.database_id.clone(),
+                branch_id: self.shard.branch_id.clone(),
+            },
+            catalog: self.catalog.clone(),
+        };
+        let body = serde_json::to_vec_pretty(&checkpoint).map_err(to_io_error)?;
+        let tmp_path = self.checkpoint_path.with_extension("json.tmp");
+        fs::write(&tmp_path, body)?;
+        let tmp = fs::File::open(&tmp_path)?;
+        tmp.sync_all()?;
+        fs::rename(&tmp_path, &self.checkpoint_path)?;
+        if let Some(parent) = self.checkpoint_path.parent() {
+            let parent = fs::File::open(parent)?;
+            parent.sync_all()?;
+        }
+        Ok(())
+    }
+}
+
+fn job_runtime_dir(root_dir: &Path, shard: &ShardKey) -> PathBuf {
+    if is_default_shard_key(shard) {
+        root_dir.join("jobs")
+    } else {
+        shard_path(root_dir, shard).join("jobs")
+    }
+}
+
+fn invalid_job_command(error: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -749,6 +1077,7 @@ async fn handle_request_text(
         .or_else(|| request.split("\n\n").nth(1))
         .unwrap_or_default();
     let actor = actor_context_from_request(request, body, &request_id);
+    let engine = engine.for_actor(&actor).await?;
     let body_hash = stable_body_hash(body.as_bytes());
     let idempotency_cache_key = header_value(&request, "idempotency-key")
         .filter(|key| !key.is_empty())
@@ -1570,10 +1899,25 @@ fn split_traceql_command(input: &str) -> Option<(&str, &str)> {
             && trimmed[..command.len()].eq_ignore_ascii_case(command)
             && trimmed.as_bytes()[command.len()].is_ascii_whitespace()
         {
-            return Some((command, trimmed[command.len()..].trim()));
+            let payload = trimmed[command.len()..].trim();
+            if command == "EXPLAIN" && starts_with_sqlish_select_payload(payload) {
+                continue;
+            }
+            return Some((command, payload));
         }
     }
     None
+}
+
+fn starts_with_sqlish_select_payload(input: &str) -> bool {
+    let trimmed = input.trim_start();
+    trimmed
+        .get(.."SELECT".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("SELECT"))
+        && trimmed["SELECT".len()..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
 }
 
 fn restore_value_from_payload(payload: &str) -> std::io::Result<Value> {
@@ -2351,6 +2695,127 @@ mod tests {
             .await
             .expect("scan");
         assert_eq!(scanned.returned_count, 2);
+    }
+
+    #[tokio::test]
+    async fn engine_handle_physically_isolates_database_branch_shards() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = EngineHandle::open(temp.path()).expect("engine handle");
+        let actor_a = ActorContext::managed_request(
+            "tenant-a",
+            "db_a",
+            "db_a:main",
+            "token-a",
+            "request-a",
+            0,
+            vec!["records:read".to_string(), "records:write".to_string()],
+        );
+        let actor_b = ActorContext::managed_request(
+            "tenant-a",
+            "db_b",
+            "db_b:main",
+            "token-b",
+            "request-b",
+            0,
+            vec!["records:read".to_string(), "records:write".to_string()],
+        );
+        let shard_a = root.for_actor(&actor_a).await.expect("shard a");
+        let shard_b = root.for_actor(&actor_b).await.expect("shard b");
+
+        shard_a
+            .apply_schema(runtime_test_schema())
+            .await
+            .expect("schema a");
+        shard_b
+            .apply_schema(runtime_test_schema())
+            .await
+            .expect("schema b");
+        shard_a
+            .put(RecordPutRequest::new(runtime_test_record(
+                "same",
+                "from shard a",
+            )))
+            .await
+            .expect("put a");
+        shard_b
+            .put(RecordPutRequest::new(runtime_test_record(
+                "same",
+                "from shard b",
+            )))
+            .await
+            .expect("put b");
+
+        let read_a = shard_a
+            .get_as(&actor_a, RecordGetRequest::new("docs", "tenant-a", "same"))
+            .await
+            .expect("get a")
+            .expect("record a");
+        let read_b = shard_b
+            .get_as(&actor_b, RecordGetRequest::new("docs", "tenant-a", "same"))
+            .await
+            .expect("get b")
+            .expect("record b");
+
+        assert_eq!(read_a.fields["body"], json!("from shard a"));
+        assert_eq!(read_b.fields["body"], json!("from shard b"));
+        assert!(temp
+            .path()
+            .join("shards")
+            .join("db_a")
+            .join("db_a_3amain")
+            .join("shard.receipt.json")
+            .exists());
+        assert!(temp
+            .path()
+            .join("shards")
+            .join("db_b")
+            .join("db_b_3amain")
+            .join("shard.receipt.json")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn job_catalog_does_not_wait_on_data_plane_read_lock_and_replays() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let engine = EngineHandle::open(temp.path()).expect("engine handle");
+        let _read_snapshot = engine.hold_read_snapshot_for_test().await;
+
+        let job = tokio::time::timeout(
+            Duration::from_millis(50),
+            engine.enqueue_job(
+                tracedb_jobs::JobKind::CompactSegment,
+                "segment:seg-1",
+                "compact:seg-1",
+            ),
+        )
+        .await
+        .expect("job enqueue should not wait behind data-plane read lock")
+        .expect("enqueue");
+        assert_eq!(job.status, tracedb_jobs::JobStatus::Queued);
+        drop(_read_snapshot);
+
+        let leased = engine
+            .lease_job(
+                tracedb_jobs::WorkerId::new("worker-1"),
+                tracedb_jobs::JobKind::CompactSegment,
+                30_000,
+            )
+            .await
+            .expect("lease")
+            .expect("leased job");
+        assert_eq!(leased.job_id, job.job_id);
+        assert_eq!(leased.status, tracedb_jobs::JobStatus::Leased);
+
+        let reopened = EngineHandle::open(temp.path()).expect("reopen engine");
+        let jobs = reopened.jobs().await.expect("jobs after reopen");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].job_id, job.job_id);
+        assert_eq!(jobs[0].status, tracedb_jobs::JobStatus::Leased);
+        assert_eq!(
+            jobs[0].lease_owner,
+            Some(tracedb_jobs::WorkerId::new("worker-1"))
+        );
+        assert!(temp.path().join("jobs").join("catalog.json").exists());
     }
 
     #[test]

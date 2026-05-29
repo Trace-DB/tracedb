@@ -5,17 +5,10 @@ use serde_json::{json, Map, Value};
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::pin::Pin;
-use std::sync::{
-    mpsc::{self, TryRecvError},
-    Arc, Mutex,
-};
-use std::task::{Context, Poll, Waker};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracedb_features::FeatureFreshnessMode;
 use tracedb_query::{
     FreshnessMode, HybridExplain, HybridQuery, HybridQueryRow, RecordDeleteRequest,
@@ -740,15 +733,16 @@ impl TraceDbClient {
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<Value> {
         let attempts = self.request_attempts(method, path, options);
-        let mut last_error = None;
-        for _ in 0..attempts {
+        for attempt in 0..attempts {
             match self.request_json_once(method, path, body, options) {
                 Ok(value) => return Ok(value),
-                Err(error) if is_retryable_error(&error) => last_error = Some(error),
+                Err(error) if is_retryable_error(&error) && attempt + 1 < attempts => {
+                    thread::sleep(retry_backoff_delay(attempt));
+                }
                 Err(error) => return Err(error),
             }
         }
-        Err(last_error.expect("at least one request attempt"))
+        unreachable!("request attempts should be at least one")
     }
 
     fn request_attempts(&self, method: &str, path: &str, options: &TraceDbRequestOptions) -> u8 {
@@ -808,6 +802,12 @@ impl TraceDbClient {
         stream
             .read_to_string(&mut response)
             .map_err(|error| map_request_io_error(method, &request_path, timeout, error))?;
+        if response.is_empty() {
+            return Err(TraceDbClientError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "empty HTTP response",
+            )));
+        }
         parse_response(method, &request_path, &response)
     }
 
@@ -905,29 +905,37 @@ impl TraceDbClient {
 
     fn actor_headers(&self, options: &TraceDbRequestOptions) -> TraceDbClientResult<String> {
         let mut headers = String::new();
+        for (name, value) in self.actor_header_pairs(options)? {
+            headers.push_str(&header_line(name, &value)?);
+        }
+        Ok(headers)
+    }
+
+    fn actor_header_pairs(
+        &self,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Vec<(&'static str, String)>> {
+        let mut headers = Vec::new();
         if let Some(actor) = &options.actor_context {
-            headers.push_str(&header_line("x-tracedb-tenant-id", &actor.tenant_id)?);
-            headers.push_str(&header_line("x-tracedb-database-id", &actor.database_id)?);
-            headers.push_str(&header_line("x-tracedb-branch-id", &actor.branch_id)?);
-            headers.push_str(&header_line(
-                "x-tracedb-token-identity",
-                &actor.token_identity,
-            )?);
-            headers.push_str(&header_line("x-tracedb-request-id", &actor.request_id)?);
-            headers.push_str(&header_line(
-                "x-tracedb-policy-epoch",
-                &actor.policy_epoch.to_string(),
-            )?);
+            headers.push(("x-tracedb-tenant-id", actor.tenant_id.clone()));
+            headers.push(("x-tracedb-database-id", actor.database_id.clone()));
+            headers.push(("x-tracedb-branch-id", actor.branch_id.clone()));
+            headers.push(("x-tracedb-token-identity", actor.token_identity.clone()));
+            headers.push(("x-tracedb-request-id", actor.request_id.clone()));
+            headers.push(("x-tracedb-policy-epoch", actor.policy_epoch.to_string()));
             if !actor.scopes.is_empty() {
-                headers.push_str(&header_line("x-tracedb-scopes", &actor.scopes.join(","))?);
+                headers.push(("x-tracedb-scopes", actor.scopes.join(",")));
             }
         } else {
             if let Some(database_id) = &self.config.database_id {
-                headers.push_str(&header_line("x-tracedb-database-id", database_id)?);
+                headers.push(("x-tracedb-database-id", database_id.clone()));
             }
             if let Some(branch_id) = &self.config.branch_id {
-                headers.push_str(&header_line("x-tracedb-branch-id", branch_id)?);
+                headers.push(("x-tracedb-branch-id", branch_id.clone()));
             }
+        }
+        for (name, value) in &headers {
+            validate_header_value(name, value)?;
         }
         Ok(headers)
     }
@@ -936,17 +944,30 @@ impl TraceDbClient {
 #[derive(Clone, Debug)]
 pub struct TraceDbAsyncClient {
     inner: TraceDbClient,
+    http_client: reqwest::Client,
 }
 
 impl TraceDbAsyncClient {
     pub fn new(config: TraceDbClientConfig) -> Self {
+        let http_client = reqwest::Client::builder()
+            .pool_max_idle_per_host(16)
+            .build()
+            .expect("TraceDB async HTTP client configuration is valid");
         Self {
             inner: TraceDbClient::new(config),
+            http_client,
         }
     }
 
     pub fn from_blocking(client: TraceDbClient) -> Self {
-        Self { inner: client }
+        let http_client = reqwest::Client::builder()
+            .pool_max_idle_per_host(16)
+            .build()
+            .expect("TraceDB async HTTP client configuration is valid");
+        Self {
+            inner: client,
+            http_client,
+        }
     }
 
     pub fn blocking_client(&self) -> &TraceDbClient {
@@ -970,55 +991,56 @@ impl TraceDbAsyncClient {
         body: Option<&Value>,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<Value> {
-        let method = method.to_string();
-        let path = path.to_string();
-        let body = body.cloned();
-        let options = options.clone();
-        self.run(move |client| {
-            client.request_json_with_options(&method, &path, body.as_ref(), &options)
-        })
-        .await
+        let attempts = self.inner.request_attempts(method, path, options);
+        for attempt in 0..attempts {
+            match self.request_json_once(method, path, body, options).await {
+                Ok(value) => return Ok(value),
+                Err(error) if is_retryable_error(&error) && attempt + 1 < attempts => {
+                    tokio::time::sleep(retry_backoff_delay(attempt)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("request attempts should be at least one")
     }
 
     pub async fn ready(&self) -> TraceDbClientResult<Value> {
-        self.run(|client| client.ready()).await
+        self.request_json("GET", "/v1/ready", None).await
     }
 
     pub async fn ready_typed(&self) -> TraceDbClientResult<ReadyResponse> {
-        self.run(|client| client.ready_typed()).await
+        self.get_typed("/v1/ready").await
     }
 
     pub async fn health(&self) -> TraceDbClientResult<Value> {
-        self.run(|client| client.health()).await
+        self.request_json("GET", "/v1/health", None).await
     }
 
     pub async fn health_typed(&self) -> TraceDbClientResult<HealthResponse> {
-        self.run(|client| client.health_typed()).await
+        self.get_typed("/v1/health").await
     }
 
     pub async fn list_databases_typed(&self) -> TraceDbClientResult<DatabasesResponse> {
-        self.run(|client| client.list_databases_typed()).await
+        self.get_typed("/v1/databases").await
     }
 
     pub async fn list_branches_typed(&self) -> TraceDbClientResult<BranchesResponse> {
-        self.run(|client| client.list_branches_typed()).await
+        self.get_typed("/v1/branches").await
     }
 
     pub async fn public_safe_metrics_typed(&self) -> TraceDbClientResult<MetricsResponse> {
-        self.run(|client| client.public_safe_metrics_typed()).await
+        self.get_typed("/v1/metrics/public-safe").await
     }
 
     pub async fn list_admin_jobs_typed(&self) -> TraceDbClientResult<JobsResponse> {
-        self.run(|client| client.list_admin_jobs_typed()).await
+        self.get_typed("/v1/admin/jobs").await
     }
 
     pub async fn apply_schema_typed(
         &self,
         schema: &TableSchema,
     ) -> TraceDbClientResult<EpochResponse> {
-        let schema = schema.clone();
-        self.run(move |client| client.apply_schema_typed(&schema))
-            .await
+        self.post_typed("/v1/schema/apply", schema).await
     }
 
     pub async fn apply_schema_typed_with_options(
@@ -1026,15 +1048,12 @@ impl TraceDbAsyncClient {
         schema: &TableSchema,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<EpochResponse> {
-        let schema = schema.clone();
-        let options = options.clone();
-        self.run(move |client| client.apply_schema_typed_with_options(&schema, &options))
+        self.post_typed_with_options("/v1/schema/apply", schema, options)
             .await
     }
 
     pub async fn put_typed(&self, record: &RecordInput) -> TraceDbClientResult<EpochResponse> {
-        let record = record.clone();
-        self.run(move |client| client.put_typed(&record)).await
+        self.post_typed("/v1/records/put", record).await
     }
 
     pub async fn put_typed_with_options(
@@ -1042,9 +1061,7 @@ impl TraceDbAsyncClient {
         record: &RecordInput,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<EpochResponse> {
-        let record = record.clone();
-        let options = options.clone();
-        self.run(move |client| client.put_typed_with_options(&record, &options))
+        self.post_typed_with_options("/v1/records/put", record, options)
             .await
     }
 
@@ -1052,9 +1069,7 @@ impl TraceDbAsyncClient {
         &self,
         request: &RecordPutBatchRequest,
     ) -> TraceDbClientResult<PutBatchResponse> {
-        let request = request.clone();
-        self.run(move |client| client.put_batch_typed(&request))
-            .await
+        self.post_typed("/v1/records/put-batch", request).await
     }
 
     pub async fn put_batch_typed_with_options(
@@ -1062,9 +1077,7 @@ impl TraceDbAsyncClient {
         request: &RecordPutBatchRequest,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<PutBatchResponse> {
-        let request = request.clone();
-        let options = options.clone();
-        self.run(move |client| client.put_batch_typed_with_options(&request, &options))
+        self.post_typed_with_options("/v1/records/put-batch", request, options)
             .await
     }
 
@@ -1072,8 +1085,7 @@ impl TraceDbAsyncClient {
         &self,
         request: &RecordPatchRequest,
     ) -> TraceDbClientResult<EpochResponse> {
-        let request = request.clone();
-        self.run(move |client| client.patch_typed(&request)).await
+        self.post_typed("/v1/records/patch", request).await
     }
 
     pub async fn patch_typed_with_options(
@@ -1081,9 +1093,7 @@ impl TraceDbAsyncClient {
         request: &RecordPatchRequest,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<EpochResponse> {
-        let request = request.clone();
-        let options = options.clone();
-        self.run(move |client| client.patch_typed_with_options(&request, &options))
+        self.post_typed_with_options("/v1/records/patch", request, options)
             .await
     }
 
@@ -1091,8 +1101,7 @@ impl TraceDbAsyncClient {
         &self,
         request: &RecordDeleteRequest,
     ) -> TraceDbClientResult<DeleteResponse> {
-        let request = request.clone();
-        self.run(move |client| client.delete_typed(&request)).await
+        self.post_typed("/v1/records/delete", request).await
     }
 
     pub async fn delete_typed_with_options(
@@ -1100,9 +1109,7 @@ impl TraceDbAsyncClient {
         request: &RecordDeleteRequest,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<DeleteResponse> {
-        let request = request.clone();
-        let options = options.clone();
-        self.run(move |client| client.delete_typed_with_options(&request, &options))
+        self.post_typed_with_options("/v1/records/delete", request, options)
             .await
     }
 
@@ -1110,22 +1117,18 @@ impl TraceDbAsyncClient {
         &self,
         request: &RecordGetRequest,
     ) -> TraceDbClientResult<GetRecordResponse> {
-        let request = request.clone();
-        self.run(move |client| client.get_record_typed(&request))
-            .await
+        self.post_typed("/v1/records/get", request).await
     }
 
     pub async fn scan_typed(
         &self,
         request: &RecordScanRequest,
     ) -> TraceDbClientResult<RecordScanOutput> {
-        let request = request.clone();
-        self.run(move |client| client.scan_typed(&request)).await
+        self.post_typed("/v1/records/scan", request).await
     }
 
     pub async fn query_typed(&self, query: &HybridQuery) -> TraceDbClientResult<QueryResponse> {
-        let query = query.clone();
-        self.run(move |client| client.query_typed(&query)).await
+        self.post_typed("/v1/query", query).await
     }
 
     pub async fn traceql_typed(
@@ -1133,8 +1136,7 @@ impl TraceDbAsyncClient {
         query: impl Into<String>,
     ) -> TraceDbClientResult<QueryResponse> {
         let request = TraceQlQueryRequest::new(query);
-        self.run(move |client| client.traceql_request_typed(&request))
-            .await
+        self.post_typed("/v1/traceql", &request).await
     }
 
     pub async fn graphql_typed(
@@ -1142,8 +1144,7 @@ impl TraceDbAsyncClient {
         query: impl Into<String>,
     ) -> TraceDbClientResult<GraphQlResponse> {
         let request = GraphQlQueryRequest::new(query);
-        self.run(move |client| client.graphql_request_typed(&request))
-            .await
+        self.post_typed("/v1/graphql", &request).await
     }
 
     pub async fn bounded_graphql_typed(
@@ -1151,29 +1152,26 @@ impl TraceDbAsyncClient {
         query: impl Into<String>,
     ) -> TraceDbClientResult<QueryResponse> {
         let request = GraphQlQueryRequest::new(query);
-        self.run(move |client| client.bounded_graphql_request_typed(&request))
-            .await
+        self.post_typed("/v1/graphql/bounded", &request).await
     }
 
     pub async fn graphql_schema_typed(&self) -> TraceDbClientResult<GraphQlSchemaResponse> {
-        self.run(|client| client.graphql_schema_typed()).await
+        self.get_typed("/v1/graphql/schema").await
     }
 
     pub async fn explain_typed(&self, query: &HybridQuery) -> TraceDbClientResult<HybridExplain> {
-        let query = query.clone();
-        self.run(move |client| client.explain_typed(&query)).await
+        self.post_typed("/v1/explain", query).await
     }
 
     pub async fn compact_typed(&self) -> TraceDbClientResult<CompactResponse> {
-        self.run(|client| client.compact_typed()).await
+        self.post_typed("/v1/admin/compact", &json!({})).await
     }
 
     pub async fn compact_typed_with_options(
         &self,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<CompactResponse> {
-        let options = options.clone();
-        self.run(move |client| client.compact_typed_with_options(&options))
+        self.post_typed_with_options("/v1/admin/compact", &json!({}), options)
             .await
     }
 
@@ -1181,9 +1179,7 @@ impl TraceDbAsyncClient {
         &self,
         request: &SnapshotRequest,
     ) -> TraceDbClientResult<SnapshotResponse> {
-        let request = request.clone();
-        self.run(move |client| client.snapshot_typed(&request))
-            .await
+        self.post_typed("/v1/admin/snapshot", request).await
     }
 
     pub async fn snapshot_typed_with_options(
@@ -1191,9 +1187,7 @@ impl TraceDbAsyncClient {
         request: &SnapshotRequest,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<SnapshotResponse> {
-        let request = request.clone();
-        let options = options.clone();
-        self.run(move |client| client.snapshot_typed_with_options(&request, &options))
+        self.post_typed_with_options("/v1/admin/snapshot", request, options)
             .await
     }
 
@@ -1201,8 +1195,7 @@ impl TraceDbAsyncClient {
         &self,
         request: &RestoreRequest,
     ) -> TraceDbClientResult<RestoreResponse> {
-        let request = request.clone();
-        self.run(move |client| client.restore_typed(&request)).await
+        self.post_typed("/v1/admin/restore", request).await
     }
 
     pub async fn restore_typed_with_options(
@@ -1210,74 +1203,112 @@ impl TraceDbAsyncClient {
         request: &RestoreRequest,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<RestoreResponse> {
-        let request = request.clone();
-        let options = options.clone();
-        self.run(move |client| client.restore_typed_with_options(&request, &options))
+        self.post_typed_with_options("/v1/admin/restore", request, options)
             .await
     }
 
-    async fn run<T>(
-        &self,
-        operation: impl FnOnce(TraceDbClient) -> TraceDbClientResult<T> + Send + 'static,
-    ) -> TraceDbClientResult<T>
+    async fn get_typed<T: for<'de> Deserialize<'de>>(&self, path: &str) -> TraceDbClientResult<T> {
+        decode_typed("GET", path, self.request_json("GET", path, None).await?)
+    }
+
+    async fn post_typed<B, R>(&self, path: &str, body: &B) -> TraceDbClientResult<R>
     where
-        T: Send + 'static,
+        B: Serialize,
+        R: for<'de> Deserialize<'de>,
     {
-        let client = self.inner.clone();
-        BackgroundRequest::spawn(move || operation(client)).await
+        let value = serde_json::to_value(body)?;
+        decode_typed(
+            "POST",
+            path,
+            self.request_json("POST", path, Some(&value)).await?,
+        )
     }
-}
 
-struct BackgroundRequest<T> {
-    receiver: mpsc::Receiver<T>,
-    waker: Arc<Mutex<Option<Waker>>>,
-}
-
-impl<T> BackgroundRequest<T>
-where
-    T: Send + 'static,
-{
-    fn spawn(operation: impl FnOnce() -> T + Send + 'static) -> Self {
-        let (sender, receiver) = mpsc::channel();
-        let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
-        let background_waker = Arc::clone(&waker);
-        thread::spawn(move || {
-            let _ = sender.send(operation());
-            if let Some(waker) = background_waker
-                .lock()
-                .expect("background request waker poisoned")
-                .take()
-            {
-                waker.wake();
-            }
-        });
-        Self { receiver, waker }
+    async fn post_typed_with_options<B, R>(
+        &self,
+        path: &str,
+        body: &B,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<R>
+    where
+        B: Serialize,
+        R: for<'de> Deserialize<'de>,
+    {
+        let value = serde_json::to_value(body)?;
+        decode_typed(
+            "POST",
+            path,
+            self.request_json_with_options("POST", path, Some(&value), options)
+                .await?,
+        )
     }
-}
 
-impl<T> Future for BackgroundRequest<T> {
-    type Output = T;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.receiver.try_recv() {
-            Ok(value) => Poll::Ready(value),
-            Err(TryRecvError::Empty) => {
-                *self
-                    .waker
-                    .lock()
-                    .expect("background request waker poisoned") = Some(context.waker().clone());
-                match self.receiver.try_recv() {
-                    Ok(value) => Poll::Ready(value),
-                    Err(TryRecvError::Empty) => Poll::Pending,
-                    Err(TryRecvError::Disconnected) => {
-                        panic!("background TraceDB request ended without a response")
-                    }
-                }
+    async fn request_json_once(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        let target = HttpTarget::parse(&self.inner.config.url)?;
+        let request_path = target.path(path);
+        let body_bytes = self.inner.request_body_bytes(body)?;
+        let timeout = self.inner.config.request_timeout();
+        let method_value = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| {
+            TraceDbClientError::InvalidRequest {
+                method: method.to_string(),
+                path: request_path.clone(),
+                message: format!("invalid HTTP method: {error}"),
             }
-            Err(TryRecvError::Disconnected) => {
-                panic!("background TraceDB request ended without a response")
-            }
+        })?;
+        let url = format!("http://{}{}", target.authority, request_path);
+        let mut request = self
+            .http_client
+            .request(method_value, url)
+            .timeout(timeout)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::CONTENT_LENGTH,
+                body_bytes.len().to_string(),
+            );
+        if !self.inner.config.token.is_empty() {
+            request = request.bearer_auth(&self.inner.config.token);
         }
+        if let Some(key) = validated_idempotency_key(method, &request_path, options)? {
+            request = request.header("Idempotency-Key", key);
+        }
+        for (name, value) in self.inner.actor_header_pairs(options)? {
+            request = request.header(name, value);
+        }
+        if !body_bytes.is_empty() {
+            request = request.header(reqwest::header::CONTENT_TYPE, "application/json");
+        }
+        let response = request
+            .body(body_bytes)
+            .send()
+            .await
+            .map_err(|error| map_reqwest_error(method, &request_path, timeout, error))?;
+        let status = response.status().as_u16();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| map_reqwest_error(method, &request_path, timeout, error))?;
+        if !(200..300).contains(&status) {
+            return Err(TraceDbClientError::HttpStatus {
+                method: method.to_string(),
+                path: request_path,
+                status,
+                body: String::from_utf8_lossy(&bytes).to_string(),
+            });
+        }
+        if bytes.iter().all(u8::is_ascii_whitespace) || bytes.is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_slice(&bytes).map_err(|error| TraceDbClientError::InvalidResponse {
+            method: method.to_string(),
+            path: request_path,
+            message: format!("invalid JSON body: {error}"),
+        })
     }
 }
 
@@ -1726,6 +1757,24 @@ fn timeout_ms(timeout: Duration) -> u64 {
     timeout.as_millis().clamp(1, u64::MAX as u128) as u64
 }
 
+fn retry_backoff_delay(attempt: u8) -> Duration {
+    let shift = u32::from(attempt).min(16);
+    let base_ms = 100_u64.saturating_mul(1_u64 << shift).min(5_000);
+    let jitter_quarter = base_ms / 4;
+    let jitter_range = jitter_quarter.saturating_mul(2).saturating_add(1);
+    let jitter_offset = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as u64
+        % jitter_range;
+    let delay_ms = base_ms
+        .saturating_sub(jitter_quarter)
+        .saturating_add(jitter_offset)
+        .min(5_000)
+        .max(1);
+    Duration::from_millis(delay_ms)
+}
+
 fn required_env(variable: &str, value: Option<String>) -> TraceDbClientResult<String> {
     match value {
         Some(value) if !value.trim().is_empty() => Ok(value),
@@ -1787,8 +1836,19 @@ fn idempotency_key_header(
     path: &str,
     options: &TraceDbRequestOptions,
 ) -> TraceDbClientResult<String> {
-    let Some(key) = &options.idempotency_key else {
+    let Some(key) = validated_idempotency_key(method, path, options)? else {
         return Ok(String::new());
+    };
+    Ok(format!("Idempotency-Key: {key}\r\n"))
+}
+
+fn validated_idempotency_key<'a>(
+    method: &str,
+    path: &str,
+    options: &'a TraceDbRequestOptions,
+) -> TraceDbClientResult<Option<&'a str>> {
+    let Some(key) = options.idempotency_key.as_deref() else {
+        return Ok(None);
     };
     if key.is_empty() || key.contains('\r') || key.contains('\n') {
         return Err(TraceDbClientError::InvalidRequest {
@@ -1797,10 +1857,15 @@ fn idempotency_key_header(
             message: "idempotency key must be non-empty and must not contain CR or LF".to_string(),
         });
     }
-    Ok(format!("Idempotency-Key: {key}\r\n"))
+    Ok(Some(key))
 }
 
 fn header_line(name: &str, value: &str) -> TraceDbClientResult<String> {
+    validate_header_value(name, value)?;
+    Ok(format!("{name}: {value}\r\n"))
+}
+
+fn validate_header_value(name: &str, value: &str) -> TraceDbClientResult<()> {
     if value.contains('\r') || value.contains('\n') {
         return Err(TraceDbClientError::InvalidRequest {
             method: "CONFIG".to_string(),
@@ -1808,7 +1873,7 @@ fn header_line(name: &str, value: &str) -> TraceDbClientResult<String> {
             message: "header values must not contain CR or LF".to_string(),
         });
     }
-    Ok(format!("{name}: {value}\r\n"))
+    Ok(())
 }
 
 fn map_request_io_error(
@@ -1828,6 +1893,23 @@ fn map_request_io_error(
         }
     } else {
         TraceDbClientError::Io(error)
+    }
+}
+
+fn map_reqwest_error(
+    method: &str,
+    path: &str,
+    timeout: Duration,
+    error: reqwest::Error,
+) -> TraceDbClientError {
+    if error.is_timeout() {
+        TraceDbClientError::Timeout {
+            method: method.to_string(),
+            path: path.to_string(),
+            timeout_ms: timeout_ms(timeout),
+        }
+    } else {
+        TraceDbClientError::Io(std::io::Error::other(error.to_string()))
     }
 }
 
@@ -1869,8 +1951,10 @@ fn strip_query(path: &str) -> &str {
 }
 
 fn is_retryable_error(error: &TraceDbClientError) -> bool {
-    matches!(error, TraceDbClientError::Timeout { .. })
-        || matches!(error, TraceDbClientError::HttpStatus { status, .. } if *status >= 500)
+    matches!(
+        error,
+        TraceDbClientError::Io(_) | TraceDbClientError::Timeout { .. }
+    ) || matches!(error, TraceDbClientError::HttpStatus { status, .. } if *status >= 500)
 }
 
 fn parse_response(method: &str, path: &str, response: &str) -> TraceDbClientResult<Value> {

@@ -675,11 +675,13 @@ fn http_traceql_endpoint_executes_native_query_string_through_hybrid_query() {
         "\"epoch\":3",
     );
 
+    let actor_headers = tenant_a_actor_headers();
     let traceql = json!({
         "query": "FROM docs\nTENANT tenant-a\nWHERE status = \"published\"\nMATCH body \"rust\"\nNEAR embedding [1.0, 0.0, 0.0]\nFRESHNESS allow_dirty\nLIMIT 5"
     })
     .to_string();
-    let response = http_response(addr, "POST", "/v1/traceql", &traceql);
+    let response =
+        http_response_with_headers(addr, "POST", "/v1/traceql", &actor_headers, &traceql);
     assert!(
         response.starts_with("HTTP/1.1 200 OK"),
         "unexpected TraceQL response: {response}"
@@ -694,7 +696,13 @@ fn http_traceql_endpoint_executes_native_query_string_through_hybrid_query() {
         "query": "FROM docs\nTENANT tenant-a\nMATCH body \"rust\"\nNEAR embedding [1.0, 0.0, 0.0]\nFRESHNESS allow_dirty\nLIMIT 5\nEXPLAIN"
     })
     .to_string();
-    let explain_response = http_response(addr, "POST", "/v1/traceql", &explain_traceql);
+    let explain_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/traceql",
+        &actor_headers,
+        &explain_traceql,
+    );
     assert!(
         explain_response.starts_with("HTTP/1.1 200 OK"),
         "unexpected TraceQL explain response: {explain_response}"
@@ -713,7 +721,13 @@ fn http_traceql_endpoint_executes_native_query_string_through_hybrid_query() {
         "query": "FROM docs\nTENANT tenant-a\nDROP TABLE docs"
     })
     .to_string();
-    let invalid_response = http_response(addr, "POST", "/v1/traceql", &invalid_traceql);
+    let invalid_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/traceql",
+        &actor_headers,
+        &invalid_traceql,
+    );
     assert!(
         invalid_response.starts_with("HTTP/1.1 400 Bad Request"),
         "invalid TraceQL should preserve bad-request envelope: {invalid_response}"
@@ -732,7 +746,8 @@ fn http_traceql_endpoint_executes_native_query_string_through_hybrid_query() {
         "query": "SELECT * FROM docs WHERE tenant_id = \"tenant-a\" AND status = \"published\" LIMIT 5"
     })
     .to_string();
-    let sqlish_response = http_response(addr, "POST", "/v1/traceql", &sqlish);
+    let sqlish_response =
+        http_response_with_headers(addr, "POST", "/v1/traceql", &actor_headers, &sqlish);
     assert!(
         sqlish_response.starts_with("HTTP/1.1 200 OK"),
         "unexpected SQL-ish TraceQL response: {sqlish_response}"
@@ -748,7 +763,8 @@ fn http_traceql_endpoint_executes_native_query_string_through_hybrid_query() {
         "query": "SELECT * FROM docs JOIN users ON docs.user_id = users.id WHERE tenant_id = \"tenant-a\""
     })
     .to_string();
-    let invalid_sqlish_response = http_response(addr, "POST", "/v1/traceql", &invalid_sqlish);
+    let invalid_sqlish_response =
+        http_response_with_headers(addr, "POST", "/v1/traceql", &actor_headers, &invalid_sqlish);
     assert!(
         invalid_sqlish_response.starts_with("HTTP/1.1 400 Bad Request"),
         "invalid SQL-ish should preserve bad-request envelope: {invalid_sqlish_response}"
@@ -805,11 +821,18 @@ fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
         "\"epoch\":3",
     );
 
+    let actor_headers = tenant_a_actor_headers();
     let graphql = json!({
         "query": "query { docs(tenant_id: \"tenant-a\", where: {status: \"published\"}, match: \"rust\", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, limit: 5) { record_id } }"
     })
     .to_string();
-    let response = http_response(addr, "POST", "/v1/graphql/bounded", &graphql);
+    let response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/graphql/bounded",
+        &actor_headers,
+        &graphql,
+    );
     assert!(
         response.starts_with("HTTP/1.1 200 OK"),
         "unexpected GraphQL response: {response}"
@@ -823,7 +846,13 @@ fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
         "query": "query { docs(tenant_id: \"tenant-a\", match: \"rust\", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, limit: 5, explain: true) { record_id } }"
     })
     .to_string();
-    let explain_response = http_response(addr, "POST", "/v1/graphql/bounded", &explain_graphql);
+    let explain_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/graphql/bounded",
+        &actor_headers,
+        &explain_graphql,
+    );
     assert!(
         explain_response.starts_with("HTTP/1.1 200 OK"),
         "unexpected GraphQL explain response: {explain_response}"
@@ -842,7 +871,13 @@ fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
         "query": "mutation { docs(tenant_id: \"tenant-a\") { record_id } }"
     })
     .to_string();
-    let invalid_response = http_response(addr, "POST", "/v1/graphql/bounded", &invalid_graphql);
+    let invalid_response = http_response_with_headers(
+        addr,
+        "POST",
+        "/v1/graphql/bounded",
+        &actor_headers,
+        &invalid_graphql,
+    );
     assert!(
         invalid_response.starts_with("HTTP/1.1 400 Bad Request"),
         "invalid GraphQL should preserve bad-request envelope: {invalid_response}"
@@ -2438,6 +2473,16 @@ fn assert_http_contains(
 
 fn http_response(addr: std::net::SocketAddr, method: &str, path: &str, body: &str) -> String {
     http_response_with_headers(addr, method, path, &[], body)
+}
+
+fn tenant_a_actor_headers() -> [(&'static str, &'static str); 5] {
+    [
+        ("x-tracedb-tenant-id", "tenant-a"),
+        ("x-tracedb-database-id", "local"),
+        ("x-tracedb-branch-id", "main"),
+        ("x-tracedb-token-identity", "test-token"),
+        ("x-tracedb-request-id", "test-request"),
+    ]
 }
 
 fn http_response_with_headers(
