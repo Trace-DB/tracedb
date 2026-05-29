@@ -182,7 +182,21 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 ],
             },
             {
-                "name": "graphql-http-conformance",
+                "name": "api-parity-conformance",
+                "argv": [
+                    "cargo",
+                    "run",
+                    "-q",
+                    "-p",
+                    "tracedb-cli",
+                    "--",
+                    "api-parity",
+                    "--report-file",
+                    "/tmp/tracedb-api-parity.json",
+                ],
+            },
+            {
+                "name": "graphql-native-conformance",
                 "argv": [
                     "python3",
                     "scripts/platform_conformance.py",

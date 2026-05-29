@@ -30,6 +30,7 @@ METHOD_NAME_OVERRIDES = {
     "postQuery": "query",
     "postTraceql": "traceql",
     "postGraphql": "graphql",
+    "postGraphqlBounded": "boundedGraphql",
     "getGraphqlSchema": "graphqlSchema",
     "postExplain": "explain",
     "postAdminCompact": "compact",
@@ -55,6 +56,7 @@ OPERATION_ORDER = [
     "postQuery",
     "postTraceql",
     "postGraphql",
+    "postGraphqlBounded",
     "getGraphqlSchema",
     "postExplain",
     "postAdminCompact",
@@ -214,9 +216,20 @@ export interface TraceDbFetchInit {
 export type TraceDbFetch = (input: string, init: TraceDbFetchInit) => Promise<TraceDbFetchResponse>;
 
 export type TraceDbRequestOptions = {
+  actorContext?: TraceDbActorContext;
   headers?: Record<string, string>;
   idempotencyKey?: string;
   signal?: unknown;
+};
+
+export type TraceDbActorContext = {
+  tenant_id: string;
+  database_id: string;
+  branch_id: string;
+  token_identity: string;
+  request_id: string;
+  policy_epoch?: number;
+  scopes?: string[];
 };
 
 export type TraceDbClientConfig = {
@@ -224,6 +237,7 @@ export type TraceDbClientConfig = {
   token?: string;
   databaseId?: string;
   branchId?: string;
+  actorContext?: TraceDbActorContext;
   fetchImpl?: TraceDbFetch;
 };
 
@@ -296,6 +310,7 @@ def render_class_start() -> str:
   private readonly token?: string;
   private readonly databaseId?: string;
   private readonly branchId?: string;
+  private readonly actorContext?: TraceDbActorContext;
   private readonly fetchImpl: TraceDbFetch;
 
   constructor(config: TraceDbClientConfig) {
@@ -313,6 +328,7 @@ def render_class_start() -> str:
     this.token = config.token;
     this.databaseId = config.databaseId;
     this.branchId = config.branchId;
+    this.actorContext = config.actorContext;
     this.fetchImpl = config.fetchImpl ?? defaultFetch!;
   }
 
@@ -369,6 +385,7 @@ def render_helpers() -> str:
     if (idempotencyKey !== undefined) {
       headers["Idempotency-Key"] = idempotencyKey;
     }
+    Object.assign(headers, this.validatedActorHeaders(options.actorContext ?? this.actorContext));
 
     const init: TraceDbFetchInit = { method, headers };
     if (options.signal !== undefined) {
@@ -427,6 +444,43 @@ def render_helpers() -> str:
       );
     }
     return key;
+  }
+
+  private validatedActorHeaders(actor?: TraceDbActorContext): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.databaseId !== undefined && actor === undefined) {
+      headers["x-tracedb-database-id"] = this.validatedHeaderValue("x-tracedb-database-id", this.databaseId);
+    }
+    if (this.branchId !== undefined && actor === undefined) {
+      headers["x-tracedb-branch-id"] = this.validatedHeaderValue("x-tracedb-branch-id", this.branchId);
+    }
+    if (actor === undefined) {
+      return headers;
+    }
+    headers["x-tracedb-tenant-id"] = this.validatedHeaderValue("x-tracedb-tenant-id", actor.tenant_id);
+    headers["x-tracedb-database-id"] = this.validatedHeaderValue("x-tracedb-database-id", actor.database_id);
+    headers["x-tracedb-branch-id"] = this.validatedHeaderValue("x-tracedb-branch-id", actor.branch_id);
+    headers["x-tracedb-token-identity"] = this.validatedHeaderValue("x-tracedb-token-identity", actor.token_identity);
+    headers["x-tracedb-request-id"] = this.validatedHeaderValue("x-tracedb-request-id", actor.request_id);
+    headers["x-tracedb-policy-epoch"] = this.validatedHeaderValue(
+      "x-tracedb-policy-epoch",
+      String(actor.policy_epoch ?? 0),
+    );
+    if (actor.scopes !== undefined && actor.scopes.length > 0) {
+      headers["x-tracedb-scopes"] = this.validatedHeaderValue("x-tracedb-scopes", actor.scopes.join(","));
+    }
+    return headers;
+  }
+
+  private validatedHeaderValue(name: string, value: string): string {
+    if (value.includes("\\r") || value.includes("\\n")) {
+      throw new TraceDbRequestError(
+        "CONFIG",
+        name,
+        "header values must not contain CR or LF",
+      );
+    }
+    return value;
   }
 }
 """

@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TraceDB, TraceDbHttpError, type TableSchema } from "./src/sdk.ts";
+import { TraceDB, TraceDbHttpError, type JsonObject, type TableSchema } from "./src/sdk.ts";
 
 const sourceDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(sourceDir, "../..");
@@ -151,7 +151,16 @@ try {
     TRACEDB_REQUIRE_API_KEY: "true",
     TRACEDB_SERVICE_MODE: "gateway",
   }, gatewayOutput);
-  const db = new TraceDB({ url: gatewayUrl, token, databaseId, branchId });
+  const actorContext = {
+    tenant_id: "tenant-a",
+    database_id: databaseId,
+    branch_id: branchId,
+    token_identity: "typescript-gateway-smoke",
+    request_id: `ts-public-gateway-${runId}`,
+    policy_epoch: 0,
+    scopes: ["records:read", "records:write", "admin:write"],
+  };
+  const db = new TraceDB({ url: gatewayUrl, token, databaseId, branchId, actorContext });
   await waitForReady(
     "tracedb gateway",
     db,
@@ -284,11 +293,24 @@ try {
   assert.match(graphqlSchemaText, /docs\(/);
   assert.match(graphqlSchemaText, /type DocsRow/);
 
+  const graphqlInput = JSON.stringify({
+    table: "docs",
+    tenant_id: "tenant-a",
+    text_field: "body",
+    text: "TypeScript public SDK",
+    top_k: 3,
+    freshness: "Lazy",
+    explain: true,
+  });
   const graphqlResponse = await db.graphql(
-    'query { docs(tenant_id: "tenant-a", match: "TypeScript public SDK", limit: 3, explain: true) { record_id } }',
+    `query { query(input: ${JSON.stringify(graphqlInput)}) { results explain } }`,
   );
-  assert.equal(Array.isArray(graphqlResponse.results), true);
-  assert.equal(typeof graphqlResponse.explain?.returned_count, "number");
+  const graphqlData = graphqlResponse.data as JsonObject | undefined;
+  const graphqlPayload = graphqlData?.query as JsonObject | undefined;
+  const graphqlResults = graphqlPayload?.results as JsonObject[] | undefined;
+  const graphqlExplain = graphqlPayload?.explain as JsonObject | undefined;
+  assert.equal(Array.isArray(graphqlResults), true, JSON.stringify(graphqlResponse));
+  assert.equal(typeof graphqlExplain?.returned_count, "number", JSON.stringify(graphqlResponse));
 
   const deleteResponse = await docs.delete("ops", {
     idempotencyKey: `ts-public-gateway-${runId}-delete`,

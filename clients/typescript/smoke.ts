@@ -20,6 +20,8 @@ import {
   type PutBatchResponse,
   type QueryResponse,
   type GetRecordResponse,
+  type GraphQlQueryRequest,
+  type GraphQlResponse,
   type ReadyResponse,
   type RecordPutBatchRequest,
   type RecordScanOutput,
@@ -249,6 +251,22 @@ assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/traceql")
 const traceqlRequest = JSON.parse(calls[calls.length - 1]?.init.body ?? "{}");
 assert.equal(traceqlRequest.query, traceqlBody.query);
 assert.equal(traceqlRequest.database_id, "db-default");
+
+const graphqlBody: GraphQlQueryRequest = {
+  query: 'query { query(input: "{\\"table\\":\\"docs\\",\\"tenant_id\\":\\"tenant-a\\",\\"top_k\\":5}") { results } }',
+};
+const graphqlResponse: GraphQlResponse = await client.graphql(graphqlBody);
+assert.equal(graphqlResponse.ok, true);
+assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/graphql");
+const graphqlRequest = JSON.parse(calls[calls.length - 1]?.init.body ?? "{}");
+assert.equal(graphqlRequest.query, graphqlBody.query);
+assert.equal(graphqlRequest.database_id, "db-default");
+
+const boundedGraphqlResponse: QueryResponse = await client.boundedGraphql({
+  query: 'query { docs(tenant_id: "tenant-a", limit: 5) { record_id } }',
+});
+assert.equal(boundedGraphqlResponse.ok, true);
+assert.equal(calls[calls.length - 1]?.input, "http://127.0.0.1:8090/v1/graphql/bounded");
 
 const failingClient = new TraceDbClient({
   baseUrl: "http://127.0.0.1:8090",

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use async_graphql::parser::parse_query;
 use axum::body::{to_bytes, Body, Bytes};
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{DefaultBodyLimit, State};
@@ -290,7 +291,7 @@ impl EngineHandle {
             "adapter": "bounded_graphql_query_adapter",
             "schema": schema,
             "tables": tables,
-            "execution": "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope",
+            "execution": "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors",
         })))
     }
 
@@ -465,6 +466,10 @@ struct TraceQlQueryRequest {
 #[derive(Debug, Deserialize)]
 struct GraphQlQueryRequest {
     query: String,
+    #[serde(default)]
+    variables: Value,
+    #[serde(default, alias = "operationName")]
+    operation_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -897,11 +902,15 @@ async fn handle_request_text(
         ("POST", "/v1/traceql") => {
             let parse_start = Instant::now();
             let request: TraceQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
-            let query = traceql_query_from_str(&request.query).map_err(to_io_error)?;
-            let parse_ms = elapsed_ms(parse_start);
-            query_response(&engine, actor, query, request_start, read_ms, parse_ms).await?
+            traceql_response(&engine, actor, request, request_start, read_ms, parse_start).await?
         }
         ("POST", "/v1/graphql") => {
+            let parse_start = Instant::now();
+            let request: GraphQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
+            native_graphql_response(&engine, actor, request, request_start, read_ms, parse_start)
+                .await?
+        }
+        ("POST", "/v1/graphql/bounded") => {
             let parse_start = Instant::now();
             let request: GraphQlQueryRequest = serde_json::from_str(body).map_err(to_io_error)?;
             let query = graphql_query_from_str(&request.query).map_err(to_io_error)?;
@@ -909,15 +918,13 @@ async fn handle_request_text(
             query_response(&engine, actor, query, request_start, read_ms, parse_ms).await?
         }
         ("GET", "/v1/graphql/schema") => engine.graphql_schema_response().await?,
+        ("GET", "/v1/graphql/bounded/schema") => engine.graphql_schema_response().await?,
         ("POST", "/v1/explain") => {
             let parse_start = Instant::now();
             let mut query: HybridQuery = serde_json::from_str(body).map_err(to_io_error)?;
             query.explain = true;
             let parse_ms = elapsed_ms(parse_start);
-            let mut actor = actor.clone();
-            if actor.tenant_id == "local" {
-                actor.tenant_id = query.tenant_id.clone();
-            }
+            let actor = actor.clone();
             let engine_start = Instant::now();
             let (timed_output, lock_wait_ms) = engine.query_with_timing_as(&actor, query).await?;
             let engine_ms = elapsed_ms(engine_start);
@@ -1108,6 +1115,8 @@ fn supports_http_idempotency(method: &str, path: &str) -> bool {
             | ("POST", "/v1/admin/compact")
             | ("POST", "/v1/admin/snapshot")
             | ("POST", "/v1/admin/restore")
+            | ("POST", "/v1/graphql")
+            | ("POST", "/v1/traceql")
     )
 }
 
@@ -1153,6 +1162,8 @@ fn records_receipt_after_response(method: &str, path: &str) -> bool {
         ("POST", "/v1/admin/compact")
             | ("POST", "/v1/admin/snapshot")
             | ("POST", "/v1/admin/restore")
+            | ("POST", "/v1/graphql")
+            | ("POST", "/v1/traceql")
     )
 }
 
@@ -1172,16 +1183,13 @@ fn parse_record_put_body(body: &str) -> std::io::Result<RecordInput> {
 
 async fn query_response(
     engine: &EngineHandle,
-    mut actor: ActorContext,
+    actor: ActorContext,
     query: HybridQuery,
     request_start: Instant,
     read_ms: f64,
     parse_ms: f64,
 ) -> std::io::Result<String> {
     let include_explain = query.explain;
-    if actor.tenant_id == "local" {
-        actor.tenant_id = query.tenant_id.clone();
-    }
     let engine_start = Instant::now();
     let (timed_output, lock_wait_ms) = engine.query_with_timing_as(&actor, query).await?;
     let engine_ms = elapsed_ms(engine_start);
@@ -1212,6 +1220,538 @@ async fn query_response(
             ("materialize", query_timing.materialize_ms),
         ],
     ))
+}
+
+async fn traceql_response(
+    engine: &EngineHandle,
+    actor: ActorContext,
+    request: TraceQlQueryRequest,
+    request_start: Instant,
+    read_ms: f64,
+    parse_start: Instant,
+) -> std::io::Result<String> {
+    if let Some((command, payload)) = split_traceql_command(&request.query) {
+        let value = execute_traceql_command(engine, &actor, command, payload).await?;
+        return Ok(ok(value));
+    }
+    let query = traceql_query_from_str(&request.query).map_err(to_io_error)?;
+    let parse_ms = elapsed_ms(parse_start);
+    query_response(engine, actor, query, request_start, read_ms, parse_ms).await
+}
+
+async fn execute_traceql_command(
+    engine: &EngineHandle,
+    actor: &ActorContext,
+    command: &str,
+    payload: &str,
+) -> std::io::Result<Value> {
+    match command {
+        "SCHEMA APPLY" => {
+            let schema: TableSchema = serde_json::from_str(payload).map_err(to_io_error)?;
+            let epoch = engine.apply_schema(schema).await?;
+            Ok(json!({ "epoch": epoch.get() }))
+        }
+        "RECORD PUT" | "PUT" => {
+            let input = parse_record_put_body(payload)?;
+            let epoch = engine.put(RecordPutRequest::new(input)).await?;
+            Ok(json!({ "epoch": epoch.get() }))
+        }
+        "RECORD BATCH" | "BATCH" => {
+            let request: RecordPutBatchRequest =
+                serde_json::from_str(payload).map_err(to_io_error)?;
+            let record_count = request.records.len();
+            let epoch = engine.put_batch(request).await?;
+            Ok(json!({ "epoch": epoch.get(), "record_count": record_count }))
+        }
+        "RECORD PATCH" | "PATCH" => {
+            let request: RecordPatchRequest = serde_json::from_str(payload).map_err(to_io_error)?;
+            let epoch = engine.patch(request).await?;
+            Ok(json!({ "epoch": epoch.get() }))
+        }
+        "RECORD DELETE" | "DELETE" => {
+            let request: RecordDeleteRequest =
+                serde_json::from_str(payload).map_err(to_io_error)?;
+            let epoch = engine.delete(request).await?;
+            Ok(json!({ "deleted": true, "epoch": epoch.get() }))
+        }
+        "RECORD GET" | "GET" => {
+            let request: RecordGetRequest = serde_json::from_str(payload).map_err(to_io_error)?;
+            let record = engine.get_as(actor, request).await?;
+            Ok(json!({ "record": record }))
+        }
+        "RECORD SCAN" | "SCAN" => {
+            let request: RecordScanRequest = serde_json::from_str(payload).map_err(to_io_error)?;
+            let output = engine.scan_as(actor, request).await?;
+            serde_json::to_value(output).map_err(to_io_error)
+        }
+        "QUERY" => {
+            let query: HybridQuery = serde_json::from_str(payload).map_err(to_io_error)?;
+            query_output_value(engine, actor, query).await
+        }
+        "EXPLAIN" => {
+            let mut query: HybridQuery = serde_json::from_str(payload).map_err(to_io_error)?;
+            query.explain = true;
+            let value = query_output_value(engine, actor, query).await?;
+            Ok(value
+                .get("explain")
+                .cloned()
+                .unwrap_or_else(|| json!({ "explain": null })))
+        }
+        "ADMIN COMPACT" | "COMPACT" => {
+            engine.compact().await?;
+            Ok(json!({ "compacted": true }))
+        }
+        "ADMIN SNAPSHOT" | "SNAPSHOT" => {
+            let value: Value = serde_json::from_str(payload).map_err(to_io_error)?;
+            let target = required_str(&value, "target")?;
+            engine.create_snapshot(target).await?;
+            Ok(json!({ "snapshot": true, "target": target }))
+        }
+        "ADMIN RESTORE" | "RESTORE" => restore_value_from_payload(payload),
+        "JOBS LIST" => {
+            let jobs = engine.jobs().await?;
+            Ok(json!({ "durable": true, "durable_jobs": jobs }))
+        }
+        "JOBS RUN" => {
+            let value: Value = serde_json::from_str(payload).map_err(to_io_error)?;
+            let kind = value
+                .get("kind")
+                .and_then(Value::as_str)
+                .and_then(parse_job_kind)
+                .unwrap_or(tracedb_jobs::JobKind::VerifyDatabase);
+            let target = value
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or("traceql-job")
+                .to_string();
+            let idempotency_key = value
+                .get("idempotency_key")
+                .and_then(Value::as_str)
+                .unwrap_or(&target)
+                .to_string();
+            let job = engine.enqueue_job(kind, target, idempotency_key).await?;
+            Ok(json!({ "job": job }))
+        }
+        _ => Err(to_io_error(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid TraceQL command: {command}"),
+        ))),
+    }
+}
+
+async fn native_graphql_response(
+    engine: &EngineHandle,
+    actor: ActorContext,
+    request: GraphQlQueryRequest,
+    _request_start: Instant,
+    _read_ms: f64,
+    _parse_start: Instant,
+) -> std::io::Result<String> {
+    let response = match execute_native_graphql(engine, &actor, &request).await {
+        Ok((field, value)) => json!({ "data": { field: value } }),
+        Err(message) => json!({
+            "data": Value::Null,
+            "errors": [graphql_error(message)],
+        }),
+    };
+    Ok(ok(response))
+}
+
+async fn execute_native_graphql(
+    engine: &EngineHandle,
+    actor: &ActorContext,
+    request: &GraphQlQueryRequest,
+) -> std::result::Result<(String, Value), String> {
+    parse_query(&request.query).map_err(|error| format!("invalid GraphQL: {error}"))?;
+    let _operation_name = request.operation_name.as_deref();
+    let field = graphql_root_field(&request.query).ok_or_else(|| {
+        "invalid GraphQL: exactly one root field is required for TraceDB operations".to_string()
+    })?;
+    let value = match field.as_str() {
+        "schemaApply" | "applySchema" => {
+            let schema: TableSchema = graphql_input_json(request, &field).and_then(|value| {
+                serde_json::from_value(value).map_err(|error| error.to_string())
+            })?;
+            let epoch = engine
+                .apply_schema(schema)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "epoch": epoch.get() })
+        }
+        "put" => {
+            let input = graphql_input_string(request, &field)
+                .and_then(|body| parse_record_put_body(&body).map_err(|error| error.to_string()))?;
+            let epoch = engine
+                .put(RecordPutRequest::new(input))
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "epoch": epoch.get() })
+        }
+        "batch" => {
+            let request_body: RecordPutBatchRequest = graphql_input_json(request, &field)
+                .and_then(|value| {
+                    serde_json::from_value(value).map_err(|error| error.to_string())
+                })?;
+            let record_count = request_body.records.len();
+            let epoch = engine
+                .put_batch(request_body)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "epoch": epoch.get(), "record_count": record_count })
+        }
+        "patch" => {
+            let request_body: RecordPatchRequest =
+                graphql_input_json(request, &field).and_then(|value| {
+                    serde_json::from_value(value).map_err(|error| error.to_string())
+                })?;
+            let epoch = engine
+                .patch(request_body)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "epoch": epoch.get() })
+        }
+        "delete" => {
+            let request_body: RecordDeleteRequest =
+                graphql_input_json(request, &field).and_then(|value| {
+                    serde_json::from_value(value).map_err(|error| error.to_string())
+                })?;
+            let epoch = engine
+                .delete(request_body)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "deleted": true, "epoch": epoch.get() })
+        }
+        "get" => {
+            let request_body: RecordGetRequest =
+                graphql_input_json(request, &field).and_then(|value| {
+                    serde_json::from_value(value).map_err(|error| error.to_string())
+                })?;
+            let record = engine
+                .get_as(actor, request_body)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "record": record })
+        }
+        "scan" => {
+            let request_body: RecordScanRequest =
+                graphql_input_json(request, &field).and_then(|value| {
+                    serde_json::from_value(value).map_err(|error| error.to_string())
+                })?;
+            serde_json::to_value(
+                engine
+                    .scan_as(actor, request_body)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?
+        }
+        "query" => {
+            let query: HybridQuery = graphql_input_json(request, &field).and_then(|value| {
+                serde_json::from_value(value).map_err(|error| error.to_string())
+            })?;
+            query_output_value(engine, actor, query)
+                .await
+                .map_err(|error| error.to_string())?
+        }
+        "explain" => {
+            let mut query: HybridQuery = graphql_input_json(request, &field).and_then(|value| {
+                serde_json::from_value(value).map_err(|error| error.to_string())
+            })?;
+            query.explain = true;
+            query_output_value(engine, actor, query)
+                .await
+                .map_err(|error| error.to_string())?
+                .get("explain")
+                .cloned()
+                .unwrap_or_else(|| json!({ "explain": null }))
+        }
+        "compact" => {
+            engine.compact().await.map_err(|error| error.to_string())?;
+            json!({ "compacted": true })
+        }
+        "snapshot" => {
+            let value = graphql_input_json(request, &field)?;
+            let target = value
+                .get("target")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "snapshot target is required".to_string())?;
+            engine
+                .create_snapshot(target)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "snapshot": true, "target": target })
+        }
+        "restore" => {
+            let body = graphql_input_string(request, &field)?;
+            restore_value_from_payload(&body).map_err(|error| error.to_string())?
+        }
+        "jobs" => {
+            let jobs = engine.jobs().await.map_err(|error| error.to_string())?;
+            json!({ "durable": true, "durable_jobs": jobs })
+        }
+        "jobRun" | "runJob" => {
+            let value = graphql_input_json(request, &field)?;
+            let kind = value
+                .get("kind")
+                .and_then(Value::as_str)
+                .and_then(parse_job_kind)
+                .unwrap_or(tracedb_jobs::JobKind::VerifyDatabase);
+            let target = value
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or("graphql-job")
+                .to_string();
+            let idempotency_key = value
+                .get("idempotency_key")
+                .and_then(Value::as_str)
+                .unwrap_or(&target)
+                .to_string();
+            let job = engine
+                .enqueue_job(kind, target, idempotency_key)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "job": job })
+        }
+        _ => return Err(format!("unsupported TraceDB GraphQL field {field}")),
+    };
+    Ok((field, value))
+}
+
+async fn query_output_value(
+    engine: &EngineHandle,
+    actor: &ActorContext,
+    query: HybridQuery,
+) -> std::io::Result<Value> {
+    let include_explain = query.explain;
+    let (timed_output, _) = engine.query_with_timing_as(actor, query).await?;
+    let output = timed_output.output;
+    if include_explain {
+        serde_json::to_value(output).map_err(to_io_error)
+    } else {
+        let mut value = json!({ "results": output.results });
+        if let Some(next_cursor) = output.next_cursor {
+            value["next_cursor"] = json!(next_cursor);
+        }
+        Ok(value)
+    }
+}
+
+fn split_traceql_command(input: &str) -> Option<(&str, &str)> {
+    let trimmed = input.trim();
+    for command in [
+        "SCHEMA APPLY",
+        "RECORD PUT",
+        "RECORD BATCH",
+        "RECORD PATCH",
+        "RECORD DELETE",
+        "RECORD GET",
+        "RECORD SCAN",
+        "ADMIN COMPACT",
+        "ADMIN SNAPSHOT",
+        "ADMIN RESTORE",
+        "JOBS LIST",
+        "JOBS RUN",
+        "EXPLAIN",
+        "QUERY",
+        "PUT",
+        "BATCH",
+        "PATCH",
+        "DELETE",
+        "GET",
+        "SCAN",
+        "COMPACT",
+        "SNAPSHOT",
+        "RESTORE",
+    ] {
+        if trimmed.eq_ignore_ascii_case(command) {
+            return Some((command, "{}"));
+        }
+        if trimmed.len() > command.len()
+            && trimmed[..command.len()].eq_ignore_ascii_case(command)
+            && trimmed.as_bytes()[command.len()].is_ascii_whitespace()
+        {
+            return Some((command, trimmed[command.len()..].trim()));
+        }
+    }
+    None
+}
+
+fn restore_value_from_payload(payload: &str) -> std::io::Result<Value> {
+    let value: Value = serde_json::from_str(payload).map_err(to_io_error)?;
+    let source = value.get("source").and_then(Value::as_str).ok_or_else(|| {
+        to_io_error(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "restore source is required",
+        ))
+    })?;
+    let target = value.get("target").and_then(Value::as_str).ok_or_else(|| {
+        to_io_error(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "restore target is required",
+        ))
+    })?;
+    let restored = TraceDb::restore_snapshot(source, target).map_err(to_io_error)?;
+    let mut response = json!({ "restored": true, "source": source, "target": target });
+    if let Some(verify_record) = value.get("verify_record") {
+        let request: RecordGetRequest =
+            serde_json::from_value(verify_record.clone()).map_err(to_io_error)?;
+        let record = restored.get(request.clone()).map_err(to_io_error)?;
+        response["verification"] = json!({
+            "status": if record.is_some() { "passed" } else { "failed" },
+            "record_visible": record.is_some(),
+            "request": request,
+            "record": record,
+        });
+    }
+    Ok(response)
+}
+
+fn graphql_error(message: impl Into<String>) -> Value {
+    json!({
+        "message": message.into(),
+        "extensions": {
+            "code": "TRACEDB_GRAPHQL_ERROR",
+        },
+    })
+}
+
+fn graphql_root_field(query: &str) -> Option<String> {
+    let body_start = query.find('{')?;
+    let body = &query[body_start + 1..];
+    let mut chars = body.trim_start().chars().peekable();
+    let mut field = String::new();
+    while let Some(ch) = chars.peek().copied() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            field.push(ch);
+            let _ = chars.next();
+        } else {
+            break;
+        }
+    }
+    if field.is_empty() {
+        None
+    } else {
+        Some(field)
+    }
+}
+
+fn graphql_input_json(
+    request: &GraphQlQueryRequest,
+    field: &str,
+) -> std::result::Result<Value, String> {
+    let input = graphql_input_string(request, field)?;
+    serde_json::from_str(&input).map_err(|error| format!("invalid {field} input JSON: {error}"))
+}
+
+fn graphql_input_string(
+    request: &GraphQlQueryRequest,
+    field: &str,
+) -> std::result::Result<String, String> {
+    let raw = graphql_arg_raw(&request.query, field, "input")
+        .ok_or_else(|| format!("{field} input argument is required"))?;
+    if let Some(variable_name) = raw.strip_prefix('$') {
+        let variable = request
+            .variables
+            .get(variable_name)
+            .ok_or_else(|| format!("GraphQL variable ${variable_name} is required"))?;
+        return match variable {
+            Value::String(value) => Ok(value.clone()),
+            other => Ok(other.to_string()),
+        };
+    }
+    serde_json::from_str::<String>(&raw)
+        .map_err(|error| format!("{field} input must be a GraphQL string: {error}"))
+}
+
+fn graphql_arg_raw(query: &str, field: &str, arg_name: &str) -> Option<String> {
+    let field_index = query.find(field)?;
+    let after_field = &query[field_index + field.len()..];
+    let open = after_field.find('(')?;
+    let args = matching_delimited(&after_field[open..], '(', ')')?;
+    split_top_level(&args, ',').into_iter().find_map(|part| {
+        let (name, value) = part.split_once(':')?;
+        (name.trim() == arg_name).then(|| value.trim().to_string())
+    })
+}
+
+fn matching_delimited(input: &str, open: char, close: char) -> Option<String> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut started = false;
+    let mut out = String::new();
+    for ch in input.chars() {
+        if !started {
+            if ch == open {
+                started = true;
+                depth = 1;
+            }
+            continue;
+        }
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            out.push(ch);
+            continue;
+        }
+        if ch == open {
+            depth += 1;
+            out.push(ch);
+            continue;
+        }
+        if ch == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(out);
+            }
+            out.push(ch);
+            continue;
+        }
+        out.push(ch);
+    }
+    None
+}
+
+fn split_top_level(input: &str, separator: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ if ch == separator && depth == 0 => {
+                parts.push(input[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(input[start..].trim());
+    parts
 }
 
 fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
@@ -1432,6 +1972,35 @@ fn first_record_json_string(value: Option<&Value>, field: &str) -> Option<String
 
 fn graphql_tenant_from_body(value: Option<&Value>) -> Option<String> {
     let query = value?.get("query")?.as_str()?;
+    if let Some(field) = graphql_root_field(query) {
+        let request = GraphQlQueryRequest {
+            query: query.to_string(),
+            variables: value
+                .and_then(|body| body.get("variables"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            operation_name: value
+                .and_then(|body| {
+                    body.get("operation_name")
+                        .or_else(|| body.get("operationName"))
+                })
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        };
+        if let Ok(input) = graphql_input_json(&request, &field) {
+            if let Some(tenant_id) = json_string(&input, "tenant_id")
+                .or_else(|| json_string(&input, "tenant"))
+                .or_else(|| {
+                    input
+                        .get("record")
+                        .and_then(|record| json_string(record, "tenant_id"))
+                })
+                .or_else(|| first_record_json_string(Some(&input), "tenant_id"))
+            {
+                return Some(tenant_id);
+            }
+        }
+    }
     let marker = "tenant_id:";
     let after_marker = query.split(marker).nth(1)?.trim_start();
     quoted_prefix(after_marker)
@@ -1439,6 +2008,21 @@ fn graphql_tenant_from_body(value: Option<&Value>) -> Option<String> {
 
 fn traceql_tenant_from_body(value: Option<&Value>) -> Option<String> {
     let query = value?.get("query")?.as_str()?;
+    if let Some((_, payload)) = split_traceql_command(query) {
+        if let Ok(value) = serde_json::from_str::<Value>(payload) {
+            if let Some(tenant_id) = json_string(&value, "tenant_id")
+                .or_else(|| json_string(&value, "tenant"))
+                .or_else(|| {
+                    value
+                        .get("record")
+                        .and_then(|record| json_string(record, "tenant_id"))
+                })
+                .or_else(|| first_record_json_string(Some(&value), "tenant_id"))
+            {
+                return Some(tenant_id);
+            }
+        }
+    }
     query.lines().find_map(|line| {
         let line = line.trim();
         line.strip_prefix("TENANT ")
@@ -1684,6 +2268,29 @@ mod tests {
         }
     }
 
+    fn test_idempotency_cache() -> IdempotencyCache {
+        Arc::new(Mutex::new(IdempotencyCacheState {
+            entries: HashMap::new(),
+        }))
+    }
+
+    fn json_body(response: &str) -> Value {
+        let body = response
+            .split("\r\n\r\n")
+            .nth(1)
+            .or_else(|| response.split("\n\n").nth(1))
+            .expect("response body");
+        serde_json::from_str(body).expect("json response body")
+    }
+
+    fn http_post(path: &str, body: &str) -> String {
+        format!(
+            "POST {path} HTTP/1.1\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
     #[tokio::test]
     async fn engine_handle_readiness_does_not_wait_behind_read_snapshot() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1744,6 +2351,136 @@ mod tests {
             .await
             .expect("scan");
         assert_eq!(scanned.returned_count, 2);
+    }
+
+    #[test]
+    fn native_graphql_returns_data_errors_and_preserves_bounded_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let engine = EngineHandle::open(temp.path()).expect("engine handle");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            engine
+                .apply_schema(runtime_test_schema())
+                .await
+                .expect("schema");
+            engine
+                .put(RecordPutRequest::new(runtime_test_record(
+                    "intro",
+                    "native graphql body",
+                )))
+                .await
+                .expect("put");
+        });
+        let query_input = json!({
+            "table": "docs",
+            "tenant_id": "tenant-a",
+            "text_field": "body",
+            "text": "native",
+            "top_k": 2,
+            "freshness": "Strict",
+            "explain": false,
+        })
+        .to_string();
+        let graphql = format!(
+            "query {{ query(input: {}) {{ results }} }}",
+            serde_json::to_string(&query_input).expect("quoted gql input")
+        );
+        let body = json!({ "query": graphql }).to_string();
+
+        let response = handle_request_text_for_test(
+            &http_post("/v1/graphql", &body),
+            engine.clone(),
+            test_idempotency_cache(),
+            EngineServerConfig::default(),
+        )
+        .expect("native graphql response");
+        let payload = json_body(&response);
+        assert!(payload.get("errors").is_none(), "payload: {payload}");
+        assert_eq!(
+            payload["data"]["query"]["results"][0]["record_id"],
+            json!("intro")
+        );
+
+        let bounded_query =
+            r#"query { docs(tenant_id: "tenant-a", text: "native", limit: 2) { id } }"#;
+        let bounded_body = json!({ "query": bounded_query }).to_string();
+        let bounded = handle_request_text_for_test(
+            &http_post("/v1/graphql/bounded", &bounded_body),
+            engine.clone(),
+            test_idempotency_cache(),
+            EngineServerConfig::default(),
+        )
+        .expect("bounded graphql response");
+        let bounded_payload = json_body(&bounded);
+        assert!(
+            bounded_payload.get("results").is_some(),
+            "bounded path should keep TraceDB QueryResponse shape: {bounded_payload}"
+        );
+        assert!(
+            bounded_payload.get("data").is_none(),
+            "bounded path should not be native GraphQL envelope: {bounded_payload}"
+        );
+
+        let invalid_body =
+            json!({ "query": "query { unsupported(input: \"{}\") { ok } }" }).to_string();
+        let invalid = handle_request_text_for_test(
+            &http_post("/v1/graphql", &invalid_body),
+            engine,
+            test_idempotency_cache(),
+            EngineServerConfig::default(),
+        )
+        .expect("graphql errors response");
+        let invalid_payload = json_body(&invalid);
+        assert!(invalid_payload["data"].is_null());
+        assert!(invalid_payload["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("unsupported TraceDB GraphQL field"));
+    }
+
+    #[test]
+    fn traceql_command_statements_execute_record_operations() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let engine = EngineHandle::open(temp.path()).expect("engine handle");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            engine
+                .apply_schema(runtime_test_schema())
+                .await
+                .expect("schema");
+            engine
+                .put(RecordPutRequest::new(runtime_test_record(
+                    "traceql",
+                    "command body",
+                )))
+                .await
+                .expect("put");
+        });
+        let command = format!(
+            "RECORD GET {}",
+            json!({
+                "table": "docs",
+                "tenant_id": "tenant-a",
+                "id": "traceql",
+            })
+        );
+        let body = json!({ "query": command }).to_string();
+
+        let response = handle_request_text_for_test(
+            &http_post("/v1/traceql", &body),
+            engine,
+            test_idempotency_cache(),
+            EngineServerConfig::default(),
+        )
+        .expect("traceql command response");
+        let payload = json_body(&response);
+        assert_eq!(payload["record"]["id"], json!("traceql"));
     }
 
     #[tokio::test]

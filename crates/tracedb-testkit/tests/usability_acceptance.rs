@@ -809,7 +809,7 @@ fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
         "query": "query { docs(tenant_id: \"tenant-a\", where: {status: \"published\"}, match: \"rust\", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, limit: 5) { record_id } }"
     })
     .to_string();
-    let response = http_response(addr, "POST", "/v1/graphql", &graphql);
+    let response = http_response(addr, "POST", "/v1/graphql/bounded", &graphql);
     assert!(
         response.starts_with("HTTP/1.1 200 OK"),
         "unexpected GraphQL response: {response}"
@@ -823,7 +823,7 @@ fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
         "query": "query { docs(tenant_id: \"tenant-a\", match: \"rust\", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, limit: 5, explain: true) { record_id } }"
     })
     .to_string();
-    let explain_response = http_response(addr, "POST", "/v1/graphql", &explain_graphql);
+    let explain_response = http_response(addr, "POST", "/v1/graphql/bounded", &explain_graphql);
     assert!(
         explain_response.starts_with("HTTP/1.1 200 OK"),
         "unexpected GraphQL explain response: {explain_response}"
@@ -842,7 +842,7 @@ fn http_graphql_endpoint_executes_bounded_query_through_hybrid_query() {
         "query": "mutation { docs(tenant_id: \"tenant-a\") { record_id } }"
     })
     .to_string();
-    let invalid_response = http_response(addr, "POST", "/v1/graphql", &invalid_graphql);
+    let invalid_response = http_response(addr, "POST", "/v1/graphql/bounded", &invalid_graphql);
     assert!(
         invalid_response.starts_with("HTTP/1.1 400 Bad Request"),
         "invalid GraphQL should preserve bad-request envelope: {invalid_response}"
@@ -896,7 +896,9 @@ fn http_graphql_schema_exports_sdl_from_applied_table_schema() {
     }
     assert_eq!(
         body["execution"],
-        json!("POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope")
+        json!(
+            "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors"
+        )
     );
 }
 
@@ -1003,6 +1005,7 @@ fn versioned_http_api_reference_tracks_current_product_routes() {
         "POST /v1/query",
         "POST /v1/traceql",
         "POST /v1/graphql",
+        "POST /v1/graphql/bounded",
         "POST /v1/explain",
         "POST /v1/admin/compact",
         "POST /v1/admin/snapshot",
@@ -1485,6 +1488,7 @@ fn generated_openapi_v1_artifact_tracks_current_product_routes() {
         ("post", "/v1/query"),
         ("post", "/v1/traceql"),
         ("post", "/v1/graphql"),
+        ("post", "/v1/graphql/bounded"),
         ("get", "/v1/graphql/schema"),
         ("post", "/v1/explain"),
         ("post", "/v1/admin/compact"),
@@ -2240,7 +2244,7 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         ".match(\"body\"",
         ".near(\"embedding\"",
         ".with({ explain: true, freshness: \"lazy\" })",
-        "TRACEDB_SAFE_RETRIES should retry bounded GraphQL",
+        "TRACEDB_SAFE_RETRIES should retry native GraphQL",
         "db.graphql",
         "db.graphqlRequest",
         "TraceDbRequestError",

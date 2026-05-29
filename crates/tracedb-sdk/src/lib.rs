@@ -284,6 +284,8 @@ impl TraceDbClientConfig {
 pub struct TraceDbRequestOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_context: Option<TraceDbActorContext>,
 }
 
 impl TraceDbRequestOptions {
@@ -293,6 +295,54 @@ impl TraceDbRequestOptions {
 
     pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.idempotency_key = Some(key.into());
+        self
+    }
+
+    pub fn with_actor_context(mut self, actor_context: TraceDbActorContext) -> Self {
+        self.actor_context = Some(actor_context);
+        self
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TraceDbActorContext {
+    pub tenant_id: String,
+    pub database_id: String,
+    pub branch_id: String,
+    pub token_identity: String,
+    pub request_id: String,
+    #[serde(default)]
+    pub policy_epoch: u64,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+impl TraceDbActorContext {
+    pub fn new(
+        tenant_id: impl Into<String>,
+        database_id: impl Into<String>,
+        branch_id: impl Into<String>,
+        token_identity: impl Into<String>,
+        request_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tenant_id: tenant_id.into(),
+            database_id: database_id.into(),
+            branch_id: branch_id.into(),
+            token_identity: token_identity.into(),
+            request_id: request_id.into(),
+            policy_epoch: 0,
+            scopes: Vec::new(),
+        }
+    }
+
+    pub fn with_policy_epoch(mut self, policy_epoch: u64) -> Self {
+        self.policy_epoch = policy_epoch;
+        self
+    }
+
+    pub fn with_scopes(mut self, scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.scopes = scopes.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -537,7 +587,7 @@ impl TraceDbClient {
         self.post_json("/v1/graphql", request)
     }
 
-    pub fn graphql_typed(&self, query: impl Into<String>) -> TraceDbClientResult<QueryResponse> {
+    pub fn graphql_typed(&self, query: impl Into<String>) -> TraceDbClientResult<GraphQlResponse> {
         let request = GraphQlQueryRequest::new(query);
         self.graphql_request_typed(&request)
     }
@@ -545,8 +595,35 @@ impl TraceDbClient {
     pub fn graphql_request_typed(
         &self,
         request: &GraphQlQueryRequest,
-    ) -> TraceDbClientResult<QueryResponse> {
+    ) -> TraceDbClientResult<GraphQlResponse> {
         self.post_typed("/v1/graphql", request)
+    }
+
+    pub fn bounded_graphql(&self, query: impl Into<String>) -> TraceDbClientResult<Value> {
+        let request = GraphQlQueryRequest::new(query);
+        self.bounded_graphql_request(&request)
+    }
+
+    pub fn bounded_graphql_request(
+        &self,
+        request: &GraphQlQueryRequest,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json("/v1/graphql/bounded", request)
+    }
+
+    pub fn bounded_graphql_typed(
+        &self,
+        query: impl Into<String>,
+    ) -> TraceDbClientResult<QueryResponse> {
+        let request = GraphQlQueryRequest::new(query);
+        self.bounded_graphql_request_typed(&request)
+    }
+
+    pub fn bounded_graphql_request_typed(
+        &self,
+        request: &GraphQlQueryRequest,
+    ) -> TraceDbClientResult<QueryResponse> {
+        self.post_typed("/v1/graphql/bounded", request)
     }
 
     pub fn graphql_schema(&self) -> TraceDbClientResult<Value> {
@@ -675,15 +752,15 @@ impl TraceDbClient {
     }
 
     fn request_attempts(&self, method: &str, path: &str, options: &TraceDbRequestOptions) -> u8 {
-        if is_retry_safe_request(method, path) {
-            self.config.safe_retries.saturating_add(1)
-        } else if is_idempotent_retry_request(method, path)
+        if is_idempotent_retry_request(method, path)
             && options
                 .idempotency_key
                 .as_deref()
                 .is_some_and(|key| !key.is_empty())
         {
             self.config.idempotency_retries.saturating_add(1)
+        } else if is_retry_safe_request(method, path) {
+            self.config.safe_retries.saturating_add(1)
         } else {
             1
         }
@@ -711,6 +788,7 @@ impl TraceDbClient {
             request.push_str(&format!("Authorization: Bearer {}\r\n", self.config.token));
         }
         request.push_str(&idempotency_key_header);
+        request.push_str(&self.actor_headers(options)?);
         if !body_bytes.is_empty() {
             request.push_str("Content-Type: application/json\r\n");
         }
@@ -823,6 +901,35 @@ impl TraceDbClient {
                 body.insert("branch_id".to_string(), Value::String(branch_id));
             }
         }
+    }
+
+    fn actor_headers(&self, options: &TraceDbRequestOptions) -> TraceDbClientResult<String> {
+        let mut headers = String::new();
+        if let Some(actor) = &options.actor_context {
+            headers.push_str(&header_line("x-tracedb-tenant-id", &actor.tenant_id)?);
+            headers.push_str(&header_line("x-tracedb-database-id", &actor.database_id)?);
+            headers.push_str(&header_line("x-tracedb-branch-id", &actor.branch_id)?);
+            headers.push_str(&header_line(
+                "x-tracedb-token-identity",
+                &actor.token_identity,
+            )?);
+            headers.push_str(&header_line("x-tracedb-request-id", &actor.request_id)?);
+            headers.push_str(&header_line(
+                "x-tracedb-policy-epoch",
+                &actor.policy_epoch.to_string(),
+            )?);
+            if !actor.scopes.is_empty() {
+                headers.push_str(&header_line("x-tracedb-scopes", &actor.scopes.join(","))?);
+            }
+        } else {
+            if let Some(database_id) = &self.config.database_id {
+                headers.push_str(&header_line("x-tracedb-database-id", database_id)?);
+            }
+            if let Some(branch_id) = &self.config.branch_id {
+                headers.push_str(&header_line("x-tracedb-branch-id", branch_id)?);
+            }
+        }
+        Ok(headers)
     }
 }
 
@@ -1033,9 +1140,18 @@ impl TraceDbAsyncClient {
     pub async fn graphql_typed(
         &self,
         query: impl Into<String>,
-    ) -> TraceDbClientResult<QueryResponse> {
+    ) -> TraceDbClientResult<GraphQlResponse> {
         let request = GraphQlQueryRequest::new(query);
         self.run(move |client| client.graphql_request_typed(&request))
+            .await
+    }
+
+    pub async fn bounded_graphql_typed(
+        &self,
+        query: impl Into<String>,
+    ) -> TraceDbClientResult<QueryResponse> {
+        let request = GraphQlQueryRequest::new(query);
+        self.run(move |client| client.bounded_graphql_request_typed(&request))
             .await
     }
 
@@ -1330,19 +1446,107 @@ impl TraceQlQueryRequest {
             query: query.into(),
         }
     }
+
+    pub fn command<T: Serialize>(
+        command: impl AsRef<str>,
+        payload: &T,
+    ) -> TraceDbClientResult<Self> {
+        Ok(Self {
+            query: format!("{} {}", command.as_ref(), serde_json::to_string(payload)?),
+        })
+    }
+
+    pub fn schema_apply(schema: &TableSchema) -> TraceDbClientResult<Self> {
+        Self::command("SCHEMA APPLY", schema)
+    }
+
+    pub fn put(record: &RecordInput) -> TraceDbClientResult<Self> {
+        Self::command("RECORD PUT", record)
+    }
+
+    pub fn batch(request: &RecordPutBatchRequest) -> TraceDbClientResult<Self> {
+        Self::command("RECORD BATCH", request)
+    }
+
+    pub fn patch(request: &RecordPatchRequest) -> TraceDbClientResult<Self> {
+        Self::command("RECORD PATCH", request)
+    }
+
+    pub fn delete(request: &RecordDeleteRequest) -> TraceDbClientResult<Self> {
+        Self::command("RECORD DELETE", request)
+    }
+
+    pub fn get(request: &RecordGetRequest) -> TraceDbClientResult<Self> {
+        Self::command("RECORD GET", request)
+    }
+
+    pub fn scan(request: &RecordScanRequest) -> TraceDbClientResult<Self> {
+        Self::command("RECORD SCAN", request)
+    }
+
+    pub fn query(query: &HybridQuery) -> TraceDbClientResult<Self> {
+        Self::command("QUERY", query)
+    }
+
+    pub fn explain(query: &HybridQuery) -> TraceDbClientResult<Self> {
+        Self::command("EXPLAIN", query)
+    }
+
+    pub fn jobs_list() -> Self {
+        Self {
+            query: "JOBS LIST".to_string(),
+        }
+    }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GraphQlQueryRequest {
     pub query: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub variables: Value,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "operationName"
+    )]
+    pub operation_name: Option<String>,
 }
 
 impl GraphQlQueryRequest {
     pub fn new(query: impl Into<String>) -> Self {
         Self {
             query: query.into(),
+            variables: Value::Null,
+            operation_name: None,
         }
     }
+
+    pub fn with_variables(mut self, variables: Value) -> Self {
+        self.variables = variables;
+        self
+    }
+
+    pub fn with_operation_name(mut self, operation_name: impl Into<String>) -> Self {
+        self.operation_name = Some(operation_name.into());
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GraphQlResponse {
+    #[serde(default)]
+    pub data: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<GraphQlError>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GraphQlError {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1596,6 +1800,17 @@ fn idempotency_key_header(
     Ok(format!("Idempotency-Key: {key}\r\n"))
 }
 
+fn header_line(name: &str, value: &str) -> TraceDbClientResult<String> {
+    if value.contains('\r') || value.contains('\n') {
+        return Err(TraceDbClientError::InvalidRequest {
+            method: "CONFIG".to_string(),
+            path: name.to_string(),
+            message: "header values must not contain CR or LF".to_string(),
+        });
+    }
+    Ok(format!("{name}: {value}\r\n"))
+}
+
 fn map_request_io_error(
     method: &str,
     path: &str,
@@ -1626,6 +1841,7 @@ fn is_retry_safe_request(method: &str, path: &str) -> bool {
             | ("POST", "/v1/query")
             | ("POST", "/v1/traceql")
             | ("POST", "/v1/graphql")
+            | ("POST", "/v1/graphql/bounded")
             | ("GET", "/v1/graphql/schema")
             | ("POST", "/v1/explain")
     )
@@ -1643,6 +1859,8 @@ fn is_idempotent_retry_request(method: &str, path: &str) -> bool {
             | ("POST", "/v1/admin/compact")
             | ("POST", "/v1/admin/snapshot")
             | ("POST", "/v1/admin/restore")
+            | ("POST", "/v1/graphql")
+            | ("POST", "/v1/traceql")
     )
 }
 

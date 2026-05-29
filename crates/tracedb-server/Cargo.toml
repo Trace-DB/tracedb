@@ -9,6 +9,7 @@ name = "tracedb-server"
 path = "src/main.rs"
 
 [dependencies]
+async-graphql.workspace = true
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -43,6 +44,7 @@ class TraceDB:
     token: str | None = None
     database_id: str | None = None
     branch_id: str | None = None
+    actor_context: Mapping[str, Any] | None = None
     timeout: float = 5.0
     safe_retries: int = 0
     idempotency_retries: int = 0
@@ -68,6 +70,7 @@ class TraceDB:
         token: str | None = None,
         database_id: str | None = None,
         branch_id: str | None = None,
+        actor_context: Mapping[str, Any] | None = None,
         timeout: float | None = None,
         safe_retries: int | None = None,
         idempotency_retries: int | None = None,
@@ -117,6 +120,7 @@ class TraceDB:
             "token": token if token is not None else source.get("TRACEDB_TOKEN"),
             "database_id": database_id if database_id is not None else source.get("TRACEDB_DATABASE_ID"),
             "branch_id": branch_id if branch_id is not None else source.get("TRACEDB_BRANCH_ID"),
+            "actor_context": dict(actor_context) if actor_context is not None else None,
         }
         if resolved_timeout is not None:
             kwargs["timeout"] = resolved_timeout
@@ -140,6 +144,7 @@ class TraceDB:
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        headers.update(self._actor_headers())
         data = None
         if request_body is not None:
             data = json.dumps(request_body, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -223,6 +228,12 @@ class TraceDB:
     def graphql_request(self, request: JsonObject) -> JsonObject:
         return self.request_json("POST", "/v1/graphql", dict(request))
 
+    def bounded_graphql(self, query: str) -> JsonObject:
+        return self.bounded_graphql_request({"query": query})
+
+    def bounded_graphql_request(self, request: JsonObject) -> JsonObject:
+        return self.request_json("POST", "/v1/graphql/bounded", dict(request))
+
     def graphql_schema(self) -> JsonObject:
         return self.request_json("GET", "/v1/graphql/schema")
 
@@ -241,6 +252,104 @@ class TraceDB:
             elif self.database_id and isinstance(copied.get("database_id"), str):
                 copied["branch_id"] = f"{copied['database_id']}:main"
         return copied
+
+    def _actor_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if self.actor_context is None:
+            if self.database_id:
+                headers["x-tracedb-database-id"] = _validated_header_value(
+                    "x-tracedb-database-id",
+                    self.database_id,
+                )
+            if self.branch_id:
+                headers["x-tracedb-branch-id"] = _validated_header_value(
+                    "x-tracedb-branch-id",
+                    self.branch_id,
+                )
+            return headers
+
+        required = {
+            "tenant_id": "x-tracedb-tenant-id",
+            "database_id": "x-tracedb-database-id",
+            "branch_id": "x-tracedb-branch-id",
+            "token_identity": "x-tracedb-token-identity",
+            "request_id": "x-tracedb-request-id",
+        }
+        for key, header in required.items():
+            value = self.actor_context.get(key)
+            if not isinstance(value, str) or not value:
+                raise TraceDBRequestError("CONFIG", key, f"actor_context.{key} must be a non-empty string")
+            headers[header] = _validated_header_value(header, value)
+        policy_epoch = self.actor_context.get("policy_epoch", 0)
+        headers["x-tracedb-policy-epoch"] = _validated_header_value(
+            "x-tracedb-policy-epoch",
+            str(policy_epoch),
+        )
+        scopes = self.actor_context.get("scopes")
+        if scopes:
+            if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
+                raise TraceDBRequestError("CONFIG", "scopes", "actor_context.scopes must be a list of strings")
+            headers["x-tracedb-scopes"] = _validated_header_value("x-tracedb-scopes", ",".join(scopes))
+        return headers
+
+
+@dataclass(frozen=True)
+class AsyncTraceDB:
+    sync_client: TraceDB
+
+    @classmethod
+    def from_env(cls, **kwargs: Any) -> "AsyncTraceDB":
+        return cls(TraceDB.from_env(**kwargs))
+
+    async def request_json(
+        self,
+        method: str,
+        path: str,
+        body: JsonObject | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> JsonObject:
+        return await asyncio.to_thread(
+            self.sync_client.request_json,
+            method,
+            path,
+            body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def ready(self) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.ready)
+
+    async def health(self) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.health)
+
+    async def apply_schema(self, schema: JsonObject, *, idempotency_key: str | None = None) -> JsonObject:
+        return await asyncio.to_thread(
+            self.sync_client.apply_schema,
+            schema,
+            idempotency_key=idempotency_key,
+        )
+
+    async def traceql(self, query: str) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.traceql, query)
+
+    async def traceql_request(self, request: JsonObject) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.traceql_request, request)
+
+    async def graphql(self, query: str) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.graphql, query)
+
+    async def graphql_request(self, request: JsonObject) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.graphql_request, request)
+
+    async def bounded_graphql(self, query: str) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.bounded_graphql, query)
+
+    async def bounded_graphql_request(self, request: JsonObject) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.bounded_graphql_request, request)
+
+    async def graphql_schema(self) -> JsonObject:
+        return await asyncio.to_thread(self.sync_client.graphql_schema)
 
 
 @dataclass(frozen=True)
@@ -507,6 +616,12 @@ def _validate_idempotency_key(method: str, path: str, key: str) -> None:
         raise TraceDBRequestError(method, path, "idempotency key cannot contain CR/LF")
 
 
+def _validated_header_value(name: str, value: str) -> str:
+    if "\r" in value or "\n" in value:
+        raise TraceDBRequestError("CONFIG", name, "header values must not contain CR/LF")
+    return value
+
+
 def _parse_optional_nonnegative_int(variable: str, value: str | None) -> int | None:
     if value is None or not value.strip():
         return None
@@ -526,10 +641,10 @@ def _attempt_count(
     idempotency_retries: int,
     idempotency_key: str | None,
 ) -> int:
-    if _is_retry_safe_request(method, path):
-        return safe_retries + 1
     if _is_idempotent_retry_request(method, path) and idempotency_key:
         return idempotency_retries + 1
+    if _is_retry_safe_request(method, path):
+        return safe_retries + 1
     return 1
 
 
@@ -547,6 +662,7 @@ def _is_retry_safe_request(method: str, path: str) -> bool:
         ("POST", "/v1/query"),
         ("POST", "/v1/traceql"),
         ("POST", "/v1/graphql"),
+        ("POST", "/v1/graphql/bounded"),
         ("POST", "/v1/explain"),
     }
 
@@ -562,6 +678,8 @@ def _is_idempotent_retry_request(method: str, path: str) -> bool:
         ("POST", "/v1/admin/compact"),
         ("POST", "/v1/admin/snapshot"),
         ("POST", "/v1/admin/restore"),
+        ("POST", "/v1/graphql"),
+        ("POST", "/v1/traceql"),
     }
 
 

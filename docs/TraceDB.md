@@ -196,18 +196,19 @@ quickstart evidence, not `typescript_check`, not TypeScript HTTP smoke, not
 managed-cloud proof, not benchmark evidence, and not SQL compatibility.
 
 Current platform conformance checkpoint: `scripts/platform_conformance.py` maps
-HTTP direct, Rust SDK, TypeScript SDK, and Python SDK into all 13 Platform
-Contract v0 scenario IDs, plus partial TraceQL/SQL-ish and GraphQL adapter
-lanes. Modal workspace run `ap-YBjqjv9hV5dHkVb2AgJSud` passed 20/20 commands in
-96.9s, including `platform-conformance-quick`,
-`traceql-sqlish-conformance`, `graphql-http-conformance`,
+HTTP direct, Rust SDK, TypeScript SDK, Python SDK, native TraceQL, and native
+GraphQL into all 13 Platform Contract v0 scenario IDs, plus the partial
+TraceQL/SQL-ish compatibility lane. Modal workspace run
+`ap-YBjqjv9hV5dHkVb2AgJSud` passed 20/20 commands in 96.9s, including
+`platform-conformance-quick`, `traceql-sqlish-conformance`,
 `typescript-sdk-conformance`, `python-sdk-conformance`, Python unit/install
 smokes, TypeScript package/HTTP/gateway lanes, TypeScript public SDK GraphQL
 schema export evidence, Python public SDK GraphQL schema export evidence,
 TypeScript and Python public SDK GraphQL result/explain smoke coverage, and
-`cargo test --workspace --all-targets`. The GraphQL lane reported schema apply,
-query, explain, and error behavior as passed with 9/13 scenarios intentionally
-`not_checked`, and the workspace tests included the generated GraphQL SDL unit
+`cargo test --workspace --all-targets`. The API parity branch promotes native
+TraceQL and native GraphQL to full 13/13 local conformance lanes; bounded
+GraphQL and SQL-ish SELECT remain compatibility evidence. The workspace tests
+included the generated GraphQL SDL unit
 test, HTTP GraphQL schema export test, Rust SDK `GraphQlQueryRequest`,
 sync/async `graphql_typed`, generated schema helper, and GraphQL safe retry
 coverage; the TypeScript public SDK smoke now also checks
@@ -469,22 +470,19 @@ passes that scenario through `/v1/traceql`, the Rust SDK lane passes it through
 lane that checks bounded SQL-ish query, explain, and error behavior while
 leaving schema/write/admin scenarios `not_checked`. This is
 TraceQL/query-adapter execution evidence only; SQL compatibility and PostgreSQL
-compatibility remain unimplemented. `GET /v1/graphql/schema` now exports
-generated SDL from applied TraceDB table schema, and `POST /v1/graphql` exposes
-a bounded GraphQL query adapter over the same `HybridQuery` model. The GraphQL
-conformance lane checks schema export, query, explain, and error behavior while
-leaving write/admin scenarios `not_checked`. The Rust SDK exposes the generated
+compatibility remain unimplemented. `GET /v1/graphql/schema` exports generated
+SDL from applied TraceDB table schema, `POST /v1/graphql` exposes native
+GraphQL `data`/`errors` operations, and `POST /v1/graphql/bounded` preserves the
+bounded adapter over the same `HybridQuery` model. The Rust SDK exposes the generated
 schema route through `TraceDbClient::graphql_schema`,
 `TraceDbClient::graphql_schema_typed`, and
-`TraceDbAsyncClient::graphql_schema_typed`, then exposes the bounded adapter
-through `TraceDbClient::graphql_typed`, `graphql_request_typed`, and
-`GraphQlQueryRequest`. The TypeScript SDK exposes schema export through
-`TraceDB.graphqlSchema()` and bounded execution through `TraceDB.graphql()` and
-`graphqlRequest({ query })`; the Python SDK exposes schema export through
-`TraceDB.graphql_schema()` and bounded execution through `TraceDB.graphql()`
-and `graphql_request({"query": query})`. GraphQL mutation support, subscription
-support, resolver runtime, GraphQL data-envelope execution, and full adapter
-parity remain unimplemented.
+`TraceDbAsyncClient::graphql_schema_typed`, native execution through
+`TraceDbClient::graphql_typed`, and compatibility execution through
+`bounded_graphql_typed`. The TypeScript SDK exposes schema export through
+`TraceDB.graphqlSchema()`, native execution through `TraceDB.graphql()`, and
+compatibility execution through `TraceDB.boundedGraphql()`; the Python SDK
+mirrors those as `TraceDB.graphql_schema()`, `TraceDB.graphql()`, and
+`TraceDB.bounded_graphql()`. GraphQL subscriptions remain unsupported.
 Mutation and admin routes accept optional `Idempotency-Key` for local
 data-dir-backed engine replay, and the gateway forwards that header. Replay
 survives a clean engine reopen from the same data directory through

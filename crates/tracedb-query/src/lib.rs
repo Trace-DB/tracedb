@@ -1,20 +1,27 @@
 #![forbid(unsafe_code)]
 
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::Sha256;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracedb_core::{
     builtin_module_manifests, checksum_bytes, compute_manifest_checksum, database_id_from_path,
-    decrypt_artifact_if_needed, recover_stale_pid_lock, value_as_f32_vec, DerivedFeatureState,
-    EncryptionContext, Epoch, FeatureStatus, IdempotencyReceipt, IndexManifest, IndexState,
-    MasterKey, ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
+    decrypt_artifact_if_needed, recover_stale_pid_lock, stable_body_hash, value_as_f32_vec,
+    DerivedFeatureState, EncryptionContext, Epoch, FeatureStatus, IdempotencyReceipt,
+    IndexManifest, IndexState, MasterKey, ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
 };
 use tracedb_jobs::{JobCatalog, JobEvent, JobKind, TraceJob, WorkerId};
 use tracedb_log::{CommitRecord, TornWalTail, Wal, WalAppendTiming};
@@ -37,6 +44,10 @@ const CHECKPOINT_FORMAT_VERSION: u32 = 3;
 const CHECKPOINT_LEGACY_COMPACT_FORMAT_VERSION: u32 = 2;
 const CHECKPOINT_LEGACY_JSON_FORMAT_VERSION: u32 = 1;
 const MIN_LEXICAL_CACHE_DOCUMENTS: usize = 2_048;
+const CURSOR_TOKEN_PREFIX: &str = "tdbc1";
+const CURSOR_VERSION: u32 = 1;
+const DEFAULT_CURSOR_TTL_SECS: u64 = 60 * 60;
+type HmacSha256 = Hmac<Sha256>;
 
 pub use tracedb_core::{
     FeatureInvalidation, ModuleManifest, RecordDeletion, RecordInput, TableSchema,
@@ -379,7 +390,41 @@ fn default_tombstone() -> String {
     "user_delete".to_string()
 }
 
-fn parse_cursor_offset(cursor: Option<&str>) -> Result<usize> {
+#[derive(Clone, Debug)]
+struct CursorScope {
+    kind: &'static str,
+    tenant_id: String,
+    database_id: String,
+    branch_id: String,
+    actor_digest: String,
+    query_digest: String,
+    limit: usize,
+    order_key: String,
+}
+
+#[derive(Clone, Debug)]
+struct CursorState {
+    offset: usize,
+    snapshot_epoch: Epoch,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SignedCursorPayload {
+    version: u32,
+    kind: String,
+    tenant_id: String,
+    database_id: String,
+    branch_id: String,
+    actor_digest: String,
+    query_digest: String,
+    snapshot_epoch: u64,
+    limit: usize,
+    order_key: String,
+    offset: usize,
+    expires_at: u64,
+}
+
+fn parse_legacy_cursor_offset(cursor: Option<&str>) -> Result<usize> {
     match cursor {
         Some(value) if value.trim().is_empty() => Err(TraceDbError::InvalidCommand(
             "cursor must be a non-empty offset".to_string(),
@@ -389,6 +434,252 @@ fn parse_cursor_offset(cursor: Option<&str>) -> Result<usize> {
             .map_err(|_| TraceDbError::InvalidCommand(format!("invalid cursor offset: {value}"))),
         None => Ok(0),
     }
+}
+
+fn cursor_scope_for_scan(
+    actor: &ActorContext,
+    request: &RecordScanRequest,
+    limit: usize,
+) -> CursorScope {
+    CursorScope {
+        kind: "scan",
+        tenant_id: request.tenant_id.clone(),
+        database_id: actor.database_id.clone(),
+        branch_id: actor.branch_id.clone(),
+        actor_digest: cursor_actor_digest(actor),
+        query_digest: stable_body_hash(
+            serde_json::json!({
+                "kind": "scan",
+                "table": &request.table,
+                "tenant_id": &request.tenant_id,
+                "order": "record_id_asc",
+            })
+            .to_string()
+            .as_bytes(),
+        ),
+        limit,
+        order_key: "record_id_asc".to_string(),
+    }
+}
+
+fn cursor_scope_for_query(actor: &ActorContext, query: &HybridQuery, limit: usize) -> CursorScope {
+    let mut digest_query = query.clone();
+    digest_query.cursor = None;
+    CursorScope {
+        kind: "query",
+        tenant_id: query.tenant_id.clone(),
+        database_id: actor.database_id.clone(),
+        branch_id: actor.branch_id.clone(),
+        actor_digest: cursor_actor_digest(actor),
+        query_digest: stable_body_hash(
+            serde_json::to_string(&digest_query)
+                .unwrap_or_else(|_| "{}".to_string())
+                .as_bytes(),
+        ),
+        limit,
+        order_key: "ranked".to_string(),
+    }
+}
+
+fn cursor_actor_digest(actor: &ActorContext) -> String {
+    stable_body_hash(
+        serde_json::json!({
+            "tenant_id": &actor.tenant_id,
+            "database_id": &actor.database_id,
+            "branch_id": &actor.branch_id,
+            "token_identity": &actor.token_identity,
+            "policy_epoch": actor.policy_epoch,
+            "scopes": &actor.scopes,
+        })
+        .to_string()
+        .as_bytes(),
+    )
+}
+
+fn resolve_cursor_state(
+    scope: &CursorScope,
+    cursor: Option<&str>,
+    latest_epoch: Epoch,
+) -> Result<CursorState> {
+    let Some(cursor) = cursor else {
+        return Ok(CursorState {
+            offset: 0,
+            snapshot_epoch: latest_epoch,
+        });
+    };
+    if cursor.starts_with(CURSOR_TOKEN_PREFIX) {
+        let payload = decode_signed_cursor(scope, cursor)?;
+        return Ok(CursorState {
+            offset: payload.offset,
+            snapshot_epoch: Epoch::new(payload.snapshot_epoch),
+        });
+    }
+    if cursor_signing_key()?.is_some() {
+        return Err(TraceDbError::InvalidCommand(
+            "invalid cursor: signed cursor token is required".to_string(),
+        ));
+    }
+    Ok(CursorState {
+        offset: parse_legacy_cursor_offset(Some(cursor))?,
+        snapshot_epoch: latest_epoch,
+    })
+}
+
+fn encode_next_cursor(scope: &CursorScope, offset: usize, snapshot_epoch: Epoch) -> Result<String> {
+    if cursor_signing_key()?.is_none() {
+        return Ok(offset.to_string());
+    }
+    let payload = SignedCursorPayload {
+        version: CURSOR_VERSION,
+        kind: scope.kind.to_string(),
+        tenant_id: scope.tenant_id.clone(),
+        database_id: scope.database_id.clone(),
+        branch_id: scope.branch_id.clone(),
+        actor_digest: scope.actor_digest.clone(),
+        query_digest: scope.query_digest.clone(),
+        snapshot_epoch: snapshot_epoch.get(),
+        limit: scope.limit,
+        order_key: scope.order_key.clone(),
+        offset,
+        expires_at: now_unix_secs().saturating_add(cursor_ttl_secs()),
+    };
+    encode_signed_cursor(&payload)
+}
+
+fn encode_signed_cursor(payload: &SignedCursorPayload) -> Result<String> {
+    let key = cursor_signing_key()?.ok_or_else(|| {
+        TraceDbError::InvalidCommand("TRACEDB_CURSOR_SIGNING_KEY_B64 is required".to_string())
+    })?;
+    let payload_json = serde_json::to_vec(payload)?;
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload_json);
+    let mut mac = HmacSha256::new_from_slice(&key)
+        .map_err(|_| TraceDbError::InvalidCommand("invalid cursor signing key".to_string()))?;
+    mac.update(payload_b64.as_bytes());
+    let signature = mac.finalize().into_bytes();
+    Ok(format!(
+        "{CURSOR_TOKEN_PREFIX}.{payload_b64}.{}",
+        URL_SAFE_NO_PAD.encode(signature)
+    ))
+}
+
+fn decode_signed_cursor(scope: &CursorScope, token: &str) -> Result<SignedCursorPayload> {
+    let key = cursor_signing_key()?.ok_or_else(|| {
+        TraceDbError::InvalidCommand(
+            "TRACEDB_CURSOR_SIGNING_KEY_B64 is required to verify cursor".to_string(),
+        )
+    })?;
+    let mut parts = token.split('.');
+    if parts.next() != Some(CURSOR_TOKEN_PREFIX) {
+        return Err(invalid_cursor("malformed token"));
+    }
+    let Some(payload_b64) = parts.next() else {
+        return Err(invalid_cursor("malformed token"));
+    };
+    let Some(signature_b64) = parts.next() else {
+        return Err(invalid_cursor("malformed token"));
+    };
+    if parts.next().is_some() {
+        return Err(invalid_cursor("malformed token"));
+    }
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature_b64)
+        .map_err(|_| invalid_cursor("malformed signature"))?;
+    let mut mac = HmacSha256::new_from_slice(&key)
+        .map_err(|_| TraceDbError::InvalidCommand("invalid cursor signing key".to_string()))?;
+    mac.update(payload_b64.as_bytes());
+    mac.verify_slice(&signature)
+        .map_err(|_| invalid_cursor("signature mismatch"))?;
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .map_err(|_| invalid_cursor("malformed payload"))?;
+    let payload: SignedCursorPayload = serde_json::from_slice(&payload_bytes)?;
+    validate_signed_cursor_payload(scope, &payload)?;
+    Ok(payload)
+}
+
+fn validate_signed_cursor_payload(
+    scope: &CursorScope,
+    payload: &SignedCursorPayload,
+) -> Result<()> {
+    if payload.version != CURSOR_VERSION {
+        return Err(invalid_cursor("unsupported version"));
+    }
+    if payload.expires_at < now_unix_secs() {
+        return Err(invalid_cursor("expired"));
+    }
+    if payload.kind != scope.kind {
+        return Err(invalid_cursor("kind mismatch"));
+    }
+    if payload.tenant_id != scope.tenant_id {
+        return Err(invalid_cursor("tenant mismatch"));
+    }
+    if payload.database_id != scope.database_id {
+        return Err(invalid_cursor("database mismatch"));
+    }
+    if payload.branch_id != scope.branch_id {
+        return Err(invalid_cursor("branch mismatch"));
+    }
+    if payload.actor_digest != scope.actor_digest {
+        return Err(invalid_cursor("actor mismatch"));
+    }
+    if payload.query_digest != scope.query_digest {
+        return Err(invalid_cursor("query mismatch"));
+    }
+    if payload.limit != scope.limit {
+        return Err(invalid_cursor("limit mismatch"));
+    }
+    if payload.order_key != scope.order_key {
+        return Err(invalid_cursor("ordering mismatch"));
+    }
+    Ok(())
+}
+
+fn cursor_signing_key() -> Result<Option<[u8; 32]>> {
+    match env::var("TRACEDB_CURSOR_SIGNING_KEY_B64") {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => {
+            if value.chars().any(char::is_whitespace) {
+                return Err(TraceDbError::InvalidCommand(
+                    "TRACEDB_CURSOR_SIGNING_KEY_B64 must be strict base64 without whitespace"
+                        .to_string(),
+                ));
+            }
+            let decoded = BASE64_STANDARD.decode(value).map_err(|_| {
+                TraceDbError::InvalidCommand(
+                    "TRACEDB_CURSOR_SIGNING_KEY_B64 must be strict base64".to_string(),
+                )
+            })?;
+            decoded.try_into().map(Some).map_err(|decoded: Vec<u8>| {
+                TraceDbError::InvalidCommand(format!(
+                    "TRACEDB_CURSOR_SIGNING_KEY_B64 must decode to exactly 32 bytes, got {}",
+                    decoded.len()
+                ))
+            })
+        }
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(TraceDbError::InvalidCommand(format!(
+            "failed to read TRACEDB_CURSOR_SIGNING_KEY_B64: {error}"
+        ))),
+    }
+}
+
+fn cursor_ttl_secs() -> u64 {
+    env::var("TRACEDB_CURSOR_TTL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_CURSOR_TTL_SECS)
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn invalid_cursor(reason: impl Into<String>) -> TraceDbError {
+    TraceDbError::InvalidCommand(format!("invalid cursor: {}", reason.into()))
 }
 
 fn validate_actor_tenant(actor: &ActorContext, tenant_id: &str) -> Result<()> {
@@ -1370,7 +1661,7 @@ impl TraceDb {
             .table(&request.table)
             .ok_or_else(|| TraceDbError::UnknownTable(request.table.clone()))?;
         let limit = request.limit.max(1);
-        let cursor_offset = parse_cursor_offset(request.cursor.as_deref())?;
+        let cursor_offset = parse_legacy_cursor_offset(request.cursor.as_deref())?;
         let mut records = self.store.visible_records_at(
             &request.table,
             &request.tenant_id,
@@ -1398,7 +1689,43 @@ impl TraceDb {
         request: RecordScanRequest,
     ) -> Result<RecordScanOutput> {
         validate_actor_tenant(actor, &request.tenant_id)?;
-        self.scan(request)
+        self.manifest
+            .table(&request.table)
+            .ok_or_else(|| TraceDbError::UnknownTable(request.table.clone()))?;
+        let limit = request.limit.max(1);
+        let scope = cursor_scope_for_scan(actor, &request, limit);
+        let cursor = resolve_cursor_state(
+            &scope,
+            request.cursor.as_deref(),
+            self.manifest.latest_epoch,
+        )?;
+        let mut records = self.store.visible_records_at(
+            &request.table,
+            &request.tenant_id,
+            cursor.snapshot_epoch,
+        );
+        records.sort_by(|left, right| left.header.record_id.cmp(&right.header.record_id));
+        let page = records
+            .into_iter()
+            .skip(cursor.offset)
+            .take(limit.saturating_add(1))
+            .map(record_output)
+            .collect::<Vec<_>>();
+        let has_more = page.len() > limit;
+        let records = page.into_iter().take(limit).collect::<Vec<_>>();
+        Ok(RecordScanOutput {
+            next_cursor: if has_more {
+                Some(encode_next_cursor(
+                    &scope,
+                    cursor.offset + records.len(),
+                    cursor.snapshot_epoch,
+                )?)
+            } else {
+                None
+            },
+            returned_count: records.len(),
+            records,
+        })
     }
 
     pub fn snapshot(&self) -> Result<ReadSnapshot> {
@@ -1419,13 +1746,31 @@ impl TraceDb {
         query: HybridQuery,
     ) -> Result<TimedQueryOutput> {
         validate_actor_tenant(actor, &query.tenant_id)?;
-        self.query_with_timing(query)
+        let limit = query.top_k.max(1);
+        let scope = cursor_scope_for_query(actor, &query, limit);
+        let cursor =
+            resolve_cursor_state(&scope, query.cursor.as_deref(), self.manifest.latest_epoch)?;
+        self.query_with_timing_internal(query, cursor, Some(scope))
     }
 
     pub fn query_with_timing(&self, query: HybridQuery) -> Result<TimedQueryOutput> {
+        let cursor = CursorState {
+            offset: parse_legacy_cursor_offset(query.cursor.as_deref())?,
+            snapshot_epoch: self.manifest.latest_epoch,
+        };
+        self.query_with_timing_internal(query, cursor, None)
+    }
+
+    fn query_with_timing_internal(
+        &self,
+        query: HybridQuery,
+        cursor: CursorState,
+        cursor_scope: Option<CursorScope>,
+    ) -> Result<TimedQueryOutput> {
         let total_started = Instant::now();
         let mut timing = QueryExecutionTiming::default();
         let include_explain = query.explain;
+        let read_epoch = cursor.snapshot_epoch;
         let schema = self
             .manifest
             .table(&query.table)
@@ -1437,7 +1782,7 @@ impl TraceDb {
             query.vector_field.as_deref(),
         )?;
         validate_scalar_eq_predicates(schema, &query.scalar_eq)?;
-        let cursor_offset = parse_cursor_offset(query.cursor.as_deref())?;
+        let cursor_offset = cursor.offset;
         if query.top_k == 0 {
             timing.total_ms = elapsed_ms(total_started);
             timing.engine_core_ms = timing.total_ms;
@@ -1446,9 +1791,9 @@ impl TraceDb {
                 output: QueryOutput {
                     results: Vec::new(),
                     explain: ExplainOutput {
-                        read_epoch: self.manifest.latest_epoch,
+                        read_epoch,
                         schema_epoch: self.manifest.latest_epoch,
-                        policy_epoch: self.manifest.latest_epoch,
+                        policy_epoch: read_epoch,
                         scalar_filter_applied: !query.scalar_eq.is_empty(),
                         scalar_filter_predicates: scalar_filter_predicates(&query.scalar_eq),
                         freshness_mode: query.freshness.as_str().to_string(),
@@ -1460,12 +1805,14 @@ impl TraceDb {
             });
         }
         let tenant_visibility_started = Instant::now();
-        let visible = self.store.visible_records_at(
-            &query.table,
-            &query.tenant_id,
-            self.manifest.latest_epoch,
-        );
-        let sealed_records = self.sealed_segment_records(&query.table, &query.tenant_id)?;
+        let visible = self
+            .store
+            .visible_records_at(&query.table, &query.tenant_id, read_epoch);
+        let sealed_records = self
+            .sealed_segment_records(&query.table, &query.tenant_id)?
+            .into_iter()
+            .filter(|record| record.version_id <= read_epoch.get())
+            .collect::<Vec<_>>();
         let tenant_mask_visible_records = visible.len();
         let tenant_visibility_ms = elapsed_ms(tenant_visibility_started);
         let scalar_filter_started = Instant::now();
@@ -1480,9 +1827,9 @@ impl TraceDb {
             .max(requested_window)
             .max(1);
         let mut explain = ExplainOutput {
-            read_epoch: self.manifest.latest_epoch,
+            read_epoch,
             schema_epoch: self.manifest.latest_epoch,
-            policy_epoch: self.manifest.latest_epoch,
+            policy_epoch: read_epoch,
             tenant_mask_visible_records,
             scalar_filter_applied,
             scalar_filter_predicates: scalar_filter_predicates(&query.scalar_eq),
@@ -1676,7 +2023,7 @@ impl TraceDb {
                     &record.table,
                     &record.tenant_id,
                     &record.record_id,
-                    self.manifest.latest_epoch,
+                    read_epoch,
                 )
             })
             .collect::<Vec<_>>();
@@ -1743,7 +2090,16 @@ impl TraceDb {
         Ok(TimedQueryOutput {
             timing,
             output: QueryOutput {
-                next_cursor: has_more.then(|| (cursor_offset + page.len()).to_string()),
+                next_cursor: if has_more {
+                    Some(match cursor_scope.as_ref() {
+                        Some(scope) => {
+                            encode_next_cursor(scope, cursor_offset + page.len(), read_epoch)?
+                        }
+                        None => (cursor_offset + page.len()).to_string(),
+                    })
+                } else {
+                    None
+                },
                 results: page,
                 explain,
             },
@@ -5112,11 +5468,35 @@ pub fn value_object(fields: &[(&str, Value)]) -> Map<String, Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex as TestMutex;
     use tracedb_core::VersionId;
     use tracedb_store::RecordHeader;
 
     const GOOD_MASTER_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const OTHER_MASTER_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+    const GOOD_CURSOR_KEY: &str = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+    static CURSOR_ENV_LOCK: TestMutex<()> = TestMutex::new(());
+
+    fn with_cursor_key(test: impl FnOnce()) {
+        let _guard = CURSOR_ENV_LOCK.lock().expect("cursor env lock");
+        std::env::set_var("TRACEDB_CURSOR_SIGNING_KEY_B64", GOOD_CURSOR_KEY);
+        std::env::set_var("TRACEDB_CURSOR_TTL_SECS", "3600");
+        test();
+        std::env::remove_var("TRACEDB_CURSOR_SIGNING_KEY_B64");
+        std::env::remove_var("TRACEDB_CURSOR_TTL_SECS");
+    }
+
+    fn tenant_actor(token_identity: &str) -> ActorContext {
+        ActorContext::managed_request(
+            "tenant-a",
+            "local",
+            "main",
+            token_identity,
+            "request-cursor",
+            1,
+            vec!["records:read".to_string()],
+        )
+    }
 
     fn schema() -> TableSchema {
         TableSchema {
@@ -5590,6 +5970,119 @@ mod tests {
         let second = db.query(query).expect("second page");
         assert_eq!(second.results.len(), 1);
         assert_eq!(second.next_cursor, None);
+    }
+
+    #[test]
+    fn signed_scan_cursor_binds_actor_and_snapshot_epoch() {
+        with_cursor_key(|| {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let mut db = TraceDb::open(temp.path()).expect("open");
+            db.apply_schema(schema()).expect("schema");
+            for id in ["a", "b", "c"] {
+                db.put(RecordPutRequest::new(record(id, "signed cursor scan")))
+                    .expect("put");
+            }
+            let actor = tenant_actor("token:cursor-owner");
+
+            let first = db
+                .scan_as(&actor, RecordScanRequest::new("docs", "tenant-a").limit(2))
+                .expect("first signed page");
+            let cursor = first.next_cursor.clone().expect("signed cursor");
+            assert!(
+                cursor.starts_with("tdbc1."),
+                "signed cursor should be opaque: {cursor}"
+            );
+            db.put(RecordPutRequest::new(record("d", "newer than cursor")))
+                .expect("post-cursor put");
+
+            let second = db
+                .scan_as(
+                    &actor,
+                    RecordScanRequest::new("docs", "tenant-a")
+                        .limit(2)
+                        .cursor(cursor.clone()),
+                )
+                .expect("second signed page");
+            assert_eq!(
+                second
+                    .records
+                    .iter()
+                    .map(|record| record.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["c"],
+                "cursor should page against the original snapshot epoch"
+            );
+
+            let wrong_actor = tenant_actor("token:other");
+            let error = db
+                .scan_as(
+                    &wrong_actor,
+                    RecordScanRequest::new("docs", "tenant-a")
+                        .limit(2)
+                        .cursor(cursor),
+                )
+                .expect_err("wrong actor should fail signed cursor");
+            assert!(
+                error.to_string().contains("invalid cursor: actor mismatch"),
+                "unexpected wrong-actor cursor error: {error}"
+            );
+        });
+    }
+
+    #[test]
+    fn signed_query_cursor_rejects_tamper_and_wrong_query() {
+        with_cursor_key(|| {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let mut db = TraceDb::open(temp.path()).expect("open");
+            db.apply_schema(schema()).expect("schema");
+            for id in ["a", "b", "c"] {
+                db.put(RecordPutRequest::new(record(id, "signed cursor query")))
+                    .expect("put");
+            }
+            let actor = tenant_actor("token:query-owner");
+            let mut query = HybridQuery {
+                table: "docs".to_string(),
+                tenant_id: "tenant-a".to_string(),
+                cursor: None,
+                text_field: Some("body".to_string()),
+                text: Some("signed".to_string()),
+                vector_field: None,
+                vector: None,
+                scalar_eq: Default::default(),
+                graph_seed: None,
+                temporal_as_of: None,
+                top_k: 2,
+                freshness: FreshnessMode::Strict,
+                explain: true,
+            };
+
+            let first = db
+                .query_as(&actor, query.clone())
+                .expect("first signed query page");
+            let cursor = first.next_cursor.clone().expect("signed query cursor");
+            assert!(cursor.starts_with("tdbc1."));
+
+            let mut tampered = cursor.clone();
+            tampered.push('x');
+            query.cursor = Some(tampered);
+            let error = db
+                .query_as(&actor, query.clone())
+                .expect_err("tampered cursor should fail");
+            assert!(
+                error.to_string().contains("invalid cursor"),
+                "unexpected tampered cursor error: {error}"
+            );
+
+            query.cursor = Some(cursor);
+            query.text = Some("different query".to_string());
+            let error = db
+                .query_as(&actor, query)
+                .expect_err("wrong query should fail cursor");
+            assert!(
+                error.to_string().contains("invalid cursor: query mismatch"),
+                "unexpected wrong-query cursor error: {error}"
+            );
+        });
     }
 
     #[test]

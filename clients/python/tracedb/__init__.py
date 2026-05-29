@@ -1,4 +1,5 @@
 from .client import (
+    AsyncTraceDB,
     TraceDB,
     TraceDBHTTPError,
     TraceDBQueryBuilder,
@@ -7,6 +8,7 @@ from .client import (
 )
 
 __all__ = [
+    "AsyncTraceDB",
     "TraceDB",
     "TraceDBHTTPError",
     "TraceDBQueryBuilder",

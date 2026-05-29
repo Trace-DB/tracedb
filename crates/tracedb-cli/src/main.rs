@@ -300,6 +300,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let config = parse_storage_index_jobs_config(&args[1..])?;
             run_storage_index_jobs(config)?;
         }
+        "api-parity" => {
+            let config = parse_api_parity_config(&args[1..])?;
+            run_api_parity(config)?;
+        }
         "compose" => {
             let action = args.get(1).map(String::as_str).unwrap_or("status");
             run_compose(action, &args[2..])?;
@@ -1052,6 +1056,7 @@ const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = PRODUCT_REGRESSION_STEPS;
 const PRODUCT_QUICKSTART_REPORT_FILE: &str = "target/tracedb/product-quickstart.json";
 const DURABILITY_FAULTS_REPORT_FILE: &str = "target/tracedb/durability-faults.json";
 const STORAGE_INDEX_JOBS_REPORT_FILE: &str = "target/tracedb/storage-index-jobs.json";
+const API_PARITY_REPORT_FILE: &str = "target/tracedb/api-parity.json";
 const DURABILITY_GOOD_MASTER_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const DURABILITY_OTHER_MASTER_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 const DURABILITY_FAULT_SCENARIOS: &[&str] = &[
@@ -1099,6 +1104,11 @@ struct StorageIndexJobsConfig {
     keep_data: bool,
     inject_failure: Option<String>,
     report_file: Option<PathBuf>,
+}
+
+struct ApiParityConfig {
+    report_file: Option<PathBuf>,
+    inject_failure: Option<String>,
 }
 
 fn parse_durability_faults_config(
@@ -1738,6 +1748,131 @@ fn storage_index_job_scenario_summary(result: Result<Value, Box<dyn std::error::
             "status": "failed",
             "error": error.to_string(),
         }),
+    }
+}
+
+fn parse_api_parity_config(args: &[String]) -> Result<ApiParityConfig, Box<dyn std::error::Error>> {
+    let mut report_file = None;
+    let mut inject_failure = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--report-file" => {
+                idx += 1;
+                report_file = Some(PathBuf::from(
+                    args.get(idx).ok_or("missing value for --report-file")?,
+                ));
+            }
+            "--inject-failure" => {
+                idx += 1;
+                inject_failure = Some(
+                    args.get(idx)
+                        .ok_or("missing value for --inject-failure")?
+                        .to_string(),
+                );
+            }
+            other => return Err(format!("unknown api-parity option {other}").into()),
+        }
+        idx += 1;
+    }
+    if report_file.is_none() {
+        report_file = Some(default_api_parity_report_file()?);
+    }
+    Ok(ApiParityConfig {
+        report_file,
+        inject_failure,
+    })
+}
+
+fn default_api_parity_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(product_regression_workspace_root()?.join(API_PARITY_REPORT_FILE))
+}
+
+fn run_api_parity(config: ApiParityConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = product_regression_workspace_root()?;
+    let report_file = config
+        .report_file
+        .clone()
+        .unwrap_or_else(|| workspace.join(API_PARITY_REPORT_FILE));
+    let conformance_file = report_file.with_file_name("api-parity-conformance.json");
+    if let Some(parent) = conformance_file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if config.inject_failure.as_deref() == Some("conformance") {
+        let summary = json!({
+            "ok": false,
+            "mode": "local-api-parity",
+            "failure_injection": config.inject_failure,
+            "status": "failed",
+            "error": "injected api-parity conformance failure",
+        });
+        emit_json(summary, config.report_file.as_deref())?;
+        return Err("api-parity local gate failed".into());
+    }
+
+    let command = Command::new("python3")
+        .arg("scripts/platform_conformance.py")
+        .arg("--surface")
+        .arg("traceql")
+        .arg("--surface")
+        .arg("graphql")
+        .arg("--summary-json")
+        .arg(&conformance_file)
+        .current_dir(&workspace)
+        .env("CARGO_TERM_COLOR", "never")
+        .env("CARGO_INCREMENTAL", "0")
+        .output()?;
+    let conformance = if conformance_file.exists() {
+        serde_json::from_slice::<Value>(&fs::read(&conformance_file)?)?
+    } else {
+        Value::Null
+    };
+    let ok = command.status.success()
+        && conformance
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && conformance
+            .get("complete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let summary = json!({
+        "ok": ok,
+        "mode": "local-api-parity",
+        "scope": "native_traceql_and_graphql",
+        "report_file": product_regression_report_file_json(config.report_file.as_deref()),
+        "conformance_report": conformance_file.display().to_string(),
+        "failure_injection": config.inject_failure,
+        "claims": {
+            "native_traceql": "checked",
+            "native_graphql": "checked",
+            "bounded_graphql": "compatibility_only",
+            "sqlish_select": "compatibility_only",
+            "managed_railway": "not_checked"
+        },
+        "command": {
+            "argv": [
+                "python3",
+                "scripts/platform_conformance.py",
+                "--surface",
+                "traceql",
+                "--surface",
+                "graphql",
+                "--summary-json",
+                conformance_file.display().to_string()
+            ],
+            "ok": command.status.success(),
+            "status": command.status.code(),
+            "stdout_tail": tail(&String::from_utf8_lossy(&command.stdout), 12_000),
+            "stderr_tail": tail(&String::from_utf8_lossy(&command.stderr), 12_000)
+        },
+        "conformance": conformance,
+    });
+    emit_json(summary, config.report_file.as_deref())?;
+    if ok {
+        Ok(())
+    } else {
+        Err("api-parity local gate failed".into())
     }
 }
 
@@ -3419,7 +3554,7 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
 
 fn usage() {
     eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run compact|vacuum|build-text-index|build-vector-index|backup|restore-verify|feature-refresh|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|durability-faults [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|storage-index-jobs [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
+        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run compact|vacuum|build-text-index|build-vector-index|backup|restore-verify|feature-refresh|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|durability-faults [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|storage-index-jobs [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|api-parity [--inject-failure conformance] [--report-file PATH]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
         PRODUCT_REGRESSION_ONLY_STEPS.join("|"),
         PRODUCT_REGRESSION_ONLY_STEPS.join("|")
     );

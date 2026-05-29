@@ -271,6 +271,7 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
     let bearer_token = header_value(request, "authorization")
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::to_string);
+    let inbound_actor_headers = gateway_actor_header_overrides(request);
 
     match (method, path) {
         ("GET", "/health") | ("GET", "/v1/health") => ok(json!({
@@ -334,7 +335,14 @@ pub fn handle_gateway_request_text(request: &str, config: GatewayServerConfig) -
             "rate_limit_requests": config.rate_limit_requests,
         })),
         _ if is_proxied_gateway_route(method, path) => {
-            match authorize_route_and_meter(&config, path, &body, bearer_token, query) {
+            match authorize_route_and_meter(
+                &config,
+                path,
+                &body,
+                bearer_token,
+                query,
+                &inbound_actor_headers,
+            ) {
                 Ok(authorized) => {
                     let mut actor_headers = authorized.actor_headers;
                     actor_headers.push(("x-tracedb-request-id".to_string(), request_id.clone()));
@@ -388,8 +396,9 @@ fn authorize_route_and_meter(
     body: &[u8],
     bearer_token: Option<String>,
     query: Option<&str>,
+    actor_headers: &GatewayActorHeaderOverrides,
 ) -> Result<AuthorizedGatewayRoute, GatewayRuntimeError> {
-    let mut ids = gateway_ids_from_request(body, query)?;
+    let mut ids = gateway_ids_from_request(body, query, actor_headers)?;
     ids.bearer_token = bearer_token;
     let gateway = match &config.required_token {
         Some(token) => Gateway::new(config.catalog.clone(), token.clone()),
@@ -435,11 +444,14 @@ struct GatewayRequestIds {
     branch_id: String,
     tenant_id: String,
     bearer_token: Option<String>,
+    token_identity: Option<String>,
+    policy_epoch: Option<String>,
+    scopes: Option<String>,
 }
 
 impl GatewayRequestIds {
     fn actor_headers(&self) -> Vec<(String, String)> {
-        vec![
+        let mut headers = vec![
             (
                 "x-tracedb-database-id".to_string(),
                 self.database_id.clone(),
@@ -448,46 +460,85 @@ impl GatewayRequestIds {
             ("x-tracedb-tenant-id".to_string(), self.tenant_id.clone()),
             (
                 "x-tracedb-token-identity".to_string(),
-                if self.bearer_token.is_some() {
-                    "bearer".to_string()
-                } else {
-                    "anonymous".to_string()
-                },
+                self.token_identity.clone().unwrap_or_else(|| {
+                    if self.bearer_token.is_some() {
+                        "bearer".to_string()
+                    } else {
+                        "anonymous".to_string()
+                    }
+                }),
             ),
-        ]
+        ];
+        if let Some(policy_epoch) = &self.policy_epoch {
+            headers.push(("x-tracedb-policy-epoch".to_string(), policy_epoch.clone()));
+        }
+        if let Some(scopes) = &self.scopes {
+            headers.push(("x-tracedb-scopes".to_string(), scopes.clone()));
+        }
+        headers
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct GatewayActorHeaderOverrides {
+    database_id: Option<String>,
+    branch_id: Option<String>,
+    tenant_id: Option<String>,
+    token_identity: Option<String>,
+    policy_epoch: Option<String>,
+    scopes: Option<String>,
 }
 
 fn gateway_ids_from_request(
     body: &[u8],
     query: Option<&str>,
+    actor_headers: &GatewayActorHeaderOverrides,
 ) -> Result<GatewayRequestIds, GatewayRuntimeError> {
     if body.is_empty() {
-        let database_id =
-            query_value(query, "database_id").unwrap_or_else(|| "db_local".to_string());
-        let branch_id =
-            query_value(query, "branch_id").unwrap_or_else(|| format!("{database_id}:main"));
-        let tenant_id = query_value(query, "tenant_id").unwrap_or_else(|| "local".to_string());
+        let database_id = actor_headers
+            .database_id
+            .clone()
+            .or_else(|| query_value(query, "database_id"))
+            .unwrap_or_else(|| "db_local".to_string());
+        let branch_id = actor_headers
+            .branch_id
+            .clone()
+            .or_else(|| query_value(query, "branch_id"))
+            .unwrap_or_else(|| format!("{database_id}:main"));
+        let tenant_id = actor_headers
+            .tenant_id
+            .clone()
+            .or_else(|| query_value(query, "tenant_id"))
+            .unwrap_or_else(|| "local".to_string());
         return Ok(GatewayRequestIds {
             database_id,
             branch_id,
             tenant_id,
             bearer_token: None,
+            token_identity: actor_headers.token_identity.clone(),
+            policy_epoch: actor_headers.policy_epoch.clone(),
+            scopes: actor_headers.scopes.clone(),
         });
     }
     let value = serde_json::from_slice::<Value>(body)
         .map_err(|error| GatewayRuntimeError::BadRequest(error.to_string()))?;
-    let database_id = value
-        .get("database_id")
-        .and_then(Value::as_str)
-        .unwrap_or("db_local")
-        .to_string();
-    let branch_id = value
-        .get("branch_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let body_database_id = value.get("database_id").and_then(Value::as_str);
+    let database_id = actor_headers
+        .database_id
+        .clone()
+        .or_else(|| body_database_id.map(str::to_string))
+        .unwrap_or_else(|| "db_local".to_string());
+    let branch_id = actor_headers
+        .branch_id
+        .clone()
+        .or_else(|| {
+            value
+                .get("branch_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| format!("{database_id}:main"));
-    let tenant_id = value
+    let body_tenant_id = value
         .get("tenant_id")
         .and_then(Value::as_str)
         .or_else(|| {
@@ -498,13 +549,20 @@ fn gateway_ids_from_request(
                 .and_then(|record| record.get("tenant_id"))
                 .and_then(Value::as_str)
         })
-        .unwrap_or("local")
-        .to_string();
+        .map(str::to_string);
+    let tenant_id = actor_headers
+        .tenant_id
+        .clone()
+        .or(body_tenant_id)
+        .unwrap_or_else(|| "local".to_string());
     Ok(GatewayRequestIds {
         database_id,
         branch_id,
         tenant_id,
         bearer_token: None,
+        token_identity: actor_headers.token_identity.clone(),
+        policy_epoch: actor_headers.policy_epoch.clone(),
+        scopes: actor_headers.scopes.clone(),
     })
 }
 
@@ -520,6 +578,17 @@ fn query_value(query: Option<&str>, name: &str) -> Option<String> {
         let (key, value) = pair.split_once('=')?;
         (key == name).then(|| value.to_string())
     })
+}
+
+fn gateway_actor_header_overrides(request: &str) -> GatewayActorHeaderOverrides {
+    GatewayActorHeaderOverrides {
+        database_id: header_value(request, "x-tracedb-database-id").map(str::to_string),
+        branch_id: header_value(request, "x-tracedb-branch-id").map(str::to_string),
+        tenant_id: header_value(request, "x-tracedb-tenant-id").map(str::to_string),
+        token_identity: header_value(request, "x-tracedb-token-identity").map(str::to_string),
+        policy_epoch: header_value(request, "x-tracedb-policy-epoch").map(str::to_string),
+        scopes: header_value(request, "x-tracedb-scopes").map(str::to_string),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1023,6 +1092,58 @@ mod tests {
         assert!(response.contains("\"x-tracedb-tenant-id\":\"tenant-a\""));
         assert!(response.contains("\"x-tracedb-request-id\":\"request-123\""));
         assert!(response.contains("\"x-tracedb-token-identity\":\"bearer\""));
+    }
+
+    #[test]
+    fn gateway_preserves_inbound_actor_context_for_command_surfaces() {
+        let engine = spawn_header_echo_engine();
+        let mut catalog = Catalog::default();
+        let database = catalog
+            .create_database("org-a", "project-a", "memory", "us-west")
+            .expect("database");
+        let branch = catalog
+            .create_branch(&database.database_id, "main", None)
+            .expect("branch");
+        let meter = Arc::new(Mutex::new(UsageMeter::default()));
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: engine,
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: Some("public-secret".to_string()),
+            catalog,
+            meter,
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
+        };
+        let body = json!({
+            "database_id": database.database_id,
+            "branch_id": branch.branch_id,
+            "query": "FROM docs\nTENANT tenant-a\nLIMIT 1"
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/traceql HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer public-secret\r\nx-request-id: request-456\r\nx-tracedb-database-id: {}\r\nx-tracedb-branch-id: {}\r\nx-tracedb-tenant-id: tenant-a\r\nx-tracedb-token-identity: smoke-token\r\nx-tracedb-policy-epoch: 7\r\nx-tracedb-scopes: records:read,records:write\r\ncontent-length: {}\r\n\r\n{}",
+            database.database_id,
+            branch.branch_id,
+            body.len(),
+            body
+        );
+
+        let response = handle_gateway_request_text(&request, config);
+
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "gateway response should be OK: {response}"
+        );
+        assert!(response.contains("\"x-tracedb-database-id\":\"db_"));
+        assert!(response.contains("\"x-tracedb-branch-id\":\""));
+        assert!(response.contains("\"x-tracedb-tenant-id\":\"tenant-a\""));
+        assert!(response.contains("\"x-tracedb-token-identity\":\"smoke-token\""));
+        assert!(response.contains("\"x-tracedb-policy-epoch\":\"7\""));
+        assert!(response.contains("\"x-tracedb-scopes\":\"records:read,records:write\""));
+        assert!(response.contains("\"x-tracedb-request-id\":\"request-456\""));
     }
 
     #[tokio::test]

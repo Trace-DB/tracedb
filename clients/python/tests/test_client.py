@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import asyncio
 import sys
 import tomllib
 import unittest
@@ -13,7 +14,7 @@ CLIENT_ROOT = Path(__file__).resolve().parents[1]
 if str(CLIENT_ROOT) not in sys.path:
     sys.path.insert(0, str(CLIENT_ROOT))
 
-from tracedb import TraceDB, TraceDBHTTPError, TraceDBRequestError  # noqa: E402
+from tracedb import AsyncTraceDB, TraceDB, TraceDBHTTPError, TraceDBRequestError  # noqa: E402
 
 
 class TraceDBClientTests(unittest.TestCase):
@@ -232,7 +233,7 @@ class TraceDBClientTests(unittest.TestCase):
         body = json.loads(captured[0].data.decode("utf-8"))
         self.assertEqual(body["freshness"], "AllowDirty")
 
-    def test_graphql_posts_query_string_to_canonical_route_with_routing(self) -> None:
+    def test_graphql_posts_native_envelope_query_to_canonical_route_with_routing(self) -> None:
         db = TraceDB(
             "http://127.0.0.1:8090",
             database_id="db-local",
@@ -242,13 +243,13 @@ class TraceDBClientTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
             captured.append(request)
-            return _FakeResponse('{"results":[{"record_id":"intro"}]}')
+            return _FakeResponse('{"data":{"query":{"results":[{"record_id":"intro"}]}}}')
 
-        query = 'query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }'
+        query = 'query { query(input: "{\\"table\\":\\"docs\\",\\"tenant_id\\":\\"tenant-a\\",\\"top_k\\":1}") { results } }'
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             response = db.graphql(query)
 
-        self.assertEqual(response, {"results": [{"record_id": "intro"}]})
+        self.assertEqual(response, {"data": {"query": {"results": [{"record_id": "intro"}]}}})
         self.assertEqual(len(captured), 1)
         request = captured[0]
         self.assertEqual(request.get_method(), "POST")
@@ -262,6 +263,24 @@ class TraceDBClientTests(unittest.TestCase):
             },
         )
 
+    def test_bounded_graphql_posts_compatibility_query_route(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090")
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"results":[{"record_id":"intro"}]}')
+
+        query = 'query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }'
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = db.bounded_graphql(query)
+
+        self.assertEqual(response, {"results": [{"record_id": "intro"}]})
+        self.assertEqual(len(captured), 1)
+        request = captured[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.full_url, "http://127.0.0.1:8090/v1/graphql/bounded")
+
     def test_graphql_schema_gets_canonical_route_without_body(self) -> None:
         db = TraceDB("http://127.0.0.1:8090")
         captured = []
@@ -271,7 +290,7 @@ class TraceDBClientTests(unittest.TestCase):
             return _FakeResponse(
                 '{"adapter":"bounded_graphql_query_adapter","tables":["docs"],'
                 '"schema":"type DocsRow { record_id: String! }",'
-                '"execution":"POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope"}'
+                '"execution":"POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors"}'
             )
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
@@ -283,7 +302,7 @@ class TraceDBClientTests(unittest.TestCase):
                 "adapter": "bounded_graphql_query_adapter",
                 "tables": ["docs"],
                 "schema": "type DocsRow { record_id: String! }",
-                "execution": "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope",
+                "execution": "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors",
             },
         )
         self.assertEqual(len(captured), 1)
@@ -332,14 +351,55 @@ class TraceDBClientTests(unittest.TestCase):
 
         with mock.patch(
             "urllib.request.urlopen",
-            side_effect=[retry_error, _FakeResponse('{"results":[]}')],
+            side_effect=[retry_error, _FakeResponse('{"data":{"query":{"results":[]}}}')],
         ) as urlopen:
             self.assertEqual(
-                db.graphql('query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }'),
-                {"results": []},
+                db.graphql(
+                    'query { query(input: "{\\"table\\":\\"docs\\",\\"tenant_id\\":\\"tenant-a\\",\\"top_k\\":1}") { results } }'
+                ),
+                {"data": {"query": {"results": []}}},
             )
 
         self.assertEqual(urlopen.call_count, 2)
+
+    def test_actor_context_headers_are_sent(self) -> None:
+        db = TraceDB(
+            "http://127.0.0.1:8090",
+            actor_context={
+                "tenant_id": "tenant-a",
+                "database_id": "db-prod",
+                "branch_id": "db-prod:main",
+                "token_identity": "token-user",
+                "request_id": "req-1",
+                "policy_epoch": 7,
+                "scopes": ["records:read", "records:write"],
+            },
+        )
+        captured = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return _FakeResponse('{"record":null}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            db.table("docs").tenant("tenant-a").get("intro")
+
+        request = captured[0]
+        self.assertEqual(request.get_header("X-tracedb-tenant-id"), "tenant-a")
+        self.assertEqual(request.get_header("X-tracedb-database-id"), "db-prod")
+        self.assertEqual(request.get_header("X-tracedb-branch-id"), "db-prod:main")
+        self.assertEqual(request.get_header("X-tracedb-token-identity"), "token-user")
+        self.assertEqual(request.get_header("X-tracedb-request-id"), "req-1")
+        self.assertEqual(request.get_header("X-tracedb-policy-epoch"), "7")
+        self.assertEqual(request.get_header("X-tracedb-scopes"), "records:read,records:write")
+
+    def test_async_client_wraps_native_graphql(self) -> None:
+        async def run() -> None:
+            db = AsyncTraceDB(TraceDB("http://127.0.0.1:8090"))
+            with mock.patch("urllib.request.urlopen", return_value=_FakeResponse('{"data":{"jobs":[]}}')):
+                self.assertEqual(await db.graphql("query { jobs { durable_jobs } }"), {"data": {"jobs": []}})
+
+        asyncio.run(run())
 
     def test_safe_retries_do_not_retry_mutation_5xx(self) -> None:
         db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
@@ -540,6 +600,8 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertIn("db.graphql_schema", smoke)
         self.assertIn("db.graphql", smoke)
         self.assertIn("db.graphql_request", smoke)
+        self.assertIn("db.bounded_graphql", smoke)
+        self.assertIn("db.bounded_graphql_request", smoke)
         self.assertIn("table.insert_rows", smoke)
         self.assertIn("TRACEDB_IDEMPOTENCY_RETRIES", smoke)
         self.assertIn("idempotency_retries", smoke)

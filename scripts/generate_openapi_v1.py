@@ -26,6 +26,7 @@ SAFE_RETRY_ROUTES = {
     ("post", "/v1/query"),
     ("post", "/v1/traceql"),
     ("post", "/v1/graphql"),
+    ("post", "/v1/graphql/bounded"),
     ("get", "/v1/graphql/schema"),
     ("post", "/v1/explain"),
 }
@@ -46,7 +47,8 @@ ROUTES = [
     ("post", "/v1/records/scan", "records", "Scan records", "RecordScanRequest", "RecordScanOutput", False),
     ("post", "/v1/query", "query", "Run hybrid query", "HybridQuery", "QueryResponse", False),
     ("post", "/v1/traceql", "query", "Run native TraceQL query", "TraceQlQueryRequest", "QueryResponse", False),
-    ("post", "/v1/graphql", "query", "Run bounded GraphQL query", "GraphQlQueryRequest", "QueryResponse", False),
+    ("post", "/v1/graphql", "query", "Run native GraphQL query, mutation, or admin operation", "GraphQlQueryRequest", "GraphQlResponse", False),
+    ("post", "/v1/graphql/bounded", "query", "Run bounded GraphQL compatibility query adapter", "GraphQlQueryRequest", "QueryResponse", False),
     ("get", "/v1/graphql/schema", "query", "Export bounded GraphQL schema", None, "GraphQlSchemaResponse", False),
     ("post", "/v1/explain", "query", "Explain hybrid query", "HybridQuery", "HybridExplain", False),
     ("post", "/v1/admin/compact", "admin", "Compact local engine state", "EmptyObject", "CompactResponse", True),
@@ -167,8 +169,20 @@ def components() -> dict[str, Any]:
             "TraceQlQueryRequest": object_schema("Native TraceQL query request.", {
                 "query": {"type": "string"},
             }),
-            "GraphQlQueryRequest": object_schema("Bounded GraphQL adapter query request.", {
+            "GraphQlQueryRequest": object_schema("GraphQL request body. Native operations accept an input JSON string argument and standard variables/operationName fields.", {
                 "query": {"type": "string"},
+                "variables": object_schema("GraphQL variables map."),
+                "operationName": {"type": "string"},
+                "operation_name": {"type": "string"},
+            }),
+            "GraphQlError": object_schema("GraphQL error entry.", {
+                "message": {"type": "string"},
+                "path": array_schema({"type": "string"}),
+                "extensions": object_schema("GraphQL error extensions."),
+            }),
+            "GraphQlResponse": object_schema("Native GraphQL response envelope.", {
+                "data": object_schema("GraphQL data object."),
+                "errors": array_schema(schema_ref("GraphQlError")),
             }),
             "GraphQlSchemaResponse": object_schema("Bounded GraphQL adapter schema response.", {
                 "adapter": {"type": "string"},

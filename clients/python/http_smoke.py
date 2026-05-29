@@ -226,18 +226,48 @@ def run_smoke(summary_json: Path | None = None) -> dict[str, Any]:
             assert isinstance(traceql_explain.get("explain", {}).get("returned_count"), int)
 
             graphql_query = (
-                'query { docs(tenant_id: "tenant-a", where: {status: "published"}, '
-                'match: "TraceDB Python", near: [1.0, 0.0, 0.0], freshness: STRICT, limit: 3) { record_id } }'
+                "query { query(input: "
+                + json.dumps(
+                    json.dumps(
+                        {
+                            "table": "docs",
+                            "tenant_id": "tenant-a",
+                            "scalar_eq": {"status": "published"},
+                            "text_field": "body",
+                            "text": "TraceDB Python",
+                            "vector_field": "embedding",
+                            "vector": [1.0, 0.0, 0.0],
+                            "freshness": "Strict",
+                            "top_k": 3,
+                            "explain": False,
+                        }
+                    )
+                )
+                + ") { results } }"
             )
             graphql = db.graphql(graphql_query)
-            graphql_results = graphql.get("results")
+            graphql_payload = graphql.get("data", {}).get("query", {})
+            graphql_results = graphql_payload.get("results")
             assert isinstance(graphql_results, list)
             assert any(result.get("record_id") == "intro" for result in graphql_results)
-            graphql_explain = db.graphql(
-                'query { docs(tenant_id: "tenant-a", match: "TraceDB Python", '
-                'near: [1.0, 0.0, 0.0], freshness: STRICT, limit: 3, explain: true) { record_id } }'
+            graphql_explain_input = json.dumps(
+                {
+                    "table": "docs",
+                    "tenant_id": "tenant-a",
+                    "text_field": "body",
+                    "text": "TraceDB Python",
+                    "vector_field": "embedding",
+                    "vector": [1.0, 0.0, 0.0],
+                    "freshness": "Strict",
+                    "top_k": 3,
+                    "explain": True,
+                }
             )
-            assert isinstance(graphql_explain.get("explain", {}).get("returned_count"), int)
+            graphql_explain = db.graphql(
+                f"query {{ query(input: {json.dumps(graphql_explain_input)}) {{ results explain }} }}"
+            )
+            graphql_explain_payload = graphql_explain.get("data", {}).get("query", {})
+            assert isinstance(graphql_explain_payload.get("explain", {}).get("returned_count"), int)
 
             deleted = docs.delete("ops", tombstone="python_sdk_smoke", idempotency_key=f"python-{run_id}-delete")
             assert deleted["deleted"] is True

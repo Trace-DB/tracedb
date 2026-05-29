@@ -126,6 +126,8 @@ def _write_consumer(consumer: Path) -> None:
             assert callable(db.graphql_schema)
             assert callable(db.graphql)
             assert callable(db.graphql_request)
+            assert callable(db.bounded_graphql)
+            assert callable(db.bounded_graphql_request)
 
             try:
                 TraceDB.from_env(env={})

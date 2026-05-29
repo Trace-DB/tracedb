@@ -19,12 +19,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = Path("docs/platform-contract-v0.json")
 DEFAULT_SURFACES = ["http_direct", "rust_sdk"]
 PYTHON_SDK_CONFORMANCE_EVIDENCE = "installed package + clients/python/http_smoke.py"
+TRACEQL_NATIVE_CONFORMANCE_EVIDENCE = "POST /v1/traceql native TraceDB command statements"
+GRAPHQL_NATIVE_CONFORMANCE_EVIDENCE = "POST /v1/graphql native GraphQL data/errors envelope"
 TRACEQL_SQLISH_CONFORMANCE_EVIDENCE = "POST /v1/traceql bounded SQL-ish SELECT adapter"
 TRACEQL_SQLISH_NOT_CHECKED_REASON = (
     "SQL-ish adapter surface only proves query/explain/error behavior; "
     "schema/write/admin scenarios remain HTTP/SDK surfaces"
 )
-GRAPHQL_HTTP_CONFORMANCE_EVIDENCE = "POST /v1/graphql bounded GraphQL query adapter"
+GRAPHQL_HTTP_CONFORMANCE_EVIDENCE = "POST /v1/graphql/bounded bounded GraphQL query adapter"
 GRAPHQL_SCHEMA_CONFORMANCE_EVIDENCE = "GET /v1/graphql/schema generated SDL from TableSchema"
 GRAPHQL_HTTP_NOT_CHECKED_REASON = (
     "GraphQL HTTP adapter surface only proves schema export/query/explain/error behavior; "
@@ -323,6 +325,548 @@ def traceql_string_execution_scenario(base_url: str) -> dict[str, Any]:
     )
 
 
+def json_compact(value: dict[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def traceql_command(base_url: str, command: str, payload: dict[str, Any] | None = None, *, headers: dict[str, str] | None = None, expected_status: int = 200) -> tuple[int, dict[str, Any]]:
+    body = command if payload is None else f"{command} {json_compact(payload)}"
+    return request_json(
+        base_url,
+        "POST",
+        "/v1/traceql",
+        {"query": body},
+        headers=headers,
+        expected_status=expected_status,
+    )
+
+
+def graphql_operation(
+    base_url: str,
+    field: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    selection: str = "{ ok }",
+    headers: dict[str, str] | None = None,
+    expected_status: int = 200,
+) -> tuple[int, dict[str, Any]]:
+    if payload is None:
+        query = f"query {{ {field} {selection} }}"
+    else:
+        query = f"query {{ {field}(input: {json.dumps(json_compact(payload))}) {selection} }}"
+    return request_json(
+        base_url,
+        "POST",
+        "/v1/graphql",
+        {"query": query},
+        headers=headers,
+        expected_status=expected_status,
+    )
+
+
+def graphql_data(payload: dict[str, Any], field: str) -> dict[str, Any]:
+    errors = payload.get("errors")
+    if errors:
+        raise RuntimeError(f"GraphQL returned errors for {field}: {errors}")
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get(field), dict):
+        raise RuntimeError(f"GraphQL response missing data.{field}: {payload}")
+    return data[field]
+
+
+def traceql_native_surface_report(manifest: dict[str, Any], base_url: str, admin_dir: Path) -> dict[str, Any]:
+    scenarios: dict[str, dict[str, Any]] = {}
+    intro = record("intro", "TraceDB native TraceQL conformance", "draft", [1.0, 0.0, 0.0])
+    intro_changed = record(
+        "intro",
+        "TraceDB native TraceQL conformance changed",
+        "draft",
+        [1.0, 0.0, 0.0],
+    )
+
+    def run_step(scenario_id: str, action: Any) -> None:
+        try:
+            scenarios[scenario_id] = action()
+        except Exception as error:  # noqa: BLE001 - report per-scenario failure details.
+            scenarios[scenario_id] = failed(scenario_id, error)
+
+    run_step(
+        "schema_apply",
+        lambda: passed("schema_apply", "TraceQL SCHEMA APPLY", {"epoch": traceql_command(base_url, "SCHEMA APPLY", table_schema())[1]["epoch"]}),
+    )
+    run_step(
+        "put",
+        lambda: passed(
+            "put",
+            "TraceQL PUT",
+            {"epoch": traceql_command(base_url, "PUT", intro, headers={"Idempotency-Key": "traceql-put-intro"})[1]["epoch"]},
+        ),
+    )
+    run_step(
+        "batch",
+        lambda: passed(
+            "batch",
+            "TraceQL BATCH",
+            {
+                "record_count": traceql_command(
+                    base_url,
+                    "BATCH",
+                    {
+                        "records": [
+                            record("sdk", "TraceDB native TraceQL SDK conformance", "published", [0.8, 0.2, 0.0]),
+                            record("ops", "TraceDB native TraceQL snapshot restore", "published", [0.0, 1.0, 0.0]),
+                        ]
+                    },
+                    headers={"Idempotency-Key": "traceql-batch"},
+                )[1]["record_count"]
+            },
+        ),
+    )
+    run_step(
+        "patch",
+        lambda: passed(
+            "patch",
+            "TraceQL PATCH",
+            {
+                "epoch": traceql_command(
+                    base_url,
+                    "PATCH",
+                    {"table": "docs", "tenant_id": "tenant-a", "id": "intro", "fields": {"status": "reviewed"}},
+                    headers={"Idempotency-Key": "traceql-patch"},
+                )[1]["epoch"]
+            },
+        ),
+    )
+    run_step(
+        "get",
+        lambda: passed(
+            "get",
+            "TraceQL GET",
+            {
+                "status": traceql_command(
+                    base_url,
+                    "GET",
+                    {"table": "docs", "tenant_id": "tenant-a", "id": "intro"},
+                )[1]["record"]["fields"]["status"]
+            },
+        ),
+    )
+    run_step(
+        "scan",
+        lambda: passed(
+            "scan",
+            "TraceQL SCAN",
+            {
+                "returned_count": traceql_command(
+                    base_url,
+                    "SCAN",
+                    {"table": "docs", "tenant_id": "tenant-a", "limit": 10},
+                )[1]["returned_count"]
+            },
+        ),
+    )
+    run_step(
+        "query",
+        lambda: passed(
+            "query",
+            "TraceQL QUERY command",
+            {"result_count": len(traceql_command(base_url, "QUERY", query_body(explain=True))[1]["results"])},
+        ),
+    )
+    run_step(
+        "traceql_string_execution",
+        lambda: traceql_string_execution_scenario(base_url),
+    )
+    run_step(
+        "explain",
+        lambda: passed(
+            "explain",
+            "TraceQL EXPLAIN command",
+            {
+                "returned_count": traceql_command(
+                    base_url,
+                    "EXPLAIN",
+                    query_body(explain=True),
+                )[1]["returned_count"]
+            },
+        ),
+    )
+    run_step(
+        "delete",
+        lambda: passed(
+            "delete",
+            "TraceQL DELETE",
+            {
+                "deleted": traceql_command(
+                    base_url,
+                    "DELETE",
+                    {"table": "docs", "tenant_id": "tenant-a", "id": "ops", "tombstone": "platform_conformance"},
+                    headers={"Idempotency-Key": "traceql-delete"},
+                )[1]["deleted"],
+                "hidden": traceql_command(
+                    base_url,
+                    "GET",
+                    {"table": "docs", "tenant_id": "tenant-a", "id": "ops"},
+                )[1]["record"]
+                is None,
+            },
+        ),
+    )
+    run_step(
+        "idempotency",
+        lambda: passed(
+            "idempotency",
+            "TraceQL Idempotency-Key replay and conflict",
+            {
+                "replay_epoch": traceql_command(
+                    base_url,
+                    "PUT",
+                    intro,
+                    headers={"Idempotency-Key": "traceql-put-intro"},
+                )[1]["epoch"],
+                "conflict_status": traceql_command(
+                    base_url,
+                    "PUT",
+                    intro_changed,
+                    headers={"Idempotency-Key": "traceql-put-intro"},
+                    expected_status=409,
+                )[0],
+            },
+        ),
+    )
+    run_step(
+        "errors",
+        lambda: passed(
+            "errors",
+            "invalid TraceQL command JSON error envelope",
+            {
+                "status": traceql_command(
+                    base_url,
+                    "DROP DATABASE",
+                    None,
+                    expected_status=400,
+                )[0]
+            },
+        ),
+    )
+    snapshot_dir = admin_dir / "traceql-snapshot"
+    restore_dir = admin_dir / "traceql-restore"
+    run_step(
+        "snapshot_restore",
+        lambda: passed(
+            "snapshot_restore",
+            "TraceQL SNAPSHOT and RESTORE",
+            {
+                "snapshot": traceql_command(
+                    base_url,
+                    "SNAPSHOT",
+                    {"target": str(snapshot_dir)},
+                    headers={"Idempotency-Key": "traceql-snapshot"},
+                )[1]["snapshot"],
+                "restored": traceql_command(
+                    base_url,
+                    "RESTORE",
+                    {"source": str(snapshot_dir), "target": str(restore_dir)},
+                    headers={"Idempotency-Key": "traceql-restore"},
+                )[1]["restored"],
+            },
+        ),
+    )
+
+    return finalize_surface(
+        "traceql",
+        "checked",
+        ordered_surface_scenarios(
+            manifest,
+            scenarios,
+            default_reason="TraceQL native command scenario did not run",
+        ),
+        evidence=[TRACEQL_NATIVE_CONFORMANCE_EVIDENCE],
+    )
+
+
+def graphql_native_surface_report(manifest: dict[str, Any], base_url: str, admin_dir: Path) -> dict[str, Any]:
+    scenarios: dict[str, dict[str, Any]] = {}
+    intro = record("intro", "TraceDB native GraphQL conformance", "draft", [1.0, 0.0, 0.0])
+    intro_changed = record(
+        "intro",
+        "TraceDB native GraphQL conformance changed",
+        "draft",
+        [1.0, 0.0, 0.0],
+    )
+
+    def run_step(scenario_id: str, action: Any) -> None:
+        try:
+            scenarios[scenario_id] = action()
+        except Exception as error:  # noqa: BLE001 - report per-scenario failure details.
+            scenarios[scenario_id] = failed(scenario_id, error)
+
+    def data(field: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return graphql_data(payload, field)
+
+    run_step(
+        "schema_apply",
+        lambda: passed("schema_apply", "GraphQL schemaApply", {"epoch": data("schemaApply", graphql_operation(base_url, "schemaApply", table_schema(), selection="{ epoch }")[1])["epoch"]}),
+    )
+    run_step(
+        "put",
+        lambda: passed(
+            "put",
+            "GraphQL put",
+            {
+                "epoch": data(
+                    "put",
+                    graphql_operation(
+                        base_url,
+                        "put",
+                        intro,
+                        selection="{ epoch }",
+                        headers={"Idempotency-Key": "graphql-put-intro"},
+                    )[1],
+                )["epoch"]
+            },
+        ),
+    )
+    run_step(
+        "batch",
+        lambda: passed(
+            "batch",
+            "GraphQL batch",
+            {
+                "record_count": data(
+                    "batch",
+                    graphql_operation(
+                        base_url,
+                        "batch",
+                        {
+                            "records": [
+                                record("sdk", "TraceDB native GraphQL SDK conformance", "published", [0.8, 0.2, 0.0]),
+                                record("ops", "TraceDB native GraphQL snapshot restore", "published", [0.0, 1.0, 0.0]),
+                            ]
+                        },
+                        selection="{ record_count }",
+                        headers={"Idempotency-Key": "graphql-batch"},
+                    )[1],
+                )["record_count"]
+            },
+        ),
+    )
+    run_step(
+        "patch",
+        lambda: passed(
+            "patch",
+            "GraphQL patch",
+            {
+                "epoch": data(
+                    "patch",
+                    graphql_operation(
+                        base_url,
+                        "patch",
+                        {"table": "docs", "tenant_id": "tenant-a", "id": "intro", "fields": {"status": "reviewed"}},
+                        selection="{ epoch }",
+                        headers={"Idempotency-Key": "graphql-patch"},
+                    )[1],
+                )["epoch"]
+            },
+        ),
+    )
+    run_step(
+        "get",
+        lambda: passed(
+            "get",
+            "GraphQL get",
+            {
+                "status": data(
+                    "get",
+                    graphql_operation(
+                        base_url,
+                        "get",
+                        {"table": "docs", "tenant_id": "tenant-a", "id": "intro"},
+                        selection="{ record }",
+                    )[1],
+                )["record"]["fields"]["status"]
+            },
+        ),
+    )
+    run_step(
+        "scan",
+        lambda: passed(
+            "scan",
+            "GraphQL scan",
+            {
+                "returned_count": data(
+                    "scan",
+                    graphql_operation(
+                        base_url,
+                        "scan",
+                        {"table": "docs", "tenant_id": "tenant-a", "limit": 10},
+                        selection="{ returned_count records }",
+                    )[1],
+                )["returned_count"]
+            },
+        ),
+    )
+    run_step(
+        "query",
+        lambda: passed(
+            "query",
+            "GraphQL query",
+            {
+                "result_count": len(
+                    data(
+                        "query",
+                        graphql_operation(
+                            base_url,
+                            "query",
+                            query_body(explain=True),
+                            selection="{ results explain }",
+                        )[1],
+                    )["results"]
+                )
+            },
+        ),
+    )
+    run_step(
+        "traceql_string_execution",
+        lambda: passed(
+            "traceql_string_execution",
+            "GraphQL query operation parity with TraceQL scenario",
+            {"result_count": len(data("query", graphql_operation(base_url, "query", query_body(explain=True), selection="{ results explain }")[1])["results"])},
+        ),
+    )
+    run_step(
+        "explain",
+        lambda: passed(
+            "explain",
+            "GraphQL explain",
+            {
+                "returned_count": data(
+                    "explain",
+                    graphql_operation(
+                        base_url,
+                        "explain",
+                        query_body(explain=True),
+                        selection="{ returned_count }",
+                    )[1],
+                )["returned_count"]
+            },
+        ),
+    )
+    run_step(
+        "delete",
+        lambda: passed(
+            "delete",
+            "GraphQL delete",
+            {
+                "deleted": data(
+                    "delete",
+                    graphql_operation(
+                        base_url,
+                        "delete",
+                        {"table": "docs", "tenant_id": "tenant-a", "id": "ops", "tombstone": "platform_conformance"},
+                        selection="{ deleted }",
+                        headers={"Idempotency-Key": "graphql-delete"},
+                    )[1],
+                )["deleted"],
+                "hidden": data(
+                    "get",
+                    graphql_operation(
+                        base_url,
+                        "get",
+                        {"table": "docs", "tenant_id": "tenant-a", "id": "ops"},
+                        selection="{ record }",
+                    )[1],
+                )["record"]
+                is None,
+            },
+        ),
+    )
+    run_step(
+        "idempotency",
+        lambda: passed(
+            "idempotency",
+            "GraphQL Idempotency-Key replay and conflict",
+            {
+                "replay_epoch": data(
+                    "put",
+                    graphql_operation(
+                        base_url,
+                        "put",
+                        intro,
+                        selection="{ epoch }",
+                        headers={"Idempotency-Key": "graphql-put-intro"},
+                    )[1],
+                )["epoch"],
+                "conflict_status": graphql_operation(
+                    base_url,
+                    "put",
+                    intro_changed,
+                    selection="{ epoch }",
+                    headers={"Idempotency-Key": "graphql-put-intro"},
+                    expected_status=409,
+                )[0],
+            },
+        ),
+    )
+    run_step(
+        "errors",
+        lambda: passed(
+            "errors",
+            "GraphQL data/errors envelope",
+            {
+                "errors": graphql_operation(
+                    base_url,
+                    "unsupportedTraceDbField",
+                    None,
+                    selection="{ ok }",
+                )[1].get("errors")
+            },
+        ),
+    )
+    snapshot_dir = admin_dir / "graphql-snapshot"
+    restore_dir = admin_dir / "graphql-restore"
+    run_step(
+        "snapshot_restore",
+        lambda: passed(
+            "snapshot_restore",
+            "GraphQL snapshot and restore",
+            {
+                "snapshot": data(
+                    "snapshot",
+                    graphql_operation(
+                        base_url,
+                        "snapshot",
+                        {"target": str(snapshot_dir)},
+                        selection="{ snapshot target }",
+                        headers={"Idempotency-Key": "graphql-snapshot"},
+                    )[1],
+                )["snapshot"],
+                "restored": data(
+                    "restore",
+                    graphql_operation(
+                        base_url,
+                        "restore",
+                        {"source": str(snapshot_dir), "target": str(restore_dir)},
+                        selection="{ restored target }",
+                        headers={"Idempotency-Key": "graphql-restore"},
+                    )[1],
+                )["restored"],
+            },
+        ),
+    )
+
+    return finalize_surface(
+        "graphql",
+        "checked",
+        ordered_surface_scenarios(
+            manifest,
+            scenarios,
+            default_reason="GraphQL native scenario did not run",
+        ),
+        evidence=[GRAPHQL_NATIVE_CONFORMANCE_EVIDENCE],
+    )
+
+
 def traceql_sqlish_conformance_summary(base_url: str) -> dict[str, Any]:
     steps = {
         "sqlish_select": False,
@@ -415,7 +959,7 @@ def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
     ]
     if schema_payload.get("adapter") != "bounded_graphql_query_adapter":
         raise RuntimeError(f"GraphQL schema adapter marker missing: {schema_payload}")
-    if schema_payload.get("execution") != "POST /v1/graphql returns TraceDB QueryResponse, not a GraphQL data envelope":
+    if schema_payload.get("execution") != "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors":
         raise RuntimeError(f"GraphQL schema execution field missing: {schema_payload}")
     if not isinstance(schema_tables, list) or "docs" not in schema_tables:
         raise RuntimeError(f"GraphQL schema response missing docs table: {schema_payload}")
@@ -428,7 +972,7 @@ def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
         'match: "TraceDB", near: [1.0, 0.0, 0.0], freshness: ALLOW_DIRTY, '
         "limit: 3) { record_id } }"
     )
-    _, payload = request_json(base_url, "POST", "/v1/graphql", {"query": graphql_query})
+    _, payload = request_json(base_url, "POST", "/v1/graphql/bounded", {"query": graphql_query})
     results = payload.get("results")
     if not isinstance(results, list):
         raise RuntimeError(f"GraphQL response missing results list: {payload}")
@@ -442,7 +986,7 @@ def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
     _, explain_payload = request_json(
         base_url,
         "POST",
-        "/v1/graphql",
+        "/v1/graphql/bounded",
         {"query": graphql_query.replace("limit: 3)", "limit: 3, explain: true)")},
     )
     if not isinstance(explain_payload.get("results"), list) or not isinstance(
@@ -455,7 +999,7 @@ def graphql_http_conformance_summary(base_url: str) -> dict[str, Any]:
     invalid_status, invalid_payload = request_json(
         base_url,
         "POST",
-        "/v1/graphql",
+        "/v1/graphql/bounded",
         {"query": 'mutation { docs(tenant_id: "tenant-a") { record_id } }'},
         expected_status=400,
     )
@@ -1524,10 +2068,12 @@ def run_traceql_sqlish_surface(manifest: dict[str, Any], repo_root: Path) -> dic
     return map_traceql_sqlish_summary(manifest, smoke_summary)
 
 
-def run_graphql_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="tracedb-graphql-conformance-") as temp_dir:
+def run_traceql_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="tracedb-traceql-conformance-") as temp_dir:
         temp = Path(temp_dir)
         data_dir = temp / "data"
+        admin_dir = temp / "admin"
+        admin_dir.mkdir(parents=True, exist_ok=True)
         bind = f"127.0.0.1:{free_port()}"
         base_url = f"http://{bind}"
         env = os.environ.copy()
@@ -1551,41 +2097,57 @@ def run_graphql_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, 
         )
         try:
             wait_for_ready(base_url, process)
-            request_json(base_url, "POST", "/v1/schema/apply", table_schema())
-            request_json(
-                base_url,
-                "POST",
-                "/v1/records/put-batch",
-                {
-                    "records": [
-                        record(
-                            "intro",
-                            "TraceDB GraphQL conformance",
-                            "reviewed",
-                            [1.0, 0.0, 0.0],
-                        ),
-                        record(
-                            "draft",
-                            "TraceDB GraphQL non-matching draft",
-                            "draft",
-                            [0.0, 1.0, 0.0],
-                        ),
-                    ]
-                },
-                headers={"Idempotency-Key": "graphql-seed"},
+            return traceql_native_surface_report(manifest, base_url, admin_dir)
+        except Exception as error:  # noqa: BLE001 - conformance reports need the failure reason.
+            return finalize_surface(
+                "traceql",
+                "failed",
+                [failed(scenario_id, error) for scenario_id in contract_scenario_ids(manifest)],
+                evidence=[TRACEQL_NATIVE_CONFORMANCE_EVIDENCE],
             )
-            smoke_summary = graphql_http_conformance_summary(base_url)
+        finally:
+            stop_process(process)
+
+
+def run_graphql_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="tracedb-graphql-conformance-") as temp_dir:
+        temp = Path(temp_dir)
+        data_dir = temp / "data"
+        admin_dir = temp / "admin"
+        admin_dir.mkdir(parents=True, exist_ok=True)
+        bind = f"127.0.0.1:{free_port()}"
+        base_url = f"http://{bind}"
+        env = os.environ.copy()
+        env.update(
+            {
+                "TRACEDB_BIND": bind,
+                "TRACEDB_DATA_DIR": str(data_dir),
+                "TRACEDB_SERVICE_MODE": "engine",
+                "CARGO_TERM_COLOR": "never",
+                "CARGO_INCREMENTAL": "0",
+            }
+        )
+        process = subprocess.Popen(
+            ["cargo", "run", "-q", "-p", "tracedb-server"],
+            cwd=repo_root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_for_ready(base_url, process)
+            return graphql_native_surface_report(manifest, base_url, admin_dir)
         except Exception as error:  # noqa: BLE001 - conformance reports need the failure reason.
             return finalize_surface(
                 "graphql",
                 "failed",
                 [failed(scenario_id, error) for scenario_id in contract_scenario_ids(manifest)],
-                evidence=[GRAPHQL_HTTP_CONFORMANCE_EVIDENCE],
+                evidence=[GRAPHQL_NATIVE_CONFORMANCE_EVIDENCE],
             )
         finally:
             stop_process(process)
-
-    return map_graphql_http_summary(manifest, smoke_summary)
 
 
 def build_report(manifest: dict[str, Any], surfaces: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1633,6 +2195,8 @@ def run_selected_surfaces(
             surfaces.append(run_typescript_sdk_surface(manifest, repo_root))
         elif surface_id == "python_sdk":
             surfaces.append(run_python_sdk_surface(manifest, repo_root))
+        elif surface_id == "traceql":
+            surfaces.append(run_traceql_surface(manifest, repo_root))
         elif surface_id == "traceql_sqlish":
             surfaces.append(run_traceql_sqlish_surface(manifest, repo_root))
         elif surface_id == "graphql":

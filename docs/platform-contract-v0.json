@@ -118,6 +118,29 @@
       ]
     },
     {
+      "id": "traceql",
+      "label": "TraceQL",
+      "status": "native_command_and_query_surface_checked_full_conformance_lane",
+      "role": "native TraceDB command/query surface over the canonical operation model",
+      "evidence": [
+        "POST /v1/traceql",
+        "SCHEMA APPLY",
+        "PUT",
+        "BATCH",
+        "PATCH",
+        "GET",
+        "SCAN",
+        "QUERY",
+        "EXPLAIN",
+        "DELETE",
+        "SNAPSHOT",
+        "RESTORE",
+        "JOBS LIST",
+        "scripts/platform_conformance.py --surface traceql",
+        "traceql reports every blocking scenario as passed for native TraceDB command statements"
+      ]
+    },
+    {
       "id": "traceql_sqlish",
       "label": "TraceQL / SQL-ish",
       "status": "native_traceql_http_execution_checked_bounded_sqlish_select_checked",
@@ -142,14 +165,15 @@
     {
       "id": "graphql",
       "label": "GraphQL",
-      "status": "generated_sdl_export_plus_bounded_http_query_adapter_checked_partial_conformance_lane",
-      "role": "future full adapter into the same TraceQuery model; current code is generated SDL export plus a bounded HTTP query adapter with explicit not_checked reporting for scenarios it does not own",
+      "status": "native_data_errors_envelope_checked_full_conformance_lane",
+      "role": "native production API over the canonical operation model; bounded GraphQL query adapter remains compatibility-only at /v1/graphql/bounded",
       "evidence": [
         "crates/tracedb-query/src/lib.rs",
         "crates/tracedb-server/src/lib.rs",
         "graphql_schema_sdl_from_tables",
         "GET /v1/graphql/schema",
         "GraphQlSchemaResponse",
+        "GraphQlResponse",
         "TraceDbClient::graphql_schema",
         "TraceDbClient::graphql_schema_typed",
         "TraceDbAsyncClient::graphql_schema_typed",
@@ -157,21 +181,23 @@
         "TraceDB.graphql_schema",
         "graphql_query_from_str",
         "POST /v1/graphql",
+        "POST /v1/graphql/bounded",
         "GraphQlQueryRequest",
         "TraceDB.graphql",
         "TraceDB.graphqlRequest",
         "TraceDB.graphql(query)",
         "graphql_request({\"query\": query})",
         "TraceDbClient::graphql_typed",
-        "query { <table>(tenant_id: \"...\", where: {...}, match: \"...\", near: [...], limit: n, freshness: ALLOW_DIRTY, explain: true) { ... } }",
-        "invalid GraphQL adapter errors for mutation/subscription/fragment/alias/unknown argument/resolver semantics",
+        "query { query(input: \"{...}\") { results explain } }",
+        "query { put(input: \"{...}\") { epoch } }",
+        "GraphQL data/errors envelope for native operations",
         "cargo test -p tracedb-query graphql_schema_sdl_is_generated_from_table_schema --no-run",
         "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_schema_exports_sdl_from_applied_table_schema --no-run",
         "cargo test -p tracedb-sdk --test http_client graphql_schema_typed_gets_generated_schema_response --no-run",
         "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run",
         "scripts/platform_conformance.py --surface graphql",
-        "graphql reports schema_apply/query/explain/errors as passed and write/admin/TraceQL/idempotency/snapshot scenarios as not_checked",
-        "not GraphQL mutation support, resolver runtime, GraphQL data-envelope execution, or full adapter parity"
+        "graphql reports every blocking scenario as passed for native GraphQL operations",
+        "GraphQL subscriptions remain unsupported"
       ]
     }
   ],

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   TraceDB,
   TraceDbHttpError,
+  type JsonObject,
   type ReadyResponse,
   type TableSchema,
 } from "./src/sdk.ts";
@@ -274,21 +275,46 @@ try {
   const traceqlExplain = await db.traceql(`${traceqlQuery}\nEXPLAIN`);
   assert.equal(typeof traceqlExplain.explain?.returned_count, "number");
 
-  const graphqlQuery =
-    `query { docs(tenant_id: "tenant-a", where: {status: "published"}, match: "TypeScript", ` +
-    `near: [1.0, 0.0, 0.0], freshness: STRICT, limit: 3) { record_id } }`;
+  const graphqlInput = JSON.stringify({
+    table: "docs",
+    tenant_id: "tenant-a",
+    scalar_eq: { status: "published" },
+    text_field: "body",
+    text: "TypeScript",
+    vector_field: "embedding",
+    vector: [1.0, 0.0, 0.0],
+    freshness: "Strict",
+    top_k: 3,
+    explain: false,
+  });
+  const graphqlQuery = `query { query(input: ${JSON.stringify(graphqlInput)}) { results } }`;
   const graphqlResponse = await db.graphql(graphqlQuery);
-  const graphqlResults = graphqlResponse.results ?? [];
+  const graphqlData = graphqlResponse.data as JsonObject | undefined;
+  const graphqlPayload = graphqlData?.query as JsonObject | undefined;
+  const graphqlResults = (graphqlPayload?.results as JsonObject[] | undefined) ?? [];
   assert.equal(Array.isArray(graphqlResults), true);
   assert.ok(
     graphqlResults.some((result) => result.record_id === "intro"),
     "GraphQL should return the intro record through the public TypeScript SDK",
   );
+  const graphqlExplainInput = JSON.stringify({
+    table: "docs",
+    tenant_id: "tenant-a",
+    text_field: "body",
+    text: "TypeScript",
+    vector_field: "embedding",
+    vector: [1.0, 0.0, 0.0],
+    freshness: "Strict",
+    top_k: 3,
+    explain: true,
+  });
   const graphqlExplain = await db.graphql(
-    `query { docs(tenant_id: "tenant-a", match: "TypeScript", near: [1.0, 0.0, 0.0], ` +
-      `freshness: STRICT, limit: 3, explain: true) { record_id } }`,
+    `query { query(input: ${JSON.stringify(graphqlExplainInput)}) { results explain } }`,
   );
-  assert.equal(typeof graphqlExplain.explain?.returned_count, "number");
+  const graphqlExplainData = graphqlExplain.data as JsonObject | undefined;
+  const graphqlExplainPayload = graphqlExplainData?.query as JsonObject | undefined;
+  const graphqlExplainObject = graphqlExplainPayload?.explain as JsonObject | undefined;
+  assert.equal(typeof graphqlExplainObject?.returned_count, "number");
 
   const deleteResponse = await docs.delete("ops", {
     idempotencyKey: `ts-public-${runId}-delete`,
@@ -379,7 +405,7 @@ try {
     graphql_schema_tables: graphqlSchemaTables,
     graphql_schema_tokens: ["type DocsRow"].filter((token) => graphqlSchemaText.includes(token)),
     graphql_result_count: graphqlResults.length,
-    graphql_explain: graphqlExplain.explain !== undefined,
+    graphql_explain: graphqlExplainObject !== undefined,
     catalog_databases: databases.databases?.length,
     put_epoch: putResponse.epoch,
     idempotency_replay_observed: replayResponse.epoch === putResponse.epoch,

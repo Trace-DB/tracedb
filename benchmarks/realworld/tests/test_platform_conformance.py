@@ -356,53 +356,28 @@ class PlatformConformanceTests(unittest.TestCase):
         ]:
             self.assertIn(token, source)
 
-    def test_graphql_surface_reports_http_adapter_owned_scenarios(self) -> None:
-        module = load_module()
-        manifest = module.load_contract(ROOT / "docs" / "platform-contract-v0.json")
-        smoke_summary = {
-            "ok": True,
-            "mode": "graphql-http-conformance",
-            "surface": "graphql",
-            "steps": {
-                "graphql_schema": True,
-                "graphql_query": True,
-                "graphql_explain": True,
-                "invalid_graphql": True,
-            },
-            "graphql_schema_tables": ["docs"],
-            "graphql_schema_tokens": ["type DocsRow"],
-            "graphql_result_ids": ["intro"],
-            "graphql_explain": True,
-            "invalid_graphql_status": 400,
-            "invalid_graphql_code": "bad_request",
-            "invalid_graphql_error": "invalid GraphQL adapter: mutation is not supported",
-        }
-
-        surface = module.map_graphql_http_summary(manifest, smoke_summary)
-        scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
-
-        self.assertEqual(surface["surface"], "graphql")
-        self.assertEqual(surface["status"], "checked")
-        self.assertTrue(surface["ok"])
-        self.assertFalse(surface["complete"])
-        self.assertEqual(scenarios["schema_apply"]["status"], "passed")
-        self.assertEqual(scenarios["query"]["status"], "passed")
-        self.assertEqual(scenarios["explain"]["status"], "passed")
-        self.assertEqual(scenarios["errors"]["status"], "passed")
-        self.assertEqual(scenarios["traceql_string_execution"]["status"], "not_checked")
-        self.assertIn("/v1/graphql/schema", " ".join(surface["evidence"]))
-
-    def test_graphql_surface_is_http_backed_with_schema_export_without_resolver_claims(self) -> None:
+    def test_graphql_surface_is_native_data_errors_conformance_lane(self) -> None:
         source = SCRIPT.read_text()
 
         for token in [
             "run_graphql_surface",
-            "map_graphql_http_summary",
-            "graphql_http_conformance_summary",
-            "graphql-http-conformance",
+            "graphql_native_surface_report",
+            "POST /v1/graphql native GraphQL data/errors envelope",
+            "GraphQL Idempotency-Key replay and conflict",
+            "GraphQL data/errors envelope",
             "/v1/graphql",
-            "/v1/graphql/schema",
-            "not GraphQL resolver runtime",
+            "/v1/graphql/bounded",
+        ]:
+            self.assertIn(token, source)
+
+    def test_traceql_native_surface_is_executable_in_runner(self) -> None:
+        source = SCRIPT.read_text()
+
+        for token in [
+            "run_traceql_surface",
+            "traceql_native_surface_report",
+            "POST /v1/traceql native TraceDB command statements",
+            "TraceQL Idempotency-Key replay and conflict",
         ]:
             self.assertIn(token, source)
 

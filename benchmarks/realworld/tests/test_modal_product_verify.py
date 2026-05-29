@@ -94,7 +94,8 @@ class ModalProductVerifyTests(unittest.TestCase):
         self.assertIn("python-platform-conformance-tests", command_names)
         self.assertIn("python-sdk-conformance", command_names)
         self.assertIn("traceql-sqlish-conformance", command_names)
-        self.assertIn("graphql-http-conformance", command_names)
+        self.assertIn("api-parity-conformance", command_names)
+        self.assertIn("graphql-native-conformance", command_names)
         self.assertIn("workspace-all-targets", command_names)
 
         install_smoke = next(
@@ -119,10 +120,29 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "/tmp/tracedb-traceql-sqlish-conformance.json",
             ],
         )
+        api_parity_conformance = next(
+            command
+            for command in module.build_command_plan("workspace")
+            if command["name"] == "api-parity-conformance"
+        )
+        self.assertEqual(
+            api_parity_conformance["argv"],
+            [
+                "cargo",
+                "run",
+                "-q",
+                "-p",
+                "tracedb-cli",
+                "--",
+                "api-parity",
+                "--report-file",
+                "/tmp/tracedb-api-parity.json",
+            ],
+        )
         graphql_conformance = next(
             command
             for command in module.build_command_plan("workspace")
-            if command["name"] == "graphql-http-conformance"
+            if command["name"] == "graphql-native-conformance"
         )
         self.assertEqual(
             graphql_conformance["argv"],

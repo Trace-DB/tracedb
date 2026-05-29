@@ -7,7 +7,9 @@ import {
   type DeleteResponse,
   type EpochResponse,
   type GetRecordResponse,
+  type GraphQlError,
   type GraphQlQueryRequest,
+  type GraphQlResponse,
   type GraphQlSchemaResponse,
   type HealthResponse,
   type HybridExplain,
@@ -30,6 +32,7 @@ import {
   type TableSchema,
   type TraceQlQueryRequest,
   type TraceDbClientConfig,
+  type TraceDbActorContext,
   type TraceDbFetch,
   type TraceDbFetchInit,
   type TraceDbRequestOptions,
@@ -43,7 +46,9 @@ export type {
   DeleteResponse,
   EpochResponse,
   GetRecordResponse,
+  GraphQlError,
   GraphQlQueryRequest,
+  GraphQlResponse,
   GraphQlSchemaResponse,
   HealthResponse,
   HybridExplain,
@@ -67,6 +72,7 @@ export type {
   SnapshotResponse,
   TableSchema,
   TraceQlQueryRequest,
+  TraceDbActorContext,
   TraceDbFetch,
   TraceDbFetchInit,
   TraceDbRequestOptions,
@@ -163,6 +169,7 @@ export class TraceDB {
       token: config.token,
       databaseId: config.databaseId,
       branchId: config.branchId,
+      actorContext: config.actorContext,
       fetchImpl,
     });
   }
@@ -231,15 +238,26 @@ export class TraceDB {
     return this.transport.traceql({ ...request }, options);
   }
 
-  async graphql(query: string, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+  async graphql(query: string, options: TraceDbRequestOptions = {}): Promise<GraphQlResponse> {
     return this.graphqlRequest({ query }, options);
   }
 
   async graphqlRequest(
     request: GraphQlQueryRequest,
     options: TraceDbRequestOptions = {},
-  ): Promise<QueryResponse> {
+  ): Promise<GraphQlResponse> {
     return this.transport.graphql({ ...request }, options);
+  }
+
+  async boundedGraphql(query: string, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+    return this.boundedGraphqlRequest({ query }, options);
+  }
+
+  async boundedGraphqlRequest(
+    request: GraphQlQueryRequest,
+    options: TraceDbRequestOptions = {},
+  ): Promise<QueryResponse> {
+    return this.transport.boundedGraphql({ ...request }, options);
   }
 
   async graphqlSchema(options: TraceDbRequestOptions = {}): Promise<GraphQlSchemaResponse> {
@@ -751,11 +769,11 @@ function retryAttemptCount(
   safeRetries: number,
   idempotencyRetries: number,
 ): number {
-  if (isRetrySafeRequest(input, init)) {
-    return safeRetries + 1;
-  }
   if (isIdempotentRetryRequest(input, init) && hasIdempotencyKey(init)) {
     return idempotencyRetries + 1;
+  }
+  if (isRetrySafeRequest(input, init)) {
+    return safeRetries + 1;
   }
   return 1;
 }
@@ -776,6 +794,7 @@ function isRetrySafeRequest(input: string, init: TraceDbFetchInit): boolean {
       requestPath(input) === "/v1/query" ||
       requestPath(input) === "/v1/traceql" ||
       requestPath(input) === "/v1/graphql" ||
+      requestPath(input) === "/v1/graphql/bounded" ||
       requestPath(input) === "/v1/explain"
     )
   );
@@ -793,7 +812,9 @@ function isIdempotentRetryRequest(input: string, init: TraceDbFetchInit): boolea
       requestPath(input) === "/v1/records/delete" ||
       requestPath(input) === "/v1/admin/compact" ||
       requestPath(input) === "/v1/admin/snapshot" ||
-      requestPath(input) === "/v1/admin/restore"
+      requestPath(input) === "/v1/admin/restore" ||
+      requestPath(input) === "/v1/graphql" ||
+      requestPath(input) === "/v1/traceql"
     )
   );
 }
