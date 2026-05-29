@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -113,6 +113,14 @@ pub struct VectorScore {
     pub record_id: String,
     pub version_id: u64,
     pub score: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VectorSearchReport {
+    pub scores: Vec<VectorScore>,
+    pub field_entry_count: usize,
+    pub visited_count: usize,
+    pub exact_fallback_used: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -401,66 +409,67 @@ impl VectorIndexArtifact {
     }
 
     pub fn search_vector(&self, field: &str, query: &[f32], limit: usize) -> Vec<VectorScore> {
+        self.search_vector_with_report(field, query, limit).scores
+    }
+
+    pub fn search_vector_with_report(
+        &self,
+        field: &str,
+        query: &[f32],
+        limit: usize,
+    ) -> VectorSearchReport {
         if limit == 0 {
-            return Vec::new();
+            return VectorSearchReport {
+                scores: Vec::new(),
+                field_entry_count: 0,
+                visited_count: 0,
+                exact_fallback_used: false,
+            };
         }
 
-        let exact_scores = self
+        let entries = self
             .entries
             .iter()
             .filter(|entry| entry.field == field)
-            .filter_map(|entry| {
-                tracedb_vector::cosine_similarity(query, &entry.vector).map(|score| VectorScore {
-                    record_id: entry.record_id.clone(),
-                    version_id: entry.version_id,
-                    score,
-                })
-            })
-            .collect::<Vec<_>>();
-        if exact_scores.is_empty() {
-            return Vec::new();
+            .map(|entry| (vector_node_key(field, &entry.record_id), entry))
+            .collect::<BTreeMap<_, _>>();
+        if entries.is_empty() {
+            return VectorSearchReport {
+                scores: Vec::new(),
+                field_entry_count: 0,
+                visited_count: 0,
+                exact_fallback_used: false,
+            };
         }
 
+        let field_entry_count = entries.len();
+        let entry_point = entries.keys().next().expect("non-empty entries").clone();
+        let target_visits = self.ef_search.max(limit).min(field_entry_count).max(1);
         let mut scores_by_key = BTreeMap::new();
-        for score in &exact_scores {
-            scores_by_key.insert(vector_node_key(field, &score.record_id), score.clone());
-        }
-
-        let entry_point = exact_scores
-            .iter()
-            .min_by(|left, right| vector_score_order(left, right))
-            .map(|score| vector_node_key(field, &score.record_id))
-            .expect("non-empty exact scores");
-        let target_visits = self.ef_search.max(limit).min(scores_by_key.len()).max(1);
         let mut visited = BTreeSet::new();
-        let mut frontier = VecDeque::from([entry_point]);
+        let mut frontier = BTreeSet::from([entry_point]);
 
-        while visited.len() < target_visits {
-            let Some(node_key) = frontier.pop_front() else {
+        while visited.len() < target_visits && !frontier.is_empty() {
+            let Some(node_key) = best_frontier_key(&frontier, &entries, query, &mut scores_by_key)
+            else {
                 break;
             };
+            frontier.remove(&node_key);
             if !visited.insert(node_key.clone()) {
                 continue;
             }
 
-            let mut neighbors = self
+            for neighbor in self
                 .neighbors
                 .get(&node_key)
                 .into_iter()
                 .flat_map(|neighbors| neighbors.iter())
                 .map(|record_id| vector_node_key(field, record_id))
-                .filter(|neighbor_key| scores_by_key.contains_key(neighbor_key))
-                .filter(|neighbor_key| !visited.contains(neighbor_key))
-                .collect::<Vec<_>>();
-            neighbors.sort_by(|left, right| {
-                vector_score_order(
-                    scores_by_key.get(left).expect("known left neighbor"),
-                    scores_by_key.get(right).expect("known right neighbor"),
-                )
-            });
-            for neighbor in neighbors {
-                if !frontier.contains(&neighbor) {
-                    frontier.push_back(neighbor);
+                .filter(|neighbor_key| entries.contains_key(neighbor_key))
+                .collect::<Vec<_>>()
+            {
+                if !visited.contains(&neighbor) {
+                    frontier.insert(neighbor);
                 }
             }
         }
@@ -469,22 +478,67 @@ impl VectorIndexArtifact {
             .iter()
             .filter_map(|key| scores_by_key.get(key).cloned())
             .collect::<Vec<_>>();
-        if scores.len() < limit {
+        let mut exact_fallback_used = false;
+        if visited.len() < field_entry_count {
+            exact_fallback_used = true;
             let seen = scores
                 .iter()
                 .map(|score| vector_node_key(field, &score.record_id))
                 .collect::<BTreeSet<_>>();
             scores.extend(
-                exact_scores
+                entries
                     .iter()
-                    .filter(|score| !seen.contains(&vector_node_key(field, &score.record_id)))
-                    .cloned(),
+                    .filter(|(key, _)| !seen.contains(*key))
+                    .filter_map(|(_, entry)| vector_score_for_entry(entry, query)),
             );
         }
         scores.sort_by(vector_score_order);
         scores.truncate(limit);
-        scores
+        VectorSearchReport {
+            scores,
+            field_entry_count,
+            visited_count: visited.len(),
+            exact_fallback_used,
+        }
     }
+}
+
+fn best_frontier_key(
+    frontier: &BTreeSet<String>,
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+    scores_by_key: &mut BTreeMap<String, VectorScore>,
+) -> Option<String> {
+    frontier
+        .iter()
+        .filter_map(|key| {
+            let score = vector_score_for_key(key, entries, query, scores_by_key)?;
+            Some((key.clone(), score))
+        })
+        .min_by(|(_, left), (_, right)| vector_score_order(left, right))
+        .map(|(key, _)| key)
+}
+
+fn vector_score_for_key(
+    key: &str,
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+    scores_by_key: &mut BTreeMap<String, VectorScore>,
+) -> Option<VectorScore> {
+    if let Some(score) = scores_by_key.get(key) {
+        return Some(score.clone());
+    }
+    let score = vector_score_for_entry(entries.get(key)?, query)?;
+    scores_by_key.insert(key.to_string(), score.clone());
+    Some(score)
+}
+
+fn vector_score_for_entry(entry: &VectorIndexEntry, query: &[f32]) -> Option<VectorScore> {
+    tracedb_vector::cosine_similarity(query, &entry.vector).map(|score| VectorScore {
+        record_id: entry.record_id.clone(),
+        version_id: entry.version_id,
+        score,
+    })
 }
 
 pub fn build_policy_bitmap_index(
@@ -870,7 +924,8 @@ mod tests {
             neighbors: BTreeMap::new(),
         };
 
-        let nearest = artifact.search_vector("embedding", &[1.0, 0.0], 2);
+        let report = artifact.search_vector_with_report("embedding", &[1.0, 0.0], 2);
+        let nearest = report.scores;
 
         assert_eq!(
             nearest
@@ -879,5 +934,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a", "b"]
         );
+        assert!(report.exact_fallback_used);
+        assert_eq!(report.visited_count, 1);
+    }
+
+    #[test]
+    fn vector_search_can_use_hnsw_without_exact_fallback_when_graph_covers_limit() {
+        let records = vec![
+            record("a", "alpha", vec![1.0, 0.0]),
+            record("b", "beta", vec![0.9, 0.1]),
+        ];
+        let mut artifact =
+            build_vector_index("seg-1", 1, 77, 1234, &records).expect("vector index");
+        artifact.ef_search = 2;
+
+        let report = artifact.search_vector_with_report("embedding", &[1.0, 0.0], 1);
+
+        assert_eq!(
+            report.scores.first().map(|score| score.record_id.as_str()),
+            Some("a")
+        );
+        assert!(!report.exact_fallback_used);
+        assert_eq!(report.visited_count, report.field_entry_count);
     }
 }

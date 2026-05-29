@@ -147,6 +147,12 @@ class SuiteGateTests(unittest.TestCase):
     def test_release_gate_requires_external_controls_before_claim_ready(self) -> None:
         spec = load_suite_spec(LAB_ROOT / "suites" / "release_100k.json")
 
+        self.assertEqual(
+            spec.surfaces,
+            ["http_direct", "rust_sdk", "typescript_sdk", "python_sdk", "traceql", "graphql"],
+        )
+        self.assertEqual(spec.unsupported_coverage["graphql_mutations"], "unsupported")
+
         blocked = build_suite_gate(
             minimal_report(control_status="internal_only_smoke"),
             spec,

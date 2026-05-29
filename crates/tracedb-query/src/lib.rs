@@ -3451,6 +3451,7 @@ impl TraceDb {
             .collect::<BTreeSet<_>>();
 
         let mut used_artifact = false;
+        let mut used_exact_fallback = false;
         let mut candidates = Vec::new();
         let mut seen = BTreeSet::new();
         for index in self.manifest.indexes.iter().filter(|index| {
@@ -3472,7 +3473,10 @@ impl TraceDb {
                 continue;
             };
             used_artifact = true;
-            for score in vector_artifact.search_vector(&vector.name, query, limit) {
+            let report = vector_artifact.search_vector_with_report(&vector.name, query, limit);
+            used_exact_fallback |=
+                report.exact_fallback_used || report.visited_count < report.field_entry_count;
+            for score in report.scores {
                 let key = (score.record_id.clone(), score.version_id);
                 let Some(record) = eligible.get(&key).copied() else {
                     continue;
@@ -3496,19 +3500,21 @@ impl TraceDb {
             return Ok(None);
         }
 
-        candidates.extend(sealed_records.iter().filter_map(|record| {
-            let key = (record.record_id.clone(), record.version_id);
-            if seen.contains(&key) {
-                return None;
-            }
-            segment_vector_score(schema, record, vector_field, query).map(|score| {
-                segment_candidate(record, "VectorPath", score, |score| ScoreComponents {
-                    vector: Some(score),
-                    final_score: score,
-                    ..ScoreComponents::default()
+        if used_exact_fallback {
+            candidates.extend(sealed_records.iter().filter_map(|record| {
+                let key = (record.record_id.clone(), record.version_id);
+                if seen.contains(&key) {
+                    return None;
+                }
+                segment_vector_score(schema, record, vector_field, query).map(|score| {
+                    segment_candidate(record, "VectorPath", score, |score| ScoreComponents {
+                        vector: Some(score),
+                        final_score: score,
+                        ..ScoreComponents::default()
+                    })
                 })
-            })
-        }));
+            }));
+        }
         candidates.sort_by(|left, right| {
             score_order(
                 left.score_components.final_score,
@@ -4599,14 +4605,9 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
     let mut explain = false;
     let mut explain_seen = false;
 
-    for (line_idx, raw_line) in input.lines().enumerate() {
-        let line_number = line_idx + 1;
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let (directive, body) = split_traceql_directive(line);
+    for statement in split_traceql_statements(input)? {
+        let line_number = statement.line_number;
+        let (directive, body) = split_traceql_directive(&statement.text);
         match directive.to_ascii_uppercase().as_str() {
             "FROM" => {
                 set_traceql_once(
@@ -4749,10 +4750,114 @@ pub fn traceql_query_from_str(input: &str) -> Result<HybridQuery> {
     })
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TraceQlStatement {
+    line_number: usize,
+    text: String,
+}
+
+fn split_traceql_statements(input: &str) -> Result<Vec<TraceQlStatement>> {
+    let mut statements = Vec::new();
+    let mut start = 0usize;
+    let mut line_number = 1usize;
+    let mut statement_line = 1usize;
+    let mut paren_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            if ch == '\n' {
+                line_number += 1;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => paren_depth += 1,
+            ')' => {
+                paren_depth = paren_depth.checked_sub(1).ok_or_else(|| {
+                    invalid_traceql(line_number, "unexpected closing parenthesis")
+                })?;
+            }
+            '{' => brace_depth += 1,
+            '}' => {
+                brace_depth = brace_depth
+                    .checked_sub(1)
+                    .ok_or_else(|| invalid_traceql(line_number, "unexpected closing brace"))?;
+            }
+            '[' => bracket_depth += 1,
+            ']' => {
+                bracket_depth = bracket_depth
+                    .checked_sub(1)
+                    .ok_or_else(|| invalid_traceql(line_number, "unexpected closing bracket"))?;
+            }
+            '\n' if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
+                push_traceql_statement(&mut statements, &input[start..index], statement_line);
+                line_number += 1;
+                start = index + ch.len_utf8();
+                statement_line = line_number;
+            }
+            '\n' => line_number += 1,
+            _ => {}
+        }
+    }
+
+    if in_string {
+        return Err(invalid_traceql(
+            statement_line,
+            "unterminated string literal in statement",
+        ));
+    }
+    if paren_depth > 0 {
+        return Err(invalid_traceql(
+            statement_line,
+            "unterminated opening parenthesis in statement",
+        ));
+    }
+    if brace_depth > 0 {
+        return Err(invalid_traceql(
+            statement_line,
+            "unterminated opening brace in statement",
+        ));
+    }
+    if bracket_depth > 0 {
+        return Err(invalid_traceql(
+            statement_line,
+            "unterminated opening bracket in statement",
+        ));
+    }
+
+    push_traceql_statement(&mut statements, &input[start..], statement_line);
+    Ok(statements)
+}
+
+fn push_traceql_statement(statements: &mut Vec<TraceQlStatement>, raw: &str, line_number: usize) {
+    let text = raw.trim();
+    if text.is_empty() || text.starts_with('#') {
+        return;
+    }
+    statements.push(TraceQlStatement {
+        line_number,
+        text: text.to_string(),
+    });
+}
+
 /// Parses TraceDB's bounded GraphQL adapter query form into `HybridQuery`.
 /// This is a compiler primitive only, not a resolver runtime or GraphQL server.
 pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
-    let body = graphql_operation_body(input)?;
+    let input = strip_graphql_comments(input);
+    let body = graphql_operation_body(&input)?;
     let (table, arguments) = graphql_root_selection(body)?;
     let argument_pairs = split_graphql_top_level(arguments, ',')?;
 
@@ -4843,6 +4948,43 @@ pub fn graphql_query_from_str(input: &str) -> Result<HybridQuery> {
         freshness,
         explain,
     })
+}
+
+fn strip_graphql_comments(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut in_comment = false;
+
+    for ch in input.chars() {
+        if in_comment {
+            if ch == '\n' || ch == '\r' {
+                in_comment = false;
+                output.push(ch);
+            }
+            continue;
+        }
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                output.push(ch);
+            }
+            '#' => in_comment = true,
+            _ => output.push(ch),
+        }
+    }
+    output
 }
 
 /// Generates a bounded GraphQL adapter SDL view from TraceDB table schemas.
@@ -5214,9 +5356,16 @@ fn matching_graphql_delimiter(
     let mut depth = 0usize;
     let mut in_string = false;
     let mut escaped = false;
+    let mut in_comment = false;
 
     for (index, ch) in input[open_index..].char_indices() {
         let index = open_index + index;
+        if in_comment {
+            if ch == '\n' || ch == '\r' {
+                in_comment = false;
+            }
+            continue;
+        }
         if in_string {
             if escaped {
                 escaped = false;
@@ -5229,6 +5378,8 @@ fn matching_graphql_delimiter(
         }
         if ch == '"' {
             in_string = true;
+        } else if ch == '#' {
+            in_comment = true;
         } else if ch == open {
             depth += 1;
         } else if ch == close {
@@ -6001,6 +6152,52 @@ mod tests {
     }
 
     #[test]
+    fn traceql_query_string_keeps_json_newlines_inside_statement_values() {
+        let query = traceql_query_from_str(
+            r#"
+            FROM docs
+            TENANT tenant-a
+            WHERE metadata = {
+              "kind": "guide",
+              "tags": ["api", "traceql"]
+            }
+            NEAR embedding [
+              1.0,
+              0.0,
+              0.0
+            ]
+            MATCH body "line one\nline two"
+            LIMIT 3
+            "#,
+        )
+        .expect("traceql query with multi-line values");
+
+        assert_eq!(query.scalar_eq["metadata"]["kind"], json!("guide"));
+        assert_eq!(query.scalar_eq["metadata"]["tags"][1], json!("traceql"));
+        assert_eq!(query.vector, Some(vec![1.0, 0.0, 0.0]));
+        assert_eq!(query.text.as_deref(), Some("line one\nline two"));
+        assert_eq!(query.top_k, 3);
+    }
+
+    #[test]
+    fn traceql_query_rejects_unbalanced_statement_delimiters_instead_of_swallowing_lines() {
+        let error = traceql_query_from_str(
+            r#"
+            FROM docs
+            TENANT tenant-a
+            MATCH body foo(
+            LIMIT 3
+            "#,
+        )
+        .expect_err("unbalanced TraceQL statement should be rejected");
+
+        assert!(
+            matches!(&error, TraceDbError::InvalidCommand(message) if message.contains("unterminated opening parenthesis")),
+            "unexpected TraceQL delimiter error: {error}"
+        );
+    }
+
+    #[test]
     fn traceql_query_string_defaults_to_strict_limit_ten_without_explain() {
         let query = traceql_query_from_str(
             r#"
@@ -6187,6 +6384,35 @@ mod tests {
         assert_eq!(query.top_k, 7);
         assert_eq!(query.freshness, FreshnessMode::AllowDirty);
         assert!(query.explain);
+    }
+
+    #[test]
+    fn graphql_query_ignores_comments_with_delimiter_characters() {
+        let query = graphql_query_from_str(
+            r#"
+            query SearchDocs {
+              # Comments can contain GraphQL-looking delimiters: { ( [ ] ) }
+              docs(
+                tenant_id: "tenant-a",
+                # The parser should not count these braces: { }
+                where: { category: "code" },
+                match_field: "body",
+                match: "TraceDB",
+                limit: 2
+              ) {
+                record_id
+                # More fake delimiters: { } ) ]
+              }
+            }
+            "#,
+        )
+        .expect("bounded GraphQL query with comments");
+
+        assert_eq!(query.table, "docs");
+        assert_eq!(query.tenant_id, "tenant-a");
+        assert_eq!(query.scalar_eq.get("category"), Some(&json!("code")));
+        assert_eq!(query.text.as_deref(), Some("TraceDB"));
+        assert_eq!(query.top_k, 2);
     }
 
     #[test]

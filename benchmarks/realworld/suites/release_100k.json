@@ -11,7 +11,7 @@
     "rust_sdk",
     "typescript_sdk",
     "python_sdk",
-    "traceql_sqlish",
+    "traceql",
     "graphql"
   ],
   "adapters": ["http", "sdk", "traceql"],
@@ -34,8 +34,8 @@
     "backup_required": true
   },
   "unsupported_coverage": {
-    "sql_compatibility": "unsupported",
     "graphql_mutations": "unsupported",
+    "sql_compatibility": "unsupported",
     "graphql_subscriptions": "unsupported",
     "sql_postgres_wire_protocol": "unsupported"
   }
