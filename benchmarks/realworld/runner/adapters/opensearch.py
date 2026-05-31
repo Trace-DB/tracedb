@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-import uuid
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
-from .base import BenchmarkAdapter, query_result_record
 from ..http import request_json
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
+from .base import BenchmarkAdapter, query_result_record
 
 
 class OpenSearchAdapter(BenchmarkAdapter):
@@ -18,7 +19,18 @@ class OpenSearchAdapter(BenchmarkAdapter):
     role = "lexical full-text search"
 
     def run(self, dataset: DatasetBundle, config: RunConfig) -> dict[str, Any]:
-        base_url = os.environ.get("BENCH_OPENSEARCH_URL", "http://localhost:29200").rstrip("/")
+        if dataset.kind == "generated_hybrid":
+            logging.warning(
+                "OpenSearch adapter skipped for %s: performs BM25 text search and ignores query.vector",
+                dataset.kind,
+            )
+            return self.unavailable(
+                "OpenSearch adapter performs BM25 text search and ignores query.vector; skipping hybrid benchmark",
+                dataset,
+            )
+        base_url = os.environ.get(
+            "BENCH_OPENSEARCH_URL", "http://localhost:29200"
+        ).rstrip("/")
         index = f"tracedb-bench-{uuid.uuid4().hex[:8]}"
         try:
             request_json(
@@ -38,7 +50,11 @@ class OpenSearchAdapter(BenchmarkAdapter):
             if dataset.records:
                 bulk_lines = []
                 for record in dataset.records:
-                    bulk_lines.append(json.dumps({"index": {"_index": index, "_id": record.record_id}}))
+                    bulk_lines.append(
+                        json.dumps(
+                            {"index": {"_index": index, "_id": record.record_id}}
+                        )
+                    )
                     bulk_lines.append(
                         json.dumps(
                             {
@@ -96,7 +112,9 @@ class OpenSearchAdapter(BenchmarkAdapter):
                     "ingest_count": len(dataset.records),
                     "query_count": len(dataset.queries),
                     "failure_count": 0,
-                    "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
+                    "recall_at_5": round(sum(recalls) / len(recalls), 3)
+                    if recalls
+                    else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
                     "disk_bytes": disk_bytes,
@@ -107,7 +125,10 @@ class OpenSearchAdapter(BenchmarkAdapter):
             return self.ok_result(
                 dataset,
                 metrics,
-                ["real OpenSearch BM25 tenant-filtered workload executed through REST API"],
+                [
+                    "real OpenSearch BM25 tenant-filtered workload executed through REST API",
+                    "WARNING: OpenSearch adapter performs BM25 text search and ignores query.vector; do not compare against vector/hybrid benchmarks",
+                ],
                 query_results=query_results,
             )
         except Exception as error:

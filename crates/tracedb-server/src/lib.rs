@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+//! HTTP server and request handler for the TraceDB engine.
 
 use async_graphql::parser::parse_query;
 use axum::body::{to_bytes, Body, Bytes};
@@ -64,11 +65,18 @@ impl Default for EngineServerConfig {
 
 impl EngineServerConfig {
     pub fn from_env() -> Self {
+        let internal_token = std::env::var("TRACEDB_ENGINE_INTERNAL_TOKEN")
+            .ok()
+            .or_else(|| std::env::var("TRACEDB_ENGINE_TOKEN").ok())
+            .filter(|token| !token.trim().is_empty());
+        let require_internal_token = bool_env("TRACEDB_REQUIRE_ENGINE_TOKEN", false)
+            || bool_env("TRACEDB_HOSTED_ALPHA", false);
+        assert!(
+            internal_token.is_some() || !require_internal_token,
+            "TRACEDB_ENGINE_INTERNAL_TOKEN must be set when hosted/private engine mode is enabled"
+        );
         Self {
-            internal_token: std::env::var("TRACEDB_ENGINE_INTERNAL_TOKEN")
-                .ok()
-                .or_else(|| std::env::var("TRACEDB_ENGINE_TOKEN").ok())
-                .filter(|token| !token.trim().is_empty()),
+            internal_token,
             request_timeout: env_duration_ms("TRACEDB_REQUEST_TIMEOUT_MS", 30_000),
             max_concurrent_requests: env_usize("TRACEDB_MAX_CONCURRENT_REQUESTS", 1024).max(1),
         }
@@ -98,6 +106,7 @@ impl EngineServerConfig {
 }
 
 #[derive(Clone)]
+/// Handle to an opened TraceDB engine shard.
 pub struct EngineHandle {
     db: Arc<RwLock<TraceDb>>,
     shard_key: ShardKey,
@@ -132,6 +141,9 @@ fn shard_path(root_dir: &Path, key: &ShardKey) -> PathBuf {
 }
 
 fn safe_shard_component(value: &str) -> String {
+    if value == "." || value == ".." {
+        return "_invalid".to_string();
+    }
     let mut output = String::new();
     for byte in value.bytes() {
         match byte {
@@ -831,6 +843,7 @@ impl IdempotencyCacheState {
     }
 }
 
+/// Start a blocking HTTP server.
 pub fn serve(db_path: impl AsRef<Path>, bind: &str) -> std::io::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -842,6 +855,7 @@ pub fn serve(db_path: impl AsRef<Path>, bind: &str) -> std::io::Result<()> {
     ))
 }
 
+/// Start an async HTTP server.
 pub async fn serve_async(
     db_path: impl AsRef<Path>,
     bind: impl AsRef<str>,
@@ -849,6 +863,23 @@ pub async fn serve_async(
 ) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind.as_ref()).await?;
     serve_tokio_listener(db_path, listener, config).await
+}
+
+/// Start an async HTTP server on an existing Tokio listener.
+async fn security_headers<B>(mut response: Response<B>) -> Response<B> {
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("x-content-type-options"),
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("x-frame-options"),
+        axum::http::HeaderValue::from_static("DENY"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("referrer-policy"),
+        axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    response
 }
 
 pub async fn serve_tokio_listener(
@@ -872,8 +903,21 @@ pub async fn serve_tokio_listener(
                 .layer(ConcurrencyLimitLayer::new(config.max_concurrent_requests))
                 .layer(TimeoutLayer::new(config.request_timeout)),
         )
+        .layer(axum::middleware::map_response(security_headers))
         .with_state(state);
-    axum::serve(listener, app).await
+    let shutdown = async {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("failed to install SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => {},
+            _ = sigint.recv() => {},
+        }
+    };
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
 async fn runtime_handle_error(error: BoxError) -> Response<Body> {
@@ -1064,7 +1108,7 @@ async fn handle_request_text(
     let method = parts.next().unwrap_or_default();
     let target = parts.next().unwrap_or_default();
     let path = route_path(target);
-    let request_id = header_value(&request, "x-request-id")
+    let request_id = header_value(request, "x-request-id")
         .map(str::to_string)
         .unwrap_or_else(next_request_id);
     log_request("tracedb-engine", &request_id, method, path);
@@ -1079,7 +1123,7 @@ async fn handle_request_text(
     let actor = actor_context_from_request(request, body, &request_id);
     let engine = engine.for_actor(&actor).await?;
     let body_hash = stable_body_hash(body.as_bytes());
-    let idempotency_cache_key = header_value(&request, "idempotency-key")
+    let idempotency_cache_key = header_value(request, "idempotency-key")
         .filter(|key| !key.is_empty())
         .filter(|_| supports_http_idempotency(method, path))
         .map(|key| IdempotencyCacheKey::new(method, path, key, &actor));
@@ -1288,7 +1332,14 @@ async fn handle_request_text(
                     "snapshot target is required",
                 ))
             })?;
-            engine.create_snapshot(target).await?;
+            if target.contains("..") {
+                return Ok(bad_request(
+                    "snapshot target must not contain parent directory references".to_string(),
+                ));
+            }
+            if let Err(error) = engine.create_snapshot(target).await {
+                return Ok(bad_request(error.to_string()));
+            }
             ok(json!({ "snapshot": true, "target": target }))
         }
         ("POST", "/v1/admin/restore") => {
@@ -1305,7 +1356,20 @@ async fn handle_request_text(
                     "restore target is required",
                 ))
             })?;
-            let restored = TraceDb::restore_snapshot(source, target).map_err(to_io_error)?;
+            if source.contains("..") {
+                return Ok(bad_request(
+                    "restore source must not contain parent directory references".to_string(),
+                ));
+            }
+            if target.contains("..") {
+                return Ok(bad_request(
+                    "restore target must not contain parent directory references".to_string(),
+                ));
+            }
+            let restored = match TraceDb::restore_snapshot(source, target) {
+                Ok(restored) => restored,
+                Err(error) => return Ok(bad_request(error.to_string())),
+            };
             let mut response = json!({ "restored": true, "source": source, "target": target });
             if let Some(verify_record) = value.get("verify_record") {
                 let request: RecordGetRequest =
@@ -1633,7 +1697,11 @@ async fn execute_traceql_command(
         "ADMIN SNAPSHOT" | "SNAPSHOT" => {
             let value: Value = serde_json::from_str(payload).map_err(to_io_error)?;
             let target = required_str(&value, "target")?;
-            engine.create_snapshot(target).await?;
+            if let Err(error) = engine.create_snapshot(target).await {
+                return Ok(
+                    json!({ "ok": false, "error": error.to_string(), "code": "bad_request" }),
+                );
+            }
             Ok(json!({ "snapshot": true, "target": target }))
         }
         "ADMIN RESTORE" | "RESTORE" => restore_value_from_payload(payload),
@@ -2569,6 +2637,12 @@ fn env_duration_ms(name: &str, default_ms: u64) -> Duration {
     )
 }
 
+fn bool_env(name: &str, default_value: bool) -> bool {
+    std::env::var(name)
+        .map(|value| matches!(value.as_str(), "true" | "1" | "yes" | "on"))
+        .unwrap_or(default_value)
+}
+
 fn env_usize(name: &str, default_value: usize) -> usize {
     std::env::var(name)
         .ok()
@@ -2583,6 +2657,8 @@ fn to_io_error(error: impl std::error::Error) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn runtime_test_schema() -> TableSchema {
         TableSchema {
@@ -2630,6 +2706,14 @@ mod tests {
     fn http_post(path: &str, body: &str) -> String {
         format!(
             "POST {path} HTTP/1.1\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn http_post_with_engine_token(path: &str, body: &str) -> String {
+        format!(
+            "POST {path} HTTP/1.1\r\ncontent-type: application/json\r\nx-tracedb-engine-token: engine-secret\r\ncontent-length: {}\r\n\r\n{}",
             body.len(),
             body
         )
@@ -2946,6 +3030,107 @@ mod tests {
         .expect("traceql command response");
         let payload = json_body(&response);
         assert_eq!(payload["record"]["id"], json!("traceql"));
+    }
+
+    #[test]
+    fn snapshot_and_restore_require_managed_root_when_configured() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let admin_root = temp.path().join("admin-snapshots");
+        std::fs::create_dir_all(&admin_root).expect("admin root");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside root");
+        std::env::set_var("TRACEDB_ADMIN_SNAPSHOT_ROOT", &admin_root);
+        let engine = EngineHandle::open(temp.path().join("db")).expect("engine handle");
+        let config = EngineServerConfig::default().with_internal_token("engine-secret");
+
+        let bad_snapshot = json!({ "target": outside.join("snapshot") }).to_string();
+        let snapshot_response = handle_request_text_for_test(
+            &http_post_with_engine_token("/v1/admin/snapshot", &bad_snapshot),
+            engine.clone(),
+            test_idempotency_cache(),
+            config.clone(),
+        )
+        .expect("snapshot response");
+        assert!(
+            snapshot_response.starts_with("HTTP/1.1 400 Bad Request"),
+            "snapshot outside managed root must fail: {snapshot_response}"
+        );
+
+        let source = admin_root.join("snapshot-ok");
+        let snapshot_ok = json!({ "target": source }).to_string();
+        let snapshot_ok_response = handle_request_text_for_test(
+            &http_post_with_engine_token("/v1/admin/snapshot", &snapshot_ok),
+            engine.clone(),
+            test_idempotency_cache(),
+            config.clone(),
+        )
+        .expect("snapshot ok response");
+        assert!(
+            snapshot_ok_response.starts_with("HTTP/1.1 200 OK"),
+            "snapshot inside managed root must pass: {snapshot_ok_response}"
+        );
+
+        let bad_restore = json!({
+            "source": source,
+            "target": outside.join("restore")
+        })
+        .to_string();
+        let restore_response = handle_request_text_for_test(
+            &http_post_with_engine_token("/v1/admin/restore", &bad_restore),
+            engine.clone(),
+            test_idempotency_cache(),
+            config.clone(),
+        )
+        .expect("restore response");
+        assert!(
+            restore_response.starts_with("HTTP/1.1 400 Bad Request"),
+            "restore outside managed root must fail: {restore_response}"
+        );
+
+        let traceql_snapshot = json!({
+            "query": format!(
+                "ADMIN SNAPSHOT {}",
+                json!({ "target": outside.join("traceql-snapshot") })
+            )
+        })
+        .to_string();
+        let traceql_response = handle_request_text_for_test(
+            &http_post_with_engine_token("/v1/traceql", &traceql_snapshot),
+            engine.clone(),
+            test_idempotency_cache(),
+            config.clone(),
+        )
+        .expect("traceql snapshot response");
+        assert!(
+            traceql_response.contains("TRACEDB_ADMIN_SNAPSHOT_ROOT"),
+            "TraceQL snapshot should use shared snapshot-root policy: {traceql_response}"
+        );
+
+        let graphql_input = json!({ "target": outside.join("graphql-snapshot") }).to_string();
+        let graphql_body = json!({
+            "query": format!(
+                "mutation {{ snapshot(input: {}) {{ snapshot }} }}",
+                serde_json::to_string(&graphql_input).expect("quoted input")
+            )
+        })
+        .to_string();
+        let graphql_response = handle_request_text_for_test(
+            &http_post_with_engine_token("/v1/graphql", &graphql_body),
+            engine,
+            test_idempotency_cache(),
+            config,
+        )
+        .expect("graphql snapshot response");
+        let graphql_payload = json_body(&graphql_response);
+        assert!(
+            graphql_payload["errors"][0]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("TRACEDB_ADMIN_SNAPSHOT_ROOT"),
+            "GraphQL snapshot should use shared snapshot-root policy: {graphql_payload}"
+        );
+        std::env::remove_var("TRACEDB_ADMIN_SNAPSHOT_ROOT");
     }
 
     #[tokio::test]

@@ -302,8 +302,8 @@
     "explain": "HybridExplain is the shared provenance/freshness/planner explanation object for query and explain surfaces"
   },
   "retry_idempotency": {
-    "safe_retries": "health and read routes only",
-    "idempotency_retries": "mutation/admin routes only when the individual request carries a non-empty Idempotency-Key",
+    "safe_retries": "blanket health/read routes only; polymorphic POST /v1/traceql and POST /v1/graphql only when the payload is provably read-only",
+    "idempotency_retries": "mutation/admin and polymorphic native operation routes only when the individual request carries a non-empty Idempotency-Key",
     "durability": "local data-dir replay from WAL/checkpoint-backed idempotency receipts; not cross-replica, not managed-cloud exactly-once, and not crash-atomic exactly-once"
   },
   "maintenance_mode_definition": "A platform project can use TraceDB through Rust, TypeScript, Python, TraceQL/SQL-ish, or GraphQL and receive the same behavior, same errors, same result shape, and same explain/freshness semantics."

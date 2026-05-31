@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+//! Core types and primitives for TraceDB.
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chacha20poly1305::{
@@ -66,10 +67,10 @@ pub struct ArtifactEnvelopeHeader {
     pub manifest_generation: u64,
     pub epoch_min: u64,
     pub epoch_max: u64,
-    pub source_segment_checksum: u32,
+    pub source_segment_checksum: [u8; 32],
     pub payload_len: u64,
-    pub payload_checksum: u32,
-    pub object_checksum: u32,
+    pub payload_checksum: [u8; 32],
+    pub object_checksum: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,6 +80,7 @@ pub struct ArtifactEnvelope {
 }
 
 impl ArtifactEnvelopeHeader {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: impl Into<String>,
         codec: impl Into<String>,
@@ -87,7 +89,7 @@ impl ArtifactEnvelopeHeader {
         manifest_generation: u64,
         epoch_min: u64,
         epoch_max: u64,
-        source_segment_checksum: u32,
+        source_segment_checksum: [u8; 32],
         payload: &[u8],
     ) -> Self {
         Self {
@@ -102,7 +104,7 @@ impl ArtifactEnvelopeHeader {
             source_segment_checksum,
             payload_len: payload.len() as u64,
             payload_checksum: checksum_bytes(payload),
-            object_checksum: 0,
+            object_checksum: [0u8; 32],
         }
     }
 }
@@ -121,11 +123,11 @@ pub fn encode_artifact_envelope(
     let payload_checksum = checksum_bytes(payload);
     if header.payload_checksum != payload_checksum {
         return Err(TraceDbError::ArtifactCorruption(format!(
-            "artifact payload checksum mismatch: header {}, actual {payload_checksum}",
+            "artifact payload checksum mismatch: header {:?}, actual {payload_checksum:?}",
             header.payload_checksum
         )));
     }
-    header.object_checksum = 0;
+    header.object_checksum = [0u8; 32];
     let header_without_checksum = serialize_artifact_header(&header)?;
     header.object_checksum =
         checksum_bytes(&[header_without_checksum.as_slice(), payload].concat());
@@ -177,17 +179,17 @@ pub fn decode_artifact_envelope(bytes: &[u8]) -> Result<ArtifactEnvelope> {
     let payload_checksum = checksum_bytes(&payload);
     if header.payload_checksum != payload_checksum {
         return Err(TraceDbError::ArtifactCorruption(format!(
-            "artifact payload checksum mismatch: expected {}, got {payload_checksum}",
+            "artifact payload checksum mismatch: expected {:?}, got {payload_checksum:?}",
             header.payload_checksum
         )));
     }
     let mut header_without_checksum = header.clone();
-    header_without_checksum.object_checksum = 0;
+    header_without_checksum.object_checksum = [0u8; 32];
     let header_bytes = serialize_artifact_header(&header_without_checksum)?;
     let object_checksum = checksum_bytes(&[header_bytes.as_slice(), payload.as_slice()].concat());
     if header.object_checksum != object_checksum {
         return Err(TraceDbError::ArtifactCorruption(format!(
-            "artifact object checksum mismatch: expected {}, got {object_checksum}",
+            "artifact object checksum mismatch: expected {:?}, got {object_checksum:?}",
             header.object_checksum
         )));
     }
@@ -201,6 +203,7 @@ fn serialize_artifact_header(header: &ArtifactEnvelopeHeader) -> Result<Vec<u8>>
 #[derive(
     Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash,
 )]
+/// Monotonic epoch counter.
 pub struct Epoch(u64);
 
 impl Epoch {
@@ -226,6 +229,7 @@ impl fmt::Display for Epoch {
 #[derive(
     Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash,
 )]
+/// Log sequence number.
 pub struct Lsn(u64);
 
 impl Lsn {
@@ -590,11 +594,11 @@ pub struct IndexManifest {
     pub policy_aware: bool,
     pub parent_manifest_generation: u64,
     pub object_path: String,
-    pub checksum: u32,
+    pub checksum: [u8; 32],
     #[serde(default)]
-    pub source_segment_checksum: u32,
+    pub source_segment_checksum: [u8; 32],
     #[serde(default)]
-    pub payload_checksum: u32,
+    pub payload_checksum: [u8; 32],
     #[serde(default)]
     pub artifact_format_version: u32,
     #[serde(default)]
@@ -605,8 +609,8 @@ pub struct IndexManifest {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ManifestChecksums {
-    pub parent_checksum: u32,
-    pub manifest_checksum: u32,
+    pub parent_checksum: [u8; 32],
+    pub manifest_checksum: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -618,6 +622,7 @@ pub struct EncryptionMetadata {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// In-memory representation of a TraceDB manifest.
 pub struct TraceDbManifest {
     pub format_version: u32,
     pub manifest_generation: u64,
@@ -691,6 +696,7 @@ impl TraceDbManifest {
 }
 
 #[derive(Clone)]
+/// Root encryption key for transparent data encryption.
 pub struct MasterKey {
     bytes: [u8; 32],
     key_id: String,
@@ -745,6 +751,7 @@ impl MasterKey {
 }
 
 #[derive(Clone)]
+/// Encryption context derived from a master key.
 pub struct EncryptionContext {
     key_id: String,
     dek: [u8; 32],
@@ -996,9 +1003,9 @@ fn pid_is_running(pid: u32) -> bool {
         .unwrap_or(true)
 }
 
-pub fn compute_manifest_checksum(manifest: &TraceDbManifest) -> Result<u32> {
+pub fn compute_manifest_checksum(manifest: &TraceDbManifest) -> Result<[u8; 32]> {
     let mut normalized = manifest.clone();
-    normalized.checksums.manifest_checksum = 0;
+    normalized.checksums.manifest_checksum = [0u8; 32];
     let bytes = serde_json::to_vec(&normalized)?;
     Ok(checksum_bytes(&bytes))
 }
@@ -1059,30 +1066,29 @@ mod crypto_tests {
     }
 }
 
-pub fn checksum_bytes(bytes: &[u8]) -> u32 {
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(bytes);
-    hasher.finalize()
+pub fn checksum_bytes(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest.into()
 }
 
 pub fn source_hash(fields: &Map<String, Value>, source_columns: &[String]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
     for column in source_columns {
-        fnv1a_update(&mut hash, column.as_bytes());
-        fnv1a_update(&mut hash, b"=");
+        hasher.update(column.as_bytes());
+        hasher.update(b"=");
         if let Some(value) = fields.get(column) {
-            fnv1a_update(&mut hash, value.to_string().as_bytes());
+            hasher.update(value.to_string().as_bytes());
         }
-        fnv1a_update(&mut hash, &[0]);
+        hasher.update([0]);
     }
-    hash
-}
-
-fn fnv1a_update(hash: &mut u64, bytes: &[u8]) {
-    for byte in bytes {
-        *hash ^= u64::from(*byte);
-        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
+    let result = hasher.finalize();
+    u64::from_le_bytes(
+        result[..8]
+            .try_into()
+            .expect("sha256 produces at least 8 bytes"),
+    )
 }
 
 pub fn value_as_f32_vec(value: &Value) -> Option<Vec<f32>> {
@@ -1097,7 +1103,10 @@ pub fn value_as_f32_vec(value: &Value) -> Option<Vec<f32>> {
 pub fn database_id_from_path(path: impl Into<PathBuf>) -> String {
     let path = path.into();
     let checksum = checksum_bytes(path.to_string_lossy().as_bytes());
-    format!("db-{checksum:08x}")
+    format!(
+        "db-{:02x}{:02x}{:02x}{:02x}",
+        checksum[0], checksum[1], checksum[2], checksum[3]
+    )
 }
 
 #[cfg(test)]

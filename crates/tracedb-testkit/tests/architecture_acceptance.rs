@@ -315,7 +315,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
     assert_eq!(reopened_keeper.commit_log().len(), 1);
 
     let mut meter = UsageMeter::default();
-    let gateway = Gateway::new(catalog.clone(), "secret-token");
+    let gateway = Gateway::open(catalog.clone()).with_engine_url("http://127.0.0.1:0");
     let response = gateway
         .route(
             GatewayRequest::query(&database.database_id, &branch.branch_id)
@@ -359,7 +359,7 @@ fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
         engine_url: engine_url.clone(),
         http_client: reqwest::Client::new(),
         engine_internal_token: None,
-        required_token: Some("secret-token".to_string()),
+        required_token: None,
         catalog: reloaded,
         meter: Arc::clone(&runtime_meter),
         rate_limit_enabled: true,
@@ -549,7 +549,7 @@ fn segment_server_cache_sdk_and_bench_surfaces_are_executable_contracts() {
         .any(|block| block.module_id == "tracedb-policy"));
 
     let mut server = SegmentServer::default();
-    let object = ObjectRef::new("segments/s1.tseg", 55);
+    let object = ObjectRef::new("segments/s1.tseg", [1u8; 32]);
     server.publish(object.clone()).expect("publish");
 
     let mut cache = tracedb_cache::SegmentCache::new(1);
@@ -584,7 +584,10 @@ fn railway_deploy_artifacts_exist_for_gateway_engine_worker_and_bench() {
         .expect("workspace root");
     for path in [
         "deploy/railway/README.md",
-        "deploy/railway/env.example",
+        "deploy/railway/env.gateway.example",
+        "deploy/railway/env.engine.example",
+        "deploy/railway/env.worker.example",
+        "deploy/railway/env.benchmark.example",
         "deploy/railway/railway.gateway.toml",
         "deploy/railway/railway.engine.toml",
         "deploy/railway/railway.worker.toml",

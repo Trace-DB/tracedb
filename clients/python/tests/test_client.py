@@ -1,23 +1,62 @@
 from __future__ import annotations
 
-import io
-import json
 import asyncio
+import io
+import importlib.util
+import json
+import subprocess
 import sys
 import tomllib
 import unittest
 import urllib.error
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 CLIENT_ROOT = Path(__file__).resolve().parents[1]
 if str(CLIENT_ROOT) not in sys.path:
     sys.path.insert(0, str(CLIENT_ROOT))
 
-from tracedb import AsyncTraceDB, TraceDB, TraceDBHTTPError, TraceDBRequestError  # noqa: E402
+from tracedb import (  # noqa: E402
+    AsyncTraceDB,
+    TraceDB,
+    TraceDBHTTPError,
+    TraceDBRequestError,
+)
 
 
 class TraceDBClientTests(unittest.TestCase):
+    def test_sync_client_imports_without_aiohttp_installed(self) -> None:
+        script = """
+import builtins
+
+real_import = builtins.__import__
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "aiohttp" or name.startswith("aiohttp."):
+        raise ModuleNotFoundError("No module named 'aiohttp'", name="aiohttp")
+    return real_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = guarded_import
+
+from tracedb import TraceDB
+
+db = TraceDB("http://127.0.0.1:8090")
+assert db.url == "http://127.0.0.1:8090"
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            env={"PYTHONPATH": str(CLIENT_ROOT)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
+
     def test_from_env_builds_connection_and_routing_config(self) -> None:
         db = TraceDB.from_env(
             env={
@@ -102,12 +141,17 @@ class TraceDBClientTests(unittest.TestCase):
             io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
         )
 
-        with mock.patch("urllib.request.urlopen", side_effect=[retry_error, _FakeResponse('{"ok":true}')]) as urlopen:
+        with mock.patch(
+            "urllib.request.urlopen",
+            side_effect=[retry_error, _FakeResponse('{"ok":true}')],
+        ) as urlopen:
             self.assertEqual(db.health(), {"ok": True})
 
         self.assertEqual(urlopen.call_count, 2)
 
-    def test_safe_retries_retry_network_errors_with_backoff_then_return_json(self) -> None:
+    def test_safe_retries_retry_network_errors_with_backoff_then_return_json(
+        self,
+    ) -> None:
         db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
 
         with (
@@ -211,7 +255,51 @@ class TraceDBClientTests(unittest.TestCase):
             "urllib.request.urlopen",
             side_effect=[retry_error, _FakeResponse('{"results":[]}')],
         ) as urlopen:
-            self.assertEqual(db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1"), {"results": []})
+            self.assertEqual(
+                db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1"), {"results": []}
+            )
+
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_mutating_traceql_does_not_safe_retry_without_idempotency_key(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/traceql",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch("urllib.request.urlopen", side_effect=retry_error) as urlopen:
+            with self.assertRaisesRegex(TraceDBHTTPError, "HTTP 503"):
+                db.traceql(
+                    'PUT {"table":"docs","tenant_id":"tenant-a","id":"intro","fields":{}}'
+                )
+
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_mutating_traceql_retries_with_idempotency_key_when_enabled(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", idempotency_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/traceql",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch(
+            "urllib.request.urlopen",
+            side_effect=[retry_error, _FakeResponse('{"epoch":7}')],
+        ) as urlopen:
+            self.assertEqual(
+                db.traceql(
+                    'PUT {"table":"docs","tenant_id":"tenant-a","id":"intro","fields":{}}',
+                    idempotency_key="python-traceql-put-1",
+                ),
+                {"epoch": 7},
+            )
 
         self.assertEqual(urlopen.call_count, 2)
 
@@ -272,7 +360,9 @@ class TraceDBClientTests(unittest.TestCase):
         body = json.loads(captured[0].data.decode("utf-8"))
         self.assertEqual(body["freshness"], "AllowDirty")
 
-    def test_graphql_posts_native_envelope_query_to_canonical_route_with_routing(self) -> None:
+    def test_graphql_posts_native_envelope_query_to_canonical_route_with_routing(
+        self,
+    ) -> None:
         db = TraceDB(
             "http://127.0.0.1:8090",
             database_id="db-local",
@@ -282,13 +372,17 @@ class TraceDBClientTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
             captured.append(request)
-            return _FakeResponse('{"data":{"query":{"results":[{"record_id":"intro"}]}}}')
+            return _FakeResponse(
+                '{"data":{"query":{"results":[{"record_id":"intro"}]}}}'
+            )
 
         query = 'query { query(input: "{\\"table\\":\\"docs\\",\\"tenant_id\\":\\"tenant-a\\",\\"top_k\\":1}") { results } }'
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             response = db.graphql(query)
 
-        self.assertEqual(response, {"data": {"query": {"results": [{"record_id": "intro"}]}}})
+        self.assertEqual(
+            response, {"data": {"query": {"results": [{"record_id": "intro"}]}}}
+        )
         self.assertEqual(len(captured), 1)
         request = captured[0]
         self.assertEqual(request.get_method(), "POST")
@@ -350,7 +444,9 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertEqual(request.full_url, "http://127.0.0.1:8090/v1/graphql/schema")
         self.assertIsNone(request.data)
 
-    def test_graphql_schema_safe_retries_retry_read_only_5xx_then_return_json(self) -> None:
+    def test_graphql_schema_safe_retries_retry_read_only_5xx_then_return_json(
+        self,
+    ) -> None:
         db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
         retry_error = urllib.error.HTTPError(
             "http://127.0.0.1:8090/v1/graphql/schema",
@@ -364,7 +460,9 @@ class TraceDBClientTests(unittest.TestCase):
             "urllib.request.urlopen",
             side_effect=[
                 retry_error,
-                _FakeResponse('{"adapter":"bounded_graphql_query_adapter","tables":["docs"],"schema":"type DocsRow"}'),
+                _FakeResponse(
+                    '{"adapter":"bounded_graphql_query_adapter","tables":["docs"],"schema":"type DocsRow"}'
+                ),
             ],
         ) as urlopen:
             self.assertEqual(
@@ -390,13 +488,56 @@ class TraceDBClientTests(unittest.TestCase):
 
         with mock.patch(
             "urllib.request.urlopen",
-            side_effect=[retry_error, _FakeResponse('{"data":{"query":{"results":[]}}}')],
+            side_effect=[
+                retry_error,
+                _FakeResponse('{"data":{"query":{"results":[]}}}'),
+            ],
         ) as urlopen:
             self.assertEqual(
                 db.graphql(
                     'query { query(input: "{\\"table\\":\\"docs\\",\\"tenant_id\\":\\"tenant-a\\",\\"top_k\\":1}") { results } }'
                 ),
                 {"data": {"query": {"results": []}}},
+            )
+
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_mutating_graphql_does_not_safe_retry_without_idempotency_key(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", safe_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/graphql",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch("urllib.request.urlopen", side_effect=retry_error) as urlopen:
+            with self.assertRaisesRegex(TraceDBHTTPError, "HTTP 503"):
+                db.graphql('mutation { put(input: "{}") { epoch } }')
+
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_mutating_graphql_retries_with_idempotency_key_when_enabled(self) -> None:
+        db = TraceDB("http://127.0.0.1:8090", idempotency_retries=1)
+        retry_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/v1/graphql",
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
+        )
+
+        with mock.patch(
+            "urllib.request.urlopen",
+            side_effect=[retry_error, _FakeResponse('{"data":{"put":{"epoch":7}}}')],
+        ) as urlopen:
+            self.assertEqual(
+                db.graphql(
+                    'mutation { put(input: "{}") { epoch } }',
+                    idempotency_key="python-graphql-put-1",
+                ),
+                {"data": {"put": {"epoch": 7}}},
             )
 
         self.assertEqual(urlopen.call_count, 2)
@@ -430,13 +571,30 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertEqual(request.get_header("X-tracedb-token-identity"), "token-user")
         self.assertEqual(request.get_header("X-tracedb-request-id"), "req-1")
         self.assertEqual(request.get_header("X-tracedb-policy-epoch"), "7")
-        self.assertEqual(request.get_header("X-tracedb-scopes"), "records:read,records:write")
+        self.assertEqual(
+            request.get_header("X-tracedb-scopes"), "records:read,records:write"
+        )
 
+    @unittest.skipIf(
+        importlib.util.find_spec("aiohttp") is None,
+        "aiohttp optional async extra not installed",
+    )
     def test_async_client_wraps_native_graphql(self) -> None:
         async def run() -> None:
             db = AsyncTraceDB(TraceDB("http://127.0.0.1:8090"))
-            with mock.patch("urllib.request.urlopen", return_value=_FakeResponse('{"data":{"jobs":[]}}')):
-                self.assertEqual(await db.graphql("query { jobs { durable_jobs } }"), {"data": {"jobs": []}})
+            try:
+                with mock.patch(
+                    "aiohttp.ClientSession.request",
+                    return_value=_FakeAsyncResponse('{"data":{"jobs":[]}}'),
+                ) as request:
+                    self.assertEqual(
+                        await db.graphql("query { jobs { durable_jobs } }"),
+                        {"data": {"jobs": []}},
+                    )
+                request.assert_called_once()
+            finally:
+                if db._session is not None:
+                    await db._session.close()
 
         asyncio.run(run())
 
@@ -456,7 +614,9 @@ class TraceDBClientTests(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 1)
 
-    def test_idempotency_retries_retry_keyed_mutation_5xx_then_return_json(self) -> None:
+    def test_idempotency_retries_retry_keyed_mutation_5xx_then_return_json(
+        self,
+    ) -> None:
         db = TraceDB("http://127.0.0.1:8090", idempotency_retries=1)
         retry_error = urllib.error.HTTPError(
             "http://127.0.0.1:8090/v1/records/put",
@@ -466,11 +626,18 @@ class TraceDBClientTests(unittest.TestCase):
             io.BytesIO(b'{"error":"busy","code":"unavailable"}'),
         )
 
-        with mock.patch("urllib.request.urlopen", side_effect=[retry_error, _FakeResponse('{"epoch":9}')]) as urlopen:
-            response = db.table("docs").tenant("tenant-a").insert(
-                "intro",
-                {"body": "hello"},
-                idempotency_key="python-insert-1",
+        with mock.patch(
+            "urllib.request.urlopen",
+            side_effect=[retry_error, _FakeResponse('{"epoch":9}')],
+        ) as urlopen:
+            response = (
+                db.table("docs")
+                .tenant("tenant-a")
+                .insert(
+                    "intro",
+                    {"body": "hello"},
+                    idempotency_key="python-insert-1",
+                )
             )
 
         self.assertEqual(response, {"epoch": 9})
@@ -485,13 +652,27 @@ class TraceDBClientTests(unittest.TestCase):
             return _FakeResponse('{"record_count":2,"epoch":7}')
 
         rows = [
-            {"id": "intro", "body": "hello", "embedding": [1, 0, 0], "status": "published"},
-            {"id": "ops", "body": "operations", "embedding": [0, 1, 0], "status": "draft"},
+            {
+                "id": "intro",
+                "body": "hello",
+                "embedding": [1, 0, 0],
+                "status": "published",
+            },
+            {
+                "id": "ops",
+                "body": "operations",
+                "embedding": [0, 1, 0],
+                "status": "draft",
+            },
         ]
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            response = db.table("docs").tenant("tenant-a").insert_rows(
-                rows,
-                idempotency_key="python-rows-1",
+            response = (
+                db.table("docs")
+                .tenant("tenant-a")
+                .insert_rows(
+                    rows,
+                    idempotency_key="python-rows-1",
+                )
             )
 
         self.assertEqual(response, {"record_count": 2, "epoch": 7})
@@ -541,9 +722,13 @@ class TraceDBClientTests(unittest.TestCase):
             return _FakeResponse('{"record_count":1}')
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            response = db.table("docs").tenant("tenant-a").insert_rows(
-                [{"doc_id": "intro", "body": "hello"}],
-                id_field="doc_id",
+            response = (
+                db.table("docs")
+                .tenant("tenant-a")
+                .insert_rows(
+                    [{"doc_id": "intro", "body": "hello"}],
+                    id_field="doc_id",
+                )
             )
 
         self.assertEqual(response, {"record_count": 1})
@@ -571,7 +756,9 @@ class TraceDBClientTests(unittest.TestCase):
         db = TraceDB("http://127.0.0.1:8090")
 
         with mock.patch("urllib.request.urlopen") as urlopen:
-            with self.assertRaisesRegex(TraceDBRequestError, "row 0 missing id field 'doc_id'"):
+            with self.assertRaisesRegex(
+                TraceDBRequestError, "row 0 missing id field 'doc_id'"
+            ):
                 db.table("docs").tenant("tenant-a").insert_rows(
                     [{"body": "hello"}],
                     id_field="doc_id",
@@ -615,7 +802,7 @@ class TraceDBClientTests(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 1)
 
-    def test_pyproject_declares_stdlib_package_boundary(self) -> None:
+    def test_pyproject_declares_sync_and_async_package_boundary(self) -> None:
         pyproject = tomllib.loads((CLIENT_ROOT / "pyproject.toml").read_text())
         project = pyproject["project"]
 
@@ -623,6 +810,10 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertEqual(project["version"], "0.1.0")
         self.assertEqual(project["requires-python"], ">=3.11")
         self.assertEqual(project.get("dependencies", []), [])
+        self.assertEqual(
+            project.get("optional-dependencies", {}).get("async"),
+            ["aiohttp>=3.8"],
+        )
         self.assertIn(
             "tracedb",
             pyproject["tool"]["setuptools"]["packages"],
@@ -645,6 +836,22 @@ class TraceDBClientTests(unittest.TestCase):
         self.assertIn("TRACEDB_IDEMPOTENCY_RETRIES", smoke)
         self.assertIn("idempotency_retries", smoke)
         self.assertIn("python sdk install smoke ok", smoke)
+
+
+class _FakeAsyncResponse:
+    status = 200
+
+    def __init__(self, body: str) -> None:
+        self.body = body
+
+    async def __aenter__(self) -> "_FakeAsyncResponse":
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> bool:
+        return False
+
+    async def text(self) -> str:
+        return self.body
 
 
 class _FakeResponse:

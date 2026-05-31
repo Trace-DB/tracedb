@@ -27,6 +27,102 @@ fn workspace_root() -> &'static Path {
 }
 
 #[test]
+fn get_positional_command_reads_table_tenant_and_record_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let record = serde_json::json!({
+        "table": "docs",
+        "tenant_id": "tenant-a",
+        "id": "intro",
+        "fields": { "body": "hello" }
+    });
+
+    let schema_path = write_docs_schema(temp.path());
+    run_tracedb(temp.path(), &["schema", "apply", path_str(&schema_path)]);
+    run_tracedb(temp.path(), &["put", &record.to_string()]);
+    let output = run_tracedb(temp.path(), &["get", "docs", "tenant-a", "intro"]);
+
+    assert_eq!(output["record"]["id"], "intro");
+    assert_eq!(output["record"]["table"], "docs");
+    assert_eq!(output["record"]["tenant_id"], "tenant-a");
+}
+
+#[test]
+fn delete_positional_command_reads_table_tenant_and_record_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let record = serde_json::json!({
+        "table": "docs",
+        "tenant_id": "tenant-a",
+        "id": "intro",
+        "fields": { "body": "hello" }
+    });
+
+    let schema_path = write_docs_schema(temp.path());
+    run_tracedb(temp.path(), &["schema", "apply", path_str(&schema_path)]);
+    run_tracedb(temp.path(), &["put", &record.to_string()]);
+    let output = run_tracedb(temp.path(), &["delete", "docs", "tenant-a", "intro"]);
+
+    assert_eq!(output["deleted"], true);
+}
+
+#[test]
+fn scan_positional_command_reads_table_tenant_and_limit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let schema_path = write_docs_schema(temp.path());
+    run_tracedb(temp.path(), &["schema", "apply", path_str(&schema_path)]);
+    for id in ["intro", "ops"] {
+        let record = serde_json::json!({
+            "table": "docs",
+            "tenant_id": "tenant-a",
+            "id": id,
+            "fields": { "body": id }
+        });
+        run_tracedb(temp.path(), &["put", &record.to_string()]);
+    }
+
+    let output = run_tracedb(temp.path(), &["scan", "docs", "tenant-a", "1"]);
+
+    assert_eq!(output["returned_count"], 1);
+    assert_eq!(output["records"][0]["table"], "docs");
+    assert_eq!(output["records"][0]["tenant_id"], "tenant-a");
+}
+
+fn run_tracedb(data_dir: &Path, args: &[&str]) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+        .arg("--data")
+        .arg(data_dir)
+        .args(args)
+        .output()
+        .expect("run tracedb");
+    assert!(
+        output.status.success(),
+        "tracedb {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("tracedb json")
+}
+
+fn write_docs_schema(dir: &Path) -> std::path::PathBuf {
+    let schema_path = dir.join("docs.schema.json");
+    let schema = serde_json::json!({
+        "name": "docs",
+        "primary_id_column": "id",
+        "tenant_id_column": "tenant",
+        "scalar_columns": [],
+        "text_indexed_columns": ["body"],
+        "vector_columns": []
+    });
+    std::fs::write(&schema_path, schema.to_string()).expect("write schema");
+    schema_path
+}
+
+fn path_str(path: &Path) -> &str {
+    path.to_str().expect("utf-8 path")
+}
+
+#[test]
 fn demo_command_exercises_local_product_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
@@ -436,7 +532,7 @@ fn storage_index_jobs_emit_machine_readable_default_report() {
         "checksum_corruption",
         "encrypted_binary_artifacts",
         "bm25_query_parity",
-        "hnsw_vector_parity",
+        "greedy_nn_vector_parity",
         "bitmap_policy_filtering",
         "stale_sealed_candidate_hot_materialization",
         "vacuum_safety",

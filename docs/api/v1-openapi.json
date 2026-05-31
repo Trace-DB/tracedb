@@ -1106,7 +1106,7 @@
     }
   },
   "info": {
-    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nIdempotency-Key supports local data-dir replay from WAL/checkpoint-backed idempotency receipts for mutation and admin routes; SDK idempotent retries are opt-in and require an Idempotency-Key; cross-replica, managed-cloud exactly-once, and crash-atomic exactly-once idempotency remain future work.",
+    "description": "SQL compatibility is not implemented.\nInternal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.\nIdempotency-Key supports local data-dir replay from WAL/checkpoint-backed idempotency receipts for mutation and admin routes, plus polymorphic native operation routes; SDK idempotent retries are opt-in and require an Idempotency-Key; cross-replica, managed-cloud exactly-once, and crash-atomic exactly-once idempotency remain future work.",
     "title": "TraceDB v1 HTTP API",
     "version": "0.1.0-development"
   },
@@ -1236,8 +1236,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/admin/jobs": {
@@ -1332,8 +1335,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "SDK safe retries are disabled for this route.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/admin/restore": {
@@ -1460,8 +1466,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/admin/snapshot": {
@@ -1588,8 +1597,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/branches": {
@@ -1684,8 +1696,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "SDK safe retries are disabled for this route.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/databases": {
@@ -1780,8 +1795,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "SDK safe retries are disabled for this route.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/explain": {
@@ -1886,14 +1904,28 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/graphql": {
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postGraphql",
+        "parameters": [
+          {
+            "description": "Optional local data-dir replay key scoped by method and path. Receipts are WAL/checkpoint-backed in the local engine. same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1945,6 +1977,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -1990,10 +2032,14 @@
         "tags": [
           "query"
         ],
-        "x-tracedb-idempotency-key-supported": false,
-        "x-tracedb-mutates-state": false,
-        "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
+        "x-tracedb-idempotency-key-supported": true,
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Polymorphic operation route: SDK safe retries are not blanket-enabled. Retry only when the payload is provably read-only, or when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "polymorphic-read-or-mutate"
       }
     },
     "/v1/graphql/bounded": {
@@ -2098,8 +2144,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/graphql/schema": {
@@ -2194,8 +2243,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/health": {
@@ -2290,8 +2342,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/insert": {
@@ -2418,8 +2473,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/metrics/public-safe": {
@@ -2514,8 +2572,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "SDK safe retries are disabled for this route.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/query": {
@@ -2620,8 +2681,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/ready": {
@@ -2716,8 +2780,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/records/delete": {
@@ -2844,8 +2911,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/records/get": {
@@ -2950,8 +3020,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/records/patch": {
@@ -3078,8 +3151,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/records/put": {
@@ -3206,8 +3282,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/records/put-batch": {
@@ -3334,8 +3413,11 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/records/scan": {
@@ -3440,8 +3522,11 @@
         ],
         "x-tracedb-idempotency-key-supported": false,
         "x-tracedb-mutates-state": false,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-sdk-safe-retry": true,
+        "x-tracedb-sdk-safe-retry-policy": "Read-only route: SDK safe retries may retry transient failures.",
+        "x-tracedb-state-effect": "read-only"
       }
     },
     "/v1/schema/apply": {
@@ -3568,14 +3653,28 @@
         "x-tracedb-idempotency-durability": "local-data-dir-reopen",
         "x-tracedb-idempotency-key-supported": true,
         "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": false,
         "x-tracedb-sdk-idempotency-retry-supported": true,
-        "x-tracedb-sdk-safe-retry": false
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Mutating/admin route: SDK safe retries are disabled; retry transient failures only when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "mutates"
       }
     },
     "/v1/traceql": {
       "post": {
         "description": "Current TraceDB v1 product route. This OpenAPI artifact is generated from the checked-in route manifest.",
         "operationId": "postTraceql",
+        "parameters": [
+          {
+            "description": "Optional local data-dir replay key scoped by method and path. Receipts are WAL/checkpoint-backed in the local engine. same key plus same raw request body replays the first successful response; same key with a different body returns 409 Conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3627,6 +3726,16 @@
             },
             "description": "Route not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key was reused with a different request body."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -3668,14 +3777,18 @@
             "description": "Service unavailable."
           }
         },
-        "summary": "Run native TraceQL query",
+        "summary": "Run native TraceQL query or command",
         "tags": [
           "query"
         ],
-        "x-tracedb-idempotency-key-supported": false,
-        "x-tracedb-mutates-state": false,
-        "x-tracedb-sdk-idempotency-retry-supported": false,
-        "x-tracedb-sdk-safe-retry": true
+        "x-tracedb-idempotency-durability": "local-data-dir-reopen",
+        "x-tracedb-idempotency-key-supported": true,
+        "x-tracedb-mutates-state": true,
+        "x-tracedb-polymorphic-operation-route": true,
+        "x-tracedb-sdk-idempotency-retry-supported": true,
+        "x-tracedb-sdk-safe-retry": false,
+        "x-tracedb-sdk-safe-retry-policy": "Polymorphic operation route: SDK safe retries are not blanket-enabled. Retry only when the payload is provably read-only, or when the caller supplies Idempotency-Key and idempotency retry is enabled.",
+        "x-tracedb-state-effect": "polymorphic-read-or-mutate"
       }
     }
   },

@@ -2055,26 +2055,21 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     assert_eq!(
         package["scripts"]["build"],
         json!(
-            "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/rewrite-declaration-imports.mjs"
+            "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && tsc -p tsconfig.smoke.json && node scripts/rewrite-declaration-imports.mjs"
         )
     );
     assert_eq!(
         package["scripts"]["typecheck"],
         json!("tsc --noEmit -p tsconfig.json")
     );
-    assert_eq!(
-        package["scripts"]["smoke"],
-        json!("node --experimental-strip-types smoke.ts")
-    );
+    assert_eq!(package["scripts"]["smoke"], json!("node dist/smoke.js"));
     assert_eq!(
         package["scripts"]["public-smoke"],
-        json!("node --experimental-strip-types public-sdk-smoke.ts")
+        json!("node dist/public-sdk-smoke.js")
     );
     assert_eq!(
         package["scripts"]["package-smoke"],
-        json!(
-            "node --experimental-strip-types package-entry-smoke.ts && node --experimental-strip-types build-package-smoke.ts"
-        )
+        json!("node dist/package-entry-smoke.js && node dist/build-package-smoke.js")
     );
     assert_eq!(
         package["scripts"]["pack-dry-run"],
@@ -2086,24 +2081,24 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
     );
     assert_eq!(
         package["scripts"]["http-smoke"],
-        json!("node --experimental-strip-types http-smoke.ts")
+        json!("npm run build && node dist/http-smoke.js")
     );
     assert_eq!(
         package["scripts"]["public-http-smoke"],
-        json!("node --experimental-strip-types public-http-smoke.ts")
+        json!("npm run build && node dist/public-http-smoke.js")
     );
     assert_eq!(
         package["scripts"]["quickstart"],
-        json!("node --experimental-strip-types quickstart.ts")
+        json!("npm run build && node dist/quickstart.js")
     );
     assert_eq!(
         package["scripts"]["gateway-smoke"],
-        json!("node --experimental-strip-types gateway-smoke.ts")
+        json!("npm run build && node dist/gateway-smoke.js")
     );
     assert_eq!(
         package["scripts"]["check"],
         json!(
-            "npm run typecheck && npm run smoke && npm run public-smoke && npm run build && npm run package-smoke && npm run pack-dry-run && npm run consumer-smoke"
+            "npm run typecheck && npm run build && npm run smoke && npm run public-smoke && npm run package-smoke && npm run pack-dry-run && npm run consumer-smoke"
         )
     );
     assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));

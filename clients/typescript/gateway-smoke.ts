@@ -148,6 +148,7 @@ try {
     TRACEDB_API_TOKEN: token,
     TRACEDB_BIND: gatewayBind,
     TRACEDB_ENGINE_URL: engineUrl,
+    TRACEDB_GATEWAY_TENANT_ID: "tenant-a",
     TRACEDB_REQUIRE_API_KEY: "true",
     TRACEDB_SERVICE_MODE: "gateway",
   }, gatewayOutput);

@@ -59,7 +59,7 @@ pub struct TextIndexArtifact {
     pub segment_id: String,
     pub generation: u64,
     pub manifest_generation: u64,
-    pub source_segment_checksum: u32,
+    pub source_segment_checksum: [u8; 32],
     pub doc_count: usize,
     pub avg_len: f32,
     pub documents: Vec<TextIndexDocument>,
@@ -92,9 +92,12 @@ pub struct VectorIndexArtifact {
     pub segment_id: String,
     pub generation: u64,
     pub manifest_generation: u64,
-    pub source_segment_checksum: u32,
+    pub source_segment_checksum: [u8; 32],
+    /// Maximum neighbors per node in the greedy NN graph. NOT real HNSW.
     pub m: usize,
+    /// Search budget parameter. NOT real HNSW — no hierarchical layers.
     pub ef_construction: usize,
+    /// Max nodes to visit during greedy search. NOT real HNSW.
     pub ef_search: usize,
     pub entries: Vec<VectorIndexEntry>,
     pub neighbors: BTreeMap<String, Vec<String>>,
@@ -129,7 +132,7 @@ pub struct BitmapIndexArtifact {
     pub segment_id: String,
     pub generation: u64,
     pub manifest_generation: u64,
-    pub source_segment_checksum: u32,
+    pub source_segment_checksum: [u8; 32],
     pub records: Vec<BitmapRecord>,
     pub tenant_records: BTreeMap<String, Vec<String>>,
 }
@@ -158,13 +161,13 @@ pub struct IndexArtifact {
     pub kind: String,
     pub state_history: Vec<String>,
     pub policy_aware: bool,
-    pub source_segment_checksum: u32,
+    pub source_segment_checksum: [u8; 32],
     pub record_count: usize,
     pub payload: IndexPayload,
 }
 
 impl IndexArtifact {
-    pub fn payload_checksum(&self) -> Result<u32> {
+    pub fn payload_checksum(&self) -> Result<[u8; 32]> {
         Ok(checksum_bytes(&serialize_index_artifact_payload(self)?))
     }
 
@@ -194,7 +197,7 @@ pub fn build_segment_index_artifacts(
     segment_id: &str,
     generation: u64,
     manifest_generation: u64,
-    source_segment_checksum: u32,
+    source_segment_checksum: [u8; 32],
     records: &[IndexRecord],
 ) -> Result<Vec<IndexArtifact>> {
     let mut artifacts = vec![
@@ -262,7 +265,7 @@ pub fn build_text_index(
     segment_id: &str,
     generation: u64,
     manifest_generation: u64,
-    source_segment_checksum: u32,
+    source_segment_checksum: [u8; 32],
     records: &[IndexRecord],
 ) -> Result<TextIndexArtifact> {
     let mut documents = Vec::new();
@@ -374,7 +377,7 @@ pub fn build_vector_index(
     segment_id: &str,
     generation: u64,
     manifest_generation: u64,
-    source_segment_checksum: u32,
+    source_segment_checksum: [u8; 32],
     records: &[IndexRecord],
 ) -> Result<VectorIndexArtifact> {
     let mut entries = Vec::new();
@@ -388,7 +391,7 @@ pub fn build_vector_index(
             });
         }
     }
-    let neighbors = deterministic_hnsw_neighbors(&entries, 16);
+    let neighbors = deterministic_greedy_nn_neighbors(&entries, 16);
     Ok(VectorIndexArtifact {
         index_id: format!("{segment_id}:vector:{generation}"),
         segment_id: segment_id.to_string(),
@@ -404,7 +407,8 @@ pub fn build_vector_index(
 }
 
 impl VectorIndexArtifact {
-    pub fn hnsw_neighbors(&self, field: &str, record_id: &str) -> Option<&Vec<String>> {
+    /// Access the greedy nearest-neighbor list for a specific entry.
+    pub fn greedy_nn_neighbors(&self, field: &str, record_id: &str) -> Option<&Vec<String>> {
         self.neighbors.get(&vector_node_key(field, record_id))
     }
 
@@ -545,7 +549,7 @@ pub fn build_policy_bitmap_index(
     segment_id: &str,
     generation: u64,
     manifest_generation: u64,
-    source_segment_checksum: u32,
+    source_segment_checksum: [u8; 32],
     records: &[IndexRecord],
 ) -> Result<BitmapIndexArtifact> {
     Ok(build_bitmap_index(
@@ -580,7 +584,7 @@ pub fn write_index_artifact(
     path: impl AsRef<Path>,
     artifact: &IndexArtifact,
     encryption: Option<&EncryptionContext>,
-) -> Result<u32> {
+) -> Result<[u8; 32]> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -651,7 +655,7 @@ fn build_bitmap_artifact(
     segment_id: &str,
     generation: u64,
     manifest_generation: u64,
-    source_segment_checksum: u32,
+    source_segment_checksum: [u8; 32],
     records: &[IndexRecord],
 ) -> IndexArtifact {
     IndexArtifact {
@@ -688,7 +692,7 @@ fn build_bitmap_index(
     segment_id: &str,
     generation: u64,
     manifest_generation: u64,
-    source_segment_checksum: u32,
+    source_segment_checksum: [u8; 32],
     records: &[IndexRecord],
 ) -> BitmapIndexArtifact {
     let records = records
@@ -742,7 +746,9 @@ fn vector_node_key(field: &str, record_id: &str) -> String {
     format!("{field}\u{0}{record_id}")
 }
 
-fn deterministic_hnsw_neighbors(
+/// Build a deterministic greedy nearest-neighbor graph by brute-force O(n²) cosine similarity.
+/// WARNING: This is NOT real HNSW. No hierarchical layers, no probabilistic construction.
+fn deterministic_greedy_nn_neighbors(
     entries: &[VectorIndexEntry],
     m: usize,
 ) -> BTreeMap<String, Vec<String>> {
@@ -811,6 +817,11 @@ mod tests {
     use serde_json::{json, Map};
     use std::collections::BTreeMap;
 
+    const CHECKSUM_VAL: [u8; 32] = [
+        0x12u8, 0x34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0,
+    ];
+
     fn record(id: &str, body: &str, vector: Vec<f32>) -> IndexRecord {
         IndexRecord {
             table: "docs".to_string(),
@@ -834,8 +845,8 @@ mod tests {
             record("a", "rare kernel token", vec![1.0, 0.0]),
             record("b", "ordinary text", vec![0.0, 1.0]),
         ];
-        let artifacts =
-            build_segment_index_artifacts("seg-1", 1, 77, 1234, &records).expect("artifacts");
+        let artifacts = build_segment_index_artifacts("seg-1", 1, 77, CHECKSUM_VAL, &records)
+            .expect("artifacts");
         assert!(artifacts.iter().any(|artifact| artifact.kind == "text"));
         assert!(artifacts.iter().any(|artifact| artifact.kind == "vector"));
         assert!(artifacts.iter().any(|artifact| artifact.kind == "policy"));
@@ -848,17 +859,17 @@ mod tests {
             assert!(raw.starts_with(tracedb_core::ARTIFACT_ENVELOPE_MAGIC));
             let read = read_index_artifact(&path, None).expect("read index");
             assert_eq!(read.index_id, artifact.index_id);
-            assert_eq!(read.source_segment_checksum, 1234);
+            assert_eq!(read.source_segment_checksum, CHECKSUM_VAL);
         }
     }
 
     #[test]
-    fn text_index_scores_from_postings_and_vector_index_exposes_hnsw_graph() {
+    fn text_index_scores_from_postings_and_vector_index_exposes_greedy_nn_graph() {
         let records = vec![
             record("rare", "rare kernel token", vec![1.0, 0.0]),
             record("common", "common ordinary text", vec![0.0, 1.0]),
         ];
-        let text = build_text_index("seg-1", 1, 77, 1234, &records).expect("text index");
+        let text = build_text_index("seg-1", 1, 77, CHECKSUM_VAL, &records).expect("text index");
         let scores = text.score_text("rare token", Some("body"));
         assert_eq!(
             scores.first().map(|score| score.record_id.as_str()),
@@ -866,9 +877,10 @@ mod tests {
         );
         assert!(scores[0].score > 0.0);
 
-        let vector = build_vector_index("seg-1", 1, 77, 1234, &records).expect("vector index");
+        let vector =
+            build_vector_index("seg-1", 1, 77, CHECKSUM_VAL, &records).expect("vector index");
         let neighbors = vector
-            .hnsw_neighbors("embedding", "rare")
+            .greedy_nn_neighbors("embedding", "rare")
             .expect("neighbors");
         assert!(!neighbors.is_empty());
         let nearest = vector.search_vector("embedding", &[1.0, 0.0], 2);
@@ -879,8 +891,8 @@ mod tests {
 
         let mut scalar_eq = Map::new();
         scalar_eq.insert("tenant".to_string(), json!("tenant-a"));
-        let bitmap =
-            build_policy_bitmap_index("seg-1", 1, 77, 1234, &records).expect("policy bitmap");
+        let bitmap = build_policy_bitmap_index("seg-1", 1, 77, CHECKSUM_VAL, &records)
+            .expect("policy bitmap");
         assert_eq!(
             bitmap
                 .visible_record_ids("tenant-a", &scalar_eq)
@@ -897,7 +909,7 @@ mod tests {
             segment_id: "seg-1".to_string(),
             generation: 1,
             manifest_generation: 77,
-            source_segment_checksum: 1234,
+            source_segment_checksum: CHECKSUM_VAL,
             m: 16,
             ef_construction: 64,
             ef_search: 1,
@@ -939,13 +951,13 @@ mod tests {
     }
 
     #[test]
-    fn vector_search_can_use_hnsw_without_exact_fallback_when_graph_covers_limit() {
+    fn vector_search_can_use_greedy_nn_without_exact_fallback_when_graph_covers_limit() {
         let records = vec![
             record("a", "alpha", vec![1.0, 0.0]),
             record("b", "beta", vec![0.9, 0.1]),
         ];
         let mut artifact =
-            build_vector_index("seg-1", 1, 77, 1234, &records).expect("vector index");
+            build_vector_index("seg-1", 1, 77, CHECKSUM_VAL, &records).expect("vector index");
         artifact.ef_search = 2;
 
         let report = artifact.search_vector_with_report("embedding", &[1.0, 0.0], 1);

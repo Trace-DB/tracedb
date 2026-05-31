@@ -19,7 +19,7 @@ use tracedb_sdk::{
     BranchesResponse, DatabasesResponse, ErrorResponse, GraphQlQueryRequest, GraphQlSchemaResponse,
     HealthResponse, JobsResponse, MetricsResponse, ReadyResponse, RestoreRequest, SnapshotRequest,
     TableHandle, TableRecordInput, TraceDb, TraceDbAsyncClient, TraceDbClient, TraceDbClientConfig,
-    TraceDbClientError, TraceDbRequestOptions,
+    TraceDbClientError, TraceDbRequestOptions, TraceQlQueryRequest,
 };
 
 fn schema() -> TableSchema {
@@ -820,10 +820,96 @@ fn graphql_typed_retries_transient_read_failures_when_safe_retries_enabled() {
         TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
 
     let response = client
-        .graphql_typed(r#"query { docs(tenant_id: "tenant-a", limit: 1) { record_id } }"#)
+        .graphql_typed(
+            r#"query { query(input: "{\"table\":\"docs\",\"tenant_id\":\"tenant-a\",\"top_k\":1}") { results } }"#,
+        )
         .expect("graphql safe retry");
 
     assert!(response.errors.is_empty());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn mutating_traceql_does_not_safe_retry_without_idempotency_key() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"epoch\":7}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+    let request = TraceQlQueryRequest::put(&record("intro", "tenant-a", "body", [1.0, 0.0, 0.0]))
+        .expect("traceql put request");
+
+    let error = client
+        .traceql_request(&request)
+        .expect_err("mutating TraceQL must not safe retry");
+
+    assert!(matches!(
+        error,
+        TraceDbClientError::HttpStatus { status: 503, .. }
+    ));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn mutating_traceql_retries_when_idempotency_key_is_enabled() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"epoch\":7}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let request = TraceQlQueryRequest::put(&record("intro", "tenant-a", "body", [1.0, 0.0, 0.0]))
+        .expect("traceql put request");
+    let options = TraceDbRequestOptions::default().with_idempotency_key("traceql-put-1");
+
+    let response = client
+        .traceql_request_with_options(&request, &options)
+        .expect("idempotent TraceQL retry");
+
+    assert_eq!(response["epoch"], 7);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn mutating_graphql_does_not_safe_retry_without_idempotency_key() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 30\r\nConnection: close\r\n\r\n{\"data\":{\"put\":{\"epoch\":7}}}",
+    ]);
+    let client =
+        TraceDbClient::new(TraceDbClientConfig::managed(url, "dev-token").with_safe_retries(1));
+    let request = GraphQlQueryRequest::new(r#"mutation { put(input: "{}") { epoch } }"#);
+
+    let error = client
+        .graphql_request(&request)
+        .expect_err("mutating GraphQL must not safe retry");
+
+    assert!(matches!(
+        error,
+        TraceDbClientError::HttpStatus { status: 503, .. }
+    ));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn mutating_graphql_retries_when_idempotency_key_is_enabled() {
+    let (url, attempts) = sequence_response_server(vec![
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"warming\"}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 30\r\nConnection: close\r\n\r\n{\"data\":{\"put\":{\"epoch\":7}}}",
+    ]);
+    let client = TraceDbClient::new(
+        TraceDbClientConfig::managed(url, "dev-token").with_idempotency_retries(1),
+    );
+    let request = GraphQlQueryRequest::new(r#"mutation { put(input: "{}") { epoch } }"#);
+    let options = TraceDbRequestOptions::default().with_idempotency_key("graphql-put-1");
+
+    let response = client
+        .graphql_request_with_options(&request, &options)
+        .expect("idempotent GraphQL retry");
+
+    assert_eq!(response["data"]["put"]["epoch"], 7);
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
 }
 

@@ -106,12 +106,17 @@ node --experimental-strip-types clients/typescript/smoke.ts
   `--target` before running the smoke so source-path imports cannot mask drift.
   This is sync SDK contract evidence, not PyPI readiness, async support,
   managed-cloud proof, SQL compatibility, or full GraphQL adapter parity.
-- SDK safe retries apply only to health/read routes that do not mutate TraceDB
-  data state: `GET /v1/health`, `GET /v1/ready`, `GET /v1/graphql/schema`,
-  `POST /v1/records/get`, `POST /v1/records/scan`, `POST /v1/query`,
-  `POST /v1/traceql`, `POST /v1/graphql`, and `POST /v1/explain`.
+- SDK safe retries apply only to routes or operation payloads that are provably
+  read-only. Blanket safe-retry routes are `GET /v1/health`, `GET /v1/ready`,
+  `GET /v1/graphql/schema`, `POST /v1/records/get`,
+  `POST /v1/records/scan`, `POST /v1/query`, `POST /v1/explain`, and
+  `POST /v1/graphql/bounded`. Native `POST /v1/traceql` and
+  `POST /v1/graphql` are polymorphic operation routes: retry only when the
+  payload is provably read-only, or when the caller supplies `Idempotency-Key`
+  and idempotency retry is enabled.
 - Idempotency-Key supports local data-dir replay from WAL/checkpoint-backed
-  idempotency receipts for mutation and admin routes. Same key plus same
+  idempotency receipts for mutation, admin, and polymorphic native operation
+  routes. Same key plus same
   method/path/raw body replays the first successful response; same key with a
   different body returns `409 Conflict`.
 - The idempotency authority is local-engine-only and scoped to the same data
@@ -124,9 +129,10 @@ node --experimental-strip-types clients/typescript/smoke.ts
   `idempotencyKey` options before network I/O as `TraceDbRequestError`.
 - The Rust SDK can manually send `Idempotency-Key` with
   `TraceDbRequestOptions` on individual requests. `safe_retries` still applies
-  only to health/read routes. `idempotency_retries` is a separate opt-in policy
-  for transient 5xx/timeout retries on mutation/admin routes and is only active
-  when the individual request includes an `Idempotency-Key`.
+  only to provably read-only routes or operation payloads. `idempotency_retries`
+  is a separate opt-in policy for transient 5xx/timeout retries on mutating,
+  admin, or polymorphic native operation routes and is only active when the
+  individual request includes an `Idempotency-Key`.
 - Gateway metering, request logging, and rate limiting may still observe each
   HTTP attempt.
 
@@ -274,9 +280,9 @@ writes.
 | `POST /v1/records/get` | `RecordGetRequest`: `table`, `tenant_id`, and `id`. | `{ "record": RecordOutput \| null }`. |
 | `POST /v1/records/scan` | `RecordScanRequest`: `table`, `tenant_id`, optional `limit`, and optional opaque `cursor` from the prior page. | `RecordScanOutput` with `records: RecordOutput[]`, `returned_count`, and optional `next_cursor`. Records are ordered by `record_id`; omit `cursor` for the first page. |
 | `POST /v1/query` | `HybridQuery`: `table`, `tenant_id`, optional opaque `cursor`, optional `text_field`, optional `text`, optional `vector_field`, optional `vector`, optional `scalar_eq`, optional `graph_seed`, optional `temporal_as_of`, `top_k`, `freshness`, and `explain`. `freshness` accepts `Strict`, `Lazy`, or `AllowDirty`; SDKs also canonicalize lowercase forms such as `allow_dirty`. `text_field` selects one schema text-indexed column; if omitted, text search spans all text-indexed columns. `vector_field` selects one schema vector column; if omitted, vector scoring uses the first vector column for backwards-compatible fieldless queries. | With `explain: false`, returns `{ "results": HybridQueryRow[], "next_cursor"?: string }`; with `explain: true`, returns results plus `HybridExplain` metadata and optional `next_cursor`. |
-| `POST /v1/traceql` | `TraceQlQueryRequest`: `{ "query": string }`, where `query` is either native line-oriented TraceQL or a TraceDB command statement such as `SCHEMA APPLY {json}`, `PUT {json}`, `BATCH {json}`, `PATCH {json}`, `GET {json}`, `SCAN {json}`, `QUERY {json}`, `EXPLAIN {json}`, `DELETE {json}`, `SNAPSHOT {json}`, `RESTORE {json}`, or `JOBS LIST`. | Query strings return the same result shape as `POST /v1/query`; command statements return the canonical route-specific JSON body for the operation. This is not SQL or PostgreSQL compatibility. |
+| `POST /v1/traceql` | `TraceQlQueryRequest`: `{ "query": string }`, where `query` is either read-only native line-oriented TraceQL or a TraceDB command statement. `GET`, `SCAN`, `QUERY`, `EXPLAIN`, and `JOBS LIST` are read-only; `SCHEMA APPLY`, `PUT`, `BATCH`, `PATCH`, `DELETE`, `SNAPSHOT`, and `RESTORE` mutate data or admin state. | Query strings return the same result shape as `POST /v1/query`; command statements return the canonical route-specific JSON body for the operation. This polymorphic route is not blanket safe-retry; mutating/admin commands should use `Idempotency-Key` for idempotency retries. This is not SQL or PostgreSQL compatibility. |
 | `GET /v1/graphql/schema` | No body. Generates SDL from currently applied `TableSchema` definitions. Rust SDK callers can use `TraceDbClient::graphql_schema`, `TraceDbClient::graphql_schema_typed`, or `TraceDbAsyncClient::graphql_schema_typed`; TypeScript SDK callers can use `TraceDB.graphqlSchema()`; Python SDK callers can use `TraceDB.graphql_schema()`. | `GraphQlSchemaResponse` with `adapter`, generated `schema` SDL, `tables`, and compatibility execution notes. This SDL export is retained for the bounded adapter and schema discovery. |
-| `POST /v1/graphql` | `GraphQlQueryRequest`: `{ "query": string, "variables"?: object, "operationName"?: string }`. Native TraceDB operations use one root field such as `schemaApply`, `put`, `batch`, `patch`, `delete`, `get`, `scan`, `query`, `explain`, `snapshot`, `restore`, `jobs`, or `jobRun` with an `input` JSON string argument when an operation body is required. Rust SDK callers can use `TraceDbClient::graphql_typed` or `graphql_request_typed`; TypeScript SDK callers can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers can use `TraceDB.graphql()` or `graphql_request({"query": query})`. | Standard GraphQL-style `{ "data": ..., "errors": ... }` response envelope. Unsupported fields and operation failures return `errors` with `extensions.code = "TRACEDB_GRAPHQL_ERROR"`. Subscriptions remain unsupported. |
+| `POST /v1/graphql` | `GraphQlQueryRequest`: `{ "query": string, "variables"?: object, "operationName"?: string }`. Native TraceDB operations use one root field. `get`, `scan`, `query`, `explain`, and `jobs` are read-only; `schemaApply`, `put`, `batch`, `patch`, `delete`, `compact`, `snapshot`, `restore`, and `jobRun` mutate data or admin state. Fields that need an operation body take an `input` JSON string argument. Rust SDK callers can use `TraceDbClient::graphql_typed` or `graphql_request_typed`; TypeScript SDK callers can use `TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers can use `TraceDB.graphql()` or `graphql_request({"query": query})`. | Standard GraphQL-style `{ "data": ..., "errors": ... }` response envelope. This polymorphic route is not blanket safe-retry; mutating/admin root fields should use `Idempotency-Key` for idempotency retries. Unsupported fields and operation failures return `errors` with `extensions.code = "TRACEDB_GRAPHQL_ERROR"`. Subscriptions remain unsupported. |
 | `POST /v1/graphql/bounded` | `GraphQlQueryRequest`: `{ "query": string }`, where `query` is the bounded GraphQL adapter form with one root table field and arguments such as `tenant_id`, `where`, `match_field`, `match`, `near_field`, `near`, `limit`, `freshness`, and `explain`. Rust SDK callers can use `bounded_graphql_typed`; TypeScript SDK callers can use `TraceDB.boundedGraphql()`; Python SDK callers can use `TraceDB.bounded_graphql()`. | Same result shape as `POST /v1/query`. This route is compatibility-only and does not satisfy native GraphQL production gates. |
 | `POST /v1/explain` | Same query shape as `POST /v1/query`; the server forces explain mode. | `HybridExplain` only, including current access-path, candidate, counter, and timing fields. |
 

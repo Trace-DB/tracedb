@@ -571,13 +571,13 @@ export class TraceDbClient {
   }
 
   // postTraceql: POST /v1/traceql
-  /** Run native TraceQL query. */
+  /** Run native TraceQL query or command. Mutates TraceDB state. Caller may provide Idempotency-Key. */
   async traceql(body: TraceQlQueryRequest, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
     return this.request<QueryResponse>("POST", "/v1/traceql", body, options);
   }
 
   // postGraphql: POST /v1/graphql
-  /** Run native GraphQL query, mutation, or admin operation. */
+  /** Run native GraphQL query, mutation, or admin operation. Mutates TraceDB state. Caller may provide Idempotency-Key. */
   async graphql(body: GraphQlQueryRequest, options: TraceDbRequestOptions = {}): Promise<GraphQlResponse> {
     return this.request<GraphQlResponse>("POST", "/v1/graphql", body, options);
   }

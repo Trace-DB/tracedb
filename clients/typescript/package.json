@@ -26,18 +26,18 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/rewrite-declaration-imports.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && tsc -p tsconfig.smoke.json && node scripts/rewrite-declaration-imports.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "smoke": "node --experimental-strip-types smoke.ts",
-    "public-smoke": "node --experimental-strip-types public-sdk-smoke.ts",
-    "package-smoke": "node --experimental-strip-types package-entry-smoke.ts && node --experimental-strip-types build-package-smoke.ts",
+    "smoke": "node dist/smoke.js",
+    "public-smoke": "node dist/public-sdk-smoke.js",
+    "package-smoke": "node dist/package-entry-smoke.js && node dist/build-package-smoke.js",
     "pack-dry-run": "npm pack --dry-run --json",
     "consumer-smoke": "node scripts/packed-consumer-smoke.mjs",
-    "http-smoke": "node --experimental-strip-types http-smoke.ts",
-    "public-http-smoke": "node --experimental-strip-types public-http-smoke.ts",
-    "quickstart": "node --experimental-strip-types quickstart.ts",
-    "gateway-smoke": "node --experimental-strip-types gateway-smoke.ts",
-    "check": "npm run typecheck && npm run smoke && npm run public-smoke && npm run build && npm run package-smoke && npm run pack-dry-run && npm run consumer-smoke"
+    "http-smoke": "npm run build && node dist/http-smoke.js",
+    "public-http-smoke": "npm run build && node dist/public-http-smoke.js",
+    "quickstart": "npm run build && node dist/quickstart.js",
+    "gateway-smoke": "npm run build && node dist/gateway-smoke.js",
+    "check": "npm run typecheck && npm run build && npm run smoke && npm run public-smoke && npm run package-smoke && npm run pack-dry-run && npm run consumer-smoke"
   },
   "devDependencies": {
     "@types/node": "25.9.0",

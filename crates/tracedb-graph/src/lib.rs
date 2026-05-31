@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tracedb_modules::{
     AccessPathDescriptor, ExplainHookDescriptor, SegmentCodecDescriptor, TraceDbModule,
     TypeDescriptor, WalDecoderDescriptor,
@@ -39,7 +40,7 @@ impl Edge {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct GraphStore {
-    edges: Vec<Edge>,
+    edges: BTreeMap<String, Vec<Edge>>,
 }
 
 pub struct GraphModule;
@@ -83,7 +84,7 @@ impl TraceDbModule for GraphModule {
 
 impl GraphStore {
     pub fn add_edge(&mut self, edge: Edge) {
-        self.edges.push(edge);
+        self.edges.entry(edge.from.clone()).or_default().push(edge);
     }
 
     pub fn visible_neighbors(
@@ -94,8 +95,9 @@ impl GraphStore {
     ) -> Vec<String> {
         let mut out = self
             .edges
-            .iter()
-            .filter(|edge| edge.from == from)
+            .get(from)
+            .into_iter()
+            .flatten()
             .filter(|edge| {
                 oracle
                     .visible(&edge.edge_id, 1, &edge.policy, actor)
@@ -104,6 +106,7 @@ impl GraphStore {
             .map(|edge| edge.to.clone())
             .collect::<Vec<_>>();
         out.sort();
+        out.dedup();
         out
     }
 }

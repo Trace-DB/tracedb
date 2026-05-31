@@ -212,9 +212,9 @@ send native TraceQL strings to `POST /v1/traceql` and decode the same
 `TraceDbClient::graphql_schema_typed`, and
 `TraceDbAsyncClient::graphql_schema_typed` read the generated SDL from
 `GET /v1/graphql/schema` and decode the same `GraphQlSchemaResponse` contract
-as HTTP direct. `TraceDbClient::graphql_typed` and `graphql_request_typed` do
-the same for the bounded `POST /v1/graphql` adapter with
-`GraphQlQueryRequest`. These helpers compile into or reuse the existing
+as HTTP direct. `TraceDbClient::graphql_typed` and `graphql_request_typed` send
+native GraphQL operations to `POST /v1/graphql`; bounded query-adapter helpers
+use `POST /v1/graphql/bounded`. These helpers compile into or reuse the existing
 `RecordInput`, `RecordPutBatchRequest`, record request, `TraceQlQueryRequest`,
 `GraphQlQueryRequest`, `GraphQlSchemaResponse`, and `HybridQuery` models; the
 raw HTTP methods remain available. `GraphQlSchemaResponse.execution` is the
@@ -224,21 +224,19 @@ field in typed examples and tests.
 
 The TypeScript public SDK mirrors the generated GraphQL schema route through
 `TraceDB.graphqlSchema()` over the generated transport's `/v1/graphql/schema`
-method, then mirrors the same bounded GraphQL wire route through
-`TraceDB.graphql(query)` and `graphqlRequest({ query })` over the generated
-transport's `/v1/graphql` method. This is public SDK access to generated SDL
-export and the bounded adapter, not GraphQL mutation support, resolver runtime,
-GraphQL data-envelope execution, or full GraphQL adapter parity.
+method, native GraphQL operations through `TraceDB.graphql(query)` and
+`graphqlRequest({ query })` over `/v1/graphql`, and bounded query-adapter
+execution over `/v1/graphql/bounded`. This is public SDK access to generated SDL
+export, native TraceDB GraphQL root operations, and the bounded adapter; general
+GraphQL subscriptions remain unsupported.
 
 The Python sync SDK mirrors generated GraphQL SDL export through
-`TraceDB.graphql_schema()` over `GET /v1/graphql/schema`, then mirrors the same
-bounded GraphQL wire route through `TraceDB.graphql(query)` and
-`graphql_request({"query": query})` over `POST /v1/graphql`, reusing the same
-dictionary-shaped `GraphQlSchemaResponse`, `GraphQlQueryRequest`, and
-`QueryResponse` envelopes as the raw HTTP contract. This is sync SDK access to
-generated SDL export and the bounded adapter, not async Python support, GraphQL
-mutation support, resolver runtime, GraphQL data-envelope execution, or full
-GraphQL adapter parity.
+`TraceDB.graphql_schema()` over `GET /v1/graphql/schema`, native GraphQL
+operations through `TraceDB.graphql(query)` and
+`graphql_request({"query": query})` over `POST /v1/graphql`, and bounded
+query-adapter execution over `POST /v1/graphql/bounded`. This is sync SDK
+access to generated SDL export, native TraceDB GraphQL root operations, and the
+bounded adapter; async Python support and GraphQL subscriptions remain future.
 `TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
@@ -259,10 +257,11 @@ The TypeScript package now starts the public SDK layer in
 `TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
 `TRACEDB_IDEMPOTENCY_RETRIES` so the TypeScript public SDK shares the same
 connection, routing, read-only retry, and keyed mutation/admin retry boundary as
-Rust. `safeRetries` only retries transient 5xx responses for health/ready, get,
-scan, query, native TraceQL, bounded GraphQL, and explain. `idempotencyRetries`
-is default-off and retries transient 5xx responses for mutation/admin routes
-only when the request carries a caller-provided `Idempotency-Key`. The wrapper is fake-fetch,
+Rust. `safeRetries` only retries transient 5xx responses for blanket
+read-only routes: health/ready, get, scan, query, bounded GraphQL, and explain.
+Native TraceQL and native GraphQL are polymorphic operation routes: retry only
+when the payload is provably read-only, or when `idempotencyRetries` is enabled
+and the request carries a caller-provided `Idempotency-Key`. The wrapper is fake-fetch,
 build/pack, packed temp-consumer install, package-entry, and typecheck guarded
 and now has real local HTTP and gateway smokes through `npm run
 public-http-smoke` and `npm run gateway-smoke`.
@@ -292,15 +291,16 @@ stdlib-only SDK also exposes `TraceDB.from_env()` for `TRACEDB_URL`,
 `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
 `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
 `TRACEDB_IDEMPOTENCY_RETRIES`. `safe_retries` only retries transient 5xx
-responses for health, ready, get, scan, query, native TraceQL, bounded GraphQL,
-and explain.
-`idempotency_retries` is default-off and retries transient 5xx responses for
-mutation/admin routes only when that request carries a caller-provided
+responses for blanket read-only routes: health, ready, get, scan, query,
+bounded GraphQL, and explain. Native TraceQL and native GraphQL are polymorphic
+operation routes: retry only when the payload is provably read-only, or when
+`idempotency_retries` is enabled and the request carries a caller-provided
 `Idempotency-Key`; unkeyed writes and 4xx/conflict responses are not retried.
 `TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
 TraceQL strings through the canonical `POST /v1/traceql` route.
-`TraceDB.graphql(query)` and `graphql_request({"query": query})` execute bounded
-GraphQL query-adapter strings through the canonical `POST /v1/graphql` route.
+`TraceDB.graphql(query)` and `graphql_request({"query": query})` execute native
+GraphQL operations through the canonical `POST /v1/graphql` route; bounded
+query-adapter execution stays on `POST /v1/graphql/bounded`.
 `insert_rows` is intentionally SDK-side ergonomics for AI/data rows; it copies
 row dictionaries into the existing `POST /v1/records/put-batch` request shape
 and supports `id_field` for custom row ids.
@@ -322,12 +322,17 @@ GraphQL adapter parity. The smoke is also promoted into the local product gate a
 the TypeScript lanes.
 
 Native TraceQL v0 now executes through `POST /v1/traceql` with a
-`TraceQlQueryRequest` body of `{ "query": string }`. The server parses the
-line-oriented string with `traceql_query_from_str`, accepts directives such as
-`FROM`, `TENANT`, `WHERE`, `MATCH`, `NEAR`, `FRESHNESS`, `LIMIT`, and
-`EXPLAIN`, and compiles them into the existing `HybridQuery` model before using
-the same query execution and response shaping as `POST /v1/query`. This is
-native TraceQL evidence only. It is not SQL compatibility, PostgreSQL
+`TraceQlQueryRequest` body of `{ "query": string }`. The server parses
+read-only line-oriented strings with `traceql_query_from_str`, accepts
+directives such as `FROM`, `TENANT`, `WHERE`, `MATCH`, `NEAR`, `FRESHNESS`,
+`LIMIT`, and `EXPLAIN`, and compiles them into the existing `HybridQuery` model
+before using the same query execution and response shaping as `POST /v1/query`.
+The same route also accepts TraceDB command statements: `GET`, `SCAN`, `QUERY`,
+`EXPLAIN`, and `JOBS LIST` are read-only, while `SCHEMA APPLY`, `PUT`, `BATCH`,
+`PATCH`, `DELETE`, `SNAPSHOT`, and `RESTORE` mutate data or admin state. This
+polymorphic route is not blanket safe-retry; mutating/admin commands require
+`Idempotency-Key` for idempotency retries. This is native TraceQL evidence only.
+It is not SQL compatibility, PostgreSQL
 compatibility, GraphQL execution/runtime evidence, or a separate query engine.
 `MATCH <field> "..."` preserves `<field>` as `HybridQuery.text_field`; `NEAR
 <field> [...]` preserves `<field>` as `HybridQuery.vector_field`.
@@ -341,17 +346,19 @@ shared explain flag. Unsupported SQL constructs such as `JOIN`, `GROUP`,
 `invalid SQL-ish` bad-request responses rather than implying compatibility.
 
 The query crate exposes `graphql_schema_sdl_from_tables` to generate SDL from
-applied `TableSchema` definitions and the bounded GraphQL adapter compiler
-primitive `graphql_query_from_str`. The HTTP server exposes the generated SDL
-through `GET /v1/graphql/schema` with `GraphQlSchemaResponse`, including the
-adapter marker, table names, and the `execution` note that `POST /v1/graphql`
-returns TraceDB's `QueryResponse` rather than a GraphQL data envelope.
-`graphql_query_from_str` accepts one root selection whose field name is the
-table, with arguments such as `tenant_id`, `where`/`filter`, `match`/`text`,
-`near`/`vector`, `limit`, `freshness`, and `explain`, then compiles directly
-into `HybridQuery`. The HTTP server exposes that path through
-`POST /v1/graphql` with `GraphQlQueryRequest`, returning the same
-`QueryResponse` shape as `/v1/query`. The Rust SDK mirrors the schema route
+applied `TableSchema` definitions and exposes the bounded GraphQL adapter
+compiler primitive `graphql_query_from_str`. The HTTP server exposes the
+generated SDL through `GET /v1/graphql/schema` with `GraphQlSchemaResponse`.
+Native GraphQL executes through polymorphic `POST /v1/graphql` with
+`GraphQlQueryRequest` and returns the GraphQL-style `data`/`errors` envelope:
+`get`, `scan`, `query`, `explain`, and `jobs` root fields are read-only,
+while `schemaApply`, `put`, `batch`, `patch`, `delete`, `compact`, `snapshot`,
+`restore`, and `jobRun` mutate data or admin state. This route is not blanket safe-retry; mutating/admin root fields require `Idempotency-Key` for idempotency retries.
+The bounded adapter remains explicit at `POST /v1/graphql/bounded`; it accepts
+one root table field with arguments such as `tenant_id`, `where`/`filter`,
+`match`/`text`, `near`/`vector`, `limit`, `freshness`, and `explain`, then
+compiles directly into `HybridQuery` and returns the same `QueryResponse` shape
+as `/v1/query`. The Rust SDK mirrors the schema route
 with `TraceDbClient::graphql_schema`, `TraceDbClient::graphql_schema_typed`,
 and `TraceDbAsyncClient::graphql_schema_typed`, and mirrors the bounded query
 route with `GraphQlQueryRequest`, `TraceDbClient::graphql_typed`, and

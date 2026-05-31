@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+//! API gateway and request proxy for TraceDB.
 
 use axum::body::{to_bytes, Body, Bytes};
 use axum::error_handling::HandleErrorLayer;
@@ -91,6 +92,7 @@ impl EngineHttpResponse {
 }
 
 #[derive(Clone, Debug)]
+/// TraceDB API gateway.
 pub struct Gateway {
     catalog: Catalog,
     required_token: Option<String>,
@@ -124,12 +126,12 @@ impl Gateway {
         request: GatewayRequest,
         meter: &mut UsageMeter,
     ) -> Result<GatewayResponse, String> {
-        if self
-            .required_token
-            .as_ref()
-            .is_some_and(|required| request.bearer_token.as_deref() != Some(required.as_str()))
-        {
-            return Err("invalid api token".to_string());
+        if let Some(stored_hash) = &self.required_token {
+            let token = request.bearer_token.as_deref().unwrap_or("");
+            let bcrypt_match = bcrypt::verify(token, stored_hash).unwrap_or(false);
+            if !bcrypt_match && token != stored_hash {
+                return Err("invalid api token".to_string());
+            }
         }
         let Some(branch) = self.catalog.branch(&request.branch_id) else {
             return Err(format!("unknown branch {}", request.branch_id));
@@ -151,6 +153,7 @@ impl Gateway {
 }
 
 #[derive(Clone, Debug)]
+/// Configuration for the gateway server.
 pub struct GatewayServerConfig {
     pub bind: String,
     pub engine_url: String,
@@ -178,7 +181,13 @@ impl GatewayServerConfig {
                 .map(|value| value == "true")
                 .unwrap_or(false)
             {
-                Some(std::env::var("TRACEDB_API_TOKEN").unwrap_or_else(|_| "dev-token".to_string()))
+                match std::env::var("TRACEDB_API_TOKEN") {
+                    Ok(token) if !token.is_empty() => Some(
+                        bcrypt::hash(&token, bcrypt::DEFAULT_COST)
+                            .expect("failed to hash API token"),
+                    ),
+                    _ => panic!("TRACEDB_API_TOKEN must be set when TRACEDB_REQUIRE_API_KEY=true"),
+                }
             } else {
                 None
             },
@@ -197,6 +206,7 @@ impl GatewayServerConfig {
     }
 }
 
+/// Start a blocking gateway server.
 pub fn serve(config: GatewayServerConfig) -> std::io::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -204,9 +214,27 @@ pub fn serve(config: GatewayServerConfig) -> std::io::Result<()> {
     runtime.block_on(serve_async(config))
 }
 
+/// Start an async gateway server.
 pub async fn serve_async(config: GatewayServerConfig) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     serve_tokio_listener(listener, config).await
+}
+
+/// Start an async gateway server on an existing Tokio listener.
+async fn security_headers<B>(mut response: Response<B>) -> Response<B> {
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("x-content-type-options"),
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("x-frame-options"),
+        axum::http::HeaderValue::from_static("DENY"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("referrer-policy"),
+        axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    response
 }
 
 pub async fn serve_tokio_listener(
@@ -223,8 +251,21 @@ pub async fn serve_tokio_listener(
                 .layer(ConcurrencyLimitLayer::new(config.max_concurrent_requests))
                 .layer(TimeoutLayer::new(config.request_timeout)),
         )
+        .layer(axum::middleware::map_response(security_headers))
         .with_state(config);
-    axum::serve(listener, app).await
+    let shutdown = async {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("failed to install SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => {},
+            _ = sigint.recv() => {},
+        }
+    };
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
 async fn runtime_handle_error(error: BoxError) -> Response<Body> {
@@ -350,6 +391,9 @@ async fn handle_gateway_request_core(
     body: Bytes,
 ) -> EngineHttpResponse {
     if !is_auth_exempt_gateway_route(method, path) {
+        if rate_limit_exceeded(&config) {
+            return gateway_too_many_requests();
+        }
         if let Err(error) = require_auth(&config, inbound.bearer_token.as_deref()) {
             return error;
         }
@@ -426,6 +470,9 @@ async fn handle_gateway_request_core(
             "rate_limit_requests": config.rate_limit_requests,
         })),
         _ if is_proxied_gateway_route(method, path) => {
+            if hosted_alpha_mode() && is_gateway_admin_route(method, path) {
+                return gateway_forbidden("admin routes are private in hosted alpha".to_string());
+            }
             match authorize_route_and_meter(
                 &config,
                 path,
@@ -458,7 +505,6 @@ async fn handle_gateway_request_core(
                     .await
                 }
                 Err(GatewayRuntimeError::Unauthorized) => gateway_unauthorized(),
-                Err(GatewayRuntimeError::RateLimited) => gateway_too_many_requests(),
                 Err(GatewayRuntimeError::BadRequest(message)) => gateway_bad_request(message),
             }
         }
@@ -500,19 +546,39 @@ fn is_auth_exempt_gateway_route(method: &str, path: &str) -> bool {
     )
 }
 
+fn is_gateway_admin_route(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/v1/admin/compact")
+            | ("POST", "/v1/admin/snapshot")
+            | ("POST", "/v1/admin/restore")
+            | ("GET", "/v1/admin/jobs")
+    )
+}
+
+fn hosted_alpha_mode() -> bool {
+    std::env::var("TRACEDB_HOSTED_ALPHA")
+        .map(|value| matches!(value.as_str(), "true" | "1" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
 fn require_auth(
     config: &GatewayServerConfig,
     bearer_token: Option<&str>,
 ) -> Result<(), EngineHttpResponse> {
-    if config
-        .required_token
-        .as_ref()
-        .is_some_and(|required| bearer_token != Some(required.as_str()))
-    {
-        Err(gateway_unauthorized())
-    } else {
-        Ok(())
+    if let Some(stored_hash) = &config.required_token {
+        let token = bearer_token.unwrap_or("");
+        let bcrypt_match = bcrypt::verify(token, stored_hash).unwrap_or(false);
+        if !bcrypt_match && token != stored_hash {
+            return Err(gateway_unauthorized());
+        }
     }
+    Ok(())
+}
+
+fn rate_limit_exceeded(config: &GatewayServerConfig) -> bool {
+    config.rate_limit_enabled
+        && config.meter.lock().unwrap().total(MeterKind::Request) >= config.rate_limit_requests
 }
 
 fn authorize_route_and_meter(
@@ -525,15 +591,8 @@ fn authorize_route_and_meter(
 ) -> Result<AuthorizedGatewayRoute, GatewayRuntimeError> {
     let mut ids = gateway_ids_from_request(body, query, actor_headers)?;
     ids.bearer_token = bearer_token;
-    let gateway = match &config.required_token {
-        Some(token) => Gateway::new(config.catalog.clone(), token.clone()),
-        None => Gateway::open(config.catalog.clone()),
-    }
-    .with_engine_url(config.engine_url.clone());
+    let gateway = Gateway::open(config.catalog.clone()).with_engine_url(config.engine_url.clone());
     let mut meter = config.meter.lock().unwrap();
-    if config.rate_limit_enabled && meter.total(MeterKind::Request) >= config.rate_limit_requests {
-        return Err(GatewayRuntimeError::RateLimited);
-    }
     let response = gateway
         .route(
             GatewayRequest {
@@ -630,53 +689,45 @@ fn gateway_ids_from_request(
             .clone()
             .or_else(|| query_value(query, "branch_id"))
             .unwrap_or_else(|| format!("{database_id}:main"));
-        let tenant_id = actor_headers
-            .tenant_id
-            .clone()
-            .or_else(|| query_value(query, "tenant_id"))
-            .unwrap_or_else(|| "local".to_string());
+        let tenant_id = gateway_actor_tenant_id(query_value(query, "tenant_id"));
         return Ok(GatewayRequestIds {
             database_id,
             branch_id,
             tenant_id,
             bearer_token: None,
-            token_identity: actor_headers.token_identity.clone(),
-            policy_epoch: actor_headers.policy_epoch.clone(),
-            scopes: actor_headers.scopes.clone(),
+            token_identity: None,
+            policy_epoch: None,
+            scopes: None,
         });
     }
-    if let (Some(database_id), Some(branch_id), Some(tenant_id)) = (
-        actor_headers.database_id.clone(),
-        actor_headers.branch_id.clone(),
-        actor_headers.tenant_id.clone(),
-    ) {
-        return Ok(GatewayRequestIds {
-            database_id,
-            branch_id,
-            tenant_id,
-            bearer_token: None,
-            token_identity: actor_headers.token_identity.clone(),
-            policy_epoch: actor_headers.policy_epoch.clone(),
-            scopes: actor_headers.scopes.clone(),
-        });
+    if serde_json::from_slice::<Value>(body).is_err() {
+        if let (Some(database_id), Some(branch_id)) = (
+            actor_headers.database_id.clone(),
+            actor_headers.branch_id.clone(),
+        ) {
+            return Ok(GatewayRequestIds {
+                database_id,
+                branch_id,
+                tenant_id: gateway_actor_tenant_id(None),
+                bearer_token: None,
+                token_identity: None,
+                policy_epoch: None,
+                scopes: None,
+            });
+        }
     }
     let value = serde_json::from_slice::<Value>(body)
         .map_err(|error| GatewayRuntimeError::BadRequest(error.to_string()))?;
     let body_database_id = value.get("database_id").and_then(Value::as_str);
-    let database_id = actor_headers
-        .database_id
-        .clone()
-        .or_else(|| body_database_id.map(str::to_string))
+    let database_id = body_database_id
+        .map(str::to_string)
+        .or_else(|| actor_headers.database_id.clone())
         .unwrap_or_else(|| "db_local".to_string());
-    let branch_id = actor_headers
-        .branch_id
-        .clone()
-        .or_else(|| {
-            value
-                .get("branch_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+    let branch_id = value
+        .get("branch_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| actor_headers.branch_id.clone())
         .unwrap_or_else(|| format!("{database_id}:main"));
     let body_tenant_id = value
         .get("tenant_id")
@@ -690,20 +741,24 @@ fn gateway_ids_from_request(
                 .and_then(Value::as_str)
         })
         .map(str::to_string);
-    let tenant_id = actor_headers
-        .tenant_id
-        .clone()
-        .or(body_tenant_id)
-        .unwrap_or_else(|| "local".to_string());
+    let tenant_id = gateway_actor_tenant_id(body_tenant_id);
     Ok(GatewayRequestIds {
         database_id,
         branch_id,
         tenant_id,
         bearer_token: None,
-        token_identity: actor_headers.token_identity.clone(),
-        policy_epoch: actor_headers.policy_epoch.clone(),
-        scopes: actor_headers.scopes.clone(),
+        token_identity: None,
+        policy_epoch: None,
+        scopes: None,
     })
+}
+
+fn gateway_actor_tenant_id(fallback: Option<String>) -> String {
+    std::env::var("TRACEDB_GATEWAY_TENANT_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or(fallback)
+        .unwrap_or_else(|| "local".to_string())
 }
 
 fn split_request_target(target: &str) -> (&str, Option<&str>) {
@@ -747,7 +802,6 @@ fn gateway_actor_header_overrides_from_header_map(
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum GatewayRuntimeError {
     Unauthorized,
-    RateLimited,
     BadRequest(String),
 }
 
@@ -771,6 +825,7 @@ fn load_gateway_catalog(engine_url: &str) -> Catalog {
     catalog
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn proxy_engine_request(
     client: &reqwest::Client,
     engine_url: &str,
@@ -796,6 +851,7 @@ pub async fn proxy_engine_request(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn proxy_engine_request_with_id(
     client: &reqwest::Client,
     engine_url: &str,
@@ -840,7 +896,7 @@ async fn proxy_engine_request_with_id(
     let response = request
         .send()
         .await
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?;
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
     let status = response.status();
     let content_type = response
         .headers()
@@ -851,7 +907,7 @@ async fn proxy_engine_request_with_id(
     let body = response
         .bytes()
         .await
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?
+        .map_err(|error| std::io::Error::other(error.to_string()))?
         .to_vec();
     Ok(EngineHttpResponse {
         status_code: status.as_u16(),
@@ -861,6 +917,7 @@ async fn proxy_engine_request_with_id(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn proxy_or_gateway_error(
     client: &reqwest::Client,
     engine_url: &str,
@@ -1046,6 +1103,13 @@ fn gateway_bad_request(message: String) -> EngineHttpResponse {
     )
 }
 
+fn gateway_forbidden(message: String) -> EngineHttpResponse {
+    gateway_json_response(
+        StatusCode::FORBIDDEN,
+        json!({ "error": message, "code": "forbidden" }),
+    )
+}
+
 fn gateway_too_many_requests() -> EngineHttpResponse {
     gateway_json_response(
         StatusCode::TOO_MANY_REQUESTS,
@@ -1107,6 +1171,8 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn gateway_proxies_traceql_and_graphql_adapter_routes() {
         assert!(is_proxied_gateway_route("POST", "/v1/traceql"));
@@ -1121,7 +1187,9 @@ mod tests {
             engine_url: "http://127.0.0.1:1".to_string(),
             http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
-            required_token: Some("public-secret".to_string()),
+            required_token: Some(
+                "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
+            ),
             catalog: Catalog::default(),
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,
@@ -1164,7 +1232,9 @@ mod tests {
             engine_url: engine,
             http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
-            required_token: Some("public-secret".to_string()),
+            required_token: Some(
+                "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
+            ),
             catalog,
             meter,
             rate_limit_enabled: false,
@@ -1202,7 +1272,9 @@ mod tests {
     }
 
     #[test]
-    fn gateway_preserves_inbound_actor_context_for_command_surfaces() {
+    fn gateway_derives_actor_context_for_command_surfaces() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var("TRACEDB_GATEWAY_TENANT_ID", "tenant-a");
         let engine = spawn_header_echo_engine();
         let mut catalog = Catalog::default();
         let database = catalog
@@ -1217,7 +1289,9 @@ mod tests {
             engine_url: engine,
             http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
-            required_token: Some("public-secret".to_string()),
+            required_token: Some(
+                "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
+            ),
             catalog,
             meter,
             rate_limit_enabled: false,
@@ -1248,10 +1322,98 @@ mod tests {
         assert!(response.contains("\"x-tracedb-database-id\":\"db_"));
         assert!(response.contains("\"x-tracedb-branch-id\":\""));
         assert!(response.contains("\"x-tracedb-tenant-id\":\"tenant-a\""));
-        assert!(response.contains("\"x-tracedb-token-identity\":\"smoke-token\""));
-        assert!(response.contains("\"x-tracedb-policy-epoch\":\"7\""));
-        assert!(response.contains("\"x-tracedb-scopes\":\"records:read,records:write\""));
+        assert!(response.contains("\"x-tracedb-token-identity\":\"bearer\""));
+        assert!(!response.contains("\"x-tracedb-policy-epoch\":\"7\""));
+        assert!(!response.contains("\"x-tracedb-scopes\":\"records:read,records:write\""));
         assert!(response.contains("\"x-tracedb-request-id\":\"request-456\""));
+        std::env::remove_var("TRACEDB_GATEWAY_TENANT_ID");
+    }
+
+    #[test]
+    fn gateway_rate_limit_rejects_before_bcrypt_verification() {
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: "http://127.0.0.1:1".to_string(),
+            http_client: reqwest::Client::new(),
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: Some(
+                "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
+            ),
+            catalog: Catalog::default(),
+            meter: Arc::new(Mutex::new(UsageMeter::default())),
+            rate_limit_enabled: true,
+            rate_limit_requests: 0,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
+        };
+
+        let response = handle_gateway_request_text(
+            "GET /v1/databases HTTP/1.1\r\nauthorization: Bearer definitely-wrong\r\n\r\n",
+            config,
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 429 Too Many Requests"),
+            "rate limit should reject before bcrypt auth work: {response}"
+        );
+    }
+
+    #[test]
+    fn public_gateway_ignores_caller_supplied_actor_headers() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var("TRACEDB_GATEWAY_TENANT_ID", "tenant-a");
+        let engine = spawn_header_echo_engine();
+        let mut catalog = Catalog::default();
+        let database = catalog
+            .create_database("org-a", "project-a", "memory", "us-west")
+            .expect("database");
+        let branch = catalog
+            .create_branch(&database.database_id, "main", None)
+            .expect("branch");
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: engine,
+            http_client: reqwest::Client::new(),
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: Some(
+                "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
+            ),
+            catalog,
+            meter: Arc::new(Mutex::new(UsageMeter::default())),
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
+        };
+        let body = json!({
+            "database_id": database.database_id,
+            "branch_id": branch.branch_id,
+            "query": "FROM docs\nTENANT tenant-a\nLIMIT 1"
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/traceql HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer public-secret\r\nx-request-id: request-456\r\nx-tracedb-database-id: attacker-db\r\nx-tracedb-branch-id: attacker-branch\r\nx-tracedb-tenant-id: attacker-tenant\r\nx-tracedb-token-identity: attacker-token\r\nx-tracedb-policy-epoch: 999\r\nx-tracedb-scopes: admin:*\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = handle_gateway_request_text(&request, config);
+
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "gateway response should be OK: {response}"
+        );
+        assert!(response.contains(&format!(
+            "\"x-tracedb-database-id\":\"{}\"",
+            database.database_id
+        )));
+        assert!(response.contains(&format!("\"x-tracedb-branch-id\":\"{}\"", branch.branch_id)));
+        assert!(response.contains("\"x-tracedb-tenant-id\":\"tenant-a\""));
+        assert!(response.contains("\"x-tracedb-token-identity\":\"bearer\""));
+        assert!(!response.contains("attacker-tenant"));
+        assert!(!response.contains("admin:*"));
+        assert!(!response.contains("\"x-tracedb-policy-epoch\":\"999\""));
+        std::env::remove_var("TRACEDB_GATEWAY_TENANT_ID");
     }
 
     #[tokio::test]
@@ -1269,7 +1431,9 @@ mod tests {
             engine_url: engine,
             http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
-            required_token: Some("public-secret".to_string()),
+            required_token: Some(
+                "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
+            ),
             catalog,
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,
@@ -1321,7 +1485,9 @@ mod tests {
             engine_url: "http://127.0.0.1:1".to_string(),
             http_client: reqwest::Client::new(),
             engine_internal_token: Some("engine-secret".to_string()),
-            required_token: Some("public-secret".to_string()),
+            required_token: Some(
+                "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
+            ),
             catalog: Catalog::default(),
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,

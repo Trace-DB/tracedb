@@ -3,6 +3,12 @@ target/
 .DS_Store
 .obsidian/
 .env
+.env.local
+.env.*.local
+**/.pytest_cache/
+**/*.egg-info/
+**/node_modules/
+.modal-input-artifacts/
 __pycache__/
 *.pyc
 benchmarks/realworld/reports/*

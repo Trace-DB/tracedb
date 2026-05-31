@@ -38,7 +38,11 @@ import {
   type TraceDbRequestOptions,
 } from "./client.ts";
 
-export { TraceDbClient, TraceDbHttpError, TraceDbRequestError } from "./client.ts";
+export {
+  TraceDbClient,
+  TraceDbHttpError,
+  TraceDbRequestError,
+} from "./client.ts";
 export type {
   BranchesResponse,
   CompactResponse,
@@ -154,7 +158,10 @@ export class TraceDB {
       );
     }
     const timeoutMs = validateTimeoutMs(config.timeoutMs, "timeoutMs");
-    const safeRetries = validateNonNegativeInteger(config.safeRetries, "safeRetries");
+    const safeRetries = validateNonNegativeInteger(
+      config.safeRetries,
+      "safeRetries",
+    );
     const idempotencyRetries = validateNonNegativeInteger(
       config.idempotencyRetries,
       "idempotencyRetries",
@@ -190,7 +197,10 @@ export class TraceDB {
         : validateTimeoutMs(options.timeoutMs, "timeoutMs");
     const safeRetries =
       options.safeRetries === undefined
-        ? parseNonNegativeIntegerFromEnv(env.TRACEDB_SAFE_RETRIES, "TRACEDB_SAFE_RETRIES")
+        ? parseNonNegativeIntegerFromEnv(
+            env.TRACEDB_SAFE_RETRIES,
+            "TRACEDB_SAFE_RETRIES",
+          )
         : validateNonNegativeInteger(options.safeRetries, "safeRetries");
     const idempotencyRetries =
       options.idempotencyRetries === undefined
@@ -198,7 +208,10 @@ export class TraceDB {
             env.TRACEDB_IDEMPOTENCY_RETRIES,
             "TRACEDB_IDEMPOTENCY_RETRIES",
           )
-        : validateNonNegativeInteger(options.idempotencyRetries, "idempotencyRetries");
+        : validateNonNegativeInteger(
+            options.idempotencyRetries,
+            "idempotencyRetries",
+          );
     return new TraceDB({
       url,
       token: options.token ?? env.TRACEDB_TOKEN,
@@ -227,7 +240,10 @@ export class TraceDB {
     return this.transport.applySchema(schema, options);
   }
 
-  async traceql(query: string, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+  async traceql(
+    query: string,
+    options: TraceDbRequestOptions = {},
+  ): Promise<QueryResponse> {
     return this.traceqlRequest({ query }, options);
   }
 
@@ -249,7 +265,10 @@ export class TraceDB {
     return this.transport.graphql({ ...request }, options);
   }
 
-  async boundedGraphql(query: string, options: TraceDbRequestOptions = {}): Promise<QueryResponse> {
+  async boundedGraphql(
+    query: string,
+    options: TraceDbRequestOptions = {},
+  ): Promise<QueryResponse> {
     return this.boundedGraphqlRequest({ query }, options);
   }
 
@@ -260,19 +279,27 @@ export class TraceDB {
     return this.transport.boundedGraphql({ ...request }, options);
   }
 
-  async graphqlSchema(options: TraceDbRequestOptions = {}): Promise<GraphQlSchemaResponse> {
+  async graphqlSchema(
+    options: TraceDbRequestOptions = {},
+  ): Promise<GraphQlSchemaResponse> {
     return this.transport.graphqlSchema(options);
   }
 
-  async listDatabases(options: TraceDbRequestOptions = {}): Promise<DatabasesResponse> {
+  async listDatabases(
+    options: TraceDbRequestOptions = {},
+  ): Promise<DatabasesResponse> {
     return this.transport.listDatabases(options);
   }
 
-  async listBranches(options: TraceDbRequestOptions = {}): Promise<BranchesResponse> {
+  async listBranches(
+    options: TraceDbRequestOptions = {},
+  ): Promise<BranchesResponse> {
     return this.transport.listBranches(options);
   }
 
-  async publicSafeMetrics(options: TraceDbRequestOptions = {}): Promise<MetricsResponse> {
+  async publicSafeMetrics(
+    options: TraceDbRequestOptions = {},
+  ): Promise<MetricsResponse> {
     return this.transport.publicSafeMetrics(options);
   }
 
@@ -294,7 +321,9 @@ export class TraceDB {
     return this.transport.restore(request, options);
   }
 
-  async listAdminJobs(options: TraceDbRequestOptions = {}): Promise<JobsResponse> {
+  async listAdminJobs(
+    options: TraceDbRequestOptions = {},
+  ): Promise<JobsResponse> {
     return this.transport.listAdminJobs(options);
   }
 
@@ -325,15 +354,33 @@ export class TraceDBTable {
   }
 
   tenant(tenantId: string): TraceDBTable {
-    return new TraceDBTable(this.transport, this.name, tenantId, this.scanLimit, this.scanCursor);
+    return new TraceDBTable(
+      this.transport,
+      this.name,
+      tenantId,
+      this.scanLimit,
+      this.scanCursor,
+    );
   }
 
   limit(limit: number): TraceDBTable {
-    return new TraceDBTable(this.transport, this.name, this.tenantId, limit, this.scanCursor);
+    return new TraceDBTable(
+      this.transport,
+      this.name,
+      this.tenantId,
+      limit,
+      this.scanCursor,
+    );
   }
 
   cursor(cursor: string): TraceDBTable {
-    return new TraceDBTable(this.transport, this.name, this.tenantId, this.scanLimit, cursor);
+    return new TraceDBTable(
+      this.transport,
+      this.name,
+      this.tenantId,
+      this.scanLimit,
+      cursor,
+    );
   }
 
   async insert(
@@ -341,7 +388,10 @@ export class TraceDBTable {
     fields: JsonObject,
     options: TraceDbRequestOptions = {},
   ): Promise<EpochResponse> {
-    return this.transport.putRecord(this.recordInput(id, fields, "POST", "/v1/records/put"), options);
+    return this.transport.putRecord(
+      this.recordInput(id, fields, "POST", "/v1/records/put"),
+      options,
+    );
   }
 
   async insertBatch(
@@ -350,7 +400,9 @@ export class TraceDBTable {
   ): Promise<PutBatchResponse> {
     const tenantId = this.requiredTenantId("POST", "/v1/records/put-batch");
     const request: RecordPutBatchRequest = {
-      records: records.map((record) => this.recordInputWithTenant(record.id, record.fields, tenantId)),
+      records: records.map((record) =>
+        this.recordInputWithTenant(record.id, record.fields, tenantId),
+      ),
     };
     return this.transport.putBatch(request, options);
   }
@@ -361,7 +413,11 @@ export class TraceDBTable {
   ): Promise<PutBatchResponse> {
     const { idField = "id", ...requestOptions } = options;
     if (idField.length === 0) {
-      throw new TraceDbRequestError("POST", "/v1/records/put-batch", "idField cannot be empty");
+      throw new TraceDbRequestError(
+        "POST",
+        "/v1/records/put-batch",
+        "idField cannot be empty",
+      );
     }
     const tenantId = this.requiredTenantId("POST", "/v1/records/put-batch");
     const request: RecordPutBatchRequest = {
@@ -374,7 +430,11 @@ export class TraceDBTable {
             `row ${index} missing id field '${idField}'`,
           );
         }
-        return this.recordInputWithTenant(String(fields[idField]), fields, tenantId);
+        return this.recordInputWithTenant(
+          String(fields[idField]),
+          fields,
+          tenantId,
+        );
       }),
     };
     return this.transport.putBatch(request, requestOptions);
@@ -394,7 +454,10 @@ export class TraceDBTable {
     return this.transport.patchRecord(request, options);
   }
 
-  async get(id: string, options: TraceDbRequestOptions = {}): Promise<GetRecordResponse> {
+  async get(
+    id: string,
+    options: TraceDbRequestOptions = {},
+  ): Promise<GetRecordResponse> {
     return this.transport.getRecord(
       {
         table: this.name,
@@ -412,13 +475,13 @@ export class TraceDBTable {
       limit: this.scanLimit,
       ...(this.scanCursor === undefined ? {} : { cursor: this.scanCursor }),
     };
-    return this.transport.scanRecords(
-      request,
-      options,
-    );
+    return this.transport.scanRecords(request, options);
   }
 
-  async delete(id: string, options: TraceDBDeleteOptions = {}): Promise<DeleteResponse> {
+  async delete(
+    id: string,
+    options: TraceDBDeleteOptions = {},
+  ): Promise<DeleteResponse> {
     const { tombstone, ...requestOptions } = options;
     return this.transport.deleteRecord(
       {
@@ -465,10 +528,18 @@ export class TraceDBTable {
     method: "POST",
     path: string,
   ): RecordInput {
-    return this.recordInputWithTenant(id, fields, this.requiredTenantId(method, path));
+    return this.recordInputWithTenant(
+      id,
+      fields,
+      this.requiredTenantId(method, path),
+    );
   }
 
-  private recordInputWithTenant(id: string, fields: JsonObject, tenantId: string): RecordInput {
+  private recordInputWithTenant(
+    id: string,
+    fields: JsonObject,
+    tenantId: string,
+  ): RecordInput {
     const recordFields: JsonObject = { ...fields };
     recordFields.id = recordFields.id ?? id;
     recordFields.tenant = recordFields.tenant ?? tenantId;
@@ -484,7 +555,11 @@ export class TraceDBTable {
     if (this.tenantId !== undefined && this.tenantId.length > 0) {
       return this.tenantId;
     }
-    throw new TraceDbRequestError(method, path, "table handle execution requires tenant(...)");
+    throw new TraceDbRequestError(
+      method,
+      path,
+      "table handle execution requires tenant(...)",
+    );
   }
 }
 
@@ -564,7 +639,9 @@ export class TraceDBQueryBuilder {
     return this.copy({
       explain: options.explain ?? this.explain,
       freshness:
-        options.freshness === undefined ? this.freshness : normalizeFreshness(options.freshness),
+        options.freshness === undefined
+          ? this.freshness
+          : normalizeFreshness(options.freshness),
     });
   }
 
@@ -580,7 +657,9 @@ export class TraceDBQueryBuilder {
     return this.transport.query(this.toHybridQuery("/v1/query"), options);
   }
 
-  async explainPlan(options: TraceDbRequestOptions = {}): Promise<HybridExplain> {
+  async explainPlan(
+    options: TraceDbRequestOptions = {},
+  ): Promise<HybridExplain> {
     return this.transport.explain(this.toHybridQuery("/v1/explain"), options);
   }
 
@@ -616,7 +695,11 @@ export class TraceDBQueryBuilder {
     if (this.tenantId !== undefined && this.tenantId.length > 0) {
       return this.tenantId;
     }
-    throw new TraceDbRequestError(method, path, "query execution requires tenant(...) or where({ tenant_id })");
+    throw new TraceDbRequestError(
+      method,
+      path,
+      "query execution requires tenant(...) or where({ tenant_id })",
+    );
   }
 
   private toHybridQuery(path: "/v1/query" | "/v1/explain"): HybridQuery {
@@ -683,33 +766,54 @@ function parseTimeoutMsFromEnv(value: string | undefined): number | undefined {
   return parsed;
 }
 
-function validateTimeoutMs(value: number | undefined, path: string): number | undefined {
+function validateTimeoutMs(
+  value: number | undefined,
+  path: string,
+): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (!Number.isFinite(value) || value <= 0) {
-    throw new TraceDbRequestError("CONFIG", path, "timeoutMs must be a positive number");
+    throw new TraceDbRequestError(
+      "CONFIG",
+      path,
+      "timeoutMs must be a positive number",
+    );
   }
   return value;
 }
 
-function parseNonNegativeIntegerFromEnv(value: string | undefined, path: string): number | undefined {
+function parseNonNegativeIntegerFromEnv(
+  value: string | undefined,
+  path: string,
+): number | undefined {
   if (value === undefined || value.trim().length === 0) {
     return undefined;
   }
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new TraceDbRequestError("CONFIG", path, `${path} must be a non-negative integer`);
+    throw new TraceDbRequestError(
+      "CONFIG",
+      path,
+      `${path} must be a non-negative integer`,
+    );
   }
   return parsed;
 }
 
-function validateNonNegativeInteger(value: number | undefined, path: string): number | undefined {
+function validateNonNegativeInteger(
+  value: number | undefined,
+  path: string,
+): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (!Number.isInteger(value) || value < 0) {
-    throw new TraceDbRequestError("CONFIG", path, `${path} must be a non-negative integer`);
+    throw new TraceDbRequestError(
+      "CONFIG",
+      path,
+      `${path} must be a non-negative integer`,
+    );
   }
   return value;
 }
@@ -721,7 +825,9 @@ function fetchWithTimeout(
   if (timeoutMs === undefined) {
     return fetchImpl;
   }
-  const defaultFetch = (globalThis as typeof globalThis & { fetch?: TraceDbFetch }).fetch;
+  const defaultFetch = (
+    globalThis as typeof globalThis & { fetch?: TraceDbFetch }
+  ).fetch;
   const resolvedFetch = fetchImpl ?? defaultFetch;
   if (typeof resolvedFetch !== "function") {
     return undefined;
@@ -748,13 +854,20 @@ function fetchWithRetries(
   if (safeRetries === 0 && idempotencyRetries === 0) {
     return fetchImpl;
   }
-  const defaultFetch = (globalThis as typeof globalThis & { fetch?: TraceDbFetch }).fetch;
+  const defaultFetch = (
+    globalThis as typeof globalThis & { fetch?: TraceDbFetch }
+  ).fetch;
   const resolvedFetch = fetchImpl ?? defaultFetch;
   if (typeof resolvedFetch !== "function") {
     return undefined;
   }
   return async (input: string, init: TraceDbFetchInit) => {
-    const attempts = retryAttemptCount(input, init, safeRetries, idempotencyRetries);
+    const attempts = retryAttemptCount(
+      input,
+      init,
+      safeRetries,
+      idempotencyRetries,
+    );
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
@@ -770,7 +883,14 @@ function fetchWithRetries(
       }
       await sleepBeforeRetry(attempt);
     }
-    throw lastError ?? new TraceDbRequestError("CONFIG", "retry", "request retry loop exhausted");
+    if (lastError !== undefined) {
+      throw lastError;
+    }
+    throw new TraceDbRequestError(
+      "CONFIG",
+      "retry",
+      "request retry loop exhausted",
+    );
   };
 }
 
@@ -814,32 +934,188 @@ function retryAttemptCount(
 }
 
 function isRetrySafeRequest(input: string, init: TraceDbFetchInit): boolean {
-  return (
+  const path = requestPath(input);
+  if (
     init.method === "GET" &&
-    (
-      requestPath(input) === "/v1/health" ||
-      requestPath(input) === "/v1/ready" ||
-      requestPath(input) === "/v1/graphql/schema"
-    )
-  ) || (
-    init.method === "POST" &&
-    (
-      requestPath(input) === "/v1/records/get" ||
-      requestPath(input) === "/v1/records/scan" ||
-      requestPath(input) === "/v1/query" ||
-      requestPath(input) === "/v1/traceql" ||
-      requestPath(input) === "/v1/graphql" ||
-      requestPath(input) === "/v1/graphql/bounded" ||
-      requestPath(input) === "/v1/explain"
-    )
+    (path === "/v1/health" ||
+      path === "/v1/ready" ||
+      path === "/v1/graphql/schema")
+  ) {
+    return true;
+  }
+  if (init.method !== "POST") {
+    return false;
+  }
+  if (
+    path === "/v1/records/get" ||
+    path === "/v1/records/scan" ||
+    path === "/v1/query" ||
+    path === "/v1/graphql/bounded" ||
+    path === "/v1/explain"
+  ) {
+    return true;
+  }
+  if (path === "/v1/traceql") {
+    return isTraceQlReadOnlyBody(init.body);
+  }
+  if (path === "/v1/graphql") {
+    return isGraphQlReadOnlyBody(init.body);
+  }
+  return false;
+}
+
+function isTraceQlReadOnlyBody(body: string | undefined): boolean {
+  const query = requestBodyQuery(body);
+  if (query === undefined) {
+    return false;
+  }
+  const command = traceQlCommand(query);
+  if (command === undefined) {
+    return true;
+  }
+  return [
+    "RECORD GET",
+    "GET",
+    "RECORD SCAN",
+    "SCAN",
+    "QUERY",
+    "EXPLAIN",
+    "JOBS LIST",
+  ].includes(command);
+}
+
+function traceQlCommand(query: string): string | undefined {
+  const trimmed = query.trimStart();
+  for (const command of [
+    "SCHEMA APPLY",
+    "RECORD PUT",
+    "RECORD BATCH",
+    "RECORD PATCH",
+    "RECORD DELETE",
+    "RECORD GET",
+    "RECORD SCAN",
+    "ADMIN COMPACT",
+    "ADMIN SNAPSHOT",
+    "ADMIN RESTORE",
+    "JOBS LIST",
+    "JOBS RUN",
+    "EXPLAIN",
+    "QUERY",
+    "PUT",
+    "BATCH",
+    "PATCH",
+    "DELETE",
+    "GET",
+    "SCAN",
+    "COMPACT",
+    "SNAPSHOT",
+    "RESTORE",
+  ]) {
+    if (startsWithCommand(trimmed, command)) {
+      return command;
+    }
+  }
+  return undefined;
+}
+
+function startsWithCommand(input: string, command: string): boolean {
+  return (
+    input.slice(0, command.length).toUpperCase() === command &&
+    (input.length === command.length || /\s/.test(input[command.length] ?? ""))
   );
 }
 
-function isIdempotentRetryRequest(input: string, init: TraceDbFetchInit): boolean {
+function isGraphQlReadOnlyBody(body: string | undefined): boolean {
+  const query = requestBodyQuery(body);
+  if (query === undefined) {
+    return false;
+  }
+  const field = graphQlRootField(query);
+  return (
+    field === "get" ||
+    field === "scan" ||
+    field === "query" ||
+    field === "explain" ||
+    field === "jobs"
+  );
+}
+
+function graphQlRootField(query: string): string | undefined {
+  const trimmed = query.trimStart();
+  if (
+    wordStartsWith(trimmed, "mutation") ||
+    wordStartsWith(trimmed, "subscription")
+  ) {
+    return undefined;
+  }
+  let root: string;
+  if (wordStartsWith(trimmed, "query")) {
+    const start = trimmed.indexOf("{");
+    if (start < 0) {
+      return undefined;
+    }
+    root = trimmed.slice(start + 1);
+  } else if (trimmed.startsWith("{")) {
+    root = trimmed.slice(1);
+  } else {
+    return undefined;
+  }
+  const first = parseGraphQlName(root);
+  if (first === undefined) {
+    return undefined;
+  }
+  const rest = first.rest.trimStart();
+  if (rest.startsWith(":")) {
+    return parseGraphQlName(rest.slice(1))?.name;
+  }
+  return first.name;
+}
+
+function parseGraphQlName(
+  input: string,
+): { name: string; rest: string } | undefined {
+  const match = /^\s*([_A-Za-z][_0-9A-Za-z]*)([\s\S]*)$/.exec(input);
+  if (match === null) {
+    return undefined;
+  }
+  return { name: match[1], rest: match[2] };
+}
+
+function wordStartsWith(input: string, word: string): boolean {
+  const next = input[word.length];
+  return (
+    input.slice(0, word.length).toLowerCase() === word &&
+    (next === undefined || !/[_0-9A-Za-z]/.test(next))
+  );
+}
+
+function requestBodyQuery(body: string | undefined): string | undefined {
+  if (body === undefined) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ) {
+      const query = (parsed as { query?: unknown }).query;
+      return typeof query === "string" ? query : undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function isIdempotentRetryRequest(
+  input: string,
+  init: TraceDbFetchInit,
+): boolean {
   return (
     init.method === "POST" &&
-    (
-      requestPath(input) === "/v1/schema/apply" ||
+    (requestPath(input) === "/v1/schema/apply" ||
       requestPath(input) === "/v1/insert" ||
       requestPath(input) === "/v1/records/put" ||
       requestPath(input) === "/v1/records/put-batch" ||
@@ -849,8 +1125,7 @@ function isIdempotentRetryRequest(input: string, init: TraceDbFetchInit): boolea
       requestPath(input) === "/v1/admin/snapshot" ||
       requestPath(input) === "/v1/admin/restore" ||
       requestPath(input) === "/v1/graphql" ||
-      requestPath(input) === "/v1/traceql"
-    )
+      requestPath(input) === "/v1/traceql")
   );
 }
 

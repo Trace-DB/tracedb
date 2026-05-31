@@ -97,13 +97,14 @@ checks table-scoped `insert`, raw-contract `insertBatch`, row-oriented
 `insertRows`, `patch`, `get`, `scan`, `delete`, admin compact/snapshot/restore,
 and query-builder chaining via `where({ tenant_id })`, `match`, `near`, `with`,
 `limit`, `all`, and `explainPlan`. It also checks
-`TraceDB.traceql()` request shape and read-only safe retries for native TraceQL,
+`TraceDB.traceql()` request shape, read-only safe retries for native TraceQL,
+and no unsafe retry for mutating TraceQL without `Idempotency-Key`;
 `TraceDB.graphqlSchema()` response decoding plus read-only safe retries for the
-generated SDL route, `TraceDB.graphql()` request shape and read-only safe
-retries for bounded GraphQL, and missing-tenant validation raises
-`TraceDbRequestError` before `fetchImpl` is called. This is public-DX smoke
-coverage over the generated transport, not publishing readiness or managed-cloud
-proof.
+generated SDL route; `TraceDB.graphql()` request shape, read-only safe retries
+for native GraphQL, and no unsafe retry for mutating GraphQL without
+`Idempotency-Key`; and missing-tenant validation raises `TraceDbRequestError`
+before `fetchImpl` is called. This is public-DX smoke coverage over the
+generated transport, not publishing readiness or managed-cloud proof.
 
 The package entry smoke imports from `@tracedb/sdk` and
 `@tracedb/sdk/transport` through the package `exports` map and verifies the
@@ -380,12 +381,15 @@ semantics. The generated client rejects empty or CR/LF-containing idempotency ke
 before network I/O with `TraceDbRequestError`.
 The public wrapper's `safeRetries` / `TRACEDB_SAFE_RETRIES` setting is separate:
 it retries transient HTTP 5xx responses only for health/ready, GraphQL schema
-export, get, scan, query, native TraceQL, bounded GraphQL, and explain. It does
-not retry write or admin mutations.
+export, get, scan, query, bounded GraphQL, explain, and polymorphic native
+TraceQL/GraphQL payloads that the SDK can classify as read-only. It does not
+retry mutating TraceQL/GraphQL commands/root fields or other write/admin
+mutations without an idempotency key.
 The public wrapper's `idempotencyRetries` / `TRACEDB_IDEMPOTENCY_RETRIES`
 setting is also default-off. It retries transient HTTP 5xx responses for
-mutation/admin routes only when the individual request carries a validated
-`Idempotency-Key`; it does not retry unkeyed writes or 4xx/409 responses.
+mutation/admin routes, including mutating native TraceQL/GraphQL payloads, only
+when the individual request carries a validated `Idempotency-Key`; it does not
+retry unkeyed writes or 4xx/409 responses.
 
 ```ts
 await client.deleteRecord(

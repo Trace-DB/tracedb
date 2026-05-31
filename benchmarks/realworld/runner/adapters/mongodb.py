@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
-from .base import BenchmarkAdapter, optional_import, query_result_record
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
+from .base import BenchmarkAdapter, optional_import, query_result_record
 
 
 class MongoAdapter(BenchmarkAdapter):
@@ -14,6 +15,15 @@ class MongoAdapter(BenchmarkAdapter):
     role = "nested sparse document database"
 
     def run(self, dataset: DatasetBundle, config: RunConfig) -> dict[str, Any]:
+        if dataset.kind == "generated_hybrid":
+            logging.warning(
+                "MongoDB adapter skipped for %s: does not perform vector similarity search",
+                dataset.kind,
+            )
+            return self.unavailable(
+                "MongoDB adapter does not perform vector similarity search; skipping hybrid benchmark",
+                dataset,
+            )
         pymongo = optional_import("pymongo")
         if pymongo is None:
             return self.unavailable("python dependency missing: pymongo", dataset)
@@ -30,7 +40,9 @@ class MongoAdapter(BenchmarkAdapter):
             setup_recorder.timed(lambda: _setup_collection(collection))
             if dataset.records:
                 ingest_recorder.timed(
-                    lambda: collection.insert_many([record.to_json() for record in dataset.records])
+                    lambda: collection.insert_many(
+                        [record.to_json() for record in dataset.records]
+                    )
                 )
             storage_after_ingest = _storage_snapshot(database)
             recalls = []
@@ -62,9 +74,15 @@ class MongoAdapter(BenchmarkAdapter):
             ingest_summary = ingest_recorder.summary()
             setup_summary = setup_recorder.summary()
             metrics = dict(query_summary)
-            metrics.update({f"query_{key}": value for key, value in query_summary.items()})
-            metrics.update({f"ingest_{key}": value for key, value in ingest_summary.items()})
-            metrics.update({f"setup_{key}": value for key, value in setup_summary.items()})
+            metrics.update(
+                {f"query_{key}": value for key, value in query_summary.items()}
+            )
+            metrics.update(
+                {f"ingest_{key}": value for key, value in ingest_summary.items()}
+            )
+            metrics.update(
+                {f"setup_{key}": value for key, value in setup_summary.items()}
+            )
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
@@ -74,7 +92,9 @@ class MongoAdapter(BenchmarkAdapter):
                     ),
                     "query_count": len(dataset.queries),
                     "failure_count": 0,
-                    "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
+                    "recall_at_5": round(sum(recalls) / len(recalls), 3)
+                    if recalls
+                    else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
                     "disk_bytes": storage_after_ingest["disk_bytes"],
@@ -132,6 +152,7 @@ class MongoAdapter(BenchmarkAdapter):
                     "real MongoDB nested sparse document workload executed through pymongo",
                     "MongoDB disk_bytes measures BENCH_MONGO_STORAGE_DIR when available and falls back to dbStats storageSize/dataSize",
                     "MongoDB dbStats data/storage/index/total size metrics are reported separately from data-dir footprint",
+                    "WARNING: MongoDB adapter sorts by scalar rating, not vector similarity; do not compare against vector/hybrid benchmarks",
                 ],
                 query_results=query_results,
             )
@@ -169,7 +190,9 @@ def _storage_snapshot(database: Any) -> dict[str, int]:
         if dbstats_total_size_bytes == 0 and (
             dbstats_storage_size_bytes or dbstats_index_size_bytes
         ):
-            dbstats_total_size_bytes = dbstats_storage_size_bytes + dbstats_index_size_bytes
+            dbstats_total_size_bytes = (
+                dbstats_storage_size_bytes + dbstats_index_size_bytes
+            )
     data_dir_bytes = _directory_bytes(os.environ.get("BENCH_MONGO_STORAGE_DIR"))
     disk_bytes = data_dir_bytes or dbstats_storage_size_bytes or dbstats_data_size_bytes
     return {

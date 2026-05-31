@@ -28,8 +28,8 @@ pub struct SegmentObject {
     pub tenant_set: Vec<String>,
     pub module_blocks: Vec<ModuleBlockDescriptor>,
     pub records: Vec<SegmentRecord>,
-    pub payload_checksum: u32,
-    pub object_checksum: u32,
+    pub payload_checksum: [u8; 32],
+    pub object_checksum: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub struct ModuleBlockDescriptor {
     pub block_kind: String,
     pub codec_id: String,
     pub logical_row_count: usize,
-    pub checksum: u32,
+    pub checksum: [u8; 32],
 }
 
 impl ModuleBlockDescriptor {
@@ -132,7 +132,7 @@ impl SegmentObject {
             ],
             records,
             payload_checksum,
-            object_checksum: 0,
+            object_checksum: [0u8; 32],
         };
         object.object_checksum = compute_segment_object_checksum(&object)?;
         Ok(object)
@@ -310,7 +310,7 @@ pub fn verify_segment_object(object: &SegmentObject) -> Result<()> {
             "segment object id cannot be empty".to_string(),
         ));
     }
-    if object.payload_checksum == 0 {
+    if object.payload_checksum == [0u8; 32] {
         return Err(TraceDbError::ManifestCorruption(format!(
             "segment object {} has empty payload checksum",
             object.segment_id
@@ -322,24 +322,24 @@ pub fn verify_segment_object(object: &SegmentObject) -> Result<()> {
             && compute_segment_object_checksum_legacy_json(object)? == object.object_checksum);
     if !checksum_matches {
         return Err(TraceDbError::ManifestCorruption(format!(
-            "segment object checksum mismatch: expected {}, got {actual}",
+            "segment object checksum mismatch: expected {:?}, got {actual:?}",
             object.object_checksum
         )));
     }
     Ok(())
 }
 
-pub fn compute_segment_object_checksum(object: &SegmentObject) -> Result<u32> {
+pub fn compute_segment_object_checksum(object: &SegmentObject) -> Result<[u8; 32]> {
     let mut normalized = object.clone();
-    normalized.object_checksum = 0;
+    normalized.object_checksum = [0u8; 32];
     let bytes = serde_json::to_vec(&normalized)?;
     let round_tripped: SegmentObject = serde_json::from_slice(&bytes)?;
     Ok(checksum_bytes(&serde_json::to_vec(&round_tripped)?))
 }
 
-fn compute_segment_object_checksum_legacy_json(object: &SegmentObject) -> Result<u32> {
+fn compute_segment_object_checksum_legacy_json(object: &SegmentObject) -> Result<[u8; 32]> {
     let mut normalized = object.clone();
-    normalized.object_checksum = 0;
+    normalized.object_checksum = [0u8; 32];
     let bytes = serde_json::to_vec(&normalized)?;
     let round_tripped: SegmentObject = serde_json::from_slice(&bytes)?;
     Ok(checksum_bytes(&serde_json::to_vec(&round_tripped)?))

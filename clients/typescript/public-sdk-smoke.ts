@@ -67,9 +67,11 @@ const db = new TraceDB({
     if (input.endsWith("/v1/graphql/schema")) {
       return okJson({
         adapter: "bounded_graphql_query_adapter",
-        schema: "type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n",
+        schema:
+          "type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n",
         tables: ["docs"],
-        execution: "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors",
+        execution:
+          "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors",
       });
     }
     if (input.endsWith("/v1/explain")) {
@@ -79,7 +81,14 @@ const db = new TraceDB({
       return okJson({ records: [], returned_count: 2 });
     }
     if (input.endsWith("/v1/records/get")) {
-      return okJson({ record: { id: "intro", table: "docs", tenant_id: "tenant-a", fields: {} } });
+      return okJson({
+        record: {
+          id: "intro",
+          table: "docs",
+          tenant_id: "tenant-a",
+          fields: {},
+        },
+      });
     }
     if (input.endsWith("/v1/records/delete")) {
       return okJson({ deleted: true, epoch: 4 });
@@ -121,13 +130,19 @@ const fromEnvDb = TraceDB.fromEnv({
   },
 });
 
-const fromEnvInsert = await fromEnvDb.table("docs").tenant("tenant-a").insert("env-intro", {
-  body: "from env",
-});
+const fromEnvInsert = await fromEnvDb
+  .table("docs")
+  .tenant("tenant-a")
+  .insert("env-intro", {
+    body: "from env",
+  });
 assert.equal(fromEnvInsert.epoch, 7);
 assert.equal(fromEnvCalls[0].input, "http://127.0.0.1:8090/v1/records/put");
 assert.equal(fromEnvCalls[0].init.headers.Authorization, "Bearer env-token");
-assert.ok(fromEnvCalls[0].init.signal, "TRACEDB_TIMEOUT_MS should attach a request signal");
+assert.ok(
+  fromEnvCalls[0].init.signal,
+  "TRACEDB_TIMEOUT_MS should attach a request signal",
+);
 const fromEnvBody = JSON.parse(fromEnvCalls[0].init.body ?? "{}");
 assert.equal(fromEnvBody.database_id, "env-db");
 assert.equal(fromEnvBody.branch_id, "env-branch");
@@ -149,8 +164,13 @@ const fromEnvDefaultBranchInsert = await fromEnvDefaultBranchDb
   .tenant("tenant-a")
   .insert("env-default-branch", { body: "from env default branch" });
 assert.equal(fromEnvDefaultBranchInsert.epoch, 8);
-assert.equal(fromEnvDefaultBranchCalls[0].input, "http://127.0.0.1:8090/v1/records/put");
-const fromEnvDefaultBranchBody = JSON.parse(fromEnvDefaultBranchCalls[0].init.body ?? "{}");
+assert.equal(
+  fromEnvDefaultBranchCalls[0].input,
+  "http://127.0.0.1:8090/v1/records/put",
+);
+const fromEnvDefaultBranchBody = JSON.parse(
+  fromEnvDefaultBranchCalls[0].init.body ?? "{}",
+);
 assert.equal(fromEnvDefaultBranchBody.database_id, "env-db-default");
 assert.equal(fromEnvDefaultBranchBody.branch_id, "env-db-default:main");
 
@@ -167,12 +187,18 @@ const retryDb = TraceDB.fromEnv({
     if (retryAttempt === 1) {
       return responseJson(503, { error: "temporarily unavailable" });
     }
-    return okJson({ record: { id: "intro", table: "docs", tenant_id: "tenant-a", fields: {} } });
+    return okJson({
+      record: { id: "intro", table: "docs", tenant_id: "tenant-a", fields: {} },
+    });
   },
 });
 const retriedGet = await retryDb.table("docs").tenant("tenant-a").get("intro");
 assert.equal(retriedGet.record?.id, "intro");
-assert.equal(retryCalls.length, 2, "TRACEDB_SAFE_RETRIES should retry read-only 5xx responses");
+assert.equal(
+  retryCalls.length,
+  2,
+  "TRACEDB_SAFE_RETRIES should retry read-only 5xx responses",
+);
 assert.equal(retryCalls[0].input, "http://127.0.0.1:8090/v1/records/get");
 
 const traceqlRetryCalls: FetchCall[] = [];
@@ -191,7 +217,9 @@ const traceqlRetryDb = TraceDB.fromEnv({
     return okJson({ results: [] });
   },
 });
-const retriedTraceql = await traceqlRetryDb.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1");
+const retriedTraceql = await traceqlRetryDb.traceql(
+  "FROM docs\nTENANT tenant-a\nLIMIT 1",
+);
 assert.equal(retriedTraceql.results?.length, 0);
 assert.equal(
   traceqlRetryCalls.length,
@@ -199,6 +227,61 @@ assert.equal(
   "TRACEDB_SAFE_RETRIES should retry native TraceQL read-only 5xx responses",
 );
 assert.equal(traceqlRetryCalls[0].input, "http://127.0.0.1:8090/v1/traceql");
+
+const mutatingTraceqlSafeRetryCalls: FetchCall[] = [];
+const mutatingTraceqlSafeRetryDb = new TraceDB({
+  url: "http://127.0.0.1:8090",
+  safeRetries: 1,
+  fetchImpl: async (input, init) => {
+    mutatingTraceqlSafeRetryCalls.push({ input, init });
+    return responseJson(503, { error: "write unavailable" });
+  },
+});
+await assert.rejects(
+  () =>
+    mutatingTraceqlSafeRetryDb.traceql(
+      `PUT {"table":"docs","tenant_id":"tenant-a","id":"intro","fields":{}}`,
+    ),
+  (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /HTTP 503/);
+    return true;
+  },
+);
+assert.equal(
+  mutatingTraceqlSafeRetryCalls.length,
+  1,
+  "safeRetries must not retry mutating TraceQL without Idempotency-Key",
+);
+
+const mutatingTraceqlIdempotencyCalls: FetchCall[] = [];
+let mutatingTraceqlIdempotencyAttempt = 0;
+const mutatingTraceqlIdempotencyDb = new TraceDB({
+  url: "http://127.0.0.1:8090",
+  idempotencyRetries: 1,
+  fetchImpl: async (input, init) => {
+    mutatingTraceqlIdempotencyCalls.push({ input, init });
+    mutatingTraceqlIdempotencyAttempt += 1;
+    if (mutatingTraceqlIdempotencyAttempt === 1) {
+      return responseJson(503, { error: "write unavailable" });
+    }
+    return okJson({ epoch: 7 });
+  },
+});
+const retriedMutatingTraceql = await mutatingTraceqlIdempotencyDb.traceql(
+  `PUT {"table":"docs","tenant_id":"tenant-a","id":"intro","fields":{}}`,
+  { idempotencyKey: "ts-traceql-put-1" },
+);
+assert.equal(retriedMutatingTraceql.epoch, 7);
+assert.equal(
+  mutatingTraceqlIdempotencyCalls.length,
+  2,
+  "idempotencyRetries should retry mutating TraceQL with Idempotency-Key",
+);
+assert.equal(
+  mutatingTraceqlIdempotencyCalls[0].init.headers["Idempotency-Key"],
+  "ts-traceql-put-1",
+);
 
 const graphqlRetryCalls: FetchCall[] = [];
 let graphqlRetryAttempt = 0;
@@ -219,8 +302,12 @@ const graphqlRetryDb = TraceDB.fromEnv({
 const retriedGraphql = await graphqlRetryDb.graphql(
   `query { query(input: "{\\"table\\":\\"docs\\",\\"tenant_id\\":\\"tenant-a\\",\\"top_k\\":1}") { results } }`,
 );
-const retriedGraphqlQuery = retriedGraphql.data?.query as JsonObject | undefined;
-const retriedGraphqlResults = retriedGraphqlQuery?.results as JsonObject[] | undefined;
+const retriedGraphqlQuery = retriedGraphql.data?.query as
+  | JsonObject
+  | undefined;
+const retriedGraphqlResults = retriedGraphqlQuery?.results as
+  | JsonObject[]
+  | undefined;
 assert.equal(retriedGraphqlResults?.length, 0);
 assert.equal(
   graphqlRetryCalls.length,
@@ -228,6 +315,64 @@ assert.equal(
   "TRACEDB_SAFE_RETRIES should retry native GraphQL read-only 5xx responses",
 );
 assert.equal(graphqlRetryCalls[0].input, "http://127.0.0.1:8090/v1/graphql");
+
+const mutatingGraphqlSafeRetryCalls: FetchCall[] = [];
+const mutatingGraphqlSafeRetryDb = new TraceDB({
+  url: "http://127.0.0.1:8090",
+  safeRetries: 1,
+  fetchImpl: async (input, init) => {
+    mutatingGraphqlSafeRetryCalls.push({ input, init });
+    return responseJson(503, { error: "write unavailable" });
+  },
+});
+await assert.rejects(
+  () =>
+    mutatingGraphqlSafeRetryDb.graphql(
+      `mutation { put(input: "{}") { epoch } }`,
+    ),
+  (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /HTTP 503/);
+    return true;
+  },
+);
+assert.equal(
+  mutatingGraphqlSafeRetryCalls.length,
+  1,
+  "safeRetries must not retry mutating GraphQL without Idempotency-Key",
+);
+
+const mutatingGraphqlIdempotencyCalls: FetchCall[] = [];
+let mutatingGraphqlIdempotencyAttempt = 0;
+const mutatingGraphqlIdempotencyDb = new TraceDB({
+  url: "http://127.0.0.1:8090",
+  idempotencyRetries: 1,
+  fetchImpl: async (input, init) => {
+    mutatingGraphqlIdempotencyCalls.push({ input, init });
+    mutatingGraphqlIdempotencyAttempt += 1;
+    if (mutatingGraphqlIdempotencyAttempt === 1) {
+      return responseJson(503, { error: "write unavailable" });
+    }
+    return okJson({ data: { put: { epoch: 7 } } });
+  },
+});
+const retriedMutatingGraphql = await mutatingGraphqlIdempotencyDb.graphql(
+  `mutation { put(input: "{}") { epoch } }`,
+  { idempotencyKey: "ts-graphql-put-1" },
+);
+const retriedMutatingGraphqlPut = retriedMutatingGraphql.data?.put as
+  | JsonObject
+  | undefined;
+assert.equal(retriedMutatingGraphqlPut?.epoch, 7);
+assert.equal(
+  mutatingGraphqlIdempotencyCalls.length,
+  2,
+  "idempotencyRetries should retry mutating GraphQL with Idempotency-Key",
+);
+assert.equal(
+  mutatingGraphqlIdempotencyCalls[0].init.headers["Idempotency-Key"],
+  "ts-graphql-put-1",
+);
 
 const graphqlSchemaRetryCalls: FetchCall[] = [];
 let graphqlSchemaRetryAttempt = 0;
@@ -244,9 +389,11 @@ const graphqlSchemaRetryDb = TraceDB.fromEnv({
     }
     return okJson({
       adapter: "bounded_graphql_query_adapter",
-      schema: "type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n",
+      schema:
+        "type Query {\n  docs(tenant_id: String!, limit: Int): [docs!]!\n}\n",
       tables: ["docs"],
-      execution: "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors",
+      execution:
+        "POST /v1/graphql/bounded returns TraceDB QueryResponse; POST /v1/graphql returns GraphQL data/errors",
     });
   },
 });
@@ -257,7 +404,10 @@ assert.equal(
   2,
   "TRACEDB_SAFE_RETRIES should retry GraphQL schema read-only 5xx responses",
 );
-assert.equal(graphqlSchemaRetryCalls[0].input, "http://127.0.0.1:8090/v1/graphql/schema");
+assert.equal(
+  graphqlSchemaRetryCalls[0].input,
+  "http://127.0.0.1:8090/v1/graphql/schema",
+);
 assert.equal(graphqlSchemaRetryCalls[0].init.method, "GET");
 
 const mutationRetryCalls: FetchCall[] = [];
@@ -270,14 +420,22 @@ const mutationRetryDb = new TraceDB({
   },
 });
 await assert.rejects(
-  () => mutationRetryDb.table("docs").tenant("tenant-a").insert("intro", { body: "write" }),
+  () =>
+    mutationRetryDb
+      .table("docs")
+      .tenant("tenant-a")
+      .insert("intro", { body: "write" }),
   (error: unknown) => {
     assert.ok(error instanceof Error);
     assert.match(error.message, /HTTP 503/);
     return true;
   },
 );
-assert.equal(mutationRetryCalls.length, 1, "safeRetries must not retry mutations");
+assert.equal(
+  mutationRetryCalls.length,
+  1,
+  "safeRetries must not retry mutations",
+);
 
 const idempotencyRetryCalls: FetchCall[] = [];
 let idempotencyRetryAttempt = 0;
@@ -298,14 +456,21 @@ const idempotencyRetryDb = TraceDB.fromEnv({
 const retriedInsert = await idempotencyRetryDb
   .table("docs")
   .tenant("tenant-a")
-  .insert("idempotent-intro", { body: "retry write" }, { idempotencyKey: "ts-idem-insert-1" });
+  .insert(
+    "idempotent-intro",
+    { body: "retry write" },
+    { idempotencyKey: "ts-idem-insert-1" },
+  );
 assert.equal(retriedInsert.epoch, 9);
 assert.equal(
   idempotencyRetryCalls.length,
   2,
   "TRACEDB_IDEMPOTENCY_RETRIES should retry keyed mutation 5xx responses",
 );
-assert.equal(idempotencyRetryCalls[0].init.headers["Idempotency-Key"], "ts-idem-insert-1");
+assert.equal(
+  idempotencyRetryCalls[0].init.headers["Idempotency-Key"],
+  "ts-idem-insert-1",
+);
 
 const unkeyedIdempotencyRetryCalls: FetchCall[] = [];
 const unkeyedIdempotencyRetryDb = new TraceDB({
@@ -317,14 +482,22 @@ const unkeyedIdempotencyRetryDb = new TraceDB({
   },
 });
 await assert.rejects(
-  () => unkeyedIdempotencyRetryDb.table("docs").tenant("tenant-a").insert("intro", { body: "write" }),
+  () =>
+    unkeyedIdempotencyRetryDb
+      .table("docs")
+      .tenant("tenant-a")
+      .insert("intro", { body: "write" }),
   (error: unknown) => {
     assert.ok(error instanceof Error);
     assert.match(error.message, /HTTP 503/);
     return true;
   },
 );
-assert.equal(unkeyedIdempotencyRetryCalls.length, 1, "idempotencyRetries require Idempotency-Key");
+assert.equal(
+  unkeyedIdempotencyRetryCalls.length,
+  1,
+  "idempotencyRetries require Idempotency-Key",
+);
 
 const rowBatchCalls: FetchCall[] = [];
 const rowBatchDb = new TraceDB({
@@ -335,7 +508,12 @@ const rowBatchDb = new TraceDB({
   },
 });
 const rowInputs = [
-  { id: "row-a", body: "row batch a", embedding: [1, 0, 0], status: "published" },
+  {
+    id: "row-a",
+    body: "row batch a",
+    embedding: [1, 0, 0],
+    status: "published",
+  },
   { id: "row-b", body: "row batch b", embedding: [0, 1, 0], status: "draft" },
 ];
 const rowBatch = await rowBatchDb
@@ -343,7 +521,10 @@ const rowBatch = await rowBatchDb
   .tenant("tenant-a")
   .insertRows(rowInputs, { idempotencyKey: "ts-rows-1" });
 assert.equal(rowBatch.record_count, 2);
-assert.equal(rowBatchCalls[0].input, "http://127.0.0.1:8090/v1/records/put-batch");
+assert.equal(
+  rowBatchCalls[0].input,
+  "http://127.0.0.1:8090/v1/records/put-batch",
+);
 assert.equal(rowBatchCalls[0].init.headers["Idempotency-Key"], "ts-rows-1");
 assert.deepEqual(rowInputs[0], {
   id: "row-a",
@@ -351,64 +532,64 @@ assert.deepEqual(rowInputs[0], {
   embedding: [1, 0, 0],
   status: "published",
 });
-assert.deepEqual(
-  JSON.parse(rowBatchCalls[0].init.body ?? "{}"),
-  {
-    records: [
-      {
-        table: "docs",
-        tenant_id: "tenant-a",
+assert.deepEqual(JSON.parse(rowBatchCalls[0].init.body ?? "{}"), {
+  records: [
+    {
+      table: "docs",
+      tenant_id: "tenant-a",
+      id: "row-a",
+      fields: {
         id: "row-a",
-        fields: {
-          id: "row-a",
-          tenant: "tenant-a",
-          body: "row batch a",
-          embedding: [1, 0, 0],
-          status: "published",
-        },
+        tenant: "tenant-a",
+        body: "row batch a",
+        embedding: [1, 0, 0],
+        status: "published",
       },
-      {
-        table: "docs",
-        tenant_id: "tenant-a",
+    },
+    {
+      table: "docs",
+      tenant_id: "tenant-a",
+      id: "row-b",
+      fields: {
         id: "row-b",
-        fields: {
-          id: "row-b",
-          tenant: "tenant-a",
-          body: "row batch b",
-          embedding: [0, 1, 0],
-          status: "draft",
-        },
+        tenant: "tenant-a",
+        body: "row batch b",
+        embedding: [0, 1, 0],
+        status: "draft",
       },
-    ],
-  },
-);
+    },
+  ],
+});
 
 await rowBatchDb
   .table("docs")
   .tenant("tenant-a")
-  .insertRows([{ doc_id: "custom-row", body: "custom id field" }], { idField: "doc_id" });
-assert.deepEqual(
-  JSON.parse(rowBatchCalls[1].init.body ?? "{}"),
-  {
-    records: [
-      {
-        table: "docs",
-        tenant_id: "tenant-a",
+  .insertRows([{ doc_id: "custom-row", body: "custom id field" }], {
+    idField: "doc_id",
+  });
+assert.deepEqual(JSON.parse(rowBatchCalls[1].init.body ?? "{}"), {
+  records: [
+    {
+      table: "docs",
+      tenant_id: "tenant-a",
+      id: "custom-row",
+      fields: {
+        doc_id: "custom-row",
+        body: "custom id field",
         id: "custom-row",
-        fields: {
-          doc_id: "custom-row",
-          body: "custom id field",
-          id: "custom-row",
-          tenant: "tenant-a",
-        },
+        tenant: "tenant-a",
       },
-    ],
-  },
-);
+    },
+  ],
+});
 
 const rowBatchCallCount = rowBatchCalls.length;
 await assert.rejects(
-  () => rowBatchDb.table("docs").tenant("tenant-a").insertRows([{ body: "missing id" }], { idField: "doc_id" }),
+  () =>
+    rowBatchDb
+      .table("docs")
+      .tenant("tenant-a")
+      .insertRows([{ body: "missing id" }], { idField: "doc_id" }),
   (error: unknown) => {
     assert.ok(error instanceof TraceDbRequestError);
     assert.equal(error.method, "POST");
@@ -417,7 +598,11 @@ await assert.rejects(
     return true;
   },
 );
-assert.equal(rowBatchCalls.length, rowBatchCallCount, "missing row id should reject before fetch");
+assert.equal(
+  rowBatchCalls.length,
+  rowBatchCallCount,
+  "missing row id should reject before fetch",
+);
 
 assert.throws(
   () => TraceDB.fromEnv({ env: {} }),
@@ -496,10 +681,13 @@ assert.equal(insertBody.id, "intro");
 assert.equal(insertBody.fields.id, "intro");
 assert.equal(insertBody.fields.tenant, "tenant-a");
 
-const batch = await db.table("docs").tenant("tenant-a").insertBatch([
-  { id: "batch-a", fields: { body: "batch a" } },
-  { id: "batch-b", fields: { body: "batch b", tenant: "explicit-tenant" } },
-]);
+const batch = await db
+  .table("docs")
+  .tenant("tenant-a")
+  .insertBatch([
+    { id: "batch-a", fields: { body: "batch a" } },
+    { id: "batch-b", fields: { body: "batch b", tenant: "explicit-tenant" } },
+  ]);
 assert.equal(batch.record_count, 2);
 const batchBody = JSON.parse(calls[1].init.body ?? "{}");
 assert.equal(batchBody.records[0].table, "docs");
@@ -508,7 +696,10 @@ assert.equal(batchBody.records[0].fields.id, "batch-a");
 assert.equal(batchBody.records[0].fields.tenant, "tenant-a");
 assert.equal(batchBody.records[1].fields.tenant, "explicit-tenant");
 
-const patch = await db.table("docs").tenant("tenant-a").patch("batch-a", { status: "reviewed" });
+const patch = await db
+  .table("docs")
+  .tenant("tenant-a")
+  .patch("batch-a", { status: "reviewed" });
 assert.equal(patch.epoch, 5);
 const patchBody = JSON.parse(calls[2].init.body ?? "{}");
 assert.equal(patchBody.table, "docs");
@@ -554,7 +745,9 @@ assert.equal(explainBody.tenant_id, "tenant-a");
 assert.equal(explainBody.text_field, "body");
 assert.equal(explainBody.vector_field, "embedding");
 
-const traceql = await db.traceql("FROM docs\nTENANT tenant-a\nLIMIT 1\nEXPLAIN");
+const traceql = await db.traceql(
+  "FROM docs\nTENANT tenant-a\nLIMIT 1\nEXPLAIN",
+);
 assert.equal(traceql.results?.[0]?.record_id, "intro");
 assert.equal(traceql.explain?.returned_count, 1);
 const traceqlBody = JSON.parse(calls[5].init.body ?? "{}");
@@ -582,8 +775,12 @@ assert.equal(graphqlBody.query, graphqlQuery);
 const graphqlRequest: GraphQlQueryRequest = { query: graphqlQuery };
 const graphqlViaRequest = await db.graphqlRequest(graphqlRequest);
 const graphqlViaRequestData = graphqlViaRequest.data as JsonObject | undefined;
-const graphqlViaRequestPayload = graphqlViaRequestData?.query as JsonObject | undefined;
-const graphqlViaRequestResults = graphqlViaRequestPayload?.results as JsonObject[] | undefined;
+const graphqlViaRequestPayload = graphqlViaRequestData?.query as
+  | JsonObject
+  | undefined;
+const graphqlViaRequestResults = graphqlViaRequestPayload?.results as
+  | JsonObject[]
+  | undefined;
 assert.equal(graphqlViaRequestResults?.[0]?.record_id, "intro");
 const graphqlRequestBody = JSON.parse(calls[7].init.body ?? "{}");
 assert.equal(graphqlRequestBody.query, graphqlQuery);
@@ -614,7 +811,10 @@ await db.table("docs").tenant("tenant-a").delete("intro", {
   tombstone: "public_sdk_smoke",
 });
 await db.compact({ idempotencyKey: "ts-public-compact-1" });
-await db.snapshot({ target: "/tmp/snapshot" }, { idempotencyKey: "ts-public-snapshot-1" });
+await db.snapshot(
+  { target: "/tmp/snapshot" },
+  { idempotencyKey: "ts-public-snapshot-1" },
+);
 await db.restore(
   { source: "/tmp/snapshot", target: "/tmp/restore" },
   { idempotencyKey: "ts-public-restore-1" },
@@ -647,6 +847,10 @@ await assert.rejects(
     return true;
   },
 );
-assert.equal(calls.length, callCount, "missing tenant should reject before fetch");
+assert.equal(
+  calls.length,
+  callCount,
+  "missing tenant should reject before fetch",
+);
 
 console.log("typescript public sdk smoke ok");

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Instant;
 use tracedb_core::{
     source_hash, value_as_f32_vec, DerivedFeatureState, Epoch, FeatureInvalidation, FeatureStatus,
@@ -42,12 +43,12 @@ pub struct ReplacementApplyTiming {
 
 #[derive(Clone, Debug, Default)]
 pub struct RecordStore {
-    versions: BTreeMap<String, Vec<StoredRecord>>,
+    versions: BTreeMap<String, Vec<Arc<StoredRecord>>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RecordStoreDelta {
-    versions_by_key: BTreeMap<String, Vec<StoredRecord>>,
+    versions_by_key: BTreeMap<String, Vec<Arc<StoredRecord>>>,
 }
 
 impl RecordStoreDelta {
@@ -59,11 +60,11 @@ impl RecordStoreDelta {
         self.versions_by_key.extend(other.versions_by_key);
     }
 
-    fn versions_for_key(&self, key: &str) -> Option<&Vec<StoredRecord>> {
+    fn versions_for_key(&self, key: &str) -> Option<&Vec<Arc<StoredRecord>>> {
         self.versions_by_key.get(key)
     }
 
-    fn replace_versions(&mut self, key: String, versions: Vec<StoredRecord>) {
+    fn replace_versions(&mut self, key: String, versions: Vec<Arc<StoredRecord>>) {
         self.versions_by_key.insert(key, versions);
     }
 }
@@ -77,7 +78,11 @@ impl RecordStore {
                 &record.header.tenant_id,
                 &record.header.record_id,
             );
-            store.versions.entry(key).or_default().push(record);
+            store
+                .versions
+                .entry(key)
+                .or_default()
+                .push(Arc::new(record));
         }
         Ok(store)
     }
@@ -143,7 +148,7 @@ impl RecordStore {
                         .map(|end| end > epoch)
                         .unwrap_or(true)
             }) {
-                records.push(record.clone());
+                records.push(record.as_ref().clone());
             }
         }
         records
@@ -222,9 +227,9 @@ impl RecordStore {
             .rev()
             .find(|record| record.header.end_epoch.is_none())
         {
-            current.header.end_epoch = Some(epoch);
+            Arc::make_mut(current).header.end_epoch = Some(epoch);
         }
-        versions.push(record);
+        versions.push(Arc::new(record));
         delta.replace_versions(key, versions);
     }
 
@@ -260,10 +265,10 @@ impl RecordStore {
             .rev()
             .find(|record| record.header.end_epoch.is_none())
         {
-            current.header.end_epoch = Some(epoch);
+            Arc::make_mut(current).header.end_epoch = Some(epoch);
         }
 
-        versions.push(record);
+        versions.push(Arc::new(record));
     }
 
     pub fn apply_mutation(
@@ -294,7 +299,7 @@ impl RecordStore {
             .rev()
             .find(|record| record.header.end_epoch.is_none())
         {
-            current.header.end_epoch = Some(epoch);
+            Arc::make_mut(current).header.end_epoch = Some(epoch);
         }
 
         let mut merged_fields = previous
@@ -319,7 +324,13 @@ impl RecordStore {
         }
         validate_record_identity(schema, mutation, Some(&merged_fields))?;
 
-        let features = build_features(schema, mutation, &merged_fields, previous.as_ref(), epoch);
+        let features = build_features(
+            schema,
+            mutation,
+            &merged_fields,
+            previous.as_ref().map(|v| v.as_ref()),
+            epoch,
+        );
         let record = StoredRecord {
             header: RecordHeader {
                 record_id: mutation.id.clone(),
@@ -334,7 +345,7 @@ impl RecordStore {
             fields: merged_fields,
             features,
         };
-        versions.push(record.clone());
+        versions.push(Arc::new(record.clone()));
         Ok(record)
     }
 
@@ -378,7 +389,7 @@ impl RecordStore {
             .rev()
             .find(|record| record.header.end_epoch.is_none())
         {
-            current.header.end_epoch = Some(epoch);
+            Arc::make_mut(current).header.end_epoch = Some(epoch);
         }
 
         let mut merged_fields = previous
@@ -403,7 +414,13 @@ impl RecordStore {
         }
         validate_record_identity(schema, mutation, Some(&merged_fields))?;
 
-        let features = build_features(schema, mutation, &merged_fields, previous.as_ref(), epoch);
+        let features = build_features(
+            schema,
+            mutation,
+            &merged_fields,
+            previous.as_ref().map(|v| v.as_ref()),
+            epoch,
+        );
         let record = StoredRecord {
             header: RecordHeader {
                 record_id: mutation.id.clone(),
@@ -418,7 +435,7 @@ impl RecordStore {
             fields: merged_fields,
             features,
         };
-        versions.push(record);
+        versions.push(Arc::new(record));
         delta.replace_versions(key, versions);
         Ok(())
     }
@@ -454,7 +471,7 @@ impl RecordStore {
             .rev()
             .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
         {
-            current.header.end_epoch = Some(epoch);
+            Arc::make_mut(current).header.end_epoch = Some(epoch);
         }
 
         let record = StoredRecord {
@@ -472,10 +489,10 @@ impl RecordStore {
                     deletion.tombstone.clone()
                 }),
             },
-            fields: previous.fields,
-            features: previous.features,
+            fields: previous.fields.clone(),
+            features: previous.features.clone(),
         };
-        versions.push(record.clone());
+        versions.push(Arc::new(record.clone()));
         Ok(record)
     }
 
@@ -523,7 +540,7 @@ impl RecordStore {
             .rev()
             .find(|record| record.header.end_epoch.is_none() && record.header.tombstone.is_none())
         {
-            current.header.end_epoch = Some(epoch);
+            Arc::make_mut(current).header.end_epoch = Some(epoch);
         }
 
         let record = StoredRecord {
@@ -541,10 +558,10 @@ impl RecordStore {
                     deletion.tombstone.clone()
                 }),
             },
-            fields: previous.fields,
-            features: previous.features,
+            fields: previous.fields.clone(),
+            features: previous.features.clone(),
         };
-        versions.push(record);
+        versions.push(Arc::new(record));
         delta.replace_versions(key, versions);
         Ok(())
     }
@@ -600,7 +617,7 @@ impl RecordStore {
                         .unwrap_or(true)
                     && record.header.tombstone.is_none()
             }) {
-                records.push(record.clone());
+                records.push(record.as_ref().clone());
             }
         }
         ReadSnapshot { epoch, records }
@@ -632,7 +649,10 @@ impl RecordStore {
                 invalidation.table, invalidation.tenant_id, invalidation.record_id
             )));
         };
-        let Some(state) = record.features.get_mut(&invalidation.feature) else {
+        let Some(state) = Arc::make_mut(record)
+            .features
+            .get_mut(&invalidation.feature)
+        else {
             return Err(TraceDbError::NotFound(format!(
                 "feature {}.{}.{}",
                 invalidation.table, invalidation.record_id, invalidation.feature
@@ -682,7 +702,10 @@ impl RecordStore {
                 invalidation.table, invalidation.tenant_id, invalidation.record_id
             )));
         };
-        let Some(state) = record.features.get_mut(&invalidation.feature) else {
+        let Some(state) = Arc::make_mut(record)
+            .features
+            .get_mut(&invalidation.feature)
+        else {
             return Err(TraceDbError::NotFound(format!(
                 "feature {}.{}.{}",
                 invalidation.table, invalidation.record_id, invalidation.feature
@@ -701,7 +724,7 @@ impl RecordStore {
         }
     }
 
-    fn versions_for_planning(&self, delta: &RecordStoreDelta, key: &str) -> Vec<StoredRecord> {
+    fn versions_for_planning(&self, delta: &RecordStoreDelta, key: &str) -> Vec<Arc<StoredRecord>> {
         delta
             .versions_for_key(key)
             .cloned()
@@ -873,7 +896,7 @@ impl ReadSnapshot {
     }
 }
 
-fn visible_record_at(versions: &[StoredRecord], epoch: Epoch) -> Option<StoredRecord> {
+fn visible_record_at(versions: &[Arc<StoredRecord>], epoch: Epoch) -> Option<StoredRecord> {
     versions
         .iter()
         .rev()
@@ -886,7 +909,7 @@ fn visible_record_at(versions: &[StoredRecord], epoch: Epoch) -> Option<StoredRe
                     .unwrap_or(true)
                 && record.header.tombstone.is_none()
         })
-        .cloned()
+        .map(|record| record.as_ref().clone())
 }
 
 fn elapsed_ms(started: Instant) -> f64 {
@@ -942,19 +965,17 @@ fn build_replacement_record_core(
     measure_result(
         timing
             .as_mut()
-            .map(|timing| &mut (**timing).validate_identity_ms),
+            .map(|timing| &mut timing.validate_identity_ms),
         || validate_record_identity(schema, input, None),
     )?;
 
     measure_result(
-        timing
-            .as_mut()
-            .map(|timing| &mut (**timing).validate_vector_ms),
+        timing.as_mut().map(|timing| &mut timing.validate_vector_ms),
         || validate_vector_dimensions(schema, input),
     )?;
 
     let (tenant_id, key) =
-        measure_result(timing.as_mut().map(|timing| &mut (**timing).key_ms), || {
+        measure_result(timing.as_mut().map(|timing| &mut timing.key_ms), || {
             let tenant_id = if input.tenant_id.is_empty() {
                 return Err(TraceDbError::InvalidRecord(
                     "tenant id cannot be empty".to_string(),
@@ -966,31 +987,28 @@ fn build_replacement_record_core(
             Ok((tenant_id, key))
         })?;
 
-    let fields = measure_value(
-        timing.as_mut().map(|timing| &mut (**timing).fields_ms),
-        || {
-            let mut fields = input.fields.clone();
-            fields.insert(
-                schema.primary_id_column.clone(),
-                Value::String(input.id.clone()),
-            );
-            fields.insert(
-                schema.tenant_id_column.clone(),
-                Value::String(tenant_id.clone()),
-            );
-            fields
-        },
-    );
+    let fields = measure_value(timing.as_mut().map(|timing| &mut timing.fields_ms), || {
+        let mut fields = input.fields.clone();
+        fields.insert(
+            schema.primary_id_column.clone(),
+            Value::String(input.id.clone()),
+        );
+        fields.insert(
+            schema.tenant_id_column.clone(),
+            Value::String(tenant_id.clone()),
+        );
+        fields
+    });
 
     measure_result(
         timing
             .as_mut()
-            .map(|timing| &mut (**timing).finalize_identity_ms),
+            .map(|timing| &mut timing.finalize_identity_ms),
         || validate_record_identity(schema, input, Some(&fields)),
     )?;
 
     let record = measure_value(
-        timing.as_mut().map(|timing| &mut (**timing).features_ms),
+        timing.as_mut().map(|timing| &mut timing.features_ms),
         || {
             let features = build_features(schema, input, &fields, None, epoch);
             StoredRecord {

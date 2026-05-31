@@ -68,10 +68,12 @@ arguments override matching environment values. Direct construction with
 configured and `branch_id` is omitted, copied JSON POST bodies default
 `branch_id` to `<database_id>:main`.
 
-The client uses only the Python standard library today. It preserves the raw
-HTTP escape hatch with `request_json(...)`, exposes `TraceDBHTTPError` with
-method, path, status, response body, parsed `error`, and optional `code`, and
-supports caller-provided `Idempotency-Key` values on mutation/admin calls.
+The sync client uses Python standard-library HTTP and imports without async
+dependencies installed. Install the `async` extra for `AsyncTraceDB` helpers
+backed by `aiohttp`. It preserves the raw HTTP escape
+hatch with `request_json(...)`, exposes `TraceDBHTTPError` with method, path,
+status, response body, parsed `error`, and optional `code`, and supports
+caller-provided `Idempotency-Key` values on mutation/admin calls.
 `table.insert_batch([{"id": ..., "fields": {...}}])` preserves the raw
 TraceDB record-input shape. `table.insert_rows([...])` is the notebook/data
 workflow helper: it accepts row dictionaries, reads the record id from `id` by
@@ -80,15 +82,18 @@ the canonical batch request, and still executes through `POST /v1/records/put-ba
 `TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
 TraceQL strings through `POST /v1/traceql`.
 `TraceDB.graphql_schema()` reads generated SDL from `GET /v1/graphql/schema`.
-`TraceDB.graphql(query)` and `graphql_request({"query": query})` execute bounded
-GraphQL query-adapter strings through `POST /v1/graphql`.
+`TraceDB.graphql(query)` and `graphql_request({"query": query})` execute native
+GraphQL operations through `POST /v1/graphql`; `bounded_graphql(...)` uses the
+bounded compatibility adapter at `POST /v1/graphql/bounded`.
 `safe_retries` retries transient HTTP 5xx responses only for read-only routes:
-health, ready, GraphQL schema export, get, scan, query, native TraceQL,
-bounded GraphQL, and explain. It does not retry writes or admin mutations.
-`idempotency_retries` is
-default-off and retries transient HTTP 5xx responses for mutation/admin routes
-only when that request carries a caller-provided `Idempotency-Key`; unkeyed
-writes and 4xx/conflict responses are not retried.
+health, ready, GraphQL schema export, get, scan, query, bounded GraphQL,
+explain, and polymorphic native TraceQL/GraphQL payloads classified as
+read-only. It does not retry mutating TraceQL/GraphQL commands/root fields or
+other writes/admin mutations without an idempotency key. `idempotency_retries`
+is default-off and retries transient HTTP 5xx responses for mutation/admin
+routes, including mutating native TraceQL/GraphQL payloads, only when that
+request carries a caller-provided `Idempotency-Key`; unkeyed writes and
+4xx/conflict responses are not retried.
 
 Run the local unit/package checks:
 

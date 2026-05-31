@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at timestamptz NOT NULL DEFAULT now(),
   revoked_at timestamptz
 );
+-- API tokens stored as bcrypt hashes; never store or log plaintext tokens.
+-- Use bcrypt::verify(plaintext, stored_hash) for token validation.
 
 INSERT INTO organizations (org_id, name)
 VALUES ('local-org', 'Local TraceDB')

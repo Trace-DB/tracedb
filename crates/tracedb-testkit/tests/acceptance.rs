@@ -1617,8 +1617,8 @@ fn published_segment_object_has_format_state_and_checksum() {
     );
     assert_eq!(object.segment_id, "seg-1");
     assert_eq!(object.state, SegmentState::Published);
-    assert_ne!(object.payload_checksum, 0);
-    assert_ne!(object.object_checksum, 0);
+    assert_ne!(object.payload_checksum, [0u8; 32]);
+    assert_ne!(object.object_checksum, [0u8; 32]);
 
     let manifest = db.inspect_manifest().unwrap();
     assert_eq!(manifest.segments[0].segment_id, "seg-1");
@@ -1640,7 +1640,7 @@ fn published_segment_object_has_format_state_and_checksum() {
         index.segment_id == "seg-1"
             && index.kind == "vector"
             && index.state == IndexState::Ready
-            && index.checksum != 0
+            && index.checksum != [0u8; 32]
     }));
 
     let segment_count = manifest.segments.len();
@@ -2648,7 +2648,7 @@ fn wal_replay_recovers_schema_when_manifest_is_stale() {
     manifest.schemas = Vec::new();
     manifest.latest_epoch = Epoch::new(0);
     manifest.durable_epoch = Epoch::new(0);
-    manifest.checksums.manifest_checksum = 0;
+    manifest.checksums.manifest_checksum = [0u8; 32];
     manifest.checksums.manifest_checksum = compute_manifest_checksum(&manifest).unwrap();
     std::fs::write(
         &manifest_path,
@@ -2672,14 +2672,15 @@ fn wal_prev_checksum_mismatch_is_corruption() {
     drop(db);
     let payload = serde_json::to_vec(&CommitRecord::empty(999, Epoch::new(999))).unwrap();
     let payload_checksum = checksum_bytes(&payload);
+    let wrong_prev_checksum = [123u8; 32];
     let mut frame = Vec::new();
     frame.extend_from_slice(&0x5444_574cu32.to_le_bytes());
-    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&2u32.to_le_bytes());
     frame.extend_from_slice(&999u64.to_le_bytes());
-    frame.extend_from_slice(&123u32.to_le_bytes());
+    frame.extend_from_slice(&wrong_prev_checksum);
     frame.extend_from_slice(&1u32.to_le_bytes());
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&payload_checksum.to_le_bytes());
+    frame.extend_from_slice(&payload_checksum);
     frame.extend_from_slice(&payload);
     std::fs::OpenOptions::new()
         .append(true)
@@ -2701,12 +2702,12 @@ fn wal_scan_rejects_oversized_payload_length_before_allocation() {
 
     let mut frame = Vec::new();
     frame.extend_from_slice(&0x5444_574cu32.to_le_bytes());
-    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&2u32.to_le_bytes()); // WAL format version 2
     frame.extend_from_slice(&last.lsn.next().get().to_le_bytes());
-    frame.extend_from_slice(&last.checksum.to_le_bytes());
+    frame.extend_from_slice(&last.checksum);
     frame.extend_from_slice(&1u32.to_le_bytes());
     frame.extend_from_slice(&u32::MAX.to_le_bytes());
-    frame.extend_from_slice(&0u32.to_le_bytes());
+    frame.extend_from_slice(&[0u8; 32]);
     std::fs::OpenOptions::new()
         .append(true)
         .open(temp.path().join("wal/000001.twal"))
@@ -2732,12 +2733,12 @@ fn wal_scan_reports_and_ignores_trailing_short_payload() {
     let payload_checksum = checksum_bytes(&payload);
     let mut frame = Vec::new();
     frame.extend_from_slice(&0x5444_574cu32.to_le_bytes());
-    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&2u32.to_le_bytes());
     frame.extend_from_slice(&last.lsn.next().get().to_le_bytes());
-    frame.extend_from_slice(&last.checksum.to_le_bytes());
+    frame.extend_from_slice(&last.checksum);
     frame.extend_from_slice(&1u32.to_le_bytes());
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&payload_checksum.to_le_bytes());
+    frame.extend_from_slice(&payload_checksum);
     frame.extend_from_slice(&payload[..payload.len() / 2]);
     std::fs::OpenOptions::new()
         .append(true)
@@ -2767,12 +2768,12 @@ fn wal_scan_reports_and_ignores_trailing_short_payload() {
     let payload_checksum = checksum_bytes(&payload);
     let mut frame = Vec::new();
     frame.extend_from_slice(&0x5444_574cu32.to_le_bytes());
-    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&2u32.to_le_bytes());
     frame.extend_from_slice(&recover_last.lsn.next().get().to_le_bytes());
-    frame.extend_from_slice(&recover_last.checksum.to_le_bytes());
+    frame.extend_from_slice(&recover_last.checksum);
     frame.extend_from_slice(&1u32.to_le_bytes());
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&payload_checksum.to_le_bytes());
+    frame.extend_from_slice(&payload_checksum);
     frame.extend_from_slice(&payload[..payload.len() / 2]);
     std::fs::OpenOptions::new()
         .append(true)
@@ -2805,12 +2806,12 @@ fn wal_scan_ignores_checksum_valid_frame_without_commit_footer() {
     let payload_checksum = checksum_bytes(&payload);
     let mut frame = Vec::new();
     frame.extend_from_slice(&0x5444_574cu32.to_le_bytes());
-    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&2u32.to_le_bytes());
     frame.extend_from_slice(&last.lsn.next().get().to_le_bytes());
-    frame.extend_from_slice(&last.checksum.to_le_bytes());
+    frame.extend_from_slice(&last.checksum);
     frame.extend_from_slice(&1u32.to_le_bytes());
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&payload_checksum.to_le_bytes());
+    frame.extend_from_slice(&payload_checksum);
     frame.extend_from_slice(&payload);
     std::fs::OpenOptions::new()
         .append(true)
@@ -2952,7 +2953,7 @@ fn feature_state_is_tenant_scoped_for_same_record_id() {
 fn manifest_has_verified_checksum() {
     let (temp, db) = seeded_db();
     let checksum = db.inspect_manifest().unwrap().checksums.manifest_checksum;
-    assert_ne!(checksum, 0);
+    assert_ne!(checksum, [0u8; 32]);
     drop(db);
     let mut manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(temp.path().join("manifest.tdb")).unwrap())
@@ -2975,14 +2976,19 @@ fn manifest_checksum_zero_is_rejected_for_existing_manifest() {
     let mut manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
     manifest["database_id"] = json!("tampered");
-    manifest["checksums"]["manifest_checksum"] = json!(0);
+    manifest["checksums"]["manifest_checksum"] = json!(vec![0u8; 32]);
     std::fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&manifest).unwrap(),
     )
     .unwrap();
     let err = TraceDb::open(temp.path()).unwrap_err();
-    assert!(err.to_string().contains("missing manifest checksum"));
+    let err_str = err.to_string();
+    assert!(
+        err_str.contains("missing manifest checksum")
+            || err_str.contains("manifest checksum mismatch"),
+        "expected manifest checksum error, got: {err_str}"
+    );
 }
 
 #[test]

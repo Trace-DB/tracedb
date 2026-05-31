@@ -9,6 +9,7 @@ name = "tracedb"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4", features = ["derive", "env"] }
 serde_json.workspace = true
 tracedb-bench = { path = "../tracedb-bench" }
 tracedb-catalog = { path = "../tracedb-catalog" }

@@ -15,8 +15,13 @@ ARTIFACT = ROOT / "docs" / "api" / "v1-openapi.json"
 BOUNDARIES = [
     "SQL compatibility is not implemented.",
     "Internal TraceDB-only runs are development evidence; exported performance claims require an external control and a number to beat.",
-    "Idempotency-Key supports local data-dir replay from WAL/checkpoint-backed idempotency receipts for mutation and admin routes; SDK idempotent retries are opt-in and require an Idempotency-Key; cross-replica, managed-cloud exactly-once, and crash-atomic exactly-once idempotency remain future work.",
+    "Idempotency-Key supports local data-dir replay from WAL/checkpoint-backed idempotency receipts for mutation and admin routes, plus polymorphic native operation routes; SDK idempotent retries are opt-in and require an Idempotency-Key; cross-replica, managed-cloud exactly-once, and crash-atomic exactly-once idempotency remain future work.",
 ]
+
+POLYMORPHIC_OPERATION_ROUTES = {
+    ("post", "/v1/traceql"),
+    ("post", "/v1/graphql"),
+}
 
 SAFE_RETRY_ROUTES = {
     ("get", "/v1/health"),
@@ -24,8 +29,6 @@ SAFE_RETRY_ROUTES = {
     ("post", "/v1/records/get"),
     ("post", "/v1/records/scan"),
     ("post", "/v1/query"),
-    ("post", "/v1/traceql"),
-    ("post", "/v1/graphql"),
     ("post", "/v1/graphql/bounded"),
     ("get", "/v1/graphql/schema"),
     ("post", "/v1/explain"),
@@ -46,7 +49,7 @@ ROUTES = [
     ("post", "/v1/records/get", "records", "Get record", "RecordGetRequest", "GetRecordResponse", False),
     ("post", "/v1/records/scan", "records", "Scan records", "RecordScanRequest", "RecordScanOutput", False),
     ("post", "/v1/query", "query", "Run hybrid query", "HybridQuery", "QueryResponse", False),
-    ("post", "/v1/traceql", "query", "Run native TraceQL query", "TraceQlQueryRequest", "QueryResponse", False),
+    ("post", "/v1/traceql", "query", "Run native TraceQL query or command", "TraceQlQueryRequest", "QueryResponse", False),
     ("post", "/v1/graphql", "query", "Run native GraphQL query, mutation, or admin operation", "GraphQlQueryRequest", "GraphQlResponse", False),
     ("post", "/v1/graphql/bounded", "query", "Run bounded GraphQL compatibility query adapter", "GraphQlQueryRequest", "QueryResponse", False),
     ("get", "/v1/graphql/schema", "query", "Export bounded GraphQL schema", None, "GraphQlSchemaResponse", False),
@@ -413,6 +416,31 @@ def route_operation(
     response_schema: str,
     mutates_state: bool,
 ) -> dict[str, Any]:
+    route_key = (method, path)
+    is_polymorphic = route_key in POLYMORPHIC_OPERATION_ROUTES
+    may_mutate_state = mutates_state or is_polymorphic
+    safe_retry = route_key in SAFE_RETRY_ROUTES
+    idempotency_key_supported = may_mutate_state
+    if is_polymorphic:
+        retry_policy = (
+            "Polymorphic operation route: SDK safe retries are not blanket-enabled. "
+            "Retry only when the payload is provably read-only, or when the caller supplies "
+            "Idempotency-Key and idempotency retry is enabled."
+        )
+        state_effect = "polymorphic-read-or-mutate"
+    elif safe_retry:
+        retry_policy = "Read-only route: SDK safe retries may retry transient failures."
+        state_effect = "read-only"
+    elif mutates_state:
+        retry_policy = (
+            "Mutating/admin route: SDK safe retries are disabled; retry transient failures "
+            "only when the caller supplies Idempotency-Key and idempotency retry is enabled."
+        )
+        state_effect = "mutates"
+    else:
+        retry_policy = "SDK safe retries are disabled for this route."
+        state_effect = "read-only"
+
     operation: dict[str, Any] = {
         "tags": [tag],
         "operationId": operation_id(method, path),
@@ -455,12 +483,15 @@ def route_operation(
                 "content": {"application/json": {"schema": schema_ref("ErrorResponse")}},
             },
         },
-        "x-tracedb-mutates-state": mutates_state,
-        "x-tracedb-sdk-safe-retry": (method, path) in SAFE_RETRY_ROUTES,
-        "x-tracedb-sdk-idempotency-retry-supported": mutates_state,
-        "x-tracedb-idempotency-key-supported": mutates_state,
+        "x-tracedb-mutates-state": may_mutate_state,
+        "x-tracedb-state-effect": state_effect,
+        "x-tracedb-polymorphic-operation-route": is_polymorphic,
+        "x-tracedb-sdk-safe-retry": safe_retry,
+        "x-tracedb-sdk-safe-retry-policy": retry_policy,
+        "x-tracedb-sdk-idempotency-retry-supported": idempotency_key_supported,
+        "x-tracedb-idempotency-key-supported": idempotency_key_supported,
     }
-    if mutates_state:
+    if idempotency_key_supported:
         operation["parameters"] = [
             {
                 "name": "Idempotency-Key",

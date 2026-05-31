@@ -447,7 +447,9 @@ mutation/admin retry config boundary as Rust. If `databaseId` is configured and
 `branchId` is omitted, copied JSON POST bodies default `branch_id` to
 `<database_id>:main`. `safeRetries` retries transient
 5xx responses only for health/ready, GraphQL schema export, get, scan, query,
-native TraceQL, bounded GraphQL, and explain. `insertRows` accepts normal row
+bounded GraphQL, explain, and native TraceQL/GraphQL payloads classified as
+read-only; mutating TraceQL/GraphQL payloads require `Idempotency-Key` plus
+`idempotencyRetries` for retry. `insertRows` accepts normal row
 dictionaries for app/data ingestion and still executes through
 `POST /v1/records/put-batch`; `insertBatch` preserves the raw TraceDB
 record-input shape.
@@ -577,9 +579,10 @@ preserves the raw TraceDB record-input shape, while `insert_rows` accepts normal
 row dictionaries for notebook/data ingestion and still executes through
 `POST /v1/records/put-batch`. `safe_retries` retries transient HTTP 5xx
 responses only for health/read routes: health, ready, GraphQL schema export,
-get, scan, query, native TraceQL, bounded GraphQL, and explain.
-`idempotency_retries` is default-off and retries
-transient HTTP 5xx responses for mutation/admin routes only when that request
+get, scan, query, bounded GraphQL, explain, and native TraceQL/GraphQL payloads
+classified as read-only. `idempotency_retries` is default-off and retries
+transient HTTP 5xx responses for mutation/admin routes, including mutating
+TraceQL/GraphQL payloads, only when that request
 carries a caller-provided `Idempotency-Key`; unkeyed writes and 4xx/conflict
 responses are not retried. The unit lane checks the local package shape and env
 config helper.

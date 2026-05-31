@@ -362,10 +362,11 @@ admin compact/snapshot/restore/jobs, and
 query-builder chaining through `where({ tenant_id })`, `match`, `near`, `with`,
 `limit`, `all`, and `explainPlan`. The public wrapper retries transient 5xx
 responses only for health/ready, GraphQL schema export, get, scan, query,
-native TraceQL, bounded GraphQL, and explain through
-`safeRetries`; keyed mutation/admin retry is default-off through
-`idempotencyRetries` and only applies when the individual request carries a
-caller-provided idempotency key.
+bounded GraphQL, explain, and native TraceQL/GraphQL payloads classified as
+read-only through `safeRetries`; keyed mutation/admin retry is default-off
+through `idempotencyRetries` and only applies when the individual request,
+including a mutating TraceQL/GraphQL payload, carries a caller-provided
+idempotency key.
 `npm run public-smoke` verifies this wrapper with a fake transport, env config,
 safe retry behavior, idempotency retry behavior, and missing-tenant request validation; `npm run public-http-smoke`
 verifies it against a real local `tracedb-server` with idempotency and
@@ -426,10 +427,11 @@ managed `database_id` / `branch_id` routing metadata injection,
 database-only routing defaulting to `<database_id>:main`,
 `Idempotency-Key` support, parsed HTTP error envelopes, and read-only
 `safe_retries` for health, ready, GraphQL schema export, get, scan, query,
-native TraceQL, bounded GraphQL, and explain.
-`idempotency_retries` is default-off and retries transient 5xx responses for
-mutation/admin routes only when that request carries a caller-provided
-`Idempotency-Key`; unkeyed writes and 4xx/conflict responses are not retried.
+bounded GraphQL, explain, and native TraceQL/GraphQL payloads classified as
+read-only. `idempotency_retries` is default-off and retries transient 5xx
+responses for mutation/admin routes, including mutating TraceQL/GraphQL
+payloads, only when that request carries a caller-provided `Idempotency-Key`;
+unkeyed writes and 4xx/conflict responses are not retried.
 The env helper reads `TRACEDB_URL`, optional `TRACEDB_TOKEN`,
 `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`, `TRACEDB_TIMEOUT_MS`,
 `TRACEDB_SAFE_RETRIES`, and `TRACEDB_IDEMPOTENCY_RETRIES`;

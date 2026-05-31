@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-test:
+    name: Rust tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --workspace --all-targets
+
+  rust-lint:
+    name: Rust lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  python-sdk:
+    name: Python unit and import smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python SDK dependencies
+        run: python3 -m pip install -e clients/python
+      - name: Run Python SDK unit tests
+        run: python3 -m unittest discover -s clients/python/tests
+      - name: Run Python import smoke
+        run: python3 -c "from tracedb import TraceDB, TraceDBRequestError; print(TraceDB.__name__, TraceDBRequestError.__name__)"
+
+  benchmark-gate:
+    name: Benchmark gate unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run benchmark gate unit tests
+        run: python3 -m unittest benchmarks.realworld.tests.test_suite_gate
+
+  typescript-sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Run TypeScript SDK check
+        run: npm ci && npm run check
+        working-directory: clients/typescript
+
+  contract-generation-drift:
+    name: Contract generation drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check OpenAPI artifact drift
+        run: python3 scripts/generate_openapi_v1.py --check
+      - name: Check TypeScript client artifact drift
+        run: python3 scripts/generate_typescript_client.py --check
+
+  platform-conformance-smoke:
+    name: Platform conformance smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run HTTP direct and Rust SDK conformance
+        run: >-
+          python3 scripts/platform_conformance.py
+          --surface http_direct
+          --surface rust_sdk
+          --summary-json "${RUNNER_TEMP}/tracedb-platform-conformance.json"
+
+  docker-lite:
+    name: Docker lite smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t tracedb-local:test .
+      - name: Start lite compose profile
+        run: |
+          docker tag tracedb-local:test tracedb-local:latest
+          docker compose --profile lite up -d tracedb-engine
+          docker compose --profile lite ps tracedb-engine
+          curl --retry 20 --retry-all-errors --retry-delay 3 -fsS http://localhost:18081/health
+      - name: Stop lite compose profile
+        if: always()
+        run: docker compose --profile lite down -v --remove-orphans
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run cargo audit
+        run: cargo audit

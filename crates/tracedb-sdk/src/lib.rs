@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+//! Official Rust SDK for TraceDB.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -18,7 +19,7 @@ use tracedb_query::{
 
 pub type TraceDbClientResult<T> = std::result::Result<T, TraceDbClientError>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TraceDbClientError {
     InvalidUrl(String),
     InvalidConfig {
@@ -30,8 +31,8 @@ pub enum TraceDbClientError {
         path: String,
         message: String,
     },
-    Io(std::io::Error),
-    Json(serde_json::Error),
+    Io(String),
+    Json(String),
     Timeout {
         method: String,
         path: String,
@@ -101,8 +102,8 @@ impl Display for TraceDbClientError {
 impl Error for TraceDbClientError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Io(error) => Some(error),
-            Self::Json(error) => Some(error),
+            Self::Io(_error) => None,
+            Self::Json(_error) => None,
             Self::InvalidUrl(_)
             | Self::InvalidConfig { .. }
             | Self::InvalidRequest { .. }
@@ -115,13 +116,13 @@ impl Error for TraceDbClientError {
 
 impl From<std::io::Error> for TraceDbClientError {
     fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
+        Self::Io(error.to_string())
     }
 }
 
 impl From<serde_json::Error> for TraceDbClientError {
     fn from(error: serde_json::Error) -> Self {
-        Self::Json(error)
+        Self::Json(error.to_string())
     }
 }
 
@@ -341,6 +342,7 @@ impl TraceDbActorContext {
 }
 
 #[derive(Clone, Debug)]
+/// Synchronous HTTP client for TraceDB.
 pub struct TraceDbClient {
     pub config: TraceDbClientConfig,
 }
@@ -559,6 +561,14 @@ impl TraceDbClient {
         self.post_json("/v1/traceql", request)
     }
 
+    pub fn traceql_request_with_options(
+        &self,
+        request: &TraceQlQueryRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/traceql", request, options)
+    }
+
     pub fn traceql_typed(&self, query: impl Into<String>) -> TraceDbClientResult<QueryResponse> {
         let request = TraceQlQueryRequest::new(query);
         self.traceql_request_typed(&request)
@@ -571,6 +581,14 @@ impl TraceDbClient {
         self.post_typed("/v1/traceql", request)
     }
 
+    pub fn traceql_request_typed_with_options(
+        &self,
+        request: &TraceQlQueryRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<QueryResponse> {
+        self.post_typed_with_options("/v1/traceql", request, options)
+    }
+
     pub fn graphql(&self, query: impl Into<String>) -> TraceDbClientResult<Value> {
         let request = GraphQlQueryRequest::new(query);
         self.graphql_request(&request)
@@ -578,6 +596,14 @@ impl TraceDbClient {
 
     pub fn graphql_request(&self, request: &GraphQlQueryRequest) -> TraceDbClientResult<Value> {
         self.post_json("/v1/graphql", request)
+    }
+
+    pub fn graphql_request_with_options(
+        &self,
+        request: &GraphQlQueryRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<Value> {
+        self.post_json_with_options("/v1/graphql", request, options)
     }
 
     pub fn graphql_typed(&self, query: impl Into<String>) -> TraceDbClientResult<GraphQlResponse> {
@@ -590,6 +616,14 @@ impl TraceDbClient {
         request: &GraphQlQueryRequest,
     ) -> TraceDbClientResult<GraphQlResponse> {
         self.post_typed("/v1/graphql", request)
+    }
+
+    pub fn graphql_request_typed_with_options(
+        &self,
+        request: &GraphQlQueryRequest,
+        options: &TraceDbRequestOptions,
+    ) -> TraceDbClientResult<GraphQlResponse> {
+        self.post_typed_with_options("/v1/graphql", request, options)
     }
 
     pub fn bounded_graphql(&self, query: impl Into<String>) -> TraceDbClientResult<Value> {
@@ -732,7 +766,7 @@ impl TraceDbClient {
         body: Option<&Value>,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<Value> {
-        let attempts = self.request_attempts(method, path, options);
+        let attempts = self.request_attempts(method, path, body, options);
         for attempt in 0..attempts {
             match self.request_json_once(method, path, body, options) {
                 Ok(value) => return Ok(value),
@@ -745,15 +779,22 @@ impl TraceDbClient {
         unreachable!("request attempts should be at least one")
     }
 
-    fn request_attempts(&self, method: &str, path: &str, options: &TraceDbRequestOptions) -> u8 {
-        if is_idempotent_retry_request(method, path)
+    fn request_attempts(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        options: &TraceDbRequestOptions,
+    ) -> u8 {
+        if self.config.idempotency_retries > 0
+            && is_idempotent_retry_request(method, path)
             && options
                 .idempotency_key
                 .as_deref()
                 .is_some_and(|key| !key.is_empty())
         {
             self.config.idempotency_retries.saturating_add(1)
-        } else if is_retry_safe_request(method, path) {
+        } else if is_retry_safe_request(method, path, body) {
             self.config.safe_retries.saturating_add(1)
         } else {
             1
@@ -803,10 +844,9 @@ impl TraceDbClient {
             .read_to_string(&mut response)
             .map_err(|error| map_request_io_error(method, &request_path, timeout, error))?;
         if response.is_empty() {
-            return Err(TraceDbClientError::Io(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "empty HTTP response",
-            )));
+            return Err(TraceDbClientError::Io(
+                "connection closed before response".to_string(),
+            ));
         }
         parse_response(method, &request_path, &response)
     }
@@ -942,6 +982,7 @@ impl TraceDbClient {
 }
 
 #[derive(Clone, Debug)]
+/// Asynchronous HTTP client for TraceDB.
 pub struct TraceDbAsyncClient {
     inner: TraceDbClient,
     http_client: reqwest::Client,
@@ -991,7 +1032,7 @@ impl TraceDbAsyncClient {
         body: Option<&Value>,
         options: &TraceDbRequestOptions,
     ) -> TraceDbClientResult<Value> {
-        let attempts = self.inner.request_attempts(method, path, options);
+        let attempts = self.inner.request_attempts(method, path, body, options);
         for attempt in 0..attempts {
             match self.request_json_once(method, path, body, options).await {
                 Ok(value) => return Ok(value),
@@ -1770,8 +1811,7 @@ fn retry_backoff_delay(attempt: u8) -> Duration {
     let delay_ms = base_ms
         .saturating_sub(jitter_quarter)
         .saturating_add(jitter_offset)
-        .min(5_000)
-        .max(1);
+        .clamp(1, 5_000);
     Duration::from_millis(delay_ms)
 }
 
@@ -1892,7 +1932,7 @@ fn map_request_io_error(
             timeout_ms: timeout_ms(timeout),
         }
     } else {
-        TraceDbClientError::Io(error)
+        TraceDbClientError::Io(error.to_string())
     }
 }
 
@@ -1909,24 +1949,141 @@ fn map_reqwest_error(
             timeout_ms: timeout_ms(timeout),
         }
     } else {
-        TraceDbClientError::Io(std::io::Error::other(error.to_string()))
+        TraceDbClientError::Io(error.to_string())
     }
 }
 
-fn is_retry_safe_request(method: &str, path: &str) -> bool {
+fn is_retry_safe_request(method: &str, path: &str, body: Option<&Value>) -> bool {
+    match (method, strip_query(path)) {
+        ("GET", "/v1/health" | "/v1/ready" | "/v1/graphql/schema")
+        | (
+            "POST",
+            "/v1/records/get"
+            | "/v1/records/scan"
+            | "/v1/query"
+            | "/v1/graphql/bounded"
+            | "/v1/explain",
+        ) => true,
+        ("POST", "/v1/traceql") => traceql_body_is_read_only(body),
+        ("POST", "/v1/graphql") => graphql_body_is_read_only(body),
+        _ => false,
+    }
+}
+
+fn traceql_body_is_read_only(body: Option<&Value>) -> bool {
+    let Some(query) = body_query(body) else {
+        return false;
+    };
+    let Some(command) = traceql_command(query) else {
+        return true;
+    };
     matches!(
-        (method, strip_query(path)),
-        ("GET", "/v1/health")
-            | ("GET", "/v1/ready")
-            | ("POST", "/v1/records/get")
-            | ("POST", "/v1/records/scan")
-            | ("POST", "/v1/query")
-            | ("POST", "/v1/traceql")
-            | ("POST", "/v1/graphql")
-            | ("POST", "/v1/graphql/bounded")
-            | ("GET", "/v1/graphql/schema")
-            | ("POST", "/v1/explain")
+        command,
+        "RECORD GET" | "GET" | "RECORD SCAN" | "SCAN" | "QUERY" | "EXPLAIN" | "JOBS LIST"
     )
+}
+
+fn traceql_command(input: &str) -> Option<&'static str> {
+    let trimmed = input.trim_start();
+    for command in [
+        "SCHEMA APPLY",
+        "RECORD PUT",
+        "RECORD BATCH",
+        "RECORD PATCH",
+        "RECORD DELETE",
+        "RECORD GET",
+        "RECORD SCAN",
+        "ADMIN COMPACT",
+        "ADMIN SNAPSHOT",
+        "ADMIN RESTORE",
+        "JOBS LIST",
+        "JOBS RUN",
+        "EXPLAIN",
+        "QUERY",
+        "PUT",
+        "BATCH",
+        "PATCH",
+        "DELETE",
+        "GET",
+        "SCAN",
+        "COMPACT",
+        "SNAPSHOT",
+        "RESTORE",
+    ] {
+        if trimmed.len() == command.len() && trimmed.eq_ignore_ascii_case(command) {
+            return Some(command);
+        }
+        if trimmed.len() > command.len()
+            && trimmed
+                .get(..command.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(command))
+            && trimmed.as_bytes()[command.len()].is_ascii_whitespace()
+        {
+            return Some(command);
+        }
+    }
+    None
+}
+
+fn graphql_body_is_read_only(body: Option<&Value>) -> bool {
+    let Some(query) = body_query(body) else {
+        return false;
+    };
+    graphql_root_field(query)
+        .is_some_and(|field| matches!(field, "get" | "scan" | "query" | "explain" | "jobs"))
+}
+
+fn graphql_root_field(query: &str) -> Option<&str> {
+    let trimmed = query.trim_start();
+    if word_starts_with(trimmed, "mutation") || word_starts_with(trimmed, "subscription") {
+        return None;
+    }
+    let root = if word_starts_with(trimmed, "query") {
+        trimmed.find('{').map(|index| &trimmed[index + 1..])?
+    } else if let Some(rest) = trimmed.strip_prefix('{') {
+        rest
+    } else {
+        return None;
+    };
+    let (name, rest) = parse_graphql_name(root)?;
+    let rest = rest.trim_start();
+    if let Some(rest) = rest.strip_prefix(':') {
+        parse_graphql_name(rest).map(|(field, _)| field)
+    } else {
+        Some(name)
+    }
+}
+
+fn parse_graphql_name(input: &str) -> Option<(&str, &str)> {
+    let trimmed = input.trim_start();
+    let mut chars = trimmed.char_indices();
+    let (_, first) = chars.next()?;
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return None;
+    }
+    let mut end = first.len_utf8();
+    for (index, ch) in chars {
+        if ch == '_' || ch.is_ascii_alphanumeric() {
+            end = index + ch.len_utf8();
+        } else {
+            return Some((&trimmed[..index], &trimmed[index..]));
+        }
+    }
+    Some((&trimmed[..end], &trimmed[end..]))
+}
+
+fn word_starts_with(input: &str, word: &str) -> bool {
+    input
+        .get(..word.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(word))
+        && input[word.len()..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !(ch == '_' || ch.is_ascii_alphanumeric()))
+}
+
+fn body_query(body: Option<&Value>) -> Option<&str> {
+    body?.get("query")?.as_str()
 }
 
 fn is_idempotent_retry_request(method: &str, path: &str) -> bool {
@@ -2034,6 +2191,7 @@ impl TableRecordInput {
 }
 
 #[derive(Clone, Debug)]
+/// Fluent builder for TraceDB hybrid queries.
 pub struct QueryBuilder {
     client_config: Option<TraceDbClientConfig>,
     table: String,

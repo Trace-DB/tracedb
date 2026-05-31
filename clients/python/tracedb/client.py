@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import random
-import asyncio
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
-
 
 JsonObject = dict[str, Any]
 
@@ -53,9 +52,15 @@ class TraceDB:
 
     def __post_init__(self) -> None:
         if not self.url or not self.url.strip():
-            raise TraceDBRequestError("CONFIG", "url", "TraceDB requires a non-empty url")
+            raise TraceDBRequestError(
+                "CONFIG", "url", "TraceDB requires a non-empty url"
+            )
         if self.safe_retries < 0:
-            raise TraceDBRequestError("CONFIG", "safe_retries", "safe_retries must be greater than or equal to 0")
+            raise TraceDBRequestError(
+                "CONFIG",
+                "safe_retries",
+                "safe_retries must be greater than or equal to 0",
+            )
         if self.idempotency_retries < 0:
             raise TraceDBRequestError(
                 "CONFIG",
@@ -81,7 +86,9 @@ class TraceDB:
         source = os.environ if env is None else env
         resolved_url = url if url is not None else source.get("TRACEDB_URL")
         if resolved_url is None or not resolved_url.strip():
-            raise TraceDBRequestError("CONFIG", "TRACEDB_URL", "TraceDB.from_env requires TRACEDB_URL")
+            raise TraceDBRequestError(
+                "CONFIG", "TRACEDB_URL", "TraceDB.from_env requires TRACEDB_URL"
+            )
 
         resolved_timeout = timeout
         if resolved_timeout is None:
@@ -106,7 +113,9 @@ class TraceDB:
         resolved_safe_retries = (
             safe_retries
             if safe_retries is not None
-            else _parse_optional_nonnegative_int("TRACEDB_SAFE_RETRIES", source.get("TRACEDB_SAFE_RETRIES"))
+            else _parse_optional_nonnegative_int(
+                "TRACEDB_SAFE_RETRIES", source.get("TRACEDB_SAFE_RETRIES")
+            )
         )
         resolved_idempotency_retries = (
             idempotency_retries
@@ -120,8 +129,12 @@ class TraceDB:
         kwargs: dict[str, Any] = {
             "url": resolved_url,
             "token": token if token is not None else source.get("TRACEDB_TOKEN"),
-            "database_id": database_id if database_id is not None else source.get("TRACEDB_DATABASE_ID"),
-            "branch_id": branch_id if branch_id is not None else source.get("TRACEDB_BRANCH_ID"),
+            "database_id": database_id
+            if database_id is not None
+            else source.get("TRACEDB_DATABASE_ID"),
+            "branch_id": branch_id
+            if branch_id is not None
+            else source.get("TRACEDB_BRANCH_ID"),
             "actor_context": dict(actor_context) if actor_context is not None else None,
         }
         if resolved_timeout is not None:
@@ -149,7 +162,9 @@ class TraceDB:
         headers.update(self._actor_headers())
         data = None
         if request_body is not None:
-            data = json.dumps(request_body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            data = json.dumps(
+                request_body, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
             headers["Content-Type"] = "application/json"
         if idempotency_key is not None:
             _validate_idempotency_key(method, path, idempotency_key)
@@ -160,13 +175,22 @@ class TraceDB:
             headers=headers,
             method=method,
         )
-        attempts = _attempt_count(method, path, self.safe_retries, self.idempotency_retries, idempotency_key)
+        attempts = _attempt_count(
+            method,
+            path,
+            request_body,
+            self.safe_retries,
+            self.idempotency_retries,
+            idempotency_key,
+        )
         for attempt in range(attempts):
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     payload = response.read().decode("utf-8")
             except urllib.error.HTTPError as error:
-                if _should_retry_http_error(method, path, error.code, attempt, attempts):
+                if _should_retry_http_error(
+                    method, path, error.code, attempt, attempts
+                ):
                     _sleep_before_retry(attempt)
                     continue
                 payload = error.read().decode("utf-8")
@@ -180,9 +204,13 @@ class TraceDB:
                 return {}
             parsed = _loads_json(payload)
             if not isinstance(parsed, dict):
-                raise TraceDBRequestError(method, path, f"expected JSON object response, got {payload!r}")
+                raise TraceDBRequestError(
+                    method, path, f"expected JSON object response, got {payload!r}"
+                )
             return parsed
-        raise TraceDBRequestError(method, path, "request retry loop exhausted without a response")
+        raise TraceDBRequestError(
+            method, path, "request retry loop exhausted without a response"
+        )
 
     def ready(self) -> JsonObject:
         return self.request_json("GET", "/v1/ready")
@@ -190,8 +218,12 @@ class TraceDB:
     def health(self) -> JsonObject:
         return self.request_json("GET", "/v1/health")
 
-    def apply_schema(self, schema: JsonObject, *, idempotency_key: str | None = None) -> JsonObject:
-        return self.request_json("POST", "/v1/schema/apply", schema, idempotency_key=idempotency_key)
+    def apply_schema(
+        self, schema: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return self.request_json(
+            "POST", "/v1/schema/apply", schema, idempotency_key=idempotency_key
+        )
 
     def list_databases(self) -> JsonObject:
         return self.request_json("GET", "/v1/databases")
@@ -203,9 +235,13 @@ class TraceDB:
         return self.request_json("GET", "/v1/metrics/public-safe")
 
     def compact(self, *, idempotency_key: str | None = None) -> JsonObject:
-        return self.request_json("POST", "/v1/admin/compact", {}, idempotency_key=idempotency_key)
+        return self.request_json(
+            "POST", "/v1/admin/compact", {}, idempotency_key=idempotency_key
+        )
 
-    def snapshot(self, target: str, *, idempotency_key: str | None = None) -> JsonObject:
+    def snapshot(
+        self, target: str, *, idempotency_key: str | None = None
+    ) -> JsonObject:
         return self.request_json(
             "POST",
             "/v1/admin/snapshot",
@@ -213,7 +249,9 @@ class TraceDB:
             idempotency_key=idempotency_key,
         )
 
-    def restore(self, source: str, target: str, *, idempotency_key: str | None = None) -> JsonObject:
+    def restore(
+        self, source: str, target: str, *, idempotency_key: str | None = None
+    ) -> JsonObject:
         return self.request_json(
             "POST",
             "/v1/admin/restore",
@@ -224,17 +262,25 @@ class TraceDB:
     def list_admin_jobs(self) -> JsonObject:
         return self.request_json("GET", "/v1/admin/jobs")
 
-    def traceql(self, query: str) -> JsonObject:
-        return self.traceql_request({"query": query})
+    def traceql(self, query: str, *, idempotency_key: str | None = None) -> JsonObject:
+        return self.traceql_request({"query": query}, idempotency_key=idempotency_key)
 
-    def traceql_request(self, request: JsonObject) -> JsonObject:
-        return self.request_json("POST", "/v1/traceql", dict(request))
+    def traceql_request(
+        self, request: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return self.request_json(
+            "POST", "/v1/traceql", dict(request), idempotency_key=idempotency_key
+        )
 
-    def graphql(self, query: str) -> JsonObject:
-        return self.graphql_request({"query": query})
+    def graphql(self, query: str, *, idempotency_key: str | None = None) -> JsonObject:
+        return self.graphql_request({"query": query}, idempotency_key=idempotency_key)
 
-    def graphql_request(self, request: JsonObject) -> JsonObject:
-        return self.request_json("POST", "/v1/graphql", dict(request))
+    def graphql_request(
+        self, request: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return self.request_json(
+            "POST", "/v1/graphql", dict(request), idempotency_key=idempotency_key
+        )
 
     def bounded_graphql(self, query: str) -> JsonObject:
         return self.bounded_graphql_request({"query": query})
@@ -286,7 +332,9 @@ class TraceDB:
         for key, header in required.items():
             value = self.actor_context.get(key)
             if not isinstance(value, str) or not value:
-                raise TraceDBRequestError("CONFIG", key, f"actor_context.{key} must be a non-empty string")
+                raise TraceDBRequestError(
+                    "CONFIG", key, f"actor_context.{key} must be a non-empty string"
+                )
             headers[header] = _validated_header_value(header, value)
         policy_epoch = self.actor_context.get("policy_epoch", 0)
         headers["x-tracedb-policy-epoch"] = _validated_header_value(
@@ -295,15 +343,27 @@ class TraceDB:
         )
         scopes = self.actor_context.get("scopes")
         if scopes:
-            if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
-                raise TraceDBRequestError("CONFIG", "scopes", "actor_context.scopes must be a list of strings")
-            headers["x-tracedb-scopes"] = _validated_header_value("x-tracedb-scopes", ",".join(scopes))
+            if not isinstance(scopes, list) or not all(
+                isinstance(scope, str) for scope in scopes
+            ):
+                raise TraceDBRequestError(
+                    "CONFIG", "scopes", "actor_context.scopes must be a list of strings"
+                )
+            headers["x-tracedb-scopes"] = _validated_header_value(
+                "x-tracedb-scopes", ",".join(scopes)
+            )
         return headers
 
 
-@dataclass(frozen=True)
+@dataclass
 class AsyncTraceDB:
     sync_client: TraceDB
+    _session: Any | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        aiohttp = _load_aiohttp()
+        timeout = aiohttp.ClientTimeout(total=self.sync_client.timeout)
+        self._session = aiohttp.ClientSession(timeout=timeout)
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> "AsyncTraceDB":
@@ -317,47 +377,118 @@ class AsyncTraceDB:
         *,
         idempotency_key: str | None = None,
     ) -> JsonObject:
-        return await asyncio.to_thread(
-            self.sync_client.request_json,
+        request_body = self.sync_client._body_with_routing(body)
+        headers = {
+            "Accept": "application/json",
+        }
+        if self.sync_client.token:
+            headers["Authorization"] = f"Bearer {self.sync_client.token}"
+        headers.update(self.sync_client._actor_headers())
+        data = None
+        if request_body is not None:
+            data = json.dumps(request_body, sort_keys=True, separators=(",", ":"))
+            headers["Content-Type"] = "application/json"
+        if idempotency_key is not None:
+            _validate_idempotency_key(method, path, idempotency_key)
+            headers["Idempotency-Key"] = idempotency_key
+
+        attempts = _attempt_count(
             method,
             path,
-            body,
-            idempotency_key=idempotency_key,
+            request_body,
+            self.sync_client.safe_retries,
+            self.sync_client.idempotency_retries,
+            idempotency_key,
+        )
+        session = self._session
+        if session is None:
+            raise TraceDBRequestError(method, path, "async client session is closed")
+        aiohttp = _load_aiohttp()
+        for attempt in range(attempts):
+            try:
+                async with session.request(
+                    method,
+                    f"{self.sync_client.url}{path}",
+                    headers=headers,
+                    data=data,
+                ) as response:
+                    payload = await response.text()
+                    status = response.status
+                    if status >= 400:
+                        if _should_retry_http_error(
+                            method, path, status, attempt, attempts
+                        ):
+                            await _async_sleep_before_retry(attempt)
+                            continue
+                        raise TraceDBHTTPError(method, path, status, payload)
+            except aiohttp.ClientError:
+                if _should_retry_transport_error(attempt, attempts):
+                    await _async_sleep_before_retry(attempt)
+                    continue
+                raise
+            if not payload:
+                return {}
+            parsed = _loads_json(payload)
+            if not isinstance(parsed, dict):
+                raise TraceDBRequestError(
+                    method,
+                    path,
+                    f"expected JSON object response, got {payload!r}",
+                )
+            return parsed
+        raise TraceDBRequestError(
+            method, path, "request retry loop exhausted without a response"
         )
 
     async def ready(self) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.ready)
+        return await self.request_json("GET", "/v1/ready")
 
     async def health(self) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.health)
+        return await self.request_json("GET", "/v1/health")
 
-    async def apply_schema(self, schema: JsonObject, *, idempotency_key: str | None = None) -> JsonObject:
-        return await asyncio.to_thread(
-            self.sync_client.apply_schema,
-            schema,
-            idempotency_key=idempotency_key,
+    async def apply_schema(
+        self, schema: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return await self.request_json(
+            "POST", "/v1/schema/apply", schema, idempotency_key=idempotency_key
         )
 
-    async def traceql(self, query: str) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.traceql, query)
+    async def traceql(
+        self, query: str, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return await self.request_json(
+            "POST", "/v1/traceql", {"query": query}, idempotency_key=idempotency_key
+        )
 
-    async def traceql_request(self, request: JsonObject) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.traceql_request, request)
+    async def traceql_request(
+        self, request: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return await self.request_json(
+            "POST", "/v1/traceql", request, idempotency_key=idempotency_key
+        )
 
-    async def graphql(self, query: str) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.graphql, query)
+    async def graphql(
+        self, query: str, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return await self.request_json(
+            "POST", "/v1/graphql", {"query": query}, idempotency_key=idempotency_key
+        )
 
-    async def graphql_request(self, request: JsonObject) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.graphql_request, request)
+    async def graphql_request(
+        self, request: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
+        return await self.request_json(
+            "POST", "/v1/graphql", request, idempotency_key=idempotency_key
+        )
 
     async def bounded_graphql(self, query: str) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.bounded_graphql, query)
+        return await self.request_json("POST", "/v1/graphql/bounded", {"query": query})
 
     async def bounded_graphql_request(self, request: JsonObject) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.bounded_graphql_request, request)
+        return await self.request_json("POST", "/v1/graphql/bounded", request)
 
     async def graphql_schema(self) -> JsonObject:
-        return await asyncio.to_thread(self.sync_client.graphql_schema)
+        return await self.request_json("GET", "/v1/graphql/schema")
 
 
 @dataclass(frozen=True)
@@ -369,7 +500,9 @@ class TraceDBTable:
     scan_cursor: str | None = None
 
     def tenant(self, tenant_id: str) -> "TraceDBTable":
-        return TraceDBTable(self.db, self.name, tenant_id, self.scan_limit, self.scan_cursor)
+        return TraceDBTable(
+            self.db, self.name, tenant_id, self.scan_limit, self.scan_cursor
+        )
 
     def limit(self, limit: int) -> "TraceDBTable":
         return TraceDBTable(self.db, self.name, self.tenant_id, limit, self.scan_cursor)
@@ -377,7 +510,9 @@ class TraceDBTable:
     def cursor(self, cursor: str) -> "TraceDBTable":
         return TraceDBTable(self.db, self.name, self.tenant_id, self.scan_limit, cursor)
 
-    def insert(self, record_id: str, fields: JsonObject, *, idempotency_key: str | None = None) -> JsonObject:
+    def insert(
+        self, record_id: str, fields: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
         return self.db.request_json(
             "POST",
             "/v1/records/put",
@@ -397,7 +532,9 @@ class TraceDBTable:
             "/v1/records/put-batch",
             {
                 "records": [
-                    self._record_input_with_tenant(str(record["id"]), dict(record["fields"]), tenant_id)
+                    self._record_input_with_tenant(
+                        str(record["id"]), dict(record["fields"]), tenant_id
+                    )
                     for record in records
                 ]
             },
@@ -412,7 +549,9 @@ class TraceDBTable:
         idempotency_key: str | None = None,
     ) -> JsonObject:
         if not id_field:
-            raise TraceDBRequestError("POST", "/v1/records/put-batch", "id_field cannot be empty")
+            raise TraceDBRequestError(
+                "POST", "/v1/records/put-batch", "id_field cannot be empty"
+            )
         tenant_id = self._required_tenant("/v1/records/put-batch")
         records = []
         for index, row in enumerate(rows):
@@ -423,7 +562,9 @@ class TraceDBTable:
                     "/v1/records/put-batch",
                     f"row {index} missing id field {id_field!r}",
                 )
-            records.append(self._record_input_with_tenant(str(fields[id_field]), fields, tenant_id))
+            records.append(
+                self._record_input_with_tenant(str(fields[id_field]), fields, tenant_id)
+            )
         return self.db.request_json(
             "POST",
             "/v1/records/put-batch",
@@ -431,7 +572,9 @@ class TraceDBTable:
             idempotency_key=idempotency_key,
         )
 
-    def patch(self, record_id: str, fields: JsonObject, *, idempotency_key: str | None = None) -> JsonObject:
+    def patch(
+        self, record_id: str, fields: JsonObject, *, idempotency_key: str | None = None
+    ) -> JsonObject:
         return self.db.request_json(
             "POST",
             "/v1/records/patch",
@@ -483,7 +626,9 @@ class TraceDBTable:
         }
         if tombstone is not None:
             body["tombstone"] = tombstone
-        return self.db.request_json("POST", "/v1/records/delete", body, idempotency_key=idempotency_key)
+        return self.db.request_json(
+            "POST", "/v1/records/delete", body, idempotency_key=idempotency_key
+        )
 
     def query(self) -> "TraceDBQueryBuilder":
         return TraceDBQueryBuilder(self.db, self.name, self.tenant_id)
@@ -500,10 +645,16 @@ class TraceDBTable:
     def near(self, field: str, vector: list[float]) -> "TraceDBQueryBuilder":
         return self.query().near(field, vector)
 
-    def _record_input(self, record_id: str, fields: JsonObject, path: str) -> JsonObject:
-        return self._record_input_with_tenant(record_id, dict(fields), self._required_tenant(path))
+    def _record_input(
+        self, record_id: str, fields: JsonObject, path: str
+    ) -> JsonObject:
+        return self._record_input_with_tenant(
+            record_id, dict(fields), self._required_tenant(path)
+        )
 
-    def _record_input_with_tenant(self, record_id: str, fields: JsonObject, tenant_id: str) -> JsonObject:
+    def _record_input_with_tenant(
+        self, record_id: str, fields: JsonObject, tenant_id: str
+    ) -> JsonObject:
         record_fields = dict(fields)
         record_fields.setdefault("id", record_id)
         record_fields.setdefault("tenant", tenant_id)
@@ -517,7 +668,9 @@ class TraceDBTable:
     def _required_tenant(self, path: str) -> str:
         if self.tenant_id:
             return self.tenant_id
-        raise TraceDBRequestError("POST", path, "table handle execution requires tenant(...)")
+        raise TraceDBRequestError(
+            "POST", path, "table handle execution requires tenant(...)"
+        )
 
 
 @dataclass(frozen=True)
@@ -564,7 +717,9 @@ class TraceDBQueryBuilder:
     ) -> "TraceDBQueryBuilder":
         return self._copy(
             explain=self.explain if explain is None else explain,
-            freshness=self.freshness if freshness is None else _normalize_freshness(freshness),
+            freshness=self.freshness
+            if freshness is None
+            else _normalize_freshness(freshness),
         )
 
     def limit(self, limit: int) -> "TraceDBQueryBuilder":
@@ -574,14 +729,22 @@ class TraceDBQueryBuilder:
         return self._copy(cursor_token=cursor)
 
     def all(self) -> JsonObject:
-        return self.db.request_json("POST", "/v1/query", self._hybrid_query("/v1/query"))
+        return self.db.request_json(
+            "POST", "/v1/query", self._hybrid_query("/v1/query")
+        )
 
     def explain_plan(self) -> JsonObject:
-        return self.db.request_json("POST", "/v1/explain", self._hybrid_query("/v1/explain"))
+        return self.db.request_json(
+            "POST", "/v1/explain", self._hybrid_query("/v1/explain")
+        )
 
     def _hybrid_query(self, path: str) -> JsonObject:
         if not self.tenant_id:
-            raise TraceDBRequestError("POST", path, "query execution requires tenant(...) or where({'tenant_id': ...})")
+            raise TraceDBRequestError(
+                "POST",
+                path,
+                "query execution requires tenant(...) or where({'tenant_id': ...})",
+            )
         body: JsonObject = {
             "table": self.table_name,
             "tenant_id": self.tenant_id,
@@ -607,7 +770,9 @@ class TraceDBQueryBuilder:
             "text_field": self.text_field,
             "text_query": self.text_query,
             "vector_field": self.vector_field,
-            "vector_query": list(self.vector_query) if self.vector_query is not None else None,
+            "vector_query": list(self.vector_query)
+            if self.vector_query is not None
+            else None,
             "top_k": self.top_k,
             "cursor_token": self.cursor_token,
             "freshness": self.freshness,
@@ -626,7 +791,9 @@ def _validate_idempotency_key(method: str, path: str, key: str) -> None:
 
 def _validated_header_value(name: str, value: str) -> str:
     if "\r" in value or "\n" in value:
-        raise TraceDBRequestError("CONFIG", name, "header values must not contain CR/LF")
+        raise TraceDBRequestError(
+            "CONFIG", name, "header values must not contain CR/LF"
+        )
     return value
 
 
@@ -636,27 +803,52 @@ def _parse_optional_nonnegative_int(variable: str, value: str | None) -> int | N
     try:
         parsed = int(value)
     except ValueError as error:
-        raise TraceDBRequestError("CONFIG", variable, f"{variable} must be a non-negative integer") from error
+        raise TraceDBRequestError(
+            "CONFIG", variable, f"{variable} must be a non-negative integer"
+        ) from error
     if parsed < 0:
-        raise TraceDBRequestError("CONFIG", variable, f"{variable} must be a non-negative integer")
+        raise TraceDBRequestError(
+            "CONFIG", variable, f"{variable} must be a non-negative integer"
+        )
     return parsed
+
+
+def _load_aiohttp() -> Any:
+    try:
+        import aiohttp
+    except ModuleNotFoundError as error:
+        if error.name == "aiohttp":
+            raise TraceDBRequestError(
+                "CONFIG",
+                "aiohttp",
+                "AsyncTraceDB requires aiohttp; install with tracedb[async]",
+            ) from error
+        raise
+    return aiohttp
 
 
 def _attempt_count(
     method: str,
     path: str,
+    body: JsonObject | None,
     safe_retries: int,
     idempotency_retries: int,
     idempotency_key: str | None,
 ) -> int:
-    if _is_idempotent_retry_request(method, path) and idempotency_key:
+    if (
+        idempotency_retries > 0
+        and _is_idempotent_retry_request(method, path)
+        and idempotency_key
+    ):
         return idempotency_retries + 1
-    if _is_retry_safe_request(method, path):
+    if _is_retry_safe_request(method, path, body):
         return safe_retries + 1
     return 1
 
 
-def _should_retry_http_error(method: str, path: str, status: int, attempt: int, attempts: int) -> bool:
+def _should_retry_http_error(
+    method: str, path: str, status: int, attempt: int, attempts: int
+) -> bool:
     return status >= 500 and attempt + 1 < attempts
 
 
@@ -668,24 +860,138 @@ def _sleep_before_retry(attempt: int) -> None:
     time.sleep(_retry_delay_seconds(attempt))
 
 
+async def _async_sleep_before_retry(attempt: int) -> None:
+    await asyncio.sleep(_retry_delay_seconds(attempt))
+
+
 def _retry_delay_seconds(attempt: int) -> float:
     base = min(5.0, 0.1 * (2 ** min(attempt, 30)))
     return min(5.0, base * random.uniform(0.75, 1.25))
 
 
-def _is_retry_safe_request(method: str, path: str) -> bool:
-    return (method, path.split("?", 1)[0]) in {
+def _is_retry_safe_request(method: str, path: str, body: JsonObject | None) -> bool:
+    route = path.split("?", 1)[0]
+    if (method, route) in {
         ("GET", "/v1/health"),
         ("GET", "/v1/ready"),
         ("GET", "/v1/graphql/schema"),
         ("POST", "/v1/records/get"),
         ("POST", "/v1/records/scan"),
         ("POST", "/v1/query"),
-        ("POST", "/v1/traceql"),
-        ("POST", "/v1/graphql"),
         ("POST", "/v1/graphql/bounded"),
         ("POST", "/v1/explain"),
+    }:
+        return True
+    if (method, route) == ("POST", "/v1/traceql"):
+        return _traceql_body_is_read_only(body)
+    if (method, route) == ("POST", "/v1/graphql"):
+        return _graphql_body_is_read_only(body)
+    return False
+
+
+def _traceql_body_is_read_only(body: JsonObject | None) -> bool:
+    query = body.get("query") if isinstance(body, dict) else None
+    if not isinstance(query, str):
+        return False
+    command = _traceql_command(query)
+    if command is None:
+        return True
+    return command in {
+        "RECORD GET",
+        "GET",
+        "RECORD SCAN",
+        "SCAN",
+        "QUERY",
+        "EXPLAIN",
+        "JOBS LIST",
     }
+
+
+def _traceql_command(query: str) -> str | None:
+    trimmed = query.lstrip()
+    for command in (
+        "SCHEMA APPLY",
+        "RECORD PUT",
+        "RECORD BATCH",
+        "RECORD PATCH",
+        "RECORD DELETE",
+        "RECORD GET",
+        "RECORD SCAN",
+        "ADMIN COMPACT",
+        "ADMIN SNAPSHOT",
+        "ADMIN RESTORE",
+        "JOBS LIST",
+        "JOBS RUN",
+        "EXPLAIN",
+        "QUERY",
+        "PUT",
+        "BATCH",
+        "PATCH",
+        "DELETE",
+        "GET",
+        "SCAN",
+        "COMPACT",
+        "SNAPSHOT",
+        "RESTORE",
+    ):
+        if trimmed[: len(command)].upper() == command and (
+            len(trimmed) == len(command) or trimmed[len(command)].isspace()
+        ):
+            return command
+    return None
+
+
+def _graphql_body_is_read_only(body: JsonObject | None) -> bool:
+    query = body.get("query") if isinstance(body, dict) else None
+    if not isinstance(query, str):
+        return False
+    return _graphql_root_field(query) in {"get", "scan", "query", "explain", "jobs"}
+
+
+def _graphql_root_field(query: str) -> str | None:
+    trimmed = query.lstrip()
+    if _word_starts_with(trimmed, "mutation") or _word_starts_with(
+        trimmed, "subscription"
+    ):
+        return None
+    if _word_starts_with(trimmed, "query"):
+        start = trimmed.find("{")
+        if start < 0:
+            return None
+        root = trimmed[start + 1 :]
+    elif trimmed.startswith("{"):
+        root = trimmed[1:]
+    else:
+        return None
+    parsed = _parse_graphql_name(root)
+    if parsed is None:
+        return None
+    name, rest = parsed
+    rest = rest.lstrip()
+    if rest.startswith(":"):
+        aliased = _parse_graphql_name(rest[1:])
+        return None if aliased is None else aliased[0]
+    return name
+
+
+def _parse_graphql_name(value: str) -> tuple[str, str] | None:
+    stripped = value.lstrip()
+    if not stripped or not (stripped[0] == "_" or stripped[0].isalpha()):
+        return None
+    index = 1
+    while index < len(stripped) and (
+        stripped[index] == "_" or stripped[index].isalnum()
+    ):
+        index += 1
+    return stripped[:index], stripped[index:]
+
+
+def _word_starts_with(value: str, word: str) -> bool:
+    if value[: len(word)].lower() != word:
+        return False
+    return len(value) == len(word) or not (
+        value[len(word)] == "_" or value[len(word)].isalnum()
+    )
 
 
 def _is_idempotent_retry_request(method: str, path: str) -> bool:

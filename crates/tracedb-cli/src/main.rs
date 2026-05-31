@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
@@ -24,6 +25,236 @@ use tracedb_sdk::{
     TraceDbRequestOptions,
 };
 
+#[derive(Parser)]
+#[command(name = "tracedb", about = "TraceDB CLI")]
+struct Cli {
+    #[arg(long, default_value = ".tracedb")]
+    data: PathBuf,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Init,
+    Create {
+        name: String,
+    },
+    Branch {
+        #[command(subcommand)]
+        command: BranchCommands,
+    },
+    Connect {
+        branch: Option<String>,
+    },
+    Serve {
+        bind: Option<String>,
+    },
+    Schema {
+        #[command(subcommand)]
+        command: SchemaCommands,
+    },
+    Insert {
+        input: Option<String>,
+    },
+    Put {
+        input: Option<String>,
+    },
+    Get {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    Patch {
+        input: Option<String>,
+    },
+    Delete {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    Feature {
+        #[command(subcommand)]
+        command: FeatureCommands,
+    },
+    Scan {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    Query {
+        input: Option<String>,
+    },
+    Explain {
+        input: Option<String>,
+    },
+    Recover,
+    Inspect {
+        #[command(subcommand)]
+        command: InspectCommands,
+    },
+    Backup {
+        target: String,
+    },
+    Compact,
+    Checkpoint,
+    Snapshot {
+        #[command(subcommand)]
+        command: SnapshotCommands,
+    },
+    Jobs {
+        #[command(subcommand)]
+        command: JobsCommands,
+    },
+    Doctor {
+        #[command(subcommand)]
+        command: Option<DoctorCommands>,
+    },
+    Demo,
+    HttpDemo,
+    ProductRegression(RegressionArgs),
+    ProductQuickstart(RegressionArgs),
+    DurabilityFaults(DataRootArgs),
+    StorageIndexJobs(DataRootArgs),
+    ApiParity(ApiParityArgs),
+    Compose {
+        action: Option<String>,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
+    },
+    Verify,
+    Export {
+        scope: Option<String>,
+    },
+    DeleteUser {
+        subject: String,
+    },
+    Bench {
+        workload: Option<String>,
+        records: Option<usize>,
+    },
+    Restore {
+        source: String,
+        target: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum BranchCommands {
+    Create {
+        name: String,
+        #[arg(long)]
+        from: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SchemaCommands {
+    Apply { path: String },
+}
+
+#[derive(Subcommand)]
+enum FeatureCommands {
+    Status {
+        #[command(subcommand)]
+        command: FeatureStatusCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum FeatureStatusCommands {
+    Set {
+        table: String,
+        tenant_id: String,
+        record_id: String,
+        feature: String,
+        status: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum InspectCommands {
+    Manifest,
+    Modules,
+    Segments,
+    Indexes,
+    Jobs,
+    Policies,
+    Wal,
+}
+
+#[derive(Subcommand)]
+enum SnapshotCommands {
+    Create { target: String },
+    Restore { source: String, target: String },
+    List,
+}
+
+#[derive(Subcommand)]
+enum JobsCommands {
+    List,
+    Run { job: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum DoctorCommands {
+    Http {
+        #[arg(long, env = "TRACEDB_URL")]
+        url: Option<String>,
+        #[arg(long, env = "TRACEDB_TOKEN", default_value = "dev-token")]
+        token: String,
+        #[arg(long, env = "TRACEDB_DATABASE_ID")]
+        database_id: Option<String>,
+        #[arg(long, env = "TRACEDB_BRANCH_ID")]
+        branch_id: Option<String>,
+        #[arg(long, env = "TRACEDB_TIMEOUT_MS", default_value = "1000")]
+        timeout_ms: u64,
+        #[arg(long, env = "TRACEDB_SAFE_RETRIES", default_value = "1")]
+        safe_retries: u8,
+        #[arg(long, env = "TRACEDB_WAIT_READY_MS", default_value = "0")]
+        wait_ready_ms: u64,
+    },
+}
+
+#[derive(Args, Clone)]
+struct RegressionArgs {
+    #[arg(long)]
+    data_root: Option<PathBuf>,
+    #[arg(long)]
+    keep_data: bool,
+    #[arg(long)]
+    skip_typescript: bool,
+    /// CLI flag: --inject-failure
+    #[arg(long = "inject-failure")]
+    inject_failure: Option<String>,
+    /// CLI flag: --report-file
+    #[arg(long)]
+    report_file: Option<PathBuf>,
+    /// CLI flag: --list-steps
+    #[arg(long)]
+    list_steps: bool,
+    /// CLI flag: --only
+    #[arg(long = "only", alias = "only-step")]
+    only_step: Option<String>,
+}
+
+#[derive(Args, Clone)]
+struct DataRootArgs {
+    #[arg(long)]
+    data_root: Option<PathBuf>,
+    #[arg(long)]
+    keep_data: bool,
+    #[arg(long = "inject-failure")]
+    inject_failure: Option<String>,
+    #[arg(long)]
+    report_file: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+struct ApiParityArgs {
+    #[arg(long = "inject-failure")]
+    inject_failure: Option<String>,
+    #[arg(long)]
+    report_file: Option<PathBuf>,
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("tracedb: {error}");
@@ -32,23 +263,18 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = env::args().skip(1).collect::<Vec<_>>();
-    let data_dir = take_data_dir(&mut args);
-    let Some(command) = args.first().cloned() else {
-        usage();
-        return Ok(());
-    };
+    let cli = Cli::parse();
+    let data_dir = cli.data;
 
-    match command.as_str() {
-        "init" => {
+    match cli.command {
+        Some(Commands::Init) => {
             TraceDb::open(&data_dir)?;
             print_json(json!({ "initialized": data_dir }));
         }
-        "create" => {
-            let name = args.get(1).ok_or("missing database name")?;
+        Some(Commands::Create { name }) => {
             let mut catalog = Catalog::default();
             let database = catalog
-                .create_database("local-org", "local-project", name, "local")
+                .create_database("local-org", "local-project", &name, "local")
                 .map_err(std::io::Error::other)?;
             let branch = catalog
                 .create_branch(&database.database_id, "main", None)
@@ -60,14 +286,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "default_branch": branch.branch_id,
             }));
         }
-        "branch" if args.get(1).map(String::as_str) == Some("create") => {
-            let name = args.get(2).ok_or("missing branch name")?;
-            let parent = args
-                .iter()
-                .position(|arg| arg == "--from")
-                .and_then(|idx| args.get(idx + 1))
-                .cloned();
-            let from = parent.unwrap_or_else(|| "main".to_string());
+        Some(Commands::Branch {
+            command: BranchCommands::Create { name, from },
+        }) => {
+            let from = from.unwrap_or_else(|| "main".to_string());
             let branch_dir = data_dir.join("catalog/branches");
             fs::create_dir_all(&branch_dir)?;
             fs::write(
@@ -84,69 +306,72 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "copy_on_write": true,
             }));
         }
-        "connect" => {
-            let branch = args.get(1).map(String::as_str).unwrap_or("main");
+        Some(Commands::Connect { branch }) => {
+            let branch = branch.as_deref().unwrap_or("main");
             print_json(json!({ "connected": branch, "mode": "local-daemon" }));
         }
-        "serve" => {
-            let bind = args
-                .get(1)
-                .cloned()
+        Some(Commands::Serve { bind }) => {
+            let bind = bind
+                .clone()
                 .or_else(|| env::var("TRACEDB_BIND").ok())
                 .unwrap_or_else(|| "127.0.0.1:8080".to_string());
             tracedb_server::serve(&data_dir, &bind)?;
         }
-        "schema" if args.get(1).map(String::as_str) == Some("apply") => {
-            let path = args.get(2).ok_or("missing schema json path")?;
+        Some(Commands::Schema {
+            command: SchemaCommands::Apply { path },
+        }) => {
             let schema: TableSchema = serde_json::from_str(&fs::read_to_string(path)?)?;
             let mut db = TraceDb::open(&data_dir)?;
             let epoch = db.apply_schema(schema)?;
             print_json(json!({ "epoch": epoch.get() }));
         }
-        "insert" => {
-            let input: RecordInput = serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?;
+        Some(Commands::Insert { input }) => {
+            let input: RecordInput = serde_json::from_str(&read_arg_or_stdin(input.as_ref())?)?;
             let mut db = TraceDb::open(&data_dir)?;
             let epoch = db.insert(input)?;
             print_json(json!({ "epoch": epoch.get() }));
         }
-        "put" => {
-            let input: RecordInput = serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?;
+        Some(Commands::Put { input }) => {
+            let input: RecordInput = serde_json::from_str(&read_arg_or_stdin(input.as_ref())?)?;
             let mut db = TraceDb::open(&data_dir)?;
             let epoch = db.put(RecordPutRequest::new(input))?;
             print_json(json!({ "epoch": epoch.get() }));
         }
-        "get" => {
+        Some(Commands::Get { args }) => {
             let request = record_get_from_args_or_json(&args)?;
             let db = TraceDb::open(&data_dir)?;
             print_json(json!({ "record": db.get(request)? }));
         }
-        "patch" => {
+        Some(Commands::Patch { input }) => {
             let request: RecordPatchRequest =
-                serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?;
+                serde_json::from_str(&read_arg_or_stdin(input.as_ref())?)?;
             let mut db = TraceDb::open(&data_dir)?;
             let epoch = db.patch(request)?;
             print_json(json!({ "epoch": epoch.get() }));
         }
-        "delete" => {
+        Some(Commands::Delete { args }) => {
             let request = record_delete_from_args_or_json(&args)?;
             let mut db = TraceDb::open(&data_dir)?;
             let epoch = db.delete(request)?;
             print_json(json!({ "deleted": true, "epoch": epoch.get() }));
         }
-        "feature"
-            if args.get(1).map(String::as_str) == Some("status")
-                && args.get(2).map(String::as_str) == Some("set") =>
-        {
-            let table = args.get(3).ok_or("missing table")?;
-            let tenant_id = args.get(4).ok_or("missing tenant id")?;
-            let record_id = args.get(5).ok_or("missing record id")?;
-            let feature = args.get(6).ok_or("missing feature name")?;
-            let status = serde_json::from_value(json!(canonical_feature_status(
-                args.get(7).ok_or("missing feature status")?
-            )?))?;
+        Some(Commands::Feature {
+            command:
+                FeatureCommands::Status {
+                    command:
+                        FeatureStatusCommands::Set {
+                            table,
+                            tenant_id,
+                            record_id,
+                            feature,
+                            status,
+                        },
+                },
+        }) => {
+            let status = serde_json::from_value(json!(canonical_feature_status(&status)?))?;
             let mut db = TraceDb::open(&data_dir)?;
-            let epoch = db.set_feature_status(table, tenant_id, record_id, feature, status)?;
-            let state = db.feature_state(table, tenant_id, record_id, feature)?;
+            let epoch = db.set_feature_status(&table, &tenant_id, &record_id, &feature, status)?;
+            let state = db.feature_state(&table, &tenant_id, &record_id, &feature)?;
             print_json(json!({
                 "table": table,
                 "tenant_id": tenant_id,
@@ -156,54 +381,68 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "epoch": epoch.get(),
             }));
         }
-        "scan" => {
+        Some(Commands::Scan { args }) => {
             let request = record_scan_from_args_or_json(&args)?;
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.scan(request)?)?);
         }
-        "query" => {
-            let query: HybridQuery = serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?;
+        Some(Commands::Query { input }) => {
+            let query: HybridQuery = serde_json::from_str(&read_arg_or_stdin(input.as_ref())?)?;
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.query(query)?)?);
         }
-        "explain" => {
-            let mut query: HybridQuery = serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?;
+        Some(Commands::Explain { input }) => {
+            let mut query: HybridQuery = serde_json::from_str(&read_arg_or_stdin(input.as_ref())?)?;
             query.explain = true;
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.query(query)?.explain)?);
         }
-        "recover" => {
+        Some(Commands::Recover) => {
             let db = TraceDb::open(&data_dir)?;
             print_json(json!({ "latest_epoch": db.inspect_manifest()?.latest_epoch.get() }));
         }
-        "inspect" if args.get(1).map(String::as_str) == Some("manifest") => {
+        Some(Commands::Inspect {
+            command: InspectCommands::Manifest,
+        }) => {
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.inspect_manifest()?)?);
         }
-        "inspect" if args.get(1).map(String::as_str) == Some("modules") => {
+        Some(Commands::Inspect {
+            command: InspectCommands::Modules,
+        }) => {
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.registered_module_catalog())?);
         }
-        "inspect" if args.get(1).map(String::as_str) == Some("segments") => {
+        Some(Commands::Inspect {
+            command: InspectCommands::Segments,
+        }) => {
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.inspect_manifest()?.segments)?);
         }
-        "inspect" if args.get(1).map(String::as_str) == Some("indexes") => {
+        Some(Commands::Inspect {
+            command: InspectCommands::Indexes,
+        }) => {
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.inspect_manifest()?.indexes)?);
         }
-        "inspect" if args.get(1).map(String::as_str) == Some("jobs") => {
+        Some(Commands::Inspect {
+            command: InspectCommands::Jobs,
+        }) => {
             let db = TraceDb::open(&data_dir)?;
             print_json(serde_json::to_value(db.inspect_manifest()?.job_queues)?);
         }
-        "inspect" if args.get(1).map(String::as_str) == Some("policies") => {
+        Some(Commands::Inspect {
+            command: InspectCommands::Policies,
+        }) => {
             print_json(json!({
                 "policy_index": "tenant-mask",
                 "final_visibility_guard": true,
                 "retrieval_pushdown": true,
             }));
         }
-        "inspect" if args.get(1).map(String::as_str) == Some("wal") => {
+        Some(Commands::Inspect {
+            command: InspectCommands::Wal,
+        }) => {
             let db = TraceDb::open(&data_dir)?;
             let entries = db
                 .inspect_wal()?
@@ -212,13 +451,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .collect::<Vec<_>>();
             print_json(Value::Array(entries));
         }
-        "backup" => {
-            let target = args.get(1).ok_or("missing backup directory")?;
+        Some(Commands::Backup { target }) => {
             let db = TraceDb::open(&data_dir)?;
-            db.backup(target)?;
+            db.backup(target.clone())?;
             print_json(json!({ "backup": target }));
         }
-        "compact" => {
+        Some(Commands::Compact) => {
             let mut db = TraceDb::open(&data_dir)?;
             db.compact()?;
             let manifest = db.inspect_manifest()?;
@@ -228,30 +466,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "index_count": manifest.indexes.len(),
             }));
         }
-        "checkpoint" => {
+        Some(Commands::Checkpoint) => {
             let mut db = TraceDb::open(&data_dir)?;
             let epoch = db.checkpoint()?;
             print_json(json!({ "checkpoint_epoch": epoch.get() }));
         }
-        "snapshot" if args.get(1).map(String::as_str) == Some("create") => {
-            let target = args.get(2).ok_or("missing snapshot target directory")?;
+        Some(Commands::Snapshot {
+            command: SnapshotCommands::Create { target },
+        }) => {
             let db = TraceDb::open(&data_dir)?;
-            db.create_snapshot(target)?;
+            db.create_snapshot(target.clone())?;
             print_json(json!({ "snapshot": target }));
         }
-        "snapshot" if args.get(1).map(String::as_str) == Some("restore") => {
-            let source = args.get(2).ok_or("missing snapshot source directory")?;
-            let target = args
-                .get(3)
-                .map(PathBuf::from)
-                .ok_or("missing restore target directory; refusing to overwrite active --data")?;
-            TraceDb::restore_snapshot(source, &target)?;
+        Some(Commands::Snapshot {
+            command: SnapshotCommands::Restore { source, target },
+        }) => {
+            TraceDb::restore_snapshot(source, PathBuf::from(target.clone()))?;
             print_json(json!({ "restored": target }));
         }
-        "snapshot" if args.get(1).map(String::as_str) == Some("list") => {
+        Some(Commands::Snapshot {
+            command: SnapshotCommands::List,
+        }) => {
             print_json(json!({ "snapshots": list_snapshot_dirs(&data_dir)? }));
         }
-        "jobs" if args.get(1).map(String::as_str) == Some("list") => {
+        Some(Commands::Jobs {
+            command: JobsCommands::List,
+        }) => {
             let db = TraceDb::open(&data_dir)?;
             let jobs = db.jobs()?;
             print_json(json!({
@@ -266,49 +506,75 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "jobs": jobs,
             }));
         }
-        "jobs" if args.get(1).map(String::as_str) == Some("run") => {
-            let job = args.get(2).map(String::as_str).unwrap_or("compact");
+        Some(Commands::Jobs {
+            command: JobsCommands::Run { job },
+        }) => {
+            let job = job.as_deref().unwrap_or("compact");
             let mut db = TraceDb::open(&data_dir)?;
             print_json(run_local_job(&mut db, job, &data_dir)?);
         }
-        "doctor" if args.get(1).map(String::as_str) == Some("http") => {
-            let config = parse_http_doctor_config(&args[2..])?;
+        Some(Commands::Doctor {
+            command:
+                Some(DoctorCommands::Http {
+                    url,
+                    token,
+                    database_id,
+                    branch_id,
+                    timeout_ms,
+                    safe_retries,
+                    wait_ready_ms,
+                }),
+        }) => {
+            let url = url
+                .as_deref()
+                .ok_or("missing --url or TRACEDB_URL for doctor http")?
+                .trim_end_matches('/')
+                .to_string();
+            let config = HttpDoctorConfig {
+                url,
+                token: token.clone(),
+                database_id: database_id.clone(),
+                branch_id: branch_id.clone(),
+                timeout_ms,
+                safe_retries,
+                wait_ready_ms,
+            };
             run_http_doctor_command(config)?;
         }
-        "doctor" => {
+        Some(Commands::Doctor { command: None }) => {
             print_json(run_doctor(&data_dir));
         }
-        "demo" => {
+        Some(Commands::Demo) => {
             run_demo(&data_dir)?;
         }
-        "http-demo" => {
+        Some(Commands::HttpDemo) => {
             run_http_demo(&data_dir)?;
         }
-        "product-regression" => {
-            let config = parse_product_regression_config(&args[1..])?;
+        Some(Commands::ProductRegression(args)) => {
+            let config = regression_config_from_args(args)?;
             run_product_regression(config)?;
         }
-        "product-quickstart" => {
-            let config = parse_product_quickstart_config(&args[1..])?;
+        Some(Commands::ProductQuickstart(args)) => {
+            let config = quickstart_config_from_args(args)?;
             run_product_regression(config)?;
         }
-        "durability-faults" => {
-            let config = parse_durability_faults_config(&args[1..])?;
+        Some(Commands::DurabilityFaults(args)) => {
+            let config = durability_faults_config_from_args(args)?;
             run_durability_faults(config)?;
         }
-        "storage-index-jobs" => {
-            let config = parse_storage_index_jobs_config(&args[1..])?;
+        Some(Commands::StorageIndexJobs(args)) => {
+            let config = storage_index_jobs_config_from_args(args)?;
             run_storage_index_jobs(config)?;
         }
-        "api-parity" => {
-            let config = parse_api_parity_config(&args[1..])?;
+        Some(Commands::ApiParity(args)) => {
+            let config = api_parity_config_from_args(args)?;
             run_api_parity(config)?;
         }
-        "compose" => {
-            let action = args.get(1).map(String::as_str).unwrap_or("status");
-            run_compose(action, &args[2..])?;
+        Some(Commands::Compose { action, extra }) => {
+            let action = action.as_deref().unwrap_or("status");
+            run_compose(action, &extra)?;
         }
-        "verify" => {
+        Some(Commands::Verify) => {
             let db = TraceDb::open(&data_dir)?;
             let wal_entries = db.inspect_wal()?.len();
             let manifest = db.inspect_manifest()?;
@@ -320,16 +586,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "manifest_checksum": manifest.checksums.manifest_checksum,
             }));
         }
-        "export" => {
-            let scope = args.get(1).map(String::as_str).unwrap_or("all");
+        Some(Commands::Export { scope }) => {
+            let scope = scope.as_deref().unwrap_or("all");
             print_json(json!({
                 "scope": scope,
                 "mode": "export_redaction",
                 "covers": ["rows", "vectors", "text", "graph", "provenance", "jobs", "snapshots"],
             }));
         }
-        "delete-user" => {
-            let subject = args.get(1).ok_or("missing subject id")?;
+        Some(Commands::DeleteUser { subject }) => {
             print_json(json!({
                 "subject": subject,
                 "mode": "logical_delete",
@@ -337,12 +602,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "legal_hold_checked": true,
             }));
         }
-        "bench" => {
-            let workload = args.get(1).map(String::as_str).unwrap_or("ai-chat-memory");
-            let records = args
-                .get(2)
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(100_000);
+        Some(Commands::Bench { workload, records }) => {
+            let workload = workload.as_deref().unwrap_or("ai-chat-memory");
+            let records = records.unwrap_or(100_000);
             let kind = match workload {
                 "search-rag-6" => WorkloadKind::SearchRag6,
                 "postgres-relational" => WorkloadKind::PostgresRelational,
@@ -364,16 +626,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "baselines": target.baselines(),
             }));
         }
-        "restore" => {
-            let source = args.get(1).ok_or("missing backup directory")?;
-            let target = args
-                .get(2)
-                .map(PathBuf::from)
-                .ok_or("missing restore target directory; refusing to overwrite active --data")?;
-            TraceDb::restore(source, &target)?;
+        Some(Commands::Restore { source, target }) => {
+            TraceDb::restore(source, PathBuf::from(target.clone()))?;
             print_json(json!({ "restored": target }));
         }
-        _ => usage(),
+        None => {}
     }
 
     Ok(())
@@ -382,32 +639,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn record_get_from_args_or_json(
     args: &[String],
 ) -> Result<RecordGetRequest, Box<dyn std::error::Error>> {
-    if args.len() >= 4 {
-        return Ok(RecordGetRequest::new(&args[1], &args[2], &args[3]));
+    if args.len() >= 3 {
+        return Ok(RecordGetRequest::new(&args[0], &args[1], &args[2]));
     }
-    Ok(serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?)
+    Ok(serde_json::from_str(&read_arg_or_stdin(args.first())?)?)
 }
 
 fn record_delete_from_args_or_json(
     args: &[String],
 ) -> Result<RecordDeleteRequest, Box<dyn std::error::Error>> {
-    if args.len() >= 4 {
-        return Ok(RecordDeleteRequest::new(&args[1], &args[2], &args[3]));
+    if args.len() >= 3 {
+        return Ok(RecordDeleteRequest::new(&args[0], &args[1], &args[2]));
     }
-    Ok(serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?)
+    Ok(serde_json::from_str(&read_arg_or_stdin(args.first())?)?)
 }
 
 fn record_scan_from_args_or_json(
     args: &[String],
 ) -> Result<RecordScanRequest, Box<dyn std::error::Error>> {
-    if args.len() >= 3 {
+    if args.len() >= 2 {
         let limit = args
-            .get(3)
+            .get(2)
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(100);
-        return Ok(RecordScanRequest::new(&args[1], &args[2]).limit(limit));
+        return Ok(RecordScanRequest::new(&args[0], &args[1]).limit(limit));
     }
-    Ok(serde_json::from_str(&read_arg_or_stdin(args.get(1))?)?)
+    Ok(serde_json::from_str(&read_arg_or_stdin(args.first())?)?)
 }
 
 fn list_snapshot_dirs(data_dir: &std::path::Path) -> std::io::Result<Vec<String>> {
@@ -483,101 +740,106 @@ struct HttpDoctorConfig {
     wait_ready_ms: u64,
 }
 
-fn parse_http_doctor_config(
-    args: &[String],
-) -> Result<HttpDoctorConfig, Box<dyn std::error::Error>> {
-    let mut url = env::var("TRACEDB_URL").ok();
-    let mut token = env::var("TRACEDB_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
-    let mut database_id = env::var("TRACEDB_DATABASE_ID").ok();
-    let mut branch_id = env::var("TRACEDB_BRANCH_ID").ok();
-    let mut timeout_ms = env::var("TRACEDB_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1_000)
-        .max(1);
-    let mut safe_retries = env::var("TRACEDB_SAFE_RETRIES")
-        .ok()
-        .and_then(|value| value.parse::<u8>().ok())
-        .unwrap_or(1);
-    let mut wait_ready_ms = env::var("TRACEDB_WAIT_READY_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--url" => {
-                idx += 1;
-                url = Some(
-                    args.get(idx)
-                        .ok_or("missing value for --url")?
-                        .trim_end_matches('/')
-                        .to_string(),
-                );
+fn regression_config_from_args(
+    args: RegressionArgs,
+) -> Result<ProductRegressionConfig, Box<dyn std::error::Error>> {
+    let data_root = args.data_root;
+    let keep_data = args.keep_data;
+    let skip_typescript = args.skip_typescript;
+    let inject_failure = args.inject_failure;
+    let report_file = args.report_file;
+    let list_steps = args.list_steps;
+    let only_step = args.only_step;
+    if skip_typescript {
+        if let Some(step) = only_step.as_deref() {
+            if product_regression_step_is_typescript(step) {
+                return Err(format!(
+                    "product-regression --only {step} conflicts with --skip-typescript; remove --skip-typescript or choose a non-TypeScript step"
+                )
+                .into());
             }
-            "--token" => {
-                idx += 1;
-                token = args.get(idx).ok_or("missing value for --token")?.clone();
-            }
-            "--database-id" => {
-                idx += 1;
-                database_id = Some(
-                    args.get(idx)
-                        .ok_or("missing value for --database-id")?
-                        .clone(),
-                );
-            }
-            "--branch-id" => {
-                idx += 1;
-                branch_id = Some(
-                    args.get(idx)
-                        .ok_or("missing value for --branch-id")?
-                        .clone(),
-                );
-            }
-            "--timeout-ms" => {
-                idx += 1;
-                timeout_ms = args
-                    .get(idx)
-                    .ok_or("missing value for --timeout-ms")?
-                    .parse::<u64>()
-                    .map_err(|_| "--timeout-ms must be an unsigned integer")?
-                    .max(1);
-            }
-            "--safe-retries" => {
-                idx += 1;
-                safe_retries = args
-                    .get(idx)
-                    .ok_or("missing value for --safe-retries")?
-                    .parse::<u8>()
-                    .map_err(|_| "--safe-retries must fit in u8")?;
-            }
-            "--wait-ready-ms" => {
-                idx += 1;
-                wait_ready_ms = args
-                    .get(idx)
-                    .ok_or("missing value for --wait-ready-ms")?
-                    .parse::<u64>()
-                    .map_err(|_| "--wait-ready-ms must be an unsigned integer")?;
-            }
-            other => return Err(format!("unknown doctor http option {other}").into()),
         }
-        idx += 1;
     }
+    let cleanup_data = data_root.is_none() && !keep_data;
+    let data_root = data_root.unwrap_or_else(default_product_regression_root);
+    Ok(ProductRegressionConfig {
+        data_root,
+        cleanup_data,
+        keep_data,
+        skip_typescript,
+        inject_failure,
+        report_file,
+        list_steps,
+        only_step,
+    })
+}
 
-    let url = url
-        .ok_or("missing --url or TRACEDB_URL for doctor http")?
-        .trim_end_matches('/')
-        .to_string();
-    Ok(HttpDoctorConfig {
-        url,
-        token,
-        database_id,
-        branch_id,
-        timeout_ms,
-        safe_retries,
-        wait_ready_ms,
+fn quickstart_config_from_args(
+    args: RegressionArgs,
+) -> Result<ProductRegressionConfig, Box<dyn std::error::Error>> {
+    let mut config = regression_config_from_args(args)?;
+    if config.report_file.is_none() {
+        config.report_file = Some(default_product_quickstart_report_file()?);
+    }
+    Ok(config)
+}
+
+fn durability_faults_config_from_args(
+    args: DataRootArgs,
+) -> Result<DurabilityFaultsConfig, Box<dyn std::error::Error>> {
+    let data_root = args.data_root;
+    let keep_data = args.keep_data;
+    let inject_failure = args.inject_failure;
+    let report_file = args.report_file;
+    let cleanup_data = data_root.is_none() && !keep_data;
+    let data_root = data_root.unwrap_or_else(default_durability_faults_root);
+    let report_file = report_file.or_else(|| default_durability_faults_report_file().ok());
+    Ok(DurabilityFaultsConfig {
+        data_root,
+        cleanup_data,
+        keep_data,
+        inject_failure,
+        report_file,
+    })
+}
+
+fn storage_index_jobs_config_from_args(
+    args: DataRootArgs,
+) -> Result<StorageIndexJobsConfig, Box<dyn std::error::Error>> {
+    let data_root = args.data_root;
+    let keep_data = args.keep_data;
+    let inject_failure = args.inject_failure;
+    let report_file = args.report_file;
+    let cleanup_data = data_root.is_none() && !keep_data;
+    let data_root = data_root.unwrap_or_else(default_storage_index_jobs_root);
+    let report_file = report_file.or_else(|| default_storage_index_jobs_report_file().ok());
+    if let Some(ref scenario) = inject_failure {
+        if !STORAGE_INDEX_JOB_SCENARIOS.contains(&scenario.as_str()) {
+            return Err(format!(
+                "unknown storage-index-jobs failure injection scenario {scenario}; expected one of {}",
+                STORAGE_INDEX_JOB_SCENARIOS.join(", ")
+            )
+            .into());
+        }
+    }
+    Ok(StorageIndexJobsConfig {
+        data_root,
+        cleanup_data,
+        keep_data,
+        inject_failure,
+        report_file,
+    })
+}
+
+fn api_parity_config_from_args(
+    args: ApiParityArgs,
+) -> Result<ApiParityConfig, Box<dyn std::error::Error>> {
+    let report_file = args
+        .report_file
+        .or_else(|| default_api_parity_report_file().ok());
+    Ok(ApiParityConfig {
+        report_file,
+        inject_failure: args.inject_failure,
     })
 }
 
@@ -1076,7 +1338,7 @@ const STORAGE_INDEX_JOB_SCENARIOS: &[&str] = &[
     "checksum_corruption",
     "encrypted_binary_artifacts",
     "bm25_query_parity",
-    "hnsw_vector_parity",
+    "greedy_nn_vector_parity",
     "bitmap_policy_filtering",
     "stale_sealed_candidate_hot_materialization",
     "vacuum_safety",
@@ -1109,62 +1371,6 @@ struct StorageIndexJobsConfig {
 struct ApiParityConfig {
     report_file: Option<PathBuf>,
     inject_failure: Option<String>,
-}
-
-fn parse_durability_faults_config(
-    args: &[String],
-) -> Result<DurabilityFaultsConfig, Box<dyn std::error::Error>> {
-    let mut data_root = None;
-    let mut keep_data = false;
-    let mut inject_failure = None;
-    let mut report_file = None;
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--data-root" => {
-                idx += 1;
-                data_root = Some(PathBuf::from(
-                    args.get(idx).ok_or("missing value for --data-root")?,
-                ));
-            }
-            "--keep-data" => keep_data = true,
-            "--report-file" => {
-                idx += 1;
-                report_file = Some(PathBuf::from(
-                    args.get(idx).ok_or("missing value for --report-file")?,
-                ));
-            }
-            "--inject-failure" => {
-                idx += 1;
-                let scenario = args
-                    .get(idx)
-                    .ok_or("missing value for --inject-failure")?
-                    .to_string();
-                if !DURABILITY_FAULT_SCENARIOS.contains(&scenario.as_str()) {
-                    return Err(format!(
-                        "unknown durability-faults failure injection scenario {scenario}; expected one of {}",
-                        DURABILITY_FAULT_SCENARIOS.join(", ")
-                    )
-                    .into());
-                }
-                inject_failure = Some(scenario);
-            }
-            other => return Err(format!("unknown durability-faults option {other}").into()),
-        }
-        idx += 1;
-    }
-    let cleanup_data = data_root.is_none() && !keep_data;
-    let data_root = data_root.unwrap_or_else(default_durability_faults_root);
-    if report_file.is_none() {
-        report_file = Some(default_durability_faults_report_file()?);
-    }
-    Ok(DurabilityFaultsConfig {
-        data_root,
-        cleanup_data,
-        keep_data,
-        inject_failure,
-        report_file,
-    })
 }
 
 fn default_durability_faults_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -1362,7 +1568,10 @@ fn durability_fault_manifest_corruption(
 
     let manifest_path = dir.join("manifest.tdb");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
-    manifest["checksums"]["manifest_checksum"] = json!(1_u32);
+    manifest["checksums"]["manifest_checksum"] = json!([
+        1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0
+    ]);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
     let error = TraceDb::open(dir)
         .expect_err("corrupt manifest checksum must fail open")
@@ -1421,15 +1630,17 @@ fn durability_fault_stale_lock_recovery(
     fs::create_dir_all(dir.join("wal"))?;
     fs::write(dir.join("wal/000001.twal.lock"), "999999999")?;
     db.apply_schema(demo_schema("docs"))?;
-    let engine_lock_removed = !dir.join("engine.write.lock").exists();
-    let wal_lock_removed = !dir.join("wal/000001.twal.lock").exists();
-    if !engine_lock_removed || !wal_lock_removed {
-        return Err("stale engine/WAL locks were not recovered".into());
+    // With fs2 advisory locks, stale lock files (not held by any process)
+    // are acquired directly; the files persist after release.
+    let engine_lock_acquired = dir.join("engine.write.lock").exists();
+    let wal_lock_acquired = dir.join("wal/000001.twal.lock").exists();
+    if !engine_lock_acquired || !wal_lock_acquired {
+        return Err("stale engine/WAL locks were not acquired".into());
     }
     Ok(json!({
-        "evidence": "stale owner PID lock files were removed after explicit safety checks",
-        "engine_lock_removed": engine_lock_removed,
-        "wal_lock_removed": wal_lock_removed,
+        "evidence": "stale owner PID lock files were acquired via fs2 advisory locks",
+        "engine_lock_acquired": engine_lock_acquired,
+        "wal_lock_acquired": wal_lock_acquired,
     }))
 }
 
@@ -1589,62 +1800,6 @@ fn seed_encrypted_db(
     Ok(())
 }
 
-fn parse_storage_index_jobs_config(
-    args: &[String],
-) -> Result<StorageIndexJobsConfig, Box<dyn std::error::Error>> {
-    let mut data_root = None;
-    let mut keep_data = false;
-    let mut inject_failure = None;
-    let mut report_file = None;
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--data-root" => {
-                idx += 1;
-                data_root = Some(PathBuf::from(
-                    args.get(idx).ok_or("missing value for --data-root")?,
-                ));
-            }
-            "--keep-data" => keep_data = true,
-            "--report-file" => {
-                idx += 1;
-                report_file = Some(PathBuf::from(
-                    args.get(idx).ok_or("missing value for --report-file")?,
-                ));
-            }
-            "--inject-failure" => {
-                idx += 1;
-                let scenario = args
-                    .get(idx)
-                    .ok_or("missing value for --inject-failure")?
-                    .to_string();
-                if !STORAGE_INDEX_JOB_SCENARIOS.contains(&scenario.as_str()) {
-                    return Err(format!(
-                        "unknown storage-index-jobs failure injection scenario {scenario}; expected one of {}",
-                        STORAGE_INDEX_JOB_SCENARIOS.join(", ")
-                    )
-                    .into());
-                }
-                inject_failure = Some(scenario);
-            }
-            other => return Err(format!("unknown storage-index-jobs option {other}").into()),
-        }
-        idx += 1;
-    }
-    let cleanup_data = data_root.is_none() && !keep_data;
-    let data_root = data_root.unwrap_or_else(default_storage_index_jobs_root);
-    if report_file.is_none() {
-        report_file = Some(default_storage_index_jobs_report_file()?);
-    }
-    Ok(StorageIndexJobsConfig {
-        data_root,
-        cleanup_data,
-        keep_data,
-        inject_failure,
-        report_file,
-    })
-}
-
 fn default_storage_index_jobs_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(product_regression_workspace_root()?.join(STORAGE_INDEX_JOBS_REPORT_FILE))
 }
@@ -1717,7 +1872,7 @@ fn run_storage_index_job_scenario(
         "checksum_corruption" => storage_checksum_corruption(dir),
         "encrypted_binary_artifacts" => storage_encrypted_binary_artifacts(dir),
         "bm25_query_parity" => storage_bm25_query_parity(dir),
-        "hnsw_vector_parity" => storage_hnsw_vector_parity(dir),
+        "greedy_nn_vector_parity" => storage_greedy_nn_vector_parity(dir),
         "bitmap_policy_filtering" => storage_bitmap_policy_filtering(dir),
         "stale_sealed_candidate_hot_materialization" => {
             storage_stale_sealed_candidate_hot_materialization(dir)
@@ -1749,39 +1904,6 @@ fn storage_index_job_scenario_summary(result: Result<Value, Box<dyn std::error::
             "error": error.to_string(),
         }),
     }
-}
-
-fn parse_api_parity_config(args: &[String]) -> Result<ApiParityConfig, Box<dyn std::error::Error>> {
-    let mut report_file = None;
-    let mut inject_failure = None;
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--report-file" => {
-                idx += 1;
-                report_file = Some(PathBuf::from(
-                    args.get(idx).ok_or("missing value for --report-file")?,
-                ));
-            }
-            "--inject-failure" => {
-                idx += 1;
-                inject_failure = Some(
-                    args.get(idx)
-                        .ok_or("missing value for --inject-failure")?
-                        .to_string(),
-                );
-            }
-            other => return Err(format!("unknown api-parity option {other}").into()),
-        }
-        idx += 1;
-    }
-    if report_file.is_none() {
-        report_file = Some(default_api_parity_report_file()?);
-    }
-    Ok(ApiParityConfig {
-        report_file,
-        inject_failure,
-    })
 }
 
 fn default_api_parity_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -1938,7 +2060,7 @@ fn storage_legacy_json_segment_read(
     let mut object =
         tracedb_segment::SegmentObject::from_records("legacy-json", 1, storage_segment_records())?;
     object.format_version = tracedb_segment::SEGMENT_LEGACY_JSON_FORMAT_VERSION;
-    object.object_checksum = 0;
+    object.object_checksum = [0u8; 32];
     object.object_checksum = tracedb_segment::compute_segment_object_checksum(&object)?;
     let path = dir.join("legacy-json.tseg");
     fs::write(&path, serde_json::to_vec_pretty(&object)?)?;
@@ -2052,14 +2174,16 @@ fn storage_bm25_query_parity(dir: &std::path::Path) -> Result<Value, Box<dyn std
     }))
 }
 
-fn storage_hnsw_vector_parity(dir: &std::path::Path) -> Result<Value, Box<dyn std::error::Error>> {
+fn storage_greedy_nn_vector_parity(
+    dir: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error>> {
     let mut db = seed_storage_index_db(dir)?;
     let before = query_record_ids(&db, "", Some(vec![1.0, 0.0, 0.0]), "tenant-a")?;
     db.compact()?;
     let after = query_record_ids(&db, "", Some(vec![1.0, 0.0, 0.0]), "tenant-a")?;
     if before != after {
         return Err(
-            format!("HNSW vector parity mismatch before={before:?} after={after:?}").into(),
+            format!("greedy NN vector parity mismatch before={before:?} after={after:?}").into(),
         );
     }
     let vector_index = first_index_artifact(dir, &db, "vector")?;
@@ -2068,14 +2192,14 @@ fn storage_hnsw_vector_parity(dir: &std::path::Path) -> Result<Value, Box<dyn st
         .ok_or("vector index artifact payload missing")?;
     let nearest = vector.search_vector("embedding", &[1.0, 0.0, 0.0], 2);
     let neighbors = vector
-        .hnsw_neighbors("embedding", "alpha")
+        .greedy_nn_neighbors("embedding", "alpha")
         .cloned()
         .unwrap_or_default();
     if nearest.first().map(|score| score.record_id.as_str()) != Some("alpha") {
         return Err("vector artifact nearest neighbor did not match exact result".into());
     }
     Ok(json!({
-        "evidence": "segment-local deterministic HNSW artifact matched exact vector query top result",
+        "evidence": "segment-local deterministic greedy NN artifact matched exact vector query top result",
         "record_ids": after,
         "nearest": nearest.iter().map(|score| score.record_id.clone()).collect::<Vec<_>>(),
         "alpha_neighbors": neighbors,
@@ -2574,99 +2698,6 @@ fn first_index_artifact(
         dir.join(&index.object_path),
         None,
     )?)
-}
-
-fn parse_product_regression_config(
-    args: &[String],
-) -> Result<ProductRegressionConfig, Box<dyn std::error::Error>> {
-    let mut data_root = None;
-    let mut keep_data = false;
-    let mut skip_typescript = false;
-    let mut inject_failure = None;
-    let mut report_file = None;
-    let mut list_steps = false;
-    let mut only_step = None;
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--data-root" => {
-                idx += 1;
-                data_root = Some(PathBuf::from(
-                    args.get(idx).ok_or("missing value for --data-root")?,
-                ));
-            }
-            "--keep-data" => keep_data = true,
-            "--skip-typescript" => skip_typescript = true,
-            "--list-steps" => list_steps = true,
-            "--report-file" => {
-                idx += 1;
-                report_file = Some(PathBuf::from(
-                    args.get(idx).ok_or("missing value for --report-file")?,
-                ));
-            }
-            "--only" => {
-                idx += 1;
-                let step = args.get(idx).ok_or("missing value for --only")?.to_string();
-                if !PRODUCT_REGRESSION_ONLY_STEPS.contains(&step.as_str()) {
-                    return Err(format!(
-                        "product-regression --only currently supports {}; got {step}",
-                        PRODUCT_REGRESSION_ONLY_STEPS.join(", ")
-                    )
-                    .into());
-                }
-                only_step = Some(step);
-            }
-            "--inject-failure" => {
-                idx += 1;
-                let step = args
-                    .get(idx)
-                    .ok_or("missing value for --inject-failure")?
-                    .to_string();
-                if !PRODUCT_REGRESSION_STEPS.contains(&step.as_str()) {
-                    return Err(format!(
-                        "unknown product-regression failure injection step {step}; expected one of {}",
-                        PRODUCT_REGRESSION_STEPS.join(", ")
-                    )
-                    .into());
-                }
-                inject_failure = Some(step);
-            }
-            other => return Err(format!("unknown product-regression option {other}").into()),
-        }
-        idx += 1;
-    }
-    if skip_typescript {
-        if let Some(step) = only_step.as_deref() {
-            if product_regression_step_is_typescript(step) {
-                return Err(format!(
-                    "product-regression --only {step} conflicts with --skip-typescript; remove --skip-typescript or choose a non-TypeScript step"
-                )
-                .into());
-            }
-        }
-    }
-    let cleanup_data = data_root.is_none() && !keep_data;
-    let data_root = data_root.unwrap_or_else(default_product_regression_root);
-    Ok(ProductRegressionConfig {
-        data_root,
-        cleanup_data,
-        keep_data,
-        skip_typescript,
-        inject_failure,
-        report_file,
-        list_steps,
-        only_step,
-    })
-}
-
-fn parse_product_quickstart_config(
-    args: &[String],
-) -> Result<ProductRegressionConfig, Box<dyn std::error::Error>> {
-    let mut config = parse_product_regression_config(args)?;
-    if config.report_file.is_none() {
-        config.report_file = Some(default_product_quickstart_report_file()?);
-    }
-    Ok(config)
 }
 
 fn product_regression_step_is_typescript(step: &str) -> bool {
@@ -3479,16 +3510,6 @@ fn run_compose(action: &str, extra: &[String]) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-fn take_data_dir(args: &mut Vec<String>) -> PathBuf {
-    if let Some(idx) = args.iter().position(|arg| arg == "--data") {
-        args.remove(idx);
-        if idx < args.len() {
-            return PathBuf::from(args.remove(idx));
-        }
-    }
-    PathBuf::from(".tracedb")
-}
-
 fn read_arg_or_stdin(arg: Option<&String>) -> Result<String, Box<dyn std::error::Error>> {
     if let Some(arg) = arg {
         if std::path::Path::new(arg).exists() {
@@ -3550,12 +3571,4 @@ fn persist_catalog(data_dir: &std::path::Path, catalog: &Catalog) -> std::io::Re
     fs::create_dir_all(&catalog_dir)?;
     let body = serde_json::to_vec_pretty(catalog).map_err(std::io::Error::other)?;
     fs::write(catalog_dir.join("local_catalog.json"), body)
-}
-
-fn usage() {
-    eprintln!(
-        "usage: tracedb [--data DIR] <init|create|branch create|connect|serve|schema apply|insert|put|get|patch|delete|feature status set|scan|query|explain|recover|inspect manifest|inspect wal|inspect modules|inspect indexes|inspect jobs|inspect policies|compact|checkpoint|snapshot create|snapshot restore|snapshot list|jobs list|jobs run compact|vacuum|build-text-index|build-vector-index|backup|restore-verify|feature-refresh|doctor|doctor http --url URL [--database-id DB] [--branch-id BRANCH] [--wait-ready-ms MS] or TRACEDB_URL=... tracedb doctor http|demo|http-demo|product-regression [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|product-quickstart [--data-root DIR] [--keep-data] [--skip-typescript] [--inject-failure STEP] [--report-file PATH] [--list-steps] [--only {}]|durability-faults [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|storage-index-jobs [--data-root DIR] [--keep-data] [--inject-failure SCENARIO] [--report-file PATH]|api-parity [--inject-failure conformance] [--report-file PATH]|compose up|compose down|compose status|verify|backup|restore|export|delete-user|bench>",
-        PRODUCT_REGRESSION_ONLY_STEPS.join("|"),
-        PRODUCT_REGRESSION_ONLY_STEPS.join("|")
-    );
 }

@@ -64,7 +64,7 @@ pub struct TraceJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub artifact_checksum: Option<u32>,
+    pub artifact_checksum: Option<[u8; 32]>,
 }
 
 impl TraceJob {

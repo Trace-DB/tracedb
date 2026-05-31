@@ -1,6 +1,6 @@
 # Railway Operations and Topology
 
-This document details the deployment topology, service routing configuration, storage volume mappings, object storage integration, and operational runbooks for TraceDB in the Railway environment.
+This document details the deployment topology, service routing configuration, storage volume mappings, object storage integration, and operational runbooks for TraceDB in the Railway lab environment. It describes a controlled hosted lab, not a production SaaS promise.
 
 ---
 
@@ -22,7 +22,7 @@ flowchart TD
 
 ### Detailed Component Roles
 1. **`tracedb-gateway` (Edge API Gateway):**
-   * Acts as the public HTTP edge for production access.
+   * Acts as the only intended hosted-alpha public HTTP edge.
    * Handles API-key verification/bearer authorization, public route forwarding, rate limiting, and usage metering.
    * Keeps the private database engines protected behind internal routing.
 2. **`tracedb-engine` (authoritative Storage Engine):**
@@ -43,6 +43,7 @@ flowchart TD
    * *Not used* for hot WAL or active query paging.
 7. **`tracedb-bench` (Benchmark Runner):**
    * Bounded jobs designed to run benchmark scenarios against direct HTTP targets (gateway or engine).
+   * Direct engine targets are diagnostic-only and must not be presented as hosted-alpha ingress.
 
 ---
 
@@ -60,7 +61,19 @@ Private services communicate using internal dns resolution to avoid public egres
   * The gateway allocates its public port after verifying the underlying engine is ready.
 * **Authentication Boundary:**
   * Public requests to the gateway require a bearer token (`TRACEDB_HTTP_BEARER_TOKEN` or `TRACEDB_API_TOKEN`).
-  * The engine-only benchmark bypasses the gateway by setting `TRACEDB_SERVICE_MODE=engine` and exposing a temporary public port on the engine itself.
+  * The engine-only benchmark bypasses the gateway by setting `TRACEDB_SERVICE_MODE=engine` and exposing a temporary public port on the engine itself. This public engine exposure is diagnostic-only for benchmark or disk validation runs; remove it before treating the environment as gateway-fronted hosted-alpha access.
+
+### Role-Specific Environment Examples
+
+Use the split templates under `deploy/railway/`:
+
+* `env.gateway.example` for public gateway ingress and private engine routing.
+* `env.engine.example` for the stateful engine volume and optional snapshot bucket.
+* `env.worker.example` for private worker queue and engine routing.
+* `env.benchmark.example` for benchmark runner targets and optional external controls.
+
+Do not apply one role's full variable set to another service. Set tokens, DSNs,
+and S3 credentials through Railway variables or CI secrets.
 
 ---
 

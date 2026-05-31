@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+//! Query engine and storage operations for TraceDB.
 
 use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -15,13 +16,12 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracedb_core::{
     builtin_module_manifests, checksum_bytes, compute_manifest_checksum, database_id_from_path,
-    decrypt_artifact_if_needed, recover_stale_pid_lock, stable_body_hash, value_as_f32_vec,
-    DerivedFeatureState, EncryptionContext, Epoch, FeatureStatus, IdempotencyReceipt,
-    IndexManifest, IndexState, MasterKey, ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
+    decrypt_artifact_if_needed, stable_body_hash, value_as_f32_vec, DerivedFeatureState,
+    EncryptionContext, Epoch, FeatureStatus, IdempotencyReceipt, IndexManifest, IndexState,
+    MasterKey, ModuleCommitEvent, Result, TraceDbError, TraceDbManifest,
 };
 use tracedb_jobs::{JobCatalog, JobEvent, JobKind, TraceJob, WorkerId};
 use tracedb_log::{CommitRecord, TornWalTail, Wal, WalAppendTiming};
@@ -39,8 +39,8 @@ use tracedb_store::{
 };
 
 const CHECKPOINT_MAGIC_V2: &[u8; 8] = b"TDBCHK01";
-const CHECKPOINT_MAGIC_V3: &[u8; 8] = b"TDBCHK02";
-const CHECKPOINT_FORMAT_VERSION: u32 = 3;
+const CHECKPOINT_MAGIC_V3: &[u8; 8] = b"TDBCHK03";
+const CHECKPOINT_FORMAT_VERSION: u32 = 4;
 const CHECKPOINT_LEGACY_COMPACT_FORMAT_VERSION: u32 = 2;
 const CHECKPOINT_LEGACY_JSON_FORMAT_VERSION: u32 = 1;
 const MIN_LEXICAL_CACHE_DOCUMENTS: usize = 2_048;
@@ -700,6 +700,7 @@ pub trait BackupRestore {
 }
 
 #[derive(Clone, Debug)]
+/// Main TraceDB engine handle.
 pub struct TraceDb {
     dir: PathBuf,
     manifest: TraceDbManifest,
@@ -805,7 +806,7 @@ struct CheckpointFile {
     idempotency_receipts: Vec<IdempotencyReceipt>,
     #[serde(default)]
     job_catalog: JobCatalog,
-    checksum: u32,
+    checksum: [u8; 32],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -918,10 +919,12 @@ impl WritePathTiming {
 }
 
 impl TraceDb {
+    /// Open a TraceDB at the given directory.
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_options(dir, TraceDbOpenOptions::from_env())
     }
 
+    /// Open a TraceDB with explicit options.
     pub fn open_with_options(dir: impl AsRef<Path>, options: TraceDbOpenOptions) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         initialize_layout(&dir)?;
@@ -1090,6 +1093,7 @@ impl TraceDb {
         Ok(epoch)
     }
 
+    /// Insert a record.
     pub fn insert(&mut self, input: RecordInput) -> Result<Epoch> {
         self.insert_with_idempotency_receipt(input, None)
     }
@@ -1133,6 +1137,7 @@ impl TraceDb {
         Ok(epoch)
     }
 
+    /// Put (upsert) a single record.
     pub fn put(&mut self, request: RecordPutRequest) -> Result<Epoch> {
         self.put_with_idempotency_receipt(request, None)
     }
@@ -1726,6 +1731,7 @@ impl TraceDb {
         self.get(request)
     }
 
+    /// Scan records with optional pagination.
     pub fn scan(&self, request: RecordScanRequest) -> Result<RecordScanOutput> {
         self.manifest
             .table(&request.table)
@@ -1802,6 +1808,7 @@ impl TraceDb {
         Ok(self.store.snapshot(self.manifest.latest_epoch))
     }
 
+    /// Execute a hybrid query.
     pub fn query(&self, query: HybridQuery) -> Result<QueryOutput> {
         Ok(self.query_with_timing(query)?.output)
     }
@@ -2738,13 +2745,13 @@ impl TraceDb {
                 ))
             })?;
             let payload_checksum = artifact.payload_checksum()?;
-            if index.payload_checksum != 0 && payload_checksum != index.payload_checksum {
+            if index.payload_checksum != [0u8; 32] && payload_checksum != index.payload_checksum {
                 return Err(TraceDbError::ArtifactCorruption(format!(
-                    "index artifact {} payload checksum mismatch: manifest {}, artifact {payload_checksum}",
+                    "index artifact {} payload checksum mismatch: manifest {:?}, artifact {payload_checksum:?}",
                     index.index_id, index.payload_checksum
                 )));
             }
-            if index.source_segment_checksum != 0
+            if index.source_segment_checksum != [0u8; 32]
                 && artifact.source_segment_checksum != index.source_segment_checksum
             {
                 return Err(TraceDbError::ArtifactCorruption(format!(
@@ -3526,6 +3533,7 @@ impl TraceDb {
         Ok(Some(candidates))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn score_prepared_lexical_corpus(
         &self,
         schema: &TableSchema,
@@ -4086,45 +4094,28 @@ fn write_job_catalog_file(
 }
 
 struct WriteLock {
-    path: PathBuf,
+    _file: std::fs::File,
 }
 
 impl WriteLock {
-    fn acquire(dir: &Path) -> Result<Self> {
+    fn acquire(dir: &std::path::Path) -> Result<Self> {
         let path = dir.join("engine.write.lock");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut file) => {
-                    file.write_all(std::process::id().to_string().as_bytes())?;
-                    file.sync_all()?;
-                    return Ok(Self { path });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if recover_stale_pid_lock(&path, "engine write")? {
-                        continue;
-                    }
-                    if Instant::now() >= deadline {
-                        return Err(TraceDbError::Io(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            format!("timed out waiting for write lock {}", path.display()),
-                        )));
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => return Err(TraceDbError::Io(error)),
-            }
-        }
-    }
-}
-
-impl Drop for WriteLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(TraceDbError::Io)?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+            TraceDbError::Io(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "engine write lock contention on {}: {error}",
+                    path.display()
+                ),
+            ))
+        })?;
+        Ok(Self { _file: file })
     }
 }
 
@@ -4134,7 +4125,7 @@ fn read_manifest(path: impl AsRef<Path>) -> Result<TraceDbManifest> {
     file.read_to_string(&mut body)?;
     let manifest: TraceDbManifest = serde_json::from_str(&body)?;
     let expected = manifest.checksums.manifest_checksum;
-    if expected == 0 {
+    if expected == [0u8; 32] {
         return Err(TraceDbError::ManifestCorruption(
             "missing manifest checksum".to_string(),
         ));
@@ -4142,14 +4133,14 @@ fn read_manifest(path: impl AsRef<Path>) -> Result<TraceDbManifest> {
     let actual = compute_manifest_checksum(&manifest)?;
     if actual != expected {
         return Err(TraceDbError::ManifestCorruption(format!(
-            "manifest checksum mismatch: expected {expected}, got {actual}"
+            "manifest checksum mismatch: expected {expected:?}, got {actual:?}",
         )));
     }
     Ok(manifest)
 }
 
 fn write_manifest(path: impl AsRef<Path>, manifest: &mut TraceDbManifest) -> Result<()> {
-    manifest.checksums.manifest_checksum = 0;
+    manifest.checksums.manifest_checksum = [0u8; 32];
     manifest.checksums.manifest_checksum = compute_manifest_checksum(manifest)?;
     let body = serde_json::to_vec_pretty(manifest)?;
     let path = path.as_ref();
@@ -4171,7 +4162,7 @@ fn write_manifest_with_timing(
 ) -> Result<ManifestWriteTiming> {
     let total_started = Instant::now();
     let checksum_started = Instant::now();
-    manifest.checksums.manifest_checksum = 0;
+    manifest.checksums.manifest_checksum = [0u8; 32];
     manifest.checksums.manifest_checksum = compute_manifest_checksum(manifest)?;
     let checksum_ms = elapsed_ms(checksum_started);
     let serialize_started = Instant::now();
@@ -4220,9 +4211,9 @@ fn checkpoint_json_relative_path(epoch: Epoch) -> String {
     format!("checkpoints/checkpoint-{}.json", epoch.get())
 }
 
-fn compute_checkpoint_checksum(checkpoint: &CheckpointFile) -> Result<u32> {
+fn compute_checkpoint_checksum(checkpoint: &CheckpointFile) -> Result<[u8; 32]> {
     let mut normalized = checkpoint.clone();
-    normalized.checksum = 0;
+    normalized.checksum = [0u8; 32];
     Ok(checksum_bytes(&serde_json::to_vec(&normalized)?))
 }
 
@@ -4254,9 +4245,9 @@ fn write_checkpoint_file(
         None => payload,
     };
     let checksum = checksum_bytes(&payload);
-    let mut body = Vec::with_capacity(CHECKPOINT_MAGIC_V3.len() + 4 + payload.len());
+    let mut body = Vec::with_capacity(CHECKPOINT_MAGIC_V3.len() + 32 + payload.len());
     body.extend_from_slice(CHECKPOINT_MAGIC_V3);
-    body.extend_from_slice(&checksum.to_le_bytes());
+    body.extend_from_slice(&checksum);
     body.extend_from_slice(&payload);
     let tmp_path = path.with_extension("tchk.tmp");
     let mut file = File::create(&tmp_path)?;
@@ -4309,33 +4300,31 @@ fn read_framed_checkpoint_file(
     body: &[u8],
     encryption: Option<&EncryptionContext>,
 ) -> Result<CheckpointFile> {
-    if body.len() <= CHECKPOINT_MAGIC_V3.len() + 4 {
+    if body.len() <= CHECKPOINT_MAGIC_V3.len() + 32 {
         return Err(TraceDbError::ManifestCorruption(format!(
             "checkpoint payload missing at {}",
             path.display()
         )));
     }
-    let expected = u32::from_le_bytes(
-        body[CHECKPOINT_MAGIC_V3.len()..CHECKPOINT_MAGIC_V3.len() + 4]
-            .try_into()
-            .map_err(|_| {
-                TraceDbError::ManifestCorruption(format!(
-                    "checkpoint checksum frame is invalid at {}",
-                    path.display()
-                ))
-            })?,
-    );
-    if expected == 0 {
+    let expected = body[CHECKPOINT_MAGIC_V3.len()..CHECKPOINT_MAGIC_V3.len() + 32]
+        .try_into()
+        .map_err(|_| {
+            TraceDbError::ManifestCorruption(format!(
+                "checkpoint checksum frame is invalid at {}",
+                path.display()
+            ))
+        })?;
+    if expected == [0u8; 32] {
         return Err(TraceDbError::ManifestCorruption(format!(
             "missing checkpoint checksum at {}",
             path.display()
         )));
     }
-    let payload = &body[CHECKPOINT_MAGIC_V3.len() + 4..];
+    let payload = &body[CHECKPOINT_MAGIC_V3.len() + 32..];
     let actual = checksum_bytes(payload);
     if actual != expected {
         return Err(TraceDbError::ManifestCorruption(format!(
-            "checkpoint checksum mismatch at {}: expected {expected}, got {actual}",
+            "checkpoint checksum mismatch at {}: expected {expected:?}, got {actual:?}",
             path.display()
         )));
     }
@@ -4408,7 +4397,7 @@ fn verify_checkpoint_file(
         )));
     }
     let expected = checkpoint.checksum;
-    if expected == 0 {
+    if expected == [0u8; 32] {
         return Err(TraceDbError::ManifestCorruption(format!(
             "missing checkpoint checksum at {}",
             path.display()
@@ -4417,8 +4406,8 @@ fn verify_checkpoint_file(
     let actual = compute_checkpoint_checksum(&checkpoint)?;
     if actual != expected {
         return Err(TraceDbError::ManifestCorruption(format!(
-            "checkpoint checksum mismatch at {}: expected {expected}, got {actual}",
-            path.display()
+            "checkpoint checksum mismatch at {}: expected {expected:?}, got {actual:?}",
+            path.display(),
         )));
     }
     Ok(checkpoint)
@@ -4464,6 +4453,7 @@ fn backup_dir(source: &Path, target: &Path) -> Result<()> {
 }
 
 fn snapshot_dir(source: &Path, target: &Path) -> Result<()> {
+    validate_admin_snapshot_path("snapshot target", target)?;
     let canonical_source = source.canonicalize()?;
     if target.exists() && target.canonicalize()? == canonical_source {
         return Err(TraceDbError::InvalidCommand(
@@ -4496,11 +4486,56 @@ fn snapshot_dir(source: &Path, target: &Path) -> Result<()> {
 }
 
 fn restore_dir(source: &Path, target: &Path) -> Result<()> {
+    validate_admin_snapshot_path("restore source", source)?;
+    validate_admin_snapshot_path("restore target", target)?;
     validate_copy_paths(source, target)?;
     if target.exists() {
         fs::remove_dir_all(target)?;
     }
     copy_dir(source, target)
+}
+
+fn validate_admin_snapshot_path(label: &str, path: &Path) -> Result<()> {
+    let Some(root) = admin_snapshot_root()? else {
+        return Ok(());
+    };
+    let resolved = resolve_existing_or_parent(path)?;
+    if !resolved.starts_with(&root) {
+        return Err(TraceDbError::InvalidCommand(format!(
+            "{label} must be under TRACEDB_ADMIN_SNAPSHOT_ROOT ({})",
+            root.display()
+        )));
+    }
+    Ok(())
+}
+
+fn admin_snapshot_root() -> Result<Option<PathBuf>> {
+    let Some(value) = std::env::var("TRACEDB_ADMIN_SNAPSHOT_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let root = PathBuf::from(value);
+    if !root.is_absolute() {
+        return Err(TraceDbError::InvalidCommand(
+            "TRACEDB_ADMIN_SNAPSHOT_ROOT must be an absolute path".to_string(),
+        ));
+    }
+    Ok(Some(root.canonicalize()?))
+}
+
+fn resolve_existing_or_parent(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return Ok(path.canonicalize()?);
+    }
+    let parent = path.parent().ok_or_else(|| {
+        TraceDbError::InvalidCommand(format!("path {} has no parent directory", path.display()))
+    })?;
+    let canonical_parent = parent.canonicalize()?;
+    Ok(canonical_parent.join(path.file_name().ok_or_else(|| {
+        TraceDbError::InvalidCommand(format!("path {} has no final component", path.display()))
+    })?))
 }
 
 fn vacuum_artifact_dir(dir: &Path, referenced_files: &BTreeSet<String>) -> Result<usize> {
@@ -7369,13 +7404,15 @@ mod tests {
         db.apply_schema(schema())
             .expect("stale engine and WAL locks should be recovered");
 
+        // With fs2 advisory locks, a stale lock file (not held by any process)
+        // is acquired directly; the file may persist after release.
         assert!(
-            !temp.path().join("engine.write.lock").exists(),
-            "engine stale lock should be removed"
+            temp.path().join("engine.write.lock").exists(),
+            "engine advisory lock file persists after release"
         );
         assert!(
-            !temp.path().join("wal/000001.twal.lock").exists(),
-            "WAL stale lock should be removed"
+            temp.path().join("wal/000001.twal.lock").exists(),
+            "WAL advisory lock file persists after release"
         );
     }
 
@@ -7393,12 +7430,10 @@ mod tests {
 
         assert_eq!(&body[..CHECKPOINT_MAGIC_V3.len()], CHECKPOINT_MAGIC_V3);
         assert!(body.len() > CHECKPOINT_MAGIC_V3.len() + 4);
-        let expected = u32::from_le_bytes(
-            body[CHECKPOINT_MAGIC_V3.len()..CHECKPOINT_MAGIC_V3.len() + 4]
-                .try_into()
-                .expect("checksum bytes"),
-        );
-        let payload = &body[CHECKPOINT_MAGIC_V3.len() + 4..];
+        let expected: [u8; 32] = body[CHECKPOINT_MAGIC_V3.len()..CHECKPOINT_MAGIC_V3.len() + 32]
+            .try_into()
+            .expect("checksum bytes");
+        let payload = &body[CHECKPOINT_MAGIC_V3.len() + 32..];
         assert_eq!(expected, checksum_bytes(payload));
     }
 }
