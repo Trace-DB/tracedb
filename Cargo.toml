@@ -39,7 +39,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-license = "MIT"
+license = "FSL-1.1-ALv2"
 version = "0.1.0"
 
 [workspace.dependencies]
