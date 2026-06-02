@@ -11,6 +11,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --shell /bin/bash tracedb
+RUN mkdir -p /data/tracedb && chown -R tracedb:tracedb /data
 
 COPY --from=builder /workspace/target/release/tracedb /usr/local/bin/tracedb
 COPY --from=builder /workspace/target/release/tracedb-server /usr/local/bin/tracedb-server

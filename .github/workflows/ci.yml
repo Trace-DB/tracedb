@@ -86,8 +86,13 @@ jobs:
         run: |
           docker tag tracedb-local:test tracedb-local:latest
           docker compose --profile lite up -d tracedb-engine
-          docker compose --profile lite ps tracedb-engine
-          curl --retry 20 --retry-all-errors --retry-delay 3 -fsS http://localhost:18081/health
+          docker compose --profile lite ps -a tracedb-engine
+          curl --retry 20 --retry-all-errors --retry-delay 3 -fsS http://localhost:18081/v1/health
+      - name: Show lite compose logs
+        if: failure()
+        run: |
+          docker compose --profile lite ps -a
+          docker compose --profile lite logs tracedb-engine
       - name: Stop lite compose profile
         if: always()
         run: docker compose --profile lite down -v --remove-orphans

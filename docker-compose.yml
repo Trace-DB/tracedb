@@ -31,7 +31,7 @@ services:
       minio-bucket:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/v1/health"]
       interval: 5s
       timeout: 2s
       retries: 20
@@ -56,7 +56,7 @@ services:
     volumes:
       - tracedb-data:/data/tracedb
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/v1/health"]
       interval: 5s
       timeout: 2s
       retries: 20
