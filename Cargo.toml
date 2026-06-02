@@ -31,7 +31,6 @@ members = [
     "crates/tracedb-metering",
     "crates/tracedb-server",
     "crates/tracedb-cli",
-    "crates/tracedb-bench",
     "crates/tracedb-testkit",
 ]
 resolver = "2"

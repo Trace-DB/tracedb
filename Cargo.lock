@@ -2159,16 +2159,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
-name = "tracedb-bench"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "tracedb-query",
-]
-
-[[package]]
 name = "tracedb-cache"
 version = "0.1.0"
 dependencies = [
@@ -2192,7 +2182,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tracedb-bench",
  "tracedb-catalog",
  "tracedb-core",
  "tracedb-index",
@@ -2470,7 +2459,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "tracedb-bench",
  "tracedb-cache",
  "tracedb-catalog",
  "tracedb-core",

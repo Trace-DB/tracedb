@@ -1051,7 +1051,7 @@ fn deterministic_hnsw_level(entry: &VectorIndexEntry, m: usize) -> usize {
     ));
     let divisor = m.max(2) as u64;
     let mut level = 0usize;
-    while level < MAX_DETERMINISTIC_HNSW_LEVEL && hash % divisor == 0 {
+    while level < MAX_DETERMINISTIC_HNSW_LEVEL && hash.is_multiple_of(divisor) {
         level += 1;
         hash = hash.rotate_right(7) ^ 0x9E37_79B9_7F4A_7C15;
     }

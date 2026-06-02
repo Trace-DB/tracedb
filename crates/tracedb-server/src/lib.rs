@@ -2889,6 +2889,7 @@ mod tests {
             .expect("leased job");
         assert_eq!(leased.job_id, job.job_id);
         assert_eq!(leased.status, tracedb_jobs::JobStatus::Leased);
+        drop(engine);
 
         let reopened = EngineHandle::open(temp.path()).expect("reopen engine");
         let jobs = reopened.jobs().await.expect("jobs after reopen");

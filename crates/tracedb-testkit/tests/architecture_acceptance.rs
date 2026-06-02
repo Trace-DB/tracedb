@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::{BranchState, Catalog};
 use tracedb_core::Epoch;
 use tracedb_features::{FeatureFreshnessMode, FeatureLifecycle, FeatureLifecycleStatus};
@@ -575,9 +574,6 @@ fn segment_server_cache_query_and_bench_surfaces_are_executable_contracts() {
     assert_eq!(request.text_field.as_deref(), Some("content"));
     assert_eq!(request.vector_field.as_deref(), Some("embedding"));
     assert_eq!(request.freshness, FreshnessMode::Lazy);
-
-    let target = BenchmarkTarget::new(WorkloadKind::AiChatMemory, 100_000);
-    assert_eq!(target.name(), "ai_chat_memory_100000");
 }
 
 #[test]

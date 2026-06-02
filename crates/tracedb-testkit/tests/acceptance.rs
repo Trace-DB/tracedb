@@ -1667,22 +1667,36 @@ fn segment_publish_rejects_parent_manifest_generation_mismatch() {
 }
 
 #[test]
-fn segment_publish_rejects_stale_handle_using_durable_manifest_generation() {
+fn concurrent_same_directory_open_is_rejected_by_engine_lock() {
+    let (temp, first) = seeded_db();
+    let err = TraceDb::open(temp.path()).expect_err("second live handle must be rejected");
+    assert!(
+        err.to_string()
+            .contains("Engine directory is already locked"),
+        "unexpected second-open error: {err}"
+    );
+    drop(first);
+    TraceDb::open(temp.path()).expect("reopen after first handle drops");
+}
+
+#[test]
+fn segment_publish_rejects_stale_parent_manifest_generation_after_reopen() {
     let (temp, mut first) = seeded_db();
-    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
     let parent_generation = first.inspect_manifest().unwrap().manifest_generation;
 
     first
         .publish_segment_with_parent_generation("seg-1", parent_generation)
         .expect("first publish");
-    let err = stale
+    drop(first);
+
+    let mut reopened = TraceDb::open(temp.path()).expect("reopen");
+    let err = reopened
         .publish_segment_with_parent_generation("seg-2", parent_generation)
         .unwrap_err();
     assert!(err
         .to_string()
         .contains("parent manifest generation mismatch"));
 
-    let reopened = TraceDb::open(temp.path()).expect("reopen");
     let manifest = reopened.inspect_manifest().unwrap();
     assert_eq!(manifest.segments.len(), 1);
     assert_eq!(manifest.segments[0].segment_id, "seg-1");
@@ -2350,9 +2364,8 @@ fn batch_put_write_timing_reports_phase_costs_and_recovers_replacements() {
 }
 
 #[test]
-fn stale_handle_put_reconciles_committed_wal_before_epoch_allocation() {
+fn reopened_handle_reconciles_committed_wal_before_put_epoch_allocation() {
     let (temp, mut first) = seeded_db();
-    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
 
     let first_epoch = first
         .put(RecordPutRequest::new(record(
@@ -2362,49 +2375,50 @@ fn stale_handle_put_reconciles_committed_wal_before_epoch_allocation() {
             [0.7, 0.2, 0.1],
         )))
         .expect("fresh handle put");
-    let stale_epoch = stale
+    drop(first);
+
+    let mut reopened = TraceDb::open(temp.path()).expect("reopened handle");
+    let reopened_epoch = reopened
         .put(RecordPutRequest::new(record(
-            "stale",
+            "reopened",
             "tenant-a",
-            "stale handle committed second",
+            "reopened handle committed second",
             [0.6, 0.3, 0.1],
         )))
-        .expect("stale handle put");
+        .expect("reopened handle put");
 
     assert_eq!(
-        stale_epoch,
+        reopened_epoch,
         first_epoch.next(),
-        "stale writers must not reuse an epoch already committed by another handle"
+        "reopened writers must not reuse an epoch already committed by a previous handle"
     );
     assert!(
-        stale
+        reopened
             .get(RecordGetRequest::new("docs", "tenant-a", "fresh"))
-            .expect("stale get fresh")
+            .expect("reopened get fresh")
             .is_some(),
-        "stale writer should refresh its hot store before installing its own write"
+        "reopened writer should refresh its hot store before installing its own write"
     );
 
-    drop(first);
-    drop(stale);
+    drop(reopened);
     let recovered = TraceDb::open(temp.path()).expect("recover");
     assert_eq!(
         recovered.inspect_manifest().unwrap().latest_epoch,
-        stale_epoch
+        reopened_epoch
     );
     assert!(recovered
         .get(RecordGetRequest::new("docs", "tenant-a", "fresh"))
         .expect("recovered fresh")
         .is_some());
     assert!(recovered
-        .get(RecordGetRequest::new("docs", "tenant-a", "stale"))
-        .expect("recovered stale")
+        .get(RecordGetRequest::new("docs", "tenant-a", "reopened"))
+        .expect("recovered reopened")
         .is_some());
 }
 
 #[test]
-fn stale_handle_batch_put_reconciles_committed_wal_before_epoch_allocation() {
+fn reopened_handle_batch_put_reconciles_committed_wal_before_epoch_allocation() {
     let (temp, mut first) = seeded_db();
-    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
 
     let first_epoch = first
         .put(RecordPutRequest::new(record(
@@ -2414,42 +2428,55 @@ fn stale_handle_batch_put_reconciles_committed_wal_before_epoch_allocation() {
             [0.7, 0.2, 0.1],
         )))
         .expect("fresh put");
-    let stale_epoch = stale
+    drop(first);
+
+    let mut reopened = TraceDb::open(temp.path()).expect("reopened handle");
+    let reopened_epoch = reopened
         .put_batch(RecordPutBatchRequest::new(vec![
-            record("stale-a", "tenant-a", "stale batch a", [0.4, 0.4, 0.2]),
-            record("stale-b", "tenant-a", "stale batch b", [0.3, 0.5, 0.2]),
+            record(
+                "reopened-a",
+                "tenant-a",
+                "reopened batch a",
+                [0.4, 0.4, 0.2],
+            ),
+            record(
+                "reopened-b",
+                "tenant-a",
+                "reopened batch b",
+                [0.3, 0.5, 0.2],
+            ),
         ]))
-        .expect("stale batch put");
+        .expect("reopened batch put");
 
     assert_eq!(
-        stale_epoch,
+        reopened_epoch,
         first_epoch.next(),
-        "stale batch writers must not reuse an epoch already committed by another handle"
+        "reopened batch writers must not reuse an epoch already committed by a previous handle"
     );
 
+    drop(reopened);
     let recovered = TraceDb::open(temp.path()).expect("recover");
     assert_eq!(
         recovered.inspect_manifest().unwrap().latest_epoch,
-        stale_epoch
+        reopened_epoch
     );
     assert!(recovered
         .get(RecordGetRequest::new("docs", "tenant-a", "fresh"))
         .expect("fresh get")
         .is_some());
     assert!(recovered
-        .get(RecordGetRequest::new("docs", "tenant-a", "stale-a"))
-        .expect("stale a get")
+        .get(RecordGetRequest::new("docs", "tenant-a", "reopened-a"))
+        .expect("reopened a get")
         .is_some());
     assert!(recovered
-        .get(RecordGetRequest::new("docs", "tenant-a", "stale-b"))
-        .expect("stale b get")
+        .get(RecordGetRequest::new("docs", "tenant-a", "reopened-b"))
+        .expect("reopened b get")
         .is_some());
 }
 
 #[test]
-fn stale_handle_insert_reconciles_committed_wal_before_epoch_allocation() {
+fn reopened_handle_insert_reconciles_committed_wal_before_epoch_allocation() {
     let (temp, mut first) = seeded_db();
-    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
 
     let first_epoch = first
         .insert(record(
@@ -2459,38 +2486,39 @@ fn stale_handle_insert_reconciles_committed_wal_before_epoch_allocation() {
             [0.7, 0.2, 0.1],
         ))
         .expect("fresh insert");
-    let stale_epoch = stale
+    drop(first);
+
+    let mut reopened = TraceDb::open(temp.path()).expect("reopened handle");
+    let reopened_epoch = reopened
         .insert(record(
-            "stale-insert",
+            "reopened-insert",
             "tenant-a",
-            "stale insert committed second",
+            "reopened insert committed second",
             [0.6, 0.3, 0.1],
         ))
-        .expect("stale insert");
+        .expect("reopened insert");
 
-    assert_eq!(stale_epoch, first_epoch.next());
-    assert!(stale
+    assert_eq!(reopened_epoch, first_epoch.next());
+    assert!(reopened
         .get(RecordGetRequest::new("docs", "tenant-a", "fresh-insert"))
-        .expect("stale get fresh insert")
+        .expect("reopened get fresh insert")
         .is_some());
 
-    drop(first);
-    drop(stale);
+    drop(reopened);
     let recovered = TraceDb::open(temp.path()).expect("recover");
     assert!(recovered
         .get(RecordGetRequest::new("docs", "tenant-a", "fresh-insert"))
         .expect("recovered fresh insert")
         .is_some());
     assert!(recovered
-        .get(RecordGetRequest::new("docs", "tenant-a", "stale-insert"))
-        .expect("recovered stale insert")
+        .get(RecordGetRequest::new("docs", "tenant-a", "reopened-insert"))
+        .expect("recovered reopened insert")
         .is_some());
 }
 
 #[test]
-fn stale_handle_delete_reconciles_committed_wal_before_staging() {
+fn reopened_handle_delete_reconciles_committed_wal_before_staging() {
     let (temp, mut first) = seeded_db();
-    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
 
     let first_epoch = first
         .insert(record(
@@ -2500,18 +2528,20 @@ fn stale_handle_delete_reconciles_committed_wal_before_staging() {
             [0.7, 0.2, 0.1],
         ))
         .expect("fresh insert");
-    let stale_epoch = stale
-        .delete(RecordDeleteRequest::new("docs", "tenant-a", "fresh-delete"))
-        .expect("stale delete");
+    drop(first);
 
-    assert_eq!(stale_epoch, first_epoch.next());
-    assert!(stale
+    let mut reopened = TraceDb::open(temp.path()).expect("reopened handle");
+    let reopened_epoch = reopened
+        .delete(RecordDeleteRequest::new("docs", "tenant-a", "fresh-delete"))
+        .expect("reopened delete");
+
+    assert_eq!(reopened_epoch, first_epoch.next());
+    assert!(reopened
         .get(RecordGetRequest::new("docs", "tenant-a", "fresh-delete"))
-        .expect("stale get deleted")
+        .expect("reopened get deleted")
         .is_none());
 
-    drop(first);
-    drop(stale);
+    drop(reopened);
     let recovered = TraceDb::open(temp.path()).expect("recover");
     assert!(recovered
         .get(RecordGetRequest::new("docs", "tenant-a", "fresh-delete"))
@@ -2520,30 +2550,30 @@ fn stale_handle_delete_reconciles_committed_wal_before_staging() {
 }
 
 #[test]
-fn stale_handle_record_write_preserves_published_segment_manifest() {
+fn reopened_record_write_preserves_published_segment_manifest() {
     let (temp, mut first) = seeded_db();
-    let mut stale = TraceDb::open(temp.path()).expect("stale handle");
     first
-        .publish_segment("seg-before-stale-write")
+        .publish_segment("seg-before-reopened-write")
         .expect("publish segment");
     assert_eq!(first.inspect_manifest().unwrap().segments.len(), 1);
+    drop(first);
 
-    stale
+    let mut reopened = TraceDb::open(temp.path()).expect("reopened handle");
+    reopened
         .put(RecordPutRequest::new(record(
             "after-segment",
             "tenant-a",
             "record after segment publish",
             [0.6, 0.3, 0.1],
         )))
-        .expect("stale put after segment publish");
+        .expect("reopened put after segment publish");
 
     assert_eq!(
-        stale.inspect_manifest().unwrap().segments.len(),
+        reopened.inspect_manifest().unwrap().segments.len(),
         1,
-        "stale record write must preserve durable segment metadata"
+        "reopened record write must preserve durable segment metadata"
     );
-    drop(first);
-    drop(stale);
+    drop(reopened);
     let recovered = TraceDb::open(temp.path()).expect("recover");
     assert_eq!(recovered.inspect_manifest().unwrap().segments.len(), 1);
     assert!(recovered
@@ -3043,7 +3073,8 @@ fn top_k_zero_returns_no_rows() {
 
 #[test]
 fn server_health_endpoint_responds() {
-    let (temp, _db) = db();
+    let (temp, db) = db();
+    drop(db);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
@@ -3051,9 +3082,16 @@ fn server_health_endpoint_responds() {
     std::thread::spawn(move || {
         let _ = tracedb_server::serve(data_dir, &addr.to_string());
     });
-    std::thread::sleep(Duration::from_millis(100));
 
-    let mut stream = TcpStream::connect(addr).unwrap();
+    let mut stream = (0..50)
+        .find_map(|_| match TcpStream::connect(addr) {
+            Ok(stream) => Some(stream),
+            Err(_) => {
+                std::thread::sleep(Duration::from_millis(20));
+                None
+            }
+        })
+        .expect("server accepted health connection");
     stream
         .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .unwrap();

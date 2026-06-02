@@ -9,8 +9,6 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tracedb_bench::{BaselineKind, BenchmarkTarget, WorkloadKind};
-
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -231,19 +229,6 @@ fn tracedb_http_surface_runs_real_record_query_and_delete_semantics() {
 
 #[test]
 fn realworld_lab_declares_search_rag_6_services_and_runner_contracts() {
-    let target = BenchmarkTarget::new(WorkloadKind::SearchRag6, 1_000);
-    assert_eq!(
-        target.baselines(),
-        vec![
-            BaselineKind::TraceDb,
-            BaselineKind::Postgres,
-            BaselineKind::PgVector,
-            BaselineKind::MongoDb,
-            BaselineKind::Qdrant,
-            BaselineKind::OpenSearch,
-        ]
-    );
-
     let root = repo_root();
     let lab = root.join("benchmarks/realworld");
     assert!(lab.join("docker-compose.yml").exists());

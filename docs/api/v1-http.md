@@ -32,8 +32,8 @@ SDK transport artifacts generated from this OpenAPI contract are maintained in
 the sibling standalone SDK repositories, especially `../tracedb-js` for the
 TypeScript/JavaScript transport and public SDK. The authoritative HTTP
 contract and OpenAPI artifact live in `../tracedb-protocol`; this core mirror
-validates against `tracedb-protocol.lock` and the protocol artifacts while SDK
-package checks and SDK smokes run outside the core product gate.
+validates against `tracedb-protocol.lock` and the protocol artifacts.
+SDK package checks and SDK smokes run outside the core product gate.
 
 ## Boundaries
 

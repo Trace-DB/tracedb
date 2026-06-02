@@ -190,7 +190,7 @@ fn http_demo_command_exercises_local_http_sdk_product_path() {
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("http-demo json");
     assert_eq!(summary["ok"], true);
-    assert_eq!(summary["mode"], "local-http-sdk-demo");
+    assert_eq!(summary["mode"], "local-http-api-demo");
     assert_eq!(summary["steps"]["server_start"], true);
     assert_eq!(summary["steps"]["ready"], true);
     assert_eq!(summary["steps"]["schema_apply"], true);

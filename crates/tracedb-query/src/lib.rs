@@ -4141,13 +4141,21 @@ impl WriteLock {
 }
 
 struct EngineLock {
-    _file: std::fs::File,
+    file: Arc<std::fs::File>,
 }
 
 impl Clone for EngineLock {
     fn clone(&self) -> Self {
         Self {
-            _file: self._file.try_clone().expect("engine lock file clone"),
+            file: Arc::clone(&self.file),
+        }
+    }
+}
+
+impl Drop for EngineLock {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.file) == 1 {
+            let _ = fs2::FileExt::unlock(&*self.file);
         }
     }
 }
@@ -4181,7 +4189,9 @@ impl EngineLock {
             .map_err(TraceDbError::Io)?;
         file.write_all(b"\n").map_err(TraceDbError::Io)?;
         file.sync_all().map_err(TraceDbError::Io)?;
-        Ok(Self { _file: file })
+        Ok(Self {
+            file: Arc::new(file),
+        })
     }
 }
 
@@ -4207,10 +4217,6 @@ fn read_manifest(path: impl AsRef<Path>) -> Result<TraceDbManifest> {
 }
 
 fn manifest_read_error_can_fallback(err: &TraceDbError) -> bool {
-    let content_error = matches!(
-        err,
-        TraceDbError::ManifestCorruption(_) | TraceDbError::Json(_)
-    );
     let readable_corruption_io = matches!(
         err,
         TraceDbError::Io(io)
@@ -4221,7 +4227,7 @@ fn manifest_read_error_can_fallback(err: &TraceDbError) -> bool {
                     | std::io::ErrorKind::UnexpectedEof
             )
     );
-    content_error || readable_corruption_io
+    matches!(err, TraceDbError::Json(_)) || readable_corruption_io
 }
 
 fn read_manifest_inner(path: &Path) -> Result<TraceDbManifest> {
@@ -7618,6 +7624,43 @@ mod tests {
             "recovery must not overwrite the only valid backup with the corrupt primary"
         );
         read_manifest_inner(&backup_path).expect("backup remains valid after recovery");
+    }
+
+    #[test]
+    fn open_rejects_checksum_corrupted_manifest_even_with_valid_backup() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        {
+            let mut db = TraceDb::open(temp.path()).expect("open");
+            db.apply_schema(schema()).expect("schema");
+            db.put(RecordPutRequest::new(record(
+                "checksum-corruption",
+                "checksum protected body",
+            )))
+            .expect("put");
+        }
+
+        let manifest_path = temp.path().join("manifest.tdb");
+        let backup_path = manifest_path.with_extension("tdb.bak");
+        read_manifest_inner(&manifest_path).expect("primary manifest is valid before corruption");
+        read_manifest_inner(&backup_path).expect("manifest backup is valid");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("primary manifest"))
+                .expect("manifest json");
+        manifest["checksums"]["manifest_checksum"] = json!([
+            1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0
+        ]);
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("corrupt manifest json"),
+        )
+        .expect("write checksum-corrupted manifest");
+
+        let error = TraceDb::open(temp.path()).expect_err("checksum corruption must fail open");
+        assert!(
+            error.to_string().contains("manifest checksum mismatch"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

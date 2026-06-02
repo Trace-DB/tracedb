@@ -13,7 +13,6 @@ clap = { version = "4", features = ["derive", "env"] }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tracedb-bench = { path = "../tracedb-bench" }
 tracedb-catalog = { path = "../tracedb-catalog" }
 tracedb-core = { path = "../tracedb-core" }
 tracedb-index = { path = "../tracedb-index" }

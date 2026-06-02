@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracedb_bench::{BenchmarkTarget, WorkloadKind};
 use tracedb_catalog::Catalog;
 use tracedb_core::{stable_body_hash, IdempotencyReceipt, IndexState, ARTIFACT_ENVELOPE_MAGIC};
 use tracedb_jobs::{JobKind, JobStatus, WorkerId};
@@ -122,10 +121,6 @@ enum Commands {
     },
     DeleteUser {
         subject: String,
-    },
-    Bench {
-        workload: Option<String>,
-        records: Option<usize>,
     },
     Restore {
         source: String,
@@ -597,30 +592,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "mode": "logical_delete",
                 "retention_checked": true,
                 "legal_hold_checked": true,
-            }));
-        }
-        Some(Commands::Bench { workload, records }) => {
-            let workload = workload.as_deref().unwrap_or("ai-chat-memory");
-            let records = records.unwrap_or(100_000);
-            let kind = match workload {
-                "search-rag-6" => WorkloadKind::SearchRag6,
-                "postgres-relational" => WorkloadKind::PostgresRelational,
-                "pgvector-hybrid" => WorkloadKind::PgVectorHybrid,
-                "mongo-document" => WorkloadKind::MongoDocument,
-                "opensearch-lexical" => WorkloadKind::OpenSearchLexical,
-                "qdrant-vector" => WorkloadKind::QdrantVector,
-                "tracedb-falsification" => WorkloadKind::TraceDbFalsification,
-                "code-search" => WorkloadKind::CodeSearch,
-                "graph-rag" => WorkloadKind::GraphRag,
-                "filtered-hybrid-search" => WorkloadKind::FilteredHybridSearch,
-                "multi-tenant-semantic-search" => WorkloadKind::MultiTenantSemanticSearch,
-                _ => WorkloadKind::AiChatMemory,
-            };
-            let target = BenchmarkTarget::new(kind, records);
-            print_json(json!({
-                "benchmark": target.name(),
-                "records": records,
-                "baselines": target.baselines(),
             }));
         }
         Some(Commands::Restore { source, target }) => {

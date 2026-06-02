@@ -1,6 +1,9 @@
 target/
 .tracedb/
+*.swp
 .DS_Store
+.idea/
+.vscode/
 .obsidian/
 .env
 .env.local
