@@ -4173,6 +4173,7 @@ impl EngineLock {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .map_err(TraceDbError::Io)?;
         fs2::FileExt::try_lock_exclusive(&file).map_err(|_error| {
