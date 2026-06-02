@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .base import BenchmarkAdapter, optional_import
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
+from .base import BenchmarkAdapter, optional_import
+
+# Number of warmup query iterations before measurement begins.
+WARMUP_ITERATIONS = 3
 
 
 class PostgresAdapter(BenchmarkAdapter):
@@ -37,7 +40,9 @@ class PostgresAdapter(BenchmarkAdapter):
                         )
                         """
                     )
-                    cur.execute("CREATE INDEX bench_records_tenant_category ON bench_records (tenant_id, category)")
+                    cur.execute(
+                        "CREATE INDEX bench_records_tenant_category ON bench_records (tenant_id, category)"
+                    )
                     cur.executemany(
                         """
                         INSERT INTO bench_records
@@ -58,6 +63,26 @@ class PostgresAdapter(BenchmarkAdapter):
                         ],
                     )
                     conn.commit()
+                    # Warmup phase: run a few query iterations (discarded from
+                    # measurements) to stabilize filesystem cache and query planner.
+                    if dataset.queries:
+                        warmup_query = dataset.queries[0]
+                        for _ in range(WARMUP_ITERATIONS):
+                            cur.execute(
+                                """
+                                SELECT id
+                                FROM bench_records
+                                WHERE tenant_id = %s AND category = %s AND body ILIKE %s
+                                ORDER BY rating DESC, id ASC
+                                LIMIT %s
+                                """,
+                                (
+                                    warmup_query.tenant_id,
+                                    warmup_query.category,
+                                    f"%{warmup_query.category.split('_')[0]}%",
+                                    warmup_query.top_k,
+                                ),
+                            ).fetchall()
                     recorder = MetricRecorder()
                     recalls = []
                     ndcgs = []
@@ -81,7 +106,9 @@ class PostgresAdapter(BenchmarkAdapter):
                             ).fetchall()
                         )
                         ids = [row[0] for row in rows]
-                        recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
+                        recalls.append(
+                            recall_at_k(query.expected_ids, ids, query.top_k)
+                        )
                         ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
                         mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
             metrics = recorder.summary()
@@ -90,7 +117,9 @@ class PostgresAdapter(BenchmarkAdapter):
                     "ingest_count": len(dataset.records),
                     "query_count": len(dataset.queries),
                     "failure_count": 0,
-                    "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
+                    "recall_at_5": round(sum(recalls) / len(recalls), 3)
+                    if recalls
+                    else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
                     "disk_bytes": 0,

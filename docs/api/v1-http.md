@@ -28,17 +28,12 @@ python3 scripts/generate_openapi_v1.py
 python3 scripts/generate_openapi_v1.py --check
 ```
 
-The checked generated TypeScript transport artifact is
-`clients/typescript/src/client.ts`. It is generated from the OpenAPI artifact,
-not hand-maintained as a second route manifest:
-
-```bash
-python3 scripts/generate_typescript_client.py
-python3 scripts/generate_typescript_client.py --check
-node --experimental-strip-types clients/typescript/smoke.ts
-(cd clients/typescript && npm ci && npm run check)
-(cd clients/typescript && npm run http-smoke)
-```
+SDK transport artifacts generated from this OpenAPI contract are maintained in
+the sibling standalone SDK repositories, especially `../tracedb-js` for the
+TypeScript/JavaScript transport and public SDK. The authoritative HTTP
+contract and OpenAPI artifact live in `../tracedb-protocol`; this core mirror
+validates against `tracedb-protocol.lock` and the protocol artifacts while SDK
+package checks and SDK smokes run outside the core product gate.
 
 ## Boundaries
 
@@ -47,65 +42,11 @@ node --experimental-strip-types clients/typescript/smoke.ts
   not a current HTTP product surface or implemented runtime in this repo.
 - Internal TraceDB-only runs are development evidence. Exported performance
   claims still require an external control and a number to beat.
-- The current Rust SDK is a minimal blocking HTTP client for this API surface.
-  It now also has a first ergonomic table/query layer over the same wire
-  contract through `TraceDb::connect(config)?` and
-  `db.table("docs").tenant("tenant-a")`, including table insert, batch insert,
-  row-oriented `insert_rows` over the same batch wire shape, patch, get, scan,
-  and delete helpers plus `TableHandle::query()` / direct query chaining that
-  posts the canonical `HybridQuery` shape to `/v1/query` or `/v1/explain`.
-  It also exposes `TraceDbAsyncClient` as a minimal async facade over the same
-  HTTP contract. This first async surface runs the existing transport on a
-  background thread per request so callers can await typed read, write, and
-  admin helpers without blocking the first Future poll on socket I/O; it is not
-  yet a runtime-native Tokio/async-std transport.
-- The TypeScript client under `clients/typescript/src/client.ts` is a generated
-  dependency-free `fetch` client artifact for this API surface. It is exposed as
-  `@tracedb/sdk/transport` by the package-ready TypeScript SDK metadata, but it
-  remains the transport layer rather than the public product API. This is not an
-  npm release, not a managed-cloud SDK promise, and not a SQL compatibility
-  claim. It includes OpenAPI-derived schema aliases and typed
-  method signatures while keeping known fields optional and unknown JSON fields
-  allowed. Runtime validation remains server-side. Scan/query/explain response
-  aliases expose current server fields, including record scan counts and cursors, query
-  rows, score components, access-path explain entries, planner candidates, and
-  timing entries. Its local runtime smoke uses
-  Node's experimental TypeScript strip support. The `clients/typescript`
-  package builds `@tracedb/sdk` from `src/index.ts` into `dist/index.js` and
-  `dist/index.d.ts`, exposes `@tracedb/sdk/transport` from `dist/client.js` and
-  `dist/client.d.ts`, and checks those entrypoints with `npm run package-smoke`
-  plus `npm run pack-dry-run` and `npm run consumer-smoke`. It rejects empty or
-  CR/LF-containing `idempotencyKey` request options before `fetchImpl` is
-  called.
-- The TypeScript public SDK wrapper under `clients/typescript/src/sdk.ts` is the
-  first hand-written platform SDK layer over that generated transport. It
-  exposes `TraceDB`, table handles, single inserts, raw-contract batch inserts,
-  row-oriented `insertRows` batch ingestion, patch,
-  scan/get/delete, admin compact/snapshot/restore/jobs, and query-builder
-  chaining through `where({ tenant_id })`, `match`, `near`, `with`, `limit`,
-  `all`, and `explainPlan`. It is smoke-tested with fake fetch through
-  `npm run public-smoke` and with real local HTTP through
-  `npm run public-http-smoke`; `npm run gateway-smoke` now drives the same
-  public wrapper through the local gateway auth/routing lane.
-- The Python SDK under `clients/python/tracedb` is the first sync AI/data SDK
-  lane over this API surface. It is stdlib-only for now and exposes `TraceDB`,
-  table handles, single inserts, raw-contract batch inserts, row-oriented
-  `insert_rows` batch ingestion, patch, get, scan, delete,
-  health/catalog/metrics/admin helpers, managed `database_id` / `branch_id`
-  routing metadata injection, `Idempotency-Key` support, read-only
-  `safe_retries` / `TRACEDB_SAFE_RETRIES`, `idempotency_retries` /
-  `TRACEDB_IDEMPOTENCY_RETRIES`, parsed HTTP error envelopes, and query-builder
-  chaining through `where`, `match_text`, `near`, `with_options`, `limit`,
-  `all`, and `explain_plan`. `idempotency_retries` retries transient 5xx
-  responses for mutation/admin routes only when that request carries a
-  caller-provided `Idempotency-Key`; unkeyed writes and 4xx/conflict responses
-  are not retried. It is covered by
-  `python3 clients/python/http_smoke.py` and
-  `python3 scripts/platform_conformance.py --surface python_sdk`; the
-  conformance lane installs the package into an isolated temporary pip
-  `--target` before running the smoke so source-path imports cannot mask drift.
-  This is sync SDK contract evidence, not PyPI readiness, async support,
-  managed-cloud proof, SQL compatibility, or full GraphQL adapter parity.
+- SDK implementations are external to this core repo. Rust SDK work lives in
+  `../tracedb-rust`, Python SDK work lives in `../tracedb-python`, and
+  TypeScript/JavaScript SDK work lives in `../tracedb-js`. Those repos own
+  package metadata, generated/client artifacts, SDK quickstarts, SDK smokes,
+  and SDK conformance against this HTTP contract.
 - SDK safe retries apply only to routes or operation payloads that are provably
   read-only. Blanket safe-retry routes are `GET /v1/health`, `GET /v1/ready`,
   `GET /v1/graphql/schema`, `POST /v1/records/get`,
@@ -325,34 +266,25 @@ cargo run -p tracedb-cli -- durability-faults
 ```
 
 The gate emits one `local-product-regression` JSON summary for the embedded
-demo/verify path, local HTTP SDK demo, endpoint doctor, Rust SDK quickstart,
-Python sync SDK smoke, and generated TypeScript check/http/gateway smoke paths,
-with a compact
-top-level `human_summary` for quick operator scanning. It is local product
-regression evidence only: SQL remains not implemented, managed-cloud is not
-checked, and benchmarks are not checked. Failure ergonomics for the consolidated
-local gate are covered by test-only `--inject-failure STEP`, which preserves the
-JSON summary on stdout and exits nonzero. Operators can pass
-`--report-file PATH` to write that same JSON summary to a predictable file while
-preserving JSON stdout; parent directories are created. Operators can run
-`product-regression --list-steps` to discover valid gate steps for failure
-injection and CI orchestration; it emits JSON step metadata including
-`human_summary` and `only_supported` and does not run demo, HTTP, SDK, or
-TypeScript smoke steps.
-`product-quickstart` runs the same local product gate with a default report file
-at `target/tracedb/product-quickstart.json`, preserves JSON stdout, and includes
-the resolved artifact path in the top-level `report_file` field. Operators can
-validate the local quickstart receipt by checking that artifact for `ok: true`,
-`mode: "local-product-regression"`, `scope: "local_only"`,
+demo/verify path, local HTTP demo, and endpoint doctor, with a compact top-level
+`human_summary` for quick operator scanning. It is local core product regression
+evidence only: SQL remains not implemented, managed-cloud is not checked,
+benchmarks are not checked, and SDK conformance is externally owned. Failure
+ergonomics for the consolidated local gate are covered by test-only
+`--inject-failure STEP`, which preserves the JSON summary on stdout and exits
+nonzero. Operators can pass `--report-file PATH` to write that same JSON summary
+to a predictable file while preserving JSON stdout; parent directories are
+created. Operators can run `product-regression --list-steps` to discover valid
+core gate steps for failure injection and CI orchestration; it emits JSON step
+metadata including `human_summary` and `only_supported` and does not run demo,
+HTTP, or SDK smoke steps.
+`product-quickstart` runs the same local core product gate with a default report
+file at `target/tracedb/product-quickstart.json`, preserves JSON stdout, and
+includes the resolved artifact path in the top-level `report_file` field.
+Operators can validate the local quickstart receipt by checking that artifact
+for `ok: true`, `mode: "local-product-regression"`, `scope: "local_only"`,
 `human_summary.status: "passed"`, `claims.sql_module: "not_implemented"`,
 `claims.managed_cloud: "not_checked"`, and `claims.benchmark: "not_checked"`.
-`product-quickstart --skip-typescript` is the reduced fallback receipt for
-machines without Node tooling: it still writes
-`target/tracedb/product-quickstart.json`, keeps `report_file`, reports
-`typescript_enabled: false`, passes the six non-TypeScript local steps including
-`python_sdk_smoke`, and omits `typescript_check`, `typescript_http_smoke`, and
-`typescript_gateway_smoke`. Treat it as a reduced local evidence path, not the
-full product gate.
 `product-quickstart --inject-failure embedded_demo` validates the failure
 receipt path without running later product steps: the command exits nonzero,
 writes the same default report artifact, keeps `report_file`, reports
@@ -364,95 +296,25 @@ failure.
 WAL tail, manifest/checkpoint corruption, stale-lock recovery, encrypted
 snapshot restore, and WAL idempotency replay after reopen. This is local
 durability evidence, not managed-cloud backup/DR evidence.
-`--skip-typescript` is for the full product gate and non-TypeScript selectors; a
-TypeScript `--only` selector conflicts with --skip-typescript.
-`product-regression --only embedded_demo` runs only
-the embedded demo step and emits one-step `local-product-regression` JSON.
+`product-regression --only embedded_demo` runs only the embedded demo step and
+emits one-step `local-product-regression` JSON. `product-regression --only embedded_verify`
+verifies an existing embedded demo data root and should be run with the same
+`--data-root` used for `--only embedded_demo`.
 `product-regression --only http_demo` runs the self-contained local HTTP demo
 step and emits the normal one-step `local-product-regression` JSON summary. It
-does not run local `doctor http`, the Rust SDK quickstart, generated
-TypeScript smoke steps, managed-cloud checks, benchmark controls, or SQL
-compatibility checks.
+does not run local `doctor http`, SDK conformance, managed-cloud checks,
+benchmark controls, or SQL compatibility checks.
 `product-regression --only local_doctor` starts a managed-style local loopback
 `tracedb-server` child process and runs only the existing local `doctor http`
 product-regression step with readiness wait, `database_id`, and `branch_id`
 metadata. It emits the normal one-step `local-product-regression` JSON summary
 with `only_step: "local_doctor"`. This is local endpoint diagnostics evidence
-only; it does not run `http_demo`, the Rust SDK quickstart, generated
-TypeScript smoke steps, managed-cloud checks, benchmark controls, or SQL
-compatibility checks. `product-regression --only rust_sdk_quickstart` starts a
-managed-style local loopback `tracedb-server`, creates/uses the quickstart admin
-dir, runs only the existing Rust SDK quickstart product-regression step, and
-emits one-step `local-product-regression` JSON with `only_step:
-"rust_sdk_quickstart"`. This is local Rust SDK quickstart evidence for typed
-HTTP plus table-handle row batch ingestion only, not full product gate coverage,
-not `http_demo`, not local `doctor http` diagnostics, not generated TypeScript
-smoke, not managed-cloud proof, not benchmark evidence, and not SQL
-compatibility. If the Rust SDK child exits nonzero after writing quickstart JSON,
-product-regression preserves that nested object under
-`steps.rust_sdk_quickstart.summary` and keeps stdout/stderr tails on the failed
-step for debugging.
-`product-regression --only python_sdk_smoke` runs only
-`python3 clients/python/http_smoke.py` from the workspace root. The smoke starts
-its own local `tracedb-server` child process and exercises the sync Python SDK
-through ready, catalog, schema apply, insert, row batch ingest, patch, get, scan,
-query, explain, delete, idempotency, error envelopes, compact, snapshot,
-restore, and jobs. It emits one-step `local-product-regression` JSON with
-`only_step: "python_sdk_smoke"`. This is local sync Python SDK HTTP smoke
-evidence only, not full product gate coverage, not `http_demo`, not local
-`doctor http`, not Rust SDK quickstart, not TypeScript smoke, not managed-cloud
-proof, not benchmark evidence, and not SQL compatibility.
-`product-regression --only typescript_check` runs only `npm run check` in
-`clients/typescript`, which currently performs the package typecheck plus
-dependency-free generated-client, public SDK, package build, package-entry
-smoke, and pack dry-run checks, and emits one-step `local-product-regression`
-JSON with
-`only_step: "typescript_check"`. This is TypeScript package boundary evidence
-only, not full product gate coverage, not
-`http_demo`, not local `doctor http`, not Rust SDK quickstart, not TypeScript
-HTTP smoke, not TypeScript gateway smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility.
-`product-regression --only typescript_http_smoke` runs only `npm run
-public-http-smoke` in `clients/typescript`, which starts its own local
-`tracedb-server` child process and exercises the public TypeScript SDK wrapper
-over the generated transport, and emits one-step `local-product-regression` JSON
-with `only_step: "typescript_http_smoke"`. The smoke includes idempotency
-replay/conflict, raw-contract batch ingestion, row batch ingestion, and parsed
-error-envelope evidence for the shared `typescript_sdk` platform conformance
-lane. This is local public TypeScript SDK HTTP smoke evidence only, not full
-product gate coverage, not embedded demo/verify, not `http_demo`, not local
-`doctor http`, not Rust SDK quickstart, not
-`typescript_check`, not generated-transport `http-smoke`, not TypeScript gateway
-smoke, not managed-cloud proof, not benchmark evidence, and not SQL
-compatibility.
-`product-regression --only typescript_gateway_smoke` runs only `npm run
-gateway-smoke` in `clients/typescript`, which starts a local engine plus
-gateway-mode `tracedb-server`, requires bearer auth, checks missing-token and
-bad-branch rejection, and runs the public TypeScript SDK wrapper through the
-gateway with managed routing metadata plus a local admin scratch dir. It now
-also proves gateway forwarding for native TraceQL, GraphQL SDL export, and
-bounded GraphQL query execution. It emits
-one-step `local-product-regression` JSON with `only_step:
-"typescript_gateway_smoke"`. This is local public TypeScript SDK gateway
-auth/routing evidence only, not full product gate coverage, not embedded
-demo/verify, not `http_demo`, not local `doctor http`, not Rust SDK quickstart,
-not `typescript_check`, not TypeScript HTTP smoke, not managed-cloud proof, not
-benchmark evidence, and not SQL compatibility.
-`product-regression --only embedded_verify`
-verifies an existing embedded demo data root and should be run with the same
-`--data-root` used for `--only embedded_demo`.
+only; it does not run `http_demo`, SDK conformance, managed-cloud checks,
+benchmark controls, or SQL compatibility checks.
 
-Run the complete local HTTP plus Rust SDK smoke with one command:
-
-```bash
-cargo run -p tracedb-cli -- --data /tmp/tracedb-http-demo http-demo
-```
-
-The command starts a loopback `tracedb-server` child process, drives the current
-typed Rust SDK over HTTP, and reports `sql_module: not_implemented`. It covers
-ready, schema apply, batch ingest, scan, query, explain, delete, compact,
-snapshot, restore, and keyed mutation/admin retries. The child server's output
-is not mixed into the command JSON summary.
+SDK conformance is owned by `../tracedb-rust`, `../tracedb-python`, and
+`../tracedb-js`. Run SDK quickstarts, SDK HTTP smokes, package checks, and SDK
+Platform Contract evidence from those standalone repos.
 
 The current runnable HTTP product path is:
 
@@ -478,80 +340,6 @@ The doctor can also read `TRACEDB_URL`, `TRACEDB_TOKEN`,
 secret-bearing deployed checks avoid command line token arguments and lets
 freshly started local endpoints settle before the full diagnostic run.
 
-The SDK quickstart exercises this path and reports `sql_module:
-not_implemented`. It uses typed SDK calls for readiness, health, catalog,
-public-safe metrics, admin jobs, schema apply, batch ingest, patch, scan, query,
-explain, delete, and deleted-record hiding; the patch step verifies patched
-visibility before later reads and delete. Passing `--admin-dir SERVER_SIDE_DIR`
-also exercises compact, snapshot, and restore with typed SDK admin helpers. The
-argument must be an absolute path interpreted by the server process and is
-intended as local scratch space. Passing `--idempotency-retries N`
-or `TRACEDB_IDEMPOTENCY_RETRIES=N` demonstrates the keyed write/admin retry path
-by generating per-run `Idempotency-Key` values for the quickstart's
-mutation/admin steps. Restore creates a separate database directory; it does not
-replace the running server's data directory and is not managed-cloud backup/DR
-semantics. The JSON summary reports the active envelope fields operators need to
-compare quickstarts across clients: `mode: "rust-sdk-quickstart"`,
-`server_url`, optional `database_id` / `branch_id`, `table`, `tenant_id`, and a
-structured `admin` object where skipped admin work is explicit instead of
-collapsed into a failure-shaped boolean. Invalid quickstart configuration exits
-nonzero but preserves stdout as JSON, reporting `ok: false`, `phase: "config"`,
-`error.kind`, `error.message`, false step statuses, and `sql_module:
-not_implemented` for automation that parses product-regression child summaries.
-
-The generated TypeScript client has its own local HTTP smoke:
-
-```bash
-cd clients/typescript
-npm run http-smoke
-npm run public-http-smoke
-```
-
-`http-smoke` starts `tracedb-server` with an isolated temporary data directory
-and uses the generated client against real HTTP routes. `public-http-smoke`
-starts the same kind of local server and uses the public `TraceDB` wrapper for
-schema apply, insert, raw-contract batch ingest, row batch ingest, patch, get,
-scan, query, explain, delete, idempotency replay/conflict, parsed error
-envelopes, compact, snapshot, restore, and admin jobs.
-`python3 scripts/platform_conformance.py --surface typescript_sdk` maps the
-public smoke summary into the Platform Contract v0 scenario IDs. The public
-wrapper also exposes `TraceDB.fromEnv()` for
-`TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
-`TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`, matching the shared SDK
-connection/routing config boundary. `insertRows` is SDK-side ergonomics for
-row dictionaries and still sends `POST /v1/records/put-batch`; `insertBatch`
-remains available for raw TraceDB record-input bodies.
-
-It also has an endpoint quickstart for an already-running local or
-managed-style HTTP endpoint:
-
-```bash
-cd clients/typescript
-TRACEDB_URL=http://127.0.0.1:8090 TRACEDB_TOKEN=dev-token npm run quickstart
-```
-
-`TRACEDB_DATABASE_ID` and `TRACEDB_BRANCH_ID` add managed-routing metadata to
-JSON POST bodies. `TRACEDB_ADMIN_DIR=/absolute/server/side/path` enables
-compact, snapshot, and restore against a server-side local scratch directory;
-without it, the quickstart avoids path-based admin writes while still covering
-readiness, health, catalog, metrics, schema apply, batch ingest, patch, patched
-visibility, scan, query, explain, delete, and admin jobs. The quickstart emits
-`sql_module: not_implemented` and remains endpoint example evidence, not SQL
-compatibility, managed-cloud backup/DR, or benchmark evidence.
-
-The public TypeScript SDK also has a local gateway smoke:
-
-```bash
-cd clients/typescript
-npm run gateway-smoke
-```
-
-That smoke starts an engine plus a gateway-mode server with
-`TRACEDB_REQUIRE_API_KEY=true`, `TRACEDB_API_TOKEN=dev-token`, and
-`TRACEDB_ENGINE_URL` pointing at the engine. It runs the public `TraceDB`
-wrapper through the gateway with `databaseId=db_local`, `branchId=db_local:main`,
-and a local admin scratch path. It covers query/explain plus native TraceQL,
-GraphQL SDL export, and bounded GraphQL query execution through the gateway.
-This is local gateway bearer-auth and
-managed-routing evidence for the public TypeScript SDK over the generated
-transport, not managed-cloud proof or benchmark evidence.
+SDK quickstarts and language-specific endpoint examples live in the sibling
+standalone repositories: `../tracedb-rust`, `../tracedb-python`, and
+`../tracedb-js`.

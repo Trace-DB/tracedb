@@ -37,21 +37,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  python-sdk:
-    name: Python unit and import smoke
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install Python SDK dependencies
-        run: python3 -m pip install -e clients/python
-      - name: Run Python SDK unit tests
-        run: python3 -m unittest discover -s clients/python/tests
-      - name: Run Python import smoke
-        run: python3 -c "from tracedb import TraceDB, TraceDBRequestError; print(TraceDB.__name__, TraceDBRequestError.__name__)"
-
   benchmark-gate:
     name: Benchmark gate unit tests
     runs-on: ubuntu-latest
@@ -63,20 +48,6 @@ jobs:
       - name: Run benchmark gate unit tests
         run: python3 -m unittest benchmarks.realworld.tests.test_suite_gate
 
-  typescript-sdk:
-    name: TypeScript SDK
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: clients/typescript/package-lock.json
-      - name: Run TypeScript SDK check
-        run: npm ci && npm run check
-        working-directory: clients/typescript
-
   contract-generation-drift:
     name: Contract generation drift
     runs-on: ubuntu-latest
@@ -87,8 +58,6 @@ jobs:
           python-version: "3.12"
       - name: Check OpenAPI artifact drift
         run: python3 scripts/generate_openapi_v1.py --check
-      - name: Check TypeScript client artifact drift
-        run: python3 scripts/generate_typescript_client.py --check
 
   platform-conformance-smoke:
     name: Platform conformance smoke
@@ -100,11 +69,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run HTTP direct and Rust SDK conformance
+      - name: Run HTTP direct conformance
         run: >-
           python3 scripts/platform_conformance.py
           --surface http_direct
-          --surface rust_sdk
           --summary-json "${RUNNER_TEMP}/tracedb-platform-conformance.json"
 
   docker-lite:

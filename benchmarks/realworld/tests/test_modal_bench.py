@@ -13,7 +13,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
@@ -40,6 +39,7 @@ class ModalBenchTests(unittest.TestCase):
 
         config = ModalSmokeConfig(run_id="modal-smoke-test")
         validate_config(config)
+        self.assertEqual(config.tracedb_ingest_mode, "batch")
 
         self.assertEqual(
             build_suite_command(config),
@@ -57,13 +57,13 @@ class ModalBenchTests(unittest.TestCase):
                 "--target",
                 "tracedb",
                 "--surface",
-                "sdk",
+                "http,curl",
                 "--openrouter-mode",
                 "off",
                 "--openrouter-cap",
                 "moderate",
                 "--tracedb-ingest-mode",
-                "per_record",
+                "batch",
                 "--seed",
                 "42",
                 "--run-id",
@@ -71,7 +71,7 @@ class ModalBenchTests(unittest.TestCase):
                 "--reports-dir",
                 "/tmp/tracedb-modal-reports",
                 "--scenarios",
-                "sdk_cli_surface",
+                "http_falsification",
             ],
         )
         self.assertFalse(config.gpu_requested)
@@ -93,7 +93,9 @@ class ModalBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "external controls"):
             validate_config(ModalSmokeConfig(target="tracedb,postgres"))
 
-    def test_postgres_external_control_command_requires_explicit_guardrails(self) -> None:
+    def test_postgres_external_control_command_requires_explicit_guardrails(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_suite_command, validate_config
 
         config = ModalSmokeConfig(
@@ -118,14 +120,18 @@ class ModalBenchTests(unittest.TestCase):
         self.assertNotIn("--require-services", default_command)
 
     def test_platform_pr_preset_wires_suite_spec_and_batch_ingest(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
-        config = _parse_args(["--suite-preset", "platform_pr", "--run-id", "platform-pr-test"])
+        config = _parse_args(
+            ["--suite-preset", "platform_pr", "--run-id", "platform-pr-test"]
+        )
         command = build_suite_command(config)
 
-        self.assertEqual(config.suite_spec, "benchmarks/realworld/suites/platform_pr.json")
+        self.assertEqual(
+            config.suite_spec, "benchmarks/realworld/suites/platform_pr.json"
+        )
         self.assertEqual(config.records, 128)
-        self.assertEqual(config.scenarios, "sdk_cli_surface,http_falsification")
+        self.assertEqual(config.scenarios, "http_falsification")
         self.assertEqual(config.tracedb_ingest_mode, "batch")
         self.assertIn("--suite-spec", command)
         self.assertEqual(
@@ -134,12 +140,16 @@ class ModalBenchTests(unittest.TestCase):
         )
 
     def test_railway_stateful_preset_passes_railway_config_from_env(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
-        config = _parse_args(["--suite-preset", "railway_stateful", "--run-id", "railway-test"])
+        config = _parse_args(
+            ["--suite-preset", "railway_stateful", "--run-id", "railway-test"]
+        )
         command = build_suite_command(config)
 
-        self.assertEqual(config.suite_spec, "benchmarks/realworld/suites/railway_stateful.json")
+        self.assertEqual(
+            config.suite_spec, "benchmarks/realworld/suites/railway_stateful.json"
+        )
         self.assertTrue(config.railway_config_from_env)
         self.assertTrue(config.railway_health_check)
         self.assertTrue(config.railway_stateful_smoke)
@@ -152,16 +162,18 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-restart-redeploy-plan", command)
 
     def test_soak_preset_requires_runbook_verification_before_execution(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
-        config = _parse_args(["--suite-preset", "soak_railway", "--run-id", "soak-test"])
+        config = _parse_args(
+            ["--suite-preset", "soak_railway", "--run-id", "soak-test"]
+        )
         command = build_suite_command(config)
 
         self.assertTrue(config.railway_runbook_verification_required)
         self.assertIn("--railway-require-runbook-verification", command)
 
     def test_release_preset_passes_runbook_verification_artifact(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
         config = _parse_args(
             [
@@ -184,20 +196,21 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-runbook-verification-json", command)
 
     def test_production_1m_preset_wires_release_gate_and_modal_guards(self) -> None:
-        from modal_bench import build_suite_command, validate_config, _parse_args
+        from modal_bench import _parse_args, build_suite_command, validate_config
 
-        config = _parse_args(["--suite-preset", "production_1m", "--run-id", "production-test"])
+        config = _parse_args(
+            ["--suite-preset", "production_1m", "--run-id", "production-test"]
+        )
         validate_config(config)
         command = build_suite_command(config)
 
-        self.assertEqual(config.suite_spec, "benchmarks/realworld/suites/production_1m.json")
+        self.assertEqual(
+            config.suite_spec, "benchmarks/realworld/suites/production_1m.json"
+        )
         self.assertEqual(config.records, 1_000_000)
         self.assertEqual(config.dataset, "generated_hybrid")
         self.assertEqual(config.target, "tracedb,pgvector,qdrant,opensearch")
-        self.assertEqual(
-            config.surface,
-            "http_direct,rust_sdk,typescript_sdk,python_sdk,traceql,graphql",
-        )
+        self.assertEqual(config.surface, "http,curl")
         self.assertEqual(config.tracedb_ingest_mode, "batch")
         self.assertTrue(config.allow_large)
         self.assertTrue(config.allow_external_controls)
@@ -228,7 +241,9 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(command[command.index("--records") + 1], "1000000")
         self.assertEqual(command[command.index("--tracedb-ingest-mode") + 1], "batch")
 
-    def test_stage_modal_input_artifacts_copies_runbook_verification_for_remote(self) -> None:
+    def test_stage_modal_input_artifacts_copies_runbook_verification_for_remote(
+        self,
+    ) -> None:
         from modal_bench import (
             ModalSmokeConfig,
             build_suite_command,
@@ -243,7 +258,9 @@ class ModalBenchTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_text('{"status":"passed"}\n', encoding="utf-8")
             backup_receipt = root / "reports" / "railway-backup-receipt.json"
-            backup_receipt.write_text('{"kind":"railway_backup_receipt"}\n', encoding="utf-8")
+            backup_receipt.write_text(
+                '{"kind":"railway_backup_receipt"}\n', encoding="utf-8"
+            )
 
             config = ModalSmokeConfig(
                 run_id="soak-test",
@@ -267,17 +284,24 @@ class ModalBenchTests(unittest.TestCase):
                 "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
                 "soak-test/railway-runbook-verification.json"
             )
-            self.assertEqual(staged_path.read_text(encoding="utf-8"), '{"status":"passed"}\n')
-            self.assertEqual(staged_config.railway_runbook_verification_json, remote_path)
+            self.assertEqual(
+                staged_path.read_text(encoding="utf-8"), '{"status":"passed"}\n'
+            )
+            self.assertEqual(
+                staged_config.railway_runbook_verification_json, remote_path
+            )
             self.assertEqual(
                 staged_config.railway_backup_receipt_json,
                 "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
                 "soak-test/railway-backup-receipt.json",
             )
-            self.assertEqual([artifact["kind"] for artifact in staged_artifacts], [
-                "railway_backup_receipt",
-                "railway_runbook_verification",
-            ])
+            self.assertEqual(
+                [artifact["kind"] for artifact in staged_artifacts],
+                [
+                    "railway_backup_receipt",
+                    "railway_runbook_verification",
+                ],
+            )
             runbook_artifact = staged_artifacts[1]
             self.assertEqual(runbook_artifact["source_path"], str(source))
             self.assertEqual(runbook_artifact["staged_path"], str(staged_path))
@@ -351,8 +375,12 @@ class ModalBenchTests(unittest.TestCase):
             self.assertEqual(staged_config.suite_baseline_json, remote_path)
             self.assertEqual(staged_artifacts[0]["kind"], "suite_baseline")
             command = build_suite_command(staged_config)
-            self.assertEqual(command[command.index("--suite-baseline-json") + 1], remote_path)
-            self.assertEqual(command[command.index("--regression-tolerance-pct") + 1], "12.5")
+            self.assertEqual(
+                command[command.index("--suite-baseline-json") + 1], remote_path
+            )
+            self.assertEqual(
+                command[command.index("--regression-tolerance-pct") + 1], "12.5"
+            )
             self.assertEqual(
                 command[command.index("--regression-tolerance-absolute") + 1],
                 "2.0",
@@ -420,28 +448,36 @@ class ModalBenchTests(unittest.TestCase):
             "/workspace/TraceDB/benchmarks/realworld/.modal-input-artifacts/"
             "current/suite-baseline.json",
         )
-        self.assertEqual(command[command.index("--regression-tolerance-pct") + 1], "10.0")
+        self.assertEqual(
+            command[command.index("--regression-tolerance-pct") + 1], "10.0"
+        )
 
     def test_railway_health_check_can_be_enabled_without_preset(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
-        config = _parse_args(["--railway-health-check", "--run-id", "railway-health-test"])
+        config = _parse_args(
+            ["--railway-health-check", "--run-id", "railway-health-test"]
+        )
         command = build_suite_command(config)
 
         self.assertTrue(config.railway_health_check)
         self.assertIn("--railway-health-check", command)
 
     def test_railway_stateful_smoke_can_be_enabled_without_preset(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
-        config = _parse_args(["--railway-stateful-smoke", "--run-id", "railway-smoke-test"])
+        config = _parse_args(
+            ["--railway-stateful-smoke", "--run-id", "railway-smoke-test"]
+        )
         command = build_suite_command(config)
 
         self.assertTrue(config.railway_stateful_smoke)
         self.assertIn("--railway-stateful-smoke", command)
 
-    def test_railway_stateful_read_only_marker_probe_can_be_enabled_without_preset(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+    def test_railway_stateful_read_only_marker_probe_can_be_enabled_without_preset(
+        self,
+    ) -> None:
+        from modal_bench import _parse_args, build_suite_command
 
         config = _parse_args(
             [
@@ -459,19 +495,23 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(config.railway_stateful_marker_id, "marker-123")
         self.assertIn("--railway-stateful-read-only", command)
         self.assertIn("--railway-stateful-marker-id", command)
-        self.assertEqual(command[command.index("--railway-stateful-marker-id") + 1], "marker-123")
+        self.assertEqual(
+            command[command.index("--railway-stateful-marker-id") + 1], "marker-123"
+        )
 
     def test_railway_restart_redeploy_plan_can_be_enabled_without_preset(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
-        config = _parse_args(["--railway-restart-redeploy-plan", "--run-id", "railway-plan-test"])
+        config = _parse_args(
+            ["--railway-restart-redeploy-plan", "--run-id", "railway-plan-test"]
+        )
         command = build_suite_command(config)
 
         self.assertTrue(config.railway_restart_redeploy_plan)
         self.assertIn("--railway-restart-redeploy-plan", command)
 
     def test_railway_snapshot_restore_check_can_be_enabled_without_preset(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
         config = _parse_args(
             [
@@ -491,10 +531,14 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-snapshot-restore-check", command)
         self.assertIn("--railway-verify-restored-marker", command)
         self.assertIn("--railway-snapshot-root", command)
-        self.assertEqual(command[command.index("--railway-snapshot-root") + 1], "/srv/tracedb-admin")
+        self.assertEqual(
+            command[command.index("--railway-snapshot-root") + 1], "/srv/tracedb-admin"
+        )
 
-    def test_railway_persistence_artifact_paths_can_be_enabled_without_preset(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+    def test_railway_persistence_artifact_paths_can_be_enabled_without_preset(
+        self,
+    ) -> None:
+        from modal_bench import _parse_args, build_suite_command
 
         config = _parse_args(
             [
@@ -508,13 +552,16 @@ class ModalBenchTests(unittest.TestCase):
         )
         command = build_suite_command(config)
 
-        self.assertEqual(config.railway_persistence_pre_manifest_json, "/tmp/pre-railway-manifest.json")
+        self.assertEqual(
+            config.railway_persistence_pre_manifest_json,
+            "/tmp/pre-railway-manifest.json",
+        )
         self.assertEqual(config.railway_operation_receipt_json, "/tmp/receipt.json")
         self.assertIn("--railway-persistence-pre-manifest-json", command)
         self.assertIn("--railway-operation-receipt-json", command)
 
     def test_railway_backup_receipt_can_be_enabled_without_preset(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
         config = _parse_args(
             [
@@ -530,7 +577,7 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--railway-backup-receipt-json", command)
 
     def test_suite_preflight_only_passes_runner_flag(self) -> None:
-        from modal_bench import build_suite_command, _parse_args
+        from modal_bench import _parse_args, build_suite_command
 
         config = _parse_args(
             [
@@ -549,7 +596,9 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("--preflight-only", command)
         self.assertIn("--railway-backup-receipt-json", command)
 
-    def test_postgres_external_control_requires_dsn_when_services_are_required(self) -> None:
+    def test_postgres_external_control_requires_dsn_when_services_are_required(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 
         config = ModalSmokeConfig(
@@ -601,7 +650,9 @@ class ModalBenchTests(unittest.TestCase):
         )
         self.assertNotIn("BENCH_POSTGRES_DSN", env)
 
-    def test_tracedb_engine_control_requires_http_surface_and_tracedb_target(self) -> None:
+    def test_tracedb_engine_control_requires_http_surface_and_tracedb_target(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env, validate_config
 
         with self.assertRaisesRegex(ValueError, "target including tracedb"):
@@ -640,7 +691,9 @@ class ModalBenchTests(unittest.TestCase):
             "/tmp/tracedb-engine-modal-tracedb-engine-smoke",
         )
 
-    def test_pgvector_external_control_requires_dsn_when_services_are_required(self) -> None:
+    def test_pgvector_external_control_requires_dsn_when_services_are_required(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 
         config = ModalSmokeConfig(
@@ -689,11 +742,15 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(command[command.index("--target") + 1], "qdrant")
         self.assertIn("--require-services", command)
         self.assertEqual(env["BENCH_QDRANT_URL"], "http://127.0.0.1:26333")
-        self.assertEqual(env["BENCH_QDRANT_STORAGE_DIR"], "/tmp/tracedb-qdrant-modal-qdrant-smoke")
+        self.assertEqual(
+            env["BENCH_QDRANT_STORAGE_DIR"], "/tmp/tracedb-qdrant-modal-qdrant-smoke"
+        )
         self.assertNotIn("BENCH_POSTGRES_DSN", env)
         self.assertNotIn("BENCH_PGVECTOR_DSN", env)
 
-    def test_qdrant_external_control_requires_url_when_services_are_required(self) -> None:
+    def test_qdrant_external_control_requires_url_when_services_are_required(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 
         config = ModalSmokeConfig(
@@ -715,7 +772,9 @@ class ModalBenchTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "external controls"):
-            validate_config(ModalSmokeConfig(target="opensearch", opensearch_control=True))
+            validate_config(
+                ModalSmokeConfig(target="opensearch", opensearch_control=True)
+            )
         with self.assertRaisesRegex(ValueError, "opensearch_control"):
             validate_config(
                 ModalSmokeConfig(
@@ -750,7 +809,9 @@ class ModalBenchTests(unittest.TestCase):
         self.assertNotIn("BENCH_PGVECTOR_DSN", env)
         self.assertNotIn("BENCH_QDRANT_URL", env)
 
-    def test_opensearch_external_control_requires_url_when_services_are_required(self) -> None:
+    def test_opensearch_external_control_requires_url_when_services_are_required(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 
         config = ModalSmokeConfig(
@@ -807,7 +868,9 @@ class ModalBenchTests(unittest.TestCase):
         self.assertNotIn("BENCH_PGVECTOR_DSN", env)
         self.assertNotIn("BENCH_QDRANT_URL", env)
 
-    def test_mongodb_external_control_requires_uri_when_services_are_required(self) -> None:
+    def test_mongodb_external_control_requires_uri_when_services_are_required(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 
         config = ModalSmokeConfig(
@@ -867,7 +930,9 @@ class ModalBenchTests(unittest.TestCase):
         self.assertNotIn("BENCH_QDRANT_URL", env)
         self.assertNotIn("BENCH_MONGO_URI", env)
 
-    def test_milvus_external_control_requires_uri_when_services_are_required(self) -> None:
+    def test_milvus_external_control_requires_uri_when_services_are_required(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_runner_env
 
         config = ModalSmokeConfig(
@@ -1000,7 +1065,9 @@ class ModalBenchTests(unittest.TestCase):
                     "query_p95_ms": {"baseline": "PostgreSQL", "value": 5.0},
                 },
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             completed = type(
@@ -1022,10 +1089,14 @@ class ModalBenchTests(unittest.TestCase):
                 "PATH": os.environ.get("PATH", ""),
                 "BENCH_POSTGRES_DSN": "postgresql://user:secret@127.0.0.1:25432/db",
             }
-            with patch.dict(os.environ, base_env, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch("subprocess.run", return_value=completed) as run:
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch("subprocess.run", return_value=completed) as run,
+            ):
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             self.assertEqual(summary["control_status"], "external_control_available")
@@ -1060,7 +1131,9 @@ class ModalBenchTests(unittest.TestCase):
                     "query_p95_ms": {"baseline": "pgvector", "value": 4.0},
                 },
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             completed = type(
@@ -1080,14 +1153,16 @@ class ModalBenchTests(unittest.TestCase):
                 pgvector_control=True,
             )
             base_env = {"PATH": os.environ.get("PATH", "")}
-            with patch.dict(os.environ, base_env, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch("modal_bench.start_pgvector_control") as start_pgvector, patch(
-                "modal_bench.stop_postgres_control"
-            ), patch(
-                "subprocess.run", return_value=completed
-            ) as run:
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch("modal_bench.start_pgvector_control") as start_pgvector,
+                patch("modal_bench.stop_postgres_control"),
+                patch("subprocess.run", return_value=completed) as run,
+            ):
                 start_pgvector.return_value = type(
                     "PostgresControlStub",
                     (),
@@ -1131,7 +1206,9 @@ class ModalBenchTests(unittest.TestCase):
                     "query_p95_ms": {"baseline": "qdrant", "value": 4.0},
                 },
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             completed = type(
@@ -1161,16 +1238,18 @@ class ModalBenchTests(unittest.TestCase):
                     "process": None,
                 },
             )()
-            with patch.dict(os.environ, base_env, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch(
-                "modal_bench.start_qdrant_control", return_value=qdrant_service
-            ) as start_qdrant, patch(
-                "modal_bench.stop_qdrant_control"
-            ) as stop_qdrant, patch(
-                "subprocess.run", return_value=completed
-            ) as run:
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch(
+                    "modal_bench.start_qdrant_control", return_value=qdrant_service
+                ) as start_qdrant,
+                patch("modal_bench.stop_qdrant_control") as stop_qdrant,
+                patch("subprocess.run", return_value=completed) as run,
+            ):
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             start_qdrant.assert_called_once()
@@ -1211,7 +1290,9 @@ class ModalBenchTests(unittest.TestCase):
                     "query_p95_ms": {"baseline": "opensearch", "value": 4.0},
                 },
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             completed = type(
@@ -1241,16 +1322,19 @@ class ModalBenchTests(unittest.TestCase):
                     "process": None,
                 },
             )()
-            with patch.dict(os.environ, base_env, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch(
-                "modal_bench.start_opensearch_control", return_value=opensearch_service
-            ) as start_opensearch, patch(
-                "modal_bench.stop_opensearch_control"
-            ) as stop_opensearch, patch(
-                "subprocess.run", return_value=completed
-            ) as run:
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch(
+                    "modal_bench.start_opensearch_control",
+                    return_value=opensearch_service,
+                ) as start_opensearch,
+                patch("modal_bench.stop_opensearch_control") as stop_opensearch,
+                patch("subprocess.run", return_value=completed) as run,
+            ):
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             start_opensearch.assert_called_once()
@@ -1291,7 +1375,9 @@ class ModalBenchTests(unittest.TestCase):
                     "query_p95_ms": {"baseline": "mongodb", "value": 4.0},
                 },
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             completed = type(
@@ -1321,16 +1407,18 @@ class ModalBenchTests(unittest.TestCase):
                     "process": None,
                 },
             )()
-            with patch.dict(os.environ, base_env, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch(
-                "modal_bench.start_mongodb_control", return_value=mongodb_service
-            ) as start_mongodb, patch(
-                "modal_bench.stop_mongodb_control"
-            ) as stop_mongodb, patch(
-                "subprocess.run", return_value=completed
-            ) as run:
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch(
+                    "modal_bench.start_mongodb_control", return_value=mongodb_service
+                ) as start_mongodb,
+                patch("modal_bench.stop_mongodb_control") as stop_mongodb,
+                patch("subprocess.run", return_value=completed) as run,
+            ):
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             start_mongodb.assert_called_once()
@@ -1371,7 +1459,9 @@ class ModalBenchTests(unittest.TestCase):
                     "query_p95_ms": {"baseline": "milvus", "value": 4.0},
                 },
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             completed = type(
@@ -1399,16 +1489,18 @@ class ModalBenchTests(unittest.TestCase):
                     "uri": str(root / "milvus" / "milvus_lite.db"),
                 },
             )()
-            with patch.dict(os.environ, base_env, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch(
-                "modal_bench.start_milvus_control", return_value=milvus_service
-            ) as start_milvus, patch(
-                "modal_bench.stop_milvus_control"
-            ) as stop_milvus, patch(
-                "subprocess.run", return_value=completed
-            ) as run:
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch(
+                    "modal_bench.start_milvus_control", return_value=milvus_service
+                ) as start_milvus,
+                patch("modal_bench.stop_milvus_control") as stop_milvus,
+                patch("subprocess.run", return_value=completed) as run,
+            ):
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             start_milvus.assert_called_once()
@@ -1449,7 +1541,9 @@ class ModalBenchTests(unittest.TestCase):
                     "query_p95_ms": {"baseline": None, "value": None},
                 },
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             completed = type(
@@ -1477,16 +1571,20 @@ class ModalBenchTests(unittest.TestCase):
                     "process": None,
                 },
             )()
-            with patch.dict(os.environ, {"PATH": os.environ.get("PATH", "")}, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch(
-                "modal_bench.start_tracedb_engine_control", return_value=service
-            ) as start_tracedb, patch(
-                "modal_bench.stop_tracedb_engine_control"
-            ) as stop_tracedb, patch(
-                "subprocess.run", return_value=completed
-            ) as run:
+            with (
+                patch.dict(
+                    os.environ, {"PATH": os.environ.get("PATH", "")}, clear=True
+                ),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch(
+                    "modal_bench.start_tracedb_engine_control", return_value=service
+                ) as start_tracedb,
+                patch("modal_bench.stop_tracedb_engine_control") as stop_tracedb,
+                patch("subprocess.run", return_value=completed) as run,
+            ):
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             start_tracedb.assert_called_once()
@@ -1583,7 +1681,9 @@ class ModalBenchTests(unittest.TestCase):
         self.assertIn("TRACEDB_HTTP_URL", manifest_text)
         self.assertIn("TRACEDB_HTTP_DATA_DIR", manifest_text)
         self.assertNotIn("secret-token", manifest_text)
-        self.assertEqual(manifest["runner_env"]["TRACEDB_HTTP_BEARER_TOKEN"], "[redacted]")
+        self.assertEqual(
+            manifest["runner_env"]["TRACEDB_HTTP_BEARER_TOKEN"], "[redacted]"
+        )
 
     def test_run_suite_redacts_sensitive_values_from_process_tails(self) -> None:
         from modal_bench import ModalSmokeConfig, run_suite_and_bundle
@@ -1603,7 +1703,9 @@ class ModalBenchTests(unittest.TestCase):
                 },
                 "number_to_beat": {},
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             secret_dsn = "postgresql://user:secret@127.0.0.1:25432/db"
@@ -1630,10 +1732,14 @@ class ModalBenchTests(unittest.TestCase):
                 "PATH": os.environ.get("PATH", ""),
                 "BENCH_POSTGRES_DSN": secret_dsn,
             }
-            with patch.dict(os.environ, base_env, clear=True), patch(
-                "modal_bench.git_identity",
-                return_value={"commit": "test", "dirty": False, "status_short": ""},
-            ), patch("subprocess.run", return_value=completed):
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch(
+                    "modal_bench.git_identity",
+                    return_value={"commit": "test", "dirty": False, "status_short": ""},
+                ),
+                patch("subprocess.run", return_value=completed),
+            ):
                 summary = run_suite_and_bundle(config, lab_root=LAB_ROOT)
 
             process_text = json.dumps(summary["manifest"]["process"])
@@ -1662,7 +1768,9 @@ class ModalBenchTests(unittest.TestCase):
             manifest["git"]["status_short"], " M benchmarks/realworld/modal_bench.py"
         )
 
-    def test_manifest_prefers_source_git_identity_when_remote_mount_has_no_git_dir(self) -> None:
+    def test_manifest_prefers_source_git_identity_when_remote_mount_has_no_git_dir(
+        self,
+    ) -> None:
         from modal_bench import ModalSmokeConfig, build_manifest
 
         config = ModalSmokeConfig(
@@ -1685,9 +1793,16 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(manifest["git"]["status_short"], "")
 
     def test_modal_app_identity_can_be_overridden_for_variance_runs(self) -> None:
-        from modal_bench import ModalSmokeConfig, _parse_args, build_manifest, modal_app_name
+        from modal_bench import (
+            ModalSmokeConfig,
+            _parse_args,
+            build_manifest,
+            modal_app_name,
+        )
 
-        with patch.dict(os.environ, {"TRACEDB_MODAL_APP_NAME": "tracedb-postgres-a"}, clear=False):
+        with patch.dict(
+            os.environ, {"TRACEDB_MODAL_APP_NAME": "tracedb-postgres-a"}, clear=False
+        ):
             self.assertEqual(modal_app_name(), "tracedb-postgres-a")
             config = _parse_args(["--run-id", "variance-a"])
             manifest = build_manifest(
@@ -1699,7 +1814,9 @@ class ModalBenchTests(unittest.TestCase):
         self.assertEqual(manifest["modal_app_name"], "tracedb-postgres-a")
         self.assertEqual(
             build_manifest(
-                ModalSmokeConfig(run_id="explicit", modal_app_name="tracedb-postgres-b"),
+                ModalSmokeConfig(
+                    run_id="explicit", modal_app_name="tracedb-postgres-b"
+                ),
                 ["python3", "-m", "runner", "suite"],
             )["modal_app_name"],
             "tracedb-postgres-b",
@@ -1850,8 +1967,9 @@ class ModalBenchTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "nested" / "summary.json"
-            with patch("modal_bench.run_suite_and_bundle", return_value=summary), patch(
-                "sys.stdout", new=io.StringIO()
+            with (
+                patch("modal_bench.run_suite_and_bundle", return_value=summary),
+                patch("sys.stdout", new=io.StringIO()),
             ):
                 exit_code = run_local(
                     [
@@ -1863,7 +1981,9 @@ class ModalBenchTests(unittest.TestCase):
                 )
 
             self.assertEqual(exit_code, 0)
-            self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8")), summary)
+            self.assertEqual(
+                json.loads(summary_path.read_text(encoding="utf-8")), summary
+            )
             self.assertTrue(summary_path.read_text(encoding="utf-8").endswith("\n"))
 
     def test_run_local_exports_local_bundle_output_and_records_checksum(self) -> None:
@@ -1882,8 +2002,9 @@ class ModalBenchTests(unittest.TestCase):
             summary_path = root / "summary.json"
             bundle_output = root / "exports" / "bundle.tar.gz"
 
-            with patch("modal_bench.run_suite_and_bundle", return_value=summary), patch(
-                "sys.stdout", new=io.StringIO()
+            with (
+                patch("modal_bench.run_suite_and_bundle", return_value=summary),
+                patch("sys.stdout", new=io.StringIO()),
             ):
                 exit_code = run_local(
                     [
@@ -1899,13 +2020,19 @@ class ModalBenchTests(unittest.TestCase):
             written_summary = json.loads(summary_path.read_text(encoding="utf-8"))
             self.assertEqual(exit_code, 0)
             self.assertEqual(bundle_output.read_bytes(), bundle_bytes)
-            self.assertEqual(str(bundle_output), written_summary["exported_bundle_path"])
+            self.assertEqual(
+                str(bundle_output), written_summary["exported_bundle_path"]
+            )
             self.assertEqual(
                 hashlib.sha256(bundle_bytes).hexdigest(),
                 written_summary["exported_bundle_sha256"],
             )
-            self.assertEqual(len(bundle_bytes), written_summary["exported_bundle_size_bytes"])
-            self.assertEqual(str(source_bundle), written_summary["exported_bundle_source_path"])
+            self.assertEqual(
+                len(bundle_bytes), written_summary["exported_bundle_size_bytes"]
+            )
+            self.assertEqual(
+                str(source_bundle), written_summary["exported_bundle_source_path"]
+            )
             self.assertEqual("local_copy", written_summary["bundle_export_transport"])
             self.assertTrue(written_summary["exported_bundle_checksum_verified"])
 
@@ -1940,12 +2067,16 @@ class ModalBenchTests(unittest.TestCase):
                 hashlib.sha256(bundle_bytes).hexdigest(),
                 clean_summary["exported_bundle_sha256"],
             )
-            self.assertEqual(len(bundle_bytes), clean_summary["exported_bundle_size_bytes"])
+            self.assertEqual(
+                len(bundle_bytes), clean_summary["exported_bundle_size_bytes"]
+            )
             self.assertEqual(
                 "/tmp/remote-bundle.tar.gz",
                 clean_summary["exported_bundle_source_path"],
             )
-            self.assertEqual("modal_return_bytes", clean_summary["bundle_export_transport"])
+            self.assertEqual(
+                "modal_return_bytes", clean_summary["bundle_export_transport"]
+            )
             self.assertTrue(clean_summary["exported_bundle_checksum_verified"])
 
     def test_write_bundle_output_rejects_remote_payload_without_checksum(self) -> None:
@@ -1962,7 +2093,11 @@ class ModalBenchTests(unittest.TestCase):
                 )
 
     def test_write_bundle_output_rejects_remote_payload_checksum_mismatch(self) -> None:
-        from modal_bench import BUNDLE_BYTES_FIELD, BUNDLE_SHA256_FIELD, write_bundle_output
+        from modal_bench import (
+            BUNDLE_BYTES_FIELD,
+            BUNDLE_SHA256_FIELD,
+            write_bundle_output,
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
@@ -2058,7 +2193,9 @@ class ModalBenchTests(unittest.TestCase):
                     }
                 ],
             }
-            (run_dir / "suite.json").write_text(json.dumps(suite_json), encoding="utf-8")
+            (run_dir / "suite.json").write_text(
+                json.dumps(suite_json), encoding="utf-8"
+            )
             (run_dir / "suite.md").write_text("# suite\n", encoding="utf-8")
 
             config = ModalSmokeConfig(run_id="modal-smoke-test")
@@ -2096,18 +2233,20 @@ class ModalBenchTests(unittest.TestCase):
             4.0,
         )
         self.assertEqual(
-            summary["scenario_baselines"]["search_rag_6"]["tracedb"]["query_results"][0][
-                "query_id"
-            ],
+            summary["scenario_baselines"]["search_rag_6"]["tracedb"]["query_results"][
+                0
+            ]["query_id"],
             "qrel-1",
         )
         self.assertEqual(
-            summary["scenario_baselines"]["search_rag_6"]["tracedb"]["query_results"][0][
-                "actual_ids"
-            ],
+            summary["scenario_baselines"]["search_rag_6"]["tracedb"]["query_results"][
+                0
+            ]["actual_ids"],
             ["doc-actual"],
         )
-        self.assertEqual(summary["scenario_datasets"]["search_rag_6"]["digest"], "digest-123")
+        self.assertEqual(
+            summary["scenario_datasets"]["search_rag_6"]["digest"], "digest-123"
+        )
         self.assertEqual(
             summary["tracedb_attribution"][0]["query"]["query_latency_p95_ms"],
             4.0,

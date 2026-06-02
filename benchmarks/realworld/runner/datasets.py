@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-import itertools
 import hashlib
+import itertools
 import json
 import random
 import re
 from typing import Any
 
 from .mathutil import cosine, deterministic_vector, text_score
-from .types import DETERMINISTIC_EMBEDDING_MODEL, VECTOR_DIMENSIONS, BenchQuery, BenchRecord, DatasetBundle
-
+from .types import (
+    DETERMINISTIC_EMBEDDING_MODEL,
+    VECTOR_DIMENSIONS,
+    BenchQuery,
+    BenchRecord,
+    DatasetBundle,
+)
 
 TOPICS = [
     ("ai_memory", "agent memory vector retrieval policy freshness"),
@@ -19,6 +24,72 @@ TOPICS = [
     ("legal", "contract clause obligation party indemnity"),
     ("ops", "incident timeline service recovery latency"),
 ]
+
+# Variant reformulations per topic to increase query diversity.
+# Each variant rephrases the topic with different terminology/word order
+# so that text_score yields different rankings per variant.
+TOPIC_VARIANTS: dict[str, list[str]] = {
+    "ai_memory": [
+        "agent memory vector retrieval policy freshness",
+        "memory retrieval for AI agents with freshness policy",
+        "vector policy freshness agent recall",
+        "AI agent recall freshness vector storage",
+        "retrieval policy agent memory stale data",
+        "agent knowledge retrieval vector freshness",
+        "policy-based memory vector agent retrieval",
+        "stale freshness agent memory vector query",
+    ],
+    "code_search": [
+        "rust function module query planner index",
+        "function index module planner rust query",
+        "query planner index rust module lookup",
+        "code search rust function module index",
+        "rust module function planner index scan",
+        "index planner module function query rust",
+        "module rust index function query scan",
+        "rust planner query function index module",
+    ],
+    "support": [
+        "customer support ticket refund billing issue",
+        "refund ticket billing customer support problem",
+        "billing issue customer support refund request",
+        "support ticket refund customer billing dispute",
+        "customer billing refund ticket support escalation",
+        "refund billing support customer issue ticket",
+        "support refund ticket billing customer complaint",
+        "customer issue billing support refund resolution",
+    ],
+    "movie": [
+        "science fiction movie adventure mystery cast",
+        "fiction movie adventure mystery science cast",
+        "adventure mystery science fiction movie cast",
+        "movie cast science fiction mystery adventure",
+        "mystery science fiction movie adventure cast",
+        "science adventure fiction movie cast mystery",
+        "fiction adventure cast movie science mystery",
+        "movie science fiction adventure mystery cast crew",
+    ],
+    "legal": [
+        "contract clause obligation party indemnity",
+        "clause obligation party indemnity contract",
+        "party indemnity clause contract obligation",
+        "obligation indemnity contract clause party",
+        "indemnity party contract obligation clause",
+        "contract party indemnity clause obligation breach",
+        "legal contract clause party indemnity",
+        "obligation contract indemnity party clause agreement",
+    ],
+    "ops": [
+        "incident timeline service recovery latency",
+        "timeline service recovery incident latency",
+        "service recovery latency incident timeline",
+        "recovery latency timeline incident service",
+        "latency incident service timeline recovery",
+        "incident service latency recovery timeline alert",
+        "ops incident recovery latency service timeline",
+        "service latency incident recovery timeline pager",
+    ],
+}
 
 
 def load_dataset(kind: str, records: int, seed: int = 42) -> DatasetBundle:
@@ -31,10 +102,14 @@ def load_dataset(kind: str, records: int, seed: int = 42) -> DatasetBundle:
     if kind in {"beir_scifact", "scifact"}:
         return beir_scifact_dataset(records, seed)
     if kind in {"codesearchnet", "code_search_net", "codesearchnet_body"}:
-        dataset_kind = "codesearchnet_body" if kind == "codesearchnet_body" else "codesearchnet"
+        dataset_kind = (
+            "codesearchnet_body" if kind == "codesearchnet_body" else "codesearchnet"
+        )
         return codesearchnet_dataset(records, seed, kind=dataset_kind)
     if kind == "codesearchnet_codeaware":
-        return codesearchnet_dataset(records, seed, kind="codesearchnet_codeaware", codeaware=True)
+        return codesearchnet_dataset(
+            records, seed, kind="codesearchnet_codeaware", codeaware=True
+        )
     raise ValueError(
         f"unknown dataset {kind}; expected generated, generated_hybrid, embedded_movies, beir_scifact, codesearchnet_body, or codesearchnet_codeaware"
     )
@@ -175,7 +250,9 @@ def beir_scifact_dataset(records: int, seed: int) -> DatasetBundle:
             status="published",
             rating=0.0,
             year=2020,
-            vector=deterministic_vector(str(item.get("text") or item.get("contents") or idx)),
+            vector=deterministic_vector(
+                str(item.get("text") or item.get("contents") or idx)
+            ),
             metadata={"source": "beir_scifact"},
         )
         for idx, item in enumerate(rows)
@@ -201,8 +278,12 @@ def beir_scifact_dataset(records: int, seed: int) -> DatasetBundle:
         records=out,
         queries=queries,
         notes=notes,
-        relevance_label_mode="external_qrels" if qrel_queries else "synthetic_text_vector_similarity",
-        relevance_label_scope="retrieval_quality" if qrel_queries else "synthetic_retrieval_quality",
+        relevance_label_mode="external_qrels"
+        if qrel_queries
+        else "synthetic_text_vector_similarity",
+        relevance_label_scope="retrieval_quality"
+        if qrel_queries
+        else "synthetic_retrieval_quality",
     )
 
 
@@ -223,7 +304,11 @@ def codesearchnet_dataset(
     out = []
     for idx, item in enumerate(rows):
         record_id = str(item.get("_id") or item.get("id") or f"code-{idx}")
-        title = str(item.get("title") or item.get("metadata", {}).get("language") or f"Code {idx}")
+        title = str(
+            item.get("title")
+            or item.get("metadata", {}).get("language")
+            or f"Code {idx}"
+        )
         original_body = str(item.get("text") or item.get("contents") or "")
         body = (
             _codeaware_lexical_text(record_id, title, original_body)
@@ -264,7 +349,9 @@ def codesearchnet_dataset(
     notes = ["external code retrieval dataset loaded from Hugging Face"]
     relevance_label_notes = []
     if codeaware:
-        notes.append("code-aware lexical lane materializes record id/path, title, body, and normalized identifier terms")
+        notes.append(
+            "code-aware lexical lane materializes record id/path, title, body, and normalized identifier terms"
+        )
         relevance_label_notes.append(
             "code-aware lexical benchmark variant expands query and document text with simple identifier morphology terms"
         )
@@ -276,8 +363,12 @@ def codesearchnet_dataset(
         records=out,
         queries=queries,
         notes=notes,
-        relevance_label_mode="external_qrels" if qrel_queries else "synthetic_text_vector_similarity",
-        relevance_label_scope="retrieval_quality" if qrel_queries else "synthetic_retrieval_quality",
+        relevance_label_mode="external_qrels"
+        if qrel_queries
+        else "synthetic_text_vector_similarity",
+        relevance_label_scope="retrieval_quality"
+        if qrel_queries
+        else "synthetic_retrieval_quality",
         relevance_label_notes=relevance_label_notes,
     )
 
@@ -340,31 +431,83 @@ def _queries_from_records(
         tenant_candidates = [
             record for record in candidates if record.tenant_id == first.tenant_id
         ]
-        if prefer_oracle_rank and all(_oracle_rank(record) is not None for record in tenant_candidates):
-            scored = [
-                (-float(_oracle_rank(record) or 0), record.record_id)
-                for record in tenant_candidates
+        # Use all defined tenants for this category, not just the first one.
+        all_tenant_ids = sorted({record.tenant_id for record in candidates})
+        variants = TOPIC_VARIANTS.get(category, [phrase])
+        variant_index = 0
+        for tenant_id in all_tenant_ids:
+            tenant_recs = [
+                record for record in candidates if record.tenant_id == tenant_id
             ]
-        else:
-            scored = [
-                (
-                    text_score(phrase, record.text()) + cosine(first.vector, record.vector),
-                    record.record_id,
+            # Pick the variant for this (category, tenant) combination.
+            variant_phrase = variants[variant_index % len(variants)]
+            variant_index += 1
+            if prefer_oracle_rank and all(
+                _oracle_rank(record) is not None for record in tenant_recs
+            ):
+                scored = [
+                    (-float(_oracle_rank(record) or 0), record.record_id)
+                    for record in tenant_recs
+                ]
+            else:
+                scored = [
+                    (
+                        text_score(variant_phrase, record.text())
+                        + cosine(first.vector, record.vector),
+                        record.record_id,
+                    )
+                    for record in tenant_recs
+                ]
+            scored.sort(key=lambda item: (-item[0], item[1]))
+            expected_ids = [record_id for _, record_id in scored[:5]]
+            queries.append(
+                BenchQuery(
+                    query_id=f"q-{category}-{tenant_id}",
+                    tenant_id=tenant_id,
+                    text=variant_phrase,
+                    category=category,
+                    vector=tenant_recs[0].vector if tenant_recs else first.vector,
+                    expected_ids=expected_ids,
                 )
-                for record in tenant_candidates
-            ]
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        expected_ids = [record_id for _, record_id in scored[:5]]
-        queries.append(
-            BenchQuery(
-                query_id=f"q-{category}",
-                tenant_id=first.tenant_id,
-                text=phrase,
-                category=category,
-                vector=first.vector,
-                expected_ids=expected_ids,
             )
-        )
+        # Add extra variant queries for the first tenant to reach ~50 total queries.
+        if len(all_tenant_ids) > 0:
+            primary_tenant = all_tenant_ids[0]
+            primary_recs = [
+                record for record in candidates if record.tenant_id == primary_tenant
+            ]
+            extra_variants = [v for v in variants if v != phrase][
+                : max(0, 5 - len(all_tenant_ids))
+            ]
+            for extra_idx, extra_phrase in enumerate(extra_variants, start=1):
+                if prefer_oracle_rank and all(
+                    _oracle_rank(record) is not None for record in primary_recs
+                ):
+                    scored = [
+                        (-float(_oracle_rank(record) or 0), record.record_id)
+                        for record in primary_recs
+                    ]
+                else:
+                    scored = [
+                        (
+                            text_score(extra_phrase, record.text())
+                            + cosine(first.vector, record.vector),
+                            record.record_id,
+                        )
+                        for record in primary_recs
+                    ]
+                scored.sort(key=lambda item: (-item[0], item[1]))
+                expected_ids = [record_id for _, record_id in scored[:5]]
+                queries.append(
+                    BenchQuery(
+                        query_id=f"q-{category}-v{extra_idx}",
+                        tenant_id=primary_tenant,
+                        text=extra_phrase,
+                        category=category,
+                        vector=primary_recs[0].vector if primary_recs else first.vector,
+                        expected_ids=expected_ids,
+                    )
+                )
     if not queries and records:
         first = records[0]
         queries.append(
@@ -397,7 +540,9 @@ def _queries_from_qrels(
     if not corpus_ids:
         return []
     try:
-        query_rows = _load_hf_rows(dataset_name, query_split, limit, seed, config=query_config)
+        query_rows = _load_hf_rows(
+            dataset_name, query_split, limit, seed, config=query_config
+        )
         qrel_rows = _load_hf_rows(
             dataset_name,
             qrels_split,
@@ -511,7 +656,9 @@ def _bundle(
     relevance_label_notes: list[str] | None = None,
 ) -> DatasetBundle:
     dimensions = len(records[0].vector) if records else VECTOR_DIMENSIONS
-    digest = _dataset_digest(kind, source, records, queries, embedding_model, dimensions)
+    digest = _dataset_digest(
+        kind, source, records, queries, embedding_model, dimensions
+    )
     return DatasetBundle(
         kind=kind,
         source=source,

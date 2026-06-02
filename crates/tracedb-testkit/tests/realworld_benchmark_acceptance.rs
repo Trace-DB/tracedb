@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,7 +10,6 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tracedb_bench::{BaselineKind, BenchmarkTarget, WorkloadKind};
-use tracedb_sdk::{TraceDbClient, TraceDbClientConfig};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -50,17 +50,13 @@ impl RealworldHttpServer {
     }
 
     fn wait_ready(&self) {
-        let client = TraceDbClient::new(
-            TraceDbClientConfig::managed(self.url(), "dev-token")
-                .with_timeout(Duration::from_millis(100)),
-        );
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut last_error = None;
         while Instant::now() < deadline {
-            match client.ready_typed() {
-                Ok(response) if response.ready => return,
-                Ok(response) => {
-                    last_error = Some(format!("ready endpoint returned not-ready: {response:?}"));
+            match ready_probe(self.addr) {
+                Ok(true) => return,
+                Ok(false) => {
+                    last_error = Some("ready endpoint returned not-ready".to_string());
                 }
                 Err(error) => {
                     last_error = Some(error.to_string());
@@ -74,6 +70,16 @@ impl RealworldHttpServer {
             last_error.unwrap_or_else(|| "no readiness attempt completed".to_string())
         );
     }
+}
+
+fn ready_probe(addr: SocketAddr) -> std::io::Result<bool> {
+    let mut stream = TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    stream.write_all(b"GET /v1/ready HTTP/1.1\r\nHost: localhost\r\n\r\n")?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response.starts_with("HTTP/1.1 200 OK") && response.contains("\"ready\":true"))
 }
 
 impl Drop for RealworldHttpServer {

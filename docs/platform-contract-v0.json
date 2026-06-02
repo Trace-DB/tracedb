@@ -40,14 +40,15 @@
       "status": "reference_candidate_with_connect_table_handle_explain_plan_and_row_batch",
       "role": "reference ergonomic SDK over the wire contract",
       "evidence": [
-        "crates/tracedb-sdk",
+        "../tracedb-rust",
+        "../tracedb-rust/examples/quickstart",
         "TraceDb::connect",
         "TableHandle::query",
         "TableHandle::insert_rows",
         "row batch ingestion over POST /v1/records/put-batch",
         "QueryBuilder::explain_plan",
         "TraceDbClientConfig::from_env",
-        "cargo run -p tracedb-sdk --example quickstart"
+        "SDK conformance owned by ../tracedb-rust"
       ]
     },
     {
@@ -56,9 +57,9 @@
       "status": "packed_consumer_entrypoint_conformance_checked_with_raw_and_row_batch_traceql_graphql_safe_and_idempotency_retries",
       "role": "public platform SDK wrapper over the generated transport",
       "evidence": [
-        "clients/typescript/package.json",
-        "clients/typescript/src/client.ts",
-        "clients/typescript/src/sdk.ts",
+        "../tracedb-js/package.json",
+        "../tracedb-js/src/client.ts",
+        "../tracedb-js/src/sdk.ts",
         "TraceDB.fromEnv",
         "TraceDBTable.insertBatch",
         "TraceDBTable.insertRows",
@@ -71,22 +72,9 @@
         "TraceDB.graphql",
         "graphqlRequest",
         "GraphQlQueryRequest",
-        "clients/typescript/public-sdk-smoke.ts",
-        "clients/typescript/public-http-smoke.ts",
-        "clients/typescript/http-smoke.ts",
-        "clients/typescript/gateway-smoke.ts",
-        "scripts/platform_conformance.py --surface typescript_sdk",
-        "clients/typescript/src/index.ts",
-        "clients/typescript/tsconfig.build.json",
-        "clients/typescript/dist/index.js",
-        "clients/typescript/dist/index.d.ts",
-        "@tracedb/sdk",
-        "@tracedb/sdk/transport",
-        "clients/typescript/package-entry-smoke.ts",
-        "clients/typescript/build-package-smoke.ts",
-        "npm pack --dry-run --json",
-        "clients/typescript/scripts/packed-consumer-smoke.mjs",
-        "npm run consumer-smoke"
+        "../tracedb-js public SDK smokes",
+        "../tracedb-js package/consumer smokes",
+        "scripts/platform_conformance.py --surface typescript_sdk (run by ../tracedb-js)"
       ]
     },
     {
@@ -95,12 +83,12 @@
       "status": "sync_http_smoked_from_installed_package_with_traceql_graphql_safe_and_idempotency_retries",
       "role": "sync-first AI/data/notebook SDK over the canonical HTTP contract",
       "evidence": [
-        "clients/python/tracedb/client.py",
-        "clients/python/pyproject.toml",
-        "clients/python/tests/test_client.py",
-        "clients/python/install_smoke.py",
-        "clients/python/http_smoke.py",
-        "clients/python/README.md",
+        "../tracedb-python/tracedb/client.py",
+        "../tracedb-python/pyproject.toml",
+        "../tracedb-python/tests/test_client.py",
+        "../tracedb-python/install_smoke.py",
+        "../tracedb-python/http_smoke.py",
+        "../tracedb-python/README.md",
         "TraceDBTable.insert_rows",
         "row batch ingestion over POST /v1/records/put-batch",
         "TRACEDB_SAFE_RETRIES",
@@ -111,10 +99,8 @@
         "traceql_request",
         "TraceDB.graphql",
         "graphql_request",
-        "python3 -m unittest discover -s clients/python/tests",
-        "python3 clients/python/install_smoke.py",
-        "installed package + clients/python/http_smoke.py",
-        "scripts/platform_conformance.py --surface python_sdk"
+        "../tracedb-python unit/install/http smokes",
+        "scripts/platform_conformance.py --surface python_sdk (run by ../tracedb-python)"
       ]
     },
     {
@@ -193,7 +179,7 @@
         "GraphQL data/errors envelope for native operations",
         "cargo test -p tracedb-query graphql_schema_sdl_is_generated_from_table_schema --no-run",
         "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_schema_exports_sdl_from_applied_table_schema --no-run",
-        "cargo test -p tracedb-sdk --test http_client graphql_schema_typed_gets_generated_schema_response --no-run",
+        "cd ../tracedb-rust && cargo test --test http_client graphql_schema_typed_gets_generated_schema_response --no-run",
         "cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run",
         "scripts/platform_conformance.py --surface graphql",
         "graphql reports every blocking scenario as passed for native GraphQL operations",

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 from typing import Any
-import uuid
 
-from .base import BenchmarkAdapter, optional_import, query_result_record
+from ..http import request_json
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
+from .base import BenchmarkAdapter, optional_import, query_result_record
+
+# Number of warmup query iterations before measurement begins.
+WARMUP_ITERATIONS = 3
 
 
 class MilvusAdapter(BenchmarkAdapter):
@@ -61,6 +65,20 @@ class MilvusAdapter(BenchmarkAdapter):
                     )
                 _maybe_flush(client, collection)
             disk_bytes_after_ingest = _storage_bytes(uri)
+            # Warmup phase: run a few query iterations (discarded from
+            # measurements) to stabilize filesystem cache and JIT.
+            if dataset.queries:
+                warmup_query = dataset.queries[0]
+                for _ in range(WARMUP_ITERATIONS):
+                    client.search(
+                        collection_name=collection,
+                        data=[warmup_query.vector],
+                        filter=_milvus_filter(
+                            warmup_query.tenant_id, warmup_query.category
+                        ),
+                        limit=warmup_query.top_k,
+                        output_fields=["record_id"],
+                    )
             recalls = []
             ndcgs = []
             mrrs = []
@@ -86,9 +104,15 @@ class MilvusAdapter(BenchmarkAdapter):
             setup_summary = setup_recorder.summary()
             ingest_transaction_total_ms = round(sum(ingest_recorder.latencies_ms), 3)
             metrics = dict(query_summary)
-            metrics.update({f"query_{key}": value for key, value in query_summary.items()})
-            metrics.update({f"ingest_{key}": value for key, value in ingest_summary.items()})
-            metrics.update({f"setup_{key}": value for key, value in setup_summary.items()})
+            metrics.update(
+                {f"query_{key}": value for key, value in query_summary.items()}
+            )
+            metrics.update(
+                {f"ingest_{key}": value for key, value in ingest_summary.items()}
+            )
+            metrics.update(
+                {f"setup_{key}": value for key, value in setup_summary.items()}
+            )
             metrics.update(
                 {
                     "ingest_count": len(dataset.records),
@@ -96,7 +120,9 @@ class MilvusAdapter(BenchmarkAdapter):
                     "ingest_transaction_total_latency_ms": ingest_transaction_total_ms,
                     "query_count": len(dataset.queries),
                     "failure_count": 0,
-                    "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
+                    "recall_at_5": round(sum(recalls) / len(recalls), 3)
+                    if recalls
+                    else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
                     "disk_bytes": disk_bytes_after_ingest,

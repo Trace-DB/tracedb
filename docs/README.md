@@ -5,6 +5,8 @@ One logical record. One commit epoch. Many native views. No external sync drift.
 
 This directory contains the canonical documentation for the TraceDB engine, SDKs, deployment operations, and performance benchmarks, migrated from the Grogan Development Vault.
 
+**New here?** Start with the **[Getting Started Guide](getting-started.md)**.
+
 ---
 
 ## Documentation Map
@@ -42,5 +44,5 @@ This directory contains the canonical documentation for the TraceDB engine, SDKs
 ### 6. Developer Guides
 *   **[Codex CLI Developer Handoff](handoffs/codex-cli.md):** System setup workarounds (macOS binary AMFI bypass via Modal, PEP 668 virtualenv rules), CLI commands index, and comprehensive validation runbooks for local and remote lanes.
 *   **Local Product Regression:** `cargo run -p tracedb-cli -- product-regression` is the local product regression smoke runner. It supports `--inject-failure STEP`, `--list-steps`, and `--report-file PATH`, and reports `only_supported`, `human_summary`, and `report_file` metadata. `product-quickstart` writes `target/tracedb/product-quickstart.json` by default. For remote Linux product verification, run `modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json`.
-*   **Product Gate Selectors:** `product-quickstart --skip-typescript` is a reduced local evidence path and records `typescript_enabled`. `product-quickstart --inject-failure embedded_demo` verifies failure receipts. The local gate supports `--only embedded_demo`, `--only embedded_verify`, `--only http_demo`, `--only local_doctor`, `--only rust_sdk_quickstart`, `--only python_sdk_smoke`, `--only typescript_check`, `--only typescript_http_smoke`, and `--only typescript_gateway_smoke`; TypeScript-only selectors report `conflicts with --skip-typescript`.
+*   **Product Gate Selectors:** `product-quickstart --inject-failure embedded_demo` verifies failure receipts. The local core gate supports `--only embedded_demo`, `--only embedded_verify`, `--only http_demo`, and `--only local_doctor`. SDK conformance is owned by the sibling standalone repos `../tracedb-rust`, `../tracedb-python`, and `../tracedb-js`; the core repo no longer shells into legacy in-tree SDK locations during product regression.
 *   **Durability Fault Harness:** `cargo run -p tracedb-cli -- durability-faults` writes `target/tracedb/durability-faults.json` and checks wrong/missing TDE keys, torn WAL tail handling, manifest/checkpoint corruption, stale-lock recovery, encrypted snapshot restore, and WAL-backed idempotency replay after reopen.

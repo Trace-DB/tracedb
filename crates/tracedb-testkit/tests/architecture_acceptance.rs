@@ -23,7 +23,6 @@ use tracedb_schema::{
     ColumnDescriptor, EdgeTableDescriptor, FeatureDescriptor, LogicalType, ModuleRequirement,
     TableDescriptor,
 };
-use tracedb_sdk::{TraceDbClient, TraceDbClientConfig};
 use tracedb_segment::SegmentObject;
 use tracedb_segment_server::{ObjectRef, SegmentServer};
 use tracedb_std::standard_module_manifest_ids;
@@ -541,7 +540,7 @@ fn graph_and_temporal_query_paths_are_executable_not_only_registered() {
 }
 
 #[test]
-fn segment_server_cache_sdk_and_bench_surfaces_are_executable_contracts() {
+fn segment_server_cache_query_and_bench_surfaces_are_executable_contracts() {
     let segment = SegmentObject::minimal("s1", 1).expect("segment");
     assert!(segment
         .module_blocks
@@ -556,21 +555,26 @@ fn segment_server_cache_sdk_and_bench_surfaces_are_executable_contracts() {
     cache.insert(object.clone());
     assert!(cache.get("segments/s1.tseg").is_some());
 
-    let client = TraceDbClient::new(TraceDbClientConfig::managed(
-        "https://example.tracedb",
-        "token",
-    ));
-    let request = client
-        .table("messages")
-        .tenant("tenant-a")
-        .match_text("content", "hybrid retrieval")
-        .near("embedding", vec![1.0, 0.0])
-        .freshness(FeatureFreshnessMode::Lazy)
-        .limit(10)
-        .build();
+    let request = HybridQuery {
+        table: "messages".to_string(),
+        tenant_id: "tenant-a".to_string(),
+        cursor: None,
+        text_field: Some("content".to_string()),
+        text: Some("hybrid retrieval".to_string()),
+        vector_field: Some("embedding".to_string()),
+        vector: Some(vec![1.0, 0.0]),
+        scalar_eq: serde_json::Map::new(),
+        graph_seed: None,
+        temporal_as_of: None,
+        top_k: 10,
+        freshness: FreshnessMode::Lazy,
+        explain: false,
+    };
     assert_eq!(request.top_k, 10);
     assert_eq!(request.text.as_deref(), Some("hybrid retrieval"));
-    assert_eq!(request.freshness, "Lazy");
+    assert_eq!(request.text_field.as_deref(), Some("content"));
+    assert_eq!(request.vector_field.as_deref(), Some("embedding"));
+    assert_eq!(request.freshness, FreshnessMode::Lazy);
 
     let target = BenchmarkTarget::new(WorkloadKind::AiChatMemory, 100_000);
     assert_eq!(target.name(), "ai_chat_memory_100000");

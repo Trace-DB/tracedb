@@ -17,7 +17,7 @@ flowchart TD
     Engine -- "Uploads Snapshots" --> Bucket["tracedb-bucket (Object Storage)"]
     Catalog["postgres-catalog (Metadata DB)"] <--> Gateway
     Queue["redis-queue (Coordination & Jobs)"] <--> Gateway & Worker
-    Bench["tracedb-bench (Benchmark Jobs)"] -- "Targets Directly (Engine Mode)" --> Engine
+    Bench["tracedb-benchmarks sibling repo"] -- "Targets Directly (Diagnostic Only)" --> Engine
 ```
 
 ### Detailed Component Roles
@@ -41,8 +41,8 @@ flowchart TD
 6. **`tracedb-bucket` / `minio-bucket` (Object Storage):**
    * Long-term bucket storage used to house snapshots, exports, database backups, restore bundles, benchmark datasets, and diagnostic dumps.
    * *Not used* for hot WAL or active query paging.
-7. **`tracedb-bench` (Benchmark Runner):**
-   * Bounded jobs designed to run benchmark scenarios against direct HTTP targets (gateway or engine).
+7. **`../tracedb-benchmarks` (Benchmark/Proof Runner):**
+   * Sibling repository that owns benchmark and proof harness execution against direct HTTP targets (gateway or engine).
    * Direct engine targets are diagnostic-only and must not be presented as hosted-alpha ingress.
 
 ---

@@ -85,7 +85,7 @@ SCENARIOS = {
             "document, lexical, vector, and hybrid retrieval behavior."
         ),
         target="all",
-        surface="sdk,cli,http,curl",
+        surface="http,curl",
         pass_criteria=[
             "All configured services either report metrics or clear unavailable reasons",
             "TraceDB remains available",

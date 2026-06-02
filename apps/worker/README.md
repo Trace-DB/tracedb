@@ -2,6 +2,7 @@
 
 Private Railway worker wrapper around `tracedb-worker`.
 
+The worker binary lives in **`crates/tracedb-worker/`**.
+
 Workers lease durable jobs, call the private engine API, and never write the
 TraceDB volume directly.
-

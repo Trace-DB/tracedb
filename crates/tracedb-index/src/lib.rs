@@ -86,6 +86,20 @@ pub struct TextScore {
     pub score: f32,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum VectorIndexAlgorithm {
+    #[default]
+    LegacyGreedy,
+    HnswCosineV1,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HnswFieldGraph {
+    pub entry_point: Option<String>,
+    pub max_level: usize,
+    pub levels: BTreeMap<usize, BTreeMap<String, Vec<String>>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VectorIndexArtifact {
     pub index_id: String,
@@ -93,14 +107,21 @@ pub struct VectorIndexArtifact {
     pub generation: u64,
     pub manifest_generation: u64,
     pub source_segment_checksum: [u8; 32],
-    /// Maximum neighbors per node in the greedy NN graph. NOT real HNSW.
+    /// Maximum neighbors per node in upper HNSW layers.
     pub m: usize,
-    /// Search budget parameter. NOT real HNSW — no hierarchical layers.
+    /// Build-time beam width used while linking HNSW nodes.
     pub ef_construction: usize,
-    /// Max nodes to visit during greedy search. NOT real HNSW.
+    /// Default max nodes to visit during HNSW search.
     pub ef_search: usize,
+    #[serde(default)]
+    pub algorithm: VectorIndexAlgorithm,
     pub entries: Vec<VectorIndexEntry>,
+    /// Legacy level-0 greedy graph kept for artifact compatibility and debug access.
+    #[serde(default)]
     pub neighbors: BTreeMap<String, Vec<String>>,
+    /// Per-vector-field deterministic HNSW graph. Edges point at stable entry keys.
+    #[serde(default)]
+    pub hnsw: BTreeMap<String, HnswFieldGraph>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -373,6 +394,11 @@ impl TextIndexArtifact {
     }
 }
 
+const DEFAULT_HNSW_M: usize = 16;
+const DEFAULT_HNSW_EF_CONSTRUCTION: usize = 64;
+const DEFAULT_HNSW_EF_SEARCH: usize = 64;
+const MAX_DETERMINISTIC_HNSW_LEVEL: usize = 16;
+
 pub fn build_vector_index(
     segment_id: &str,
     generation: u64,
@@ -391,23 +417,32 @@ pub fn build_vector_index(
             });
         }
     }
-    let neighbors = deterministic_greedy_nn_neighbors(&entries, 16);
+    entries.sort_by(|left, right| {
+        left.field
+            .cmp(&right.field)
+            .then_with(|| left.record_id.cmp(&right.record_id))
+            .then_with(|| left.version_id.cmp(&right.version_id))
+    });
+    let hnsw = build_hnsw_graphs(&entries, DEFAULT_HNSW_M, DEFAULT_HNSW_EF_CONSTRUCTION);
+    let neighbors = hnsw_level_zero_debug_neighbors(&hnsw, &entries);
     Ok(VectorIndexArtifact {
         index_id: format!("{segment_id}:vector:{generation}"),
         segment_id: segment_id.to_string(),
         generation,
         manifest_generation,
         source_segment_checksum,
-        m: 16,
-        ef_construction: 64,
-        ef_search: 64,
+        m: DEFAULT_HNSW_M,
+        ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
+        ef_search: DEFAULT_HNSW_EF_SEARCH,
+        algorithm: VectorIndexAlgorithm::HnswCosineV1,
         entries,
         neighbors,
+        hnsw,
     })
 }
 
 impl VectorIndexArtifact {
-    /// Access the greedy nearest-neighbor list for a specific entry.
+    /// Access the level-0 nearest-neighbor list for a specific entry.
     pub fn greedy_nn_neighbors(&self, field: &str, record_id: &str) -> Option<&Vec<String>> {
         self.neighbors.get(&vector_node_key(field, record_id))
     }
@@ -422,6 +457,26 @@ impl VectorIndexArtifact {
         query: &[f32],
         limit: usize,
     ) -> VectorSearchReport {
+        self.search_vector_internal(field, query, limit, None)
+    }
+
+    pub fn search_vector_with_report_filtered(
+        &self,
+        field: &str,
+        query: &[f32],
+        limit: usize,
+        allowed: &BTreeSet<(String, u64)>,
+    ) -> VectorSearchReport {
+        self.search_vector_internal(field, query, limit, Some(allowed))
+    }
+
+    fn search_vector_internal(
+        &self,
+        field: &str,
+        query: &[f32],
+        limit: usize,
+        allowed: Option<&BTreeSet<(String, u64)>>,
+    ) -> VectorSearchReport {
         if limit == 0 {
             return VectorSearchReport {
                 scores: Vec::new(),
@@ -431,12 +486,7 @@ impl VectorIndexArtifact {
             };
         }
 
-        let entries = self
-            .entries
-            .iter()
-            .filter(|entry| entry.field == field)
-            .map(|entry| (vector_node_key(field, &entry.record_id), entry))
-            .collect::<BTreeMap<_, _>>();
+        let entries = field_entries_by_key(&self.entries, field);
         if entries.is_empty() {
             return VectorSearchReport {
                 scores: Vec::new(),
@@ -446,6 +496,109 @@ impl VectorIndexArtifact {
             };
         }
 
+        match self.algorithm {
+            VectorIndexAlgorithm::HnswCosineV1 => {
+                self.search_hnsw(field, query, limit, allowed, entries)
+            }
+            VectorIndexAlgorithm::LegacyGreedy => {
+                self.search_legacy_greedy(field, query, limit, allowed, entries)
+            }
+        }
+    }
+
+    fn search_hnsw(
+        &self,
+        field: &str,
+        query: &[f32],
+        limit: usize,
+        allowed: Option<&BTreeSet<(String, u64)>>,
+        entries: BTreeMap<String, &VectorIndexEntry>,
+    ) -> VectorSearchReport {
+        let field_entry_count = entries.len();
+        let Some(graph) = self.hnsw.get(field) else {
+            return exact_vector_search(&entries, query, limit, allowed, true, 0);
+        };
+        let Some(mut entry_point) = graph.entry_point.clone() else {
+            return exact_vector_search(&entries, query, limit, allowed, true, 0);
+        };
+        if !entries.contains_key(&entry_point) {
+            return exact_vector_search(&entries, query, limit, allowed, true, 0);
+        }
+
+        let mut visited = BTreeSet::new();
+        for level in (1..=graph.max_level).rev() {
+            let candidates = hnsw_search_layer(
+                graph,
+                &entries,
+                query,
+                vec![entry_point.clone()],
+                level,
+                1,
+                &mut visited,
+            );
+            if let Some(best) = candidates.first() {
+                entry_point = best.clone();
+            }
+        }
+
+        let allowed_count = allowed
+            .map(|allowed| allowed.len())
+            .unwrap_or(field_entry_count);
+        let ef_search = self
+            .ef_search
+            .max(limit.saturating_mul(4))
+            .max(
+                allowed_count
+                    .min(field_entry_count)
+                    .min(DEFAULT_HNSW_EF_SEARCH),
+            )
+            .min(field_entry_count)
+            .max(1);
+        let mut entry_points = vec![entry_point];
+        if let Some(first_key) = entries.keys().next() {
+            if !entry_points.iter().any(|key| key == first_key) {
+                entry_points.push(first_key.clone());
+            }
+        }
+        let candidates = hnsw_search_layer(
+            graph,
+            &entries,
+            query,
+            entry_points,
+            0,
+            ef_search,
+            &mut visited,
+        );
+        let mut scores = vector_scores_for_keys(&candidates, &entries, query, allowed);
+        scores.sort_by(vector_score_order);
+        scores.truncate(limit);
+
+        let mut exact_fallback_used = false;
+        if scores.len() < limit && allowed_count > scores.len() && visited.len() < field_entry_count
+        {
+            exact_fallback_used = true;
+            let mut exact_scores = exact_scores_for_entries(&entries, query, allowed);
+            exact_scores.sort_by(vector_score_order);
+            exact_scores.truncate(limit);
+            scores = exact_scores;
+        }
+
+        VectorSearchReport {
+            scores,
+            field_entry_count,
+            visited_count: visited.len(),
+            exact_fallback_used,
+        }
+    }
+
+    fn search_legacy_greedy(
+        &self,
+        field: &str,
+        query: &[f32],
+        limit: usize,
+        allowed: Option<&BTreeSet<(String, u64)>>,
+        entries: BTreeMap<String, &VectorIndexEntry>,
+    ) -> VectorSearchReport {
         let field_entry_count = entries.len();
         let entry_point = entries.keys().next().expect("non-empty entries").clone();
         let target_visits = self.ef_search.max(limit).min(field_entry_count).max(1);
@@ -454,23 +607,26 @@ impl VectorIndexArtifact {
         let mut frontier = BTreeSet::from([entry_point]);
 
         while visited.len() < target_visits && !frontier.is_empty() {
-            let Some(node_key) = best_frontier_key(&frontier, &entries, query, &mut scores_by_key)
-            else {
+            let Some(node_key) = best_entry_key(&frontier, &entries, query) else {
                 break;
             };
             frontier.remove(&node_key);
             if !visited.insert(node_key.clone()) {
                 continue;
             }
+            if let Some(score) = vector_score_for_key(&node_key, &entries, query) {
+                scores_by_key.insert(node_key.clone(), score);
+            }
 
+            let Some(entry) = entries.get(&node_key) else {
+                continue;
+            };
             for neighbor in self
                 .neighbors
-                .get(&node_key)
+                .get(&vector_node_key(field, &entry.record_id))
                 .into_iter()
                 .flat_map(|neighbors| neighbors.iter())
-                .map(|record_id| vector_node_key(field, record_id))
-                .filter(|neighbor_key| entries.contains_key(neighbor_key))
-                .collect::<Vec<_>>()
+                .filter_map(|record_id| legacy_entry_key_for_record_id(&entries, record_id))
             {
                 if !visited.contains(&neighbor) {
                     frontier.insert(neighbor);
@@ -481,20 +637,12 @@ impl VectorIndexArtifact {
         let mut scores = visited
             .iter()
             .filter_map(|key| scores_by_key.get(key).cloned())
+            .filter(|score| score_allowed(score, allowed))
             .collect::<Vec<_>>();
         let mut exact_fallback_used = false;
-        if visited.len() < field_entry_count {
+        if visited.len() < field_entry_count || scores.len() < limit {
             exact_fallback_used = true;
-            let seen = scores
-                .iter()
-                .map(|score| vector_node_key(field, &score.record_id))
-                .collect::<BTreeSet<_>>();
-            scores.extend(
-                entries
-                    .iter()
-                    .filter(|(key, _)| !seen.contains(*key))
-                    .filter_map(|(_, entry)| vector_score_for_entry(entry, query)),
-            );
+            scores = exact_scores_for_entries(&entries, query, allowed);
         }
         scores.sort_by(vector_score_order);
         scores.truncate(limit);
@@ -507,34 +655,361 @@ impl VectorIndexArtifact {
     }
 }
 
-fn best_frontier_key(
+fn build_hnsw_graphs(
+    entries: &[VectorIndexEntry],
+    m: usize,
+    ef_construction: usize,
+) -> BTreeMap<String, HnswFieldGraph> {
+    let mut grouped = BTreeMap::<String, Vec<&VectorIndexEntry>>::new();
+    for entry in entries {
+        grouped.entry(entry.field.clone()).or_default().push(entry);
+    }
+
+    grouped
+        .into_iter()
+        .map(|(field, mut field_entries)| {
+            field_entries.sort_by(|left, right| {
+                left.record_id
+                    .cmp(&right.record_id)
+                    .then_with(|| left.version_id.cmp(&right.version_id))
+            });
+            let entries_by_key = field_entries
+                .iter()
+                .map(|entry| (vector_entry_key(entry), *entry))
+                .collect::<BTreeMap<_, _>>();
+            let mut graph = HnswFieldGraph::default();
+
+            for entry in field_entries {
+                let key = vector_entry_key(entry);
+                let node_level = deterministic_hnsw_level(entry, m);
+                if graph.entry_point.is_none() {
+                    graph.entry_point = Some(key.clone());
+                    graph.max_level = node_level;
+                    for level in 0..=node_level {
+                        graph
+                            .levels
+                            .entry(level)
+                            .or_default()
+                            .entry(key.clone())
+                            .or_default();
+                    }
+                    continue;
+                }
+
+                let previous_max_level = graph.max_level;
+                let mut entry_point = graph.entry_point.clone().expect("entry point exists");
+                let mut ignored_visited = BTreeSet::new();
+                if previous_max_level > node_level {
+                    for level in ((node_level + 1)..=previous_max_level).rev() {
+                        let candidates = hnsw_search_layer(
+                            &graph,
+                            &entries_by_key,
+                            &entry.vector,
+                            vec![entry_point.clone()],
+                            level,
+                            1,
+                            &mut ignored_visited,
+                        );
+                        if let Some(best) = candidates.first() {
+                            entry_point = best.clone();
+                        }
+                    }
+                }
+
+                let max_link_level = previous_max_level.min(node_level);
+                for level in (0..=max_link_level).rev() {
+                    let candidates = hnsw_search_layer(
+                        &graph,
+                        &entries_by_key,
+                        &entry.vector,
+                        vec![entry_point.clone()],
+                        level,
+                        ef_construction.max(1),
+                        &mut ignored_visited,
+                    );
+                    let selected = select_hnsw_neighbors(
+                        &key,
+                        &candidates,
+                        &entries_by_key,
+                        m_for_level(m, level),
+                    );
+                    graph
+                        .levels
+                        .entry(level)
+                        .or_default()
+                        .entry(key.clone())
+                        .or_default();
+                    for neighbor in selected {
+                        link_hnsw_neighbors(
+                            &mut graph,
+                            level,
+                            &key,
+                            &neighbor,
+                            &entries_by_key,
+                            m_for_level(m, level),
+                        );
+                    }
+                    if let Some(best) = hnsw_best_key(
+                        graph
+                            .levels
+                            .get(&level)
+                            .and_then(|level_links| level_links.get(&key))
+                            .into_iter()
+                            .flat_map(|neighbors| neighbors.iter()),
+                        &entries_by_key,
+                        &entry.vector,
+                    ) {
+                        entry_point = best;
+                    }
+                }
+
+                if node_level > previous_max_level {
+                    for level in (previous_max_level + 1)..=node_level {
+                        graph
+                            .levels
+                            .entry(level)
+                            .or_default()
+                            .entry(key.clone())
+                            .or_default();
+                    }
+                    graph.entry_point = Some(key.clone());
+                    graph.max_level = node_level;
+                }
+            }
+
+            (field, graph)
+        })
+        .collect()
+}
+
+fn hnsw_search_layer(
+    graph: &HnswFieldGraph,
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+    entry_points: Vec<String>,
+    level: usize,
+    ef: usize,
+    visited_accumulator: &mut BTreeSet<String>,
+) -> Vec<String> {
+    let mut visited = BTreeSet::new();
+    let mut frontier = entry_points
+        .into_iter()
+        .filter(|key| entries.contains_key(key))
+        .collect::<BTreeSet<_>>();
+    let max_visits = ef.max(1).min(entries.len()).max(1);
+
+    while visited.len() < max_visits && !frontier.is_empty() {
+        let Some(key) = best_entry_key(&frontier, entries, query) else {
+            break;
+        };
+        frontier.remove(&key);
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        visited_accumulator.insert(key.clone());
+        for neighbor in graph
+            .levels
+            .get(&level)
+            .and_then(|level_links| level_links.get(&key))
+            .into_iter()
+            .flat_map(|neighbors| neighbors.iter())
+            .filter(|neighbor| entries.contains_key(*neighbor))
+        {
+            if !visited.contains(neighbor) {
+                frontier.insert(neighbor.clone());
+            }
+        }
+    }
+
+    let mut out = visited.into_iter().collect::<Vec<_>>();
+    out.sort_by(|left, right| vector_key_order(left, right, entries, query));
+    out.truncate(ef.max(1));
+    out
+}
+
+fn select_hnsw_neighbors(
+    key: &str,
+    candidates: &[String],
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    m: usize,
+) -> Vec<String> {
+    let Some(entry) = entries.get(key) else {
+        return Vec::new();
+    };
+    let mut out = candidates
+        .iter()
+        .filter(|candidate| candidate.as_str() != key)
+        .filter(|candidate| entries.contains_key(candidate.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    out.sort_by(|left, right| vector_key_order(left, right, entries, &entry.vector));
+    out.truncate(m);
+    out
+}
+
+fn link_hnsw_neighbors(
+    graph: &mut HnswFieldGraph,
+    level: usize,
+    left: &str,
+    right: &str,
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    m: usize,
+) {
+    add_hnsw_neighbor(graph, level, left, right);
+    add_hnsw_neighbor(graph, level, right, left);
+    prune_hnsw_neighbors(graph, level, left, entries, m);
+    prune_hnsw_neighbors(graph, level, right, entries, m);
+}
+
+fn add_hnsw_neighbor(graph: &mut HnswFieldGraph, level: usize, key: &str, neighbor: &str) {
+    let neighbors = graph
+        .levels
+        .entry(level)
+        .or_default()
+        .entry(key.to_string())
+        .or_default();
+    if !neighbors.iter().any(|existing| existing == neighbor) {
+        neighbors.push(neighbor.to_string());
+    }
+}
+
+fn prune_hnsw_neighbors(
+    graph: &mut HnswFieldGraph,
+    level: usize,
+    key: &str,
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    m: usize,
+) {
+    let Some(entry) = entries.get(key) else {
+        return;
+    };
+    let Some(neighbors) = graph
+        .levels
+        .get_mut(&level)
+        .and_then(|level_links| level_links.get_mut(key))
+    else {
+        return;
+    };
+    neighbors.sort_by(|left, right| vector_key_order(left, right, entries, &entry.vector));
+    neighbors.dedup();
+    neighbors.truncate(m);
+}
+
+fn hnsw_best_key<'a>(
+    keys: impl Iterator<Item = &'a String>,
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+) -> Option<String> {
+    keys.filter(|key| entries.contains_key(key.as_str()))
+        .min_by(|left, right| vector_key_order(left, right, entries, query))
+        .cloned()
+}
+
+fn field_entries_by_key<'a>(
+    entries: &'a [VectorIndexEntry],
+    field: &str,
+) -> BTreeMap<String, &'a VectorIndexEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.field == field)
+        .map(|entry| (vector_entry_key(entry), entry))
+        .collect()
+}
+
+fn vector_scores_for_keys(
+    keys: &[String],
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+    allowed: Option<&BTreeSet<(String, u64)>>,
+) -> Vec<VectorScore> {
+    keys.iter()
+        .filter_map(|key| vector_score_for_key(key, entries, query))
+        .filter(|score| score_allowed(score, allowed))
+        .collect()
+}
+
+fn exact_vector_search(
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+    limit: usize,
+    allowed: Option<&BTreeSet<(String, u64)>>,
+    exact_fallback_used: bool,
+    visited_count: usize,
+) -> VectorSearchReport {
+    let mut scores = exact_scores_for_entries(entries, query, allowed);
+    scores.sort_by(vector_score_order);
+    scores.truncate(limit);
+    VectorSearchReport {
+        scores,
+        field_entry_count: entries.len(),
+        visited_count,
+        exact_fallback_used,
+    }
+}
+
+fn exact_scores_for_entries(
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+    allowed: Option<&BTreeSet<(String, u64)>>,
+) -> Vec<VectorScore> {
+    entries
+        .values()
+        .filter_map(|entry| vector_score_for_entry(entry, query))
+        .filter(|score| score_allowed(score, allowed))
+        .collect()
+}
+
+fn score_allowed(score: &VectorScore, allowed: Option<&BTreeSet<(String, u64)>>) -> bool {
+    allowed.is_none_or(|allowed| allowed.contains(&(score.record_id.clone(), score.version_id)))
+}
+
+fn best_entry_key(
     frontier: &BTreeSet<String>,
     entries: &BTreeMap<String, &VectorIndexEntry>,
     query: &[f32],
-    scores_by_key: &mut BTreeMap<String, VectorScore>,
 ) -> Option<String> {
     frontier
         .iter()
-        .filter_map(|key| {
-            let score = vector_score_for_key(key, entries, query, scores_by_key)?;
-            Some((key.clone(), score))
-        })
-        .min_by(|(_, left), (_, right)| vector_score_order(left, right))
-        .map(|(key, _)| key)
+        .filter(|key| entries.contains_key(key.as_str()))
+        .min_by(|left, right| vector_key_order(left, right, entries, query))
+        .cloned()
 }
 
 fn vector_score_for_key(
     key: &str,
     entries: &BTreeMap<String, &VectorIndexEntry>,
     query: &[f32],
-    scores_by_key: &mut BTreeMap<String, VectorScore>,
 ) -> Option<VectorScore> {
-    if let Some(score) = scores_by_key.get(key) {
-        return Some(score.clone());
-    }
-    let score = vector_score_for_entry(entries.get(key)?, query)?;
-    scores_by_key.insert(key.to_string(), score.clone());
-    Some(score)
+    vector_score_for_entry(entries.get(key)?, query)
+}
+
+fn vector_key_order(
+    left: &str,
+    right: &str,
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    query: &[f32],
+) -> std::cmp::Ordering {
+    let left_score = entries
+        .get(left)
+        .and_then(|entry| tracedb_vector::cosine_similarity(query, &entry.vector))
+        .unwrap_or(f32::NEG_INFINITY);
+    let right_score = entries
+        .get(right)
+        .and_then(|entry| tracedb_vector::cosine_similarity(query, &entry.vector))
+        .unwrap_or(f32::NEG_INFINITY);
+    score_order(left_score, right_score).then_with(|| {
+        let left_entry = entries.get(left).copied();
+        let right_entry = entries.get(right).copied();
+        match (left_entry, right_entry) {
+            (Some(left), Some(right)) => left
+                .record_id
+                .cmp(&right.record_id)
+                .then_with(|| left.version_id.cmp(&right.version_id)),
+            _ => left.cmp(right),
+        }
+    })
 }
 
 fn vector_score_for_entry(entry: &VectorIndexEntry, query: &[f32]) -> Option<VectorScore> {
@@ -543,6 +1018,85 @@ fn vector_score_for_entry(entry: &VectorIndexEntry, query: &[f32]) -> Option<Vec
         version_id: entry.version_id,
         score,
     })
+}
+
+fn vector_entry_key(entry: &VectorIndexEntry) -> String {
+    format!(
+        "{}\u{0}{}\u{0}{}",
+        entry.field, entry.record_id, entry.version_id
+    )
+}
+
+fn legacy_entry_key_for_record_id(
+    entries: &BTreeMap<String, &VectorIndexEntry>,
+    record_id: &str,
+) -> Option<String> {
+    entries
+        .iter()
+        .find_map(|(key, entry)| (entry.record_id == record_id).then(|| key.clone()))
+}
+
+fn m_for_level(m: usize, level: usize) -> usize {
+    if level == 0 {
+        m.saturating_mul(2).max(1)
+    } else {
+        m.max(1)
+    }
+}
+
+fn deterministic_hnsw_level(entry: &VectorIndexEntry, m: usize) -> usize {
+    let mut hash = stable_vector_hash(&format!(
+        "{}\u{0}{}\u{0}{}",
+        entry.field, entry.record_id, entry.version_id
+    ));
+    let divisor = m.max(2) as u64;
+    let mut level = 0usize;
+    while level < MAX_DETERMINISTIC_HNSW_LEVEL && hash % divisor == 0 {
+        level += 1;
+        hash = hash.rotate_right(7) ^ 0x9E37_79B9_7F4A_7C15;
+    }
+    level
+}
+
+fn stable_vector_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    hash
+}
+
+fn hnsw_level_zero_debug_neighbors(
+    hnsw: &BTreeMap<String, HnswFieldGraph>,
+    entries: &[VectorIndexEntry],
+) -> BTreeMap<String, Vec<String>> {
+    let entries_by_key = entries
+        .iter()
+        .map(|entry| (vector_entry_key(entry), entry))
+        .collect::<BTreeMap<_, _>>();
+    hnsw.iter()
+        .flat_map(|(field, graph)| {
+            graph
+                .levels
+                .get(&0)
+                .into_iter()
+                .flat_map(|level| level.iter())
+                .filter_map(|(key, neighbors)| {
+                    let entry = entries_by_key.get(key)?;
+                    let record_ids = neighbors
+                        .iter()
+                        .filter_map(|neighbor| {
+                            entries_by_key
+                                .get(neighbor)
+                                .map(|entry| entry.record_id.clone())
+                        })
+                        .collect::<Vec<_>>();
+                    Some((vector_node_key(field, &entry.record_id), record_ids))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 pub fn build_policy_bitmap_index(
@@ -746,33 +1300,6 @@ fn vector_node_key(field: &str, record_id: &str) -> String {
     format!("{field}\u{0}{record_id}")
 }
 
-/// Build a deterministic greedy nearest-neighbor graph by brute-force O(n²) cosine similarity.
-/// WARNING: This is NOT real HNSW. No hierarchical layers, no probabilistic construction.
-fn deterministic_greedy_nn_neighbors(
-    entries: &[VectorIndexEntry],
-    m: usize,
-) -> BTreeMap<String, Vec<String>> {
-    let mut out = BTreeMap::new();
-    for entry in entries {
-        let mut scored = entries
-            .iter()
-            .filter(|other| other.field == entry.field && other.record_id != entry.record_id)
-            .filter_map(|other| {
-                tracedb_vector::cosine_similarity(&entry.vector, &other.vector)
-                    .map(|score| (other.record_id.clone(), score))
-            })
-            .collect::<Vec<_>>();
-        scored
-            .sort_by(|left, right| score_order(left.1, right.1).then_with(|| left.0.cmp(&right.0)));
-        scored.truncate(m);
-        out.insert(
-            vector_node_key(&entry.field, &entry.record_id),
-            scored.into_iter().map(|(record_id, _)| record_id).collect(),
-        );
-    }
-    out
-}
-
 fn bm25_from_term_frequency(
     query_terms: &[String],
     tf: &BTreeMap<String, usize>,
@@ -864,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn text_index_scores_from_postings_and_vector_index_exposes_greedy_nn_graph() {
+    fn text_index_scores_from_postings_and_vector_index_exposes_hnsw_graph() {
         let records = vec![
             record("rare", "rare kernel token", vec![1.0, 0.0]),
             record("common", "common ordinary text", vec![0.0, 1.0]),
@@ -913,6 +1440,7 @@ mod tests {
             m: 16,
             ef_construction: 64,
             ef_search: 1,
+            algorithm: VectorIndexAlgorithm::LegacyGreedy,
             entries: vec![
                 VectorIndexEntry {
                     record_id: "b".to_string(),
@@ -934,6 +1462,7 @@ mod tests {
                 },
             ],
             neighbors: BTreeMap::new(),
+            hnsw: BTreeMap::new(),
         };
 
         let report = artifact.search_vector_with_report("embedding", &[1.0, 0.0], 2);
@@ -951,11 +1480,17 @@ mod tests {
     }
 
     #[test]
-    fn vector_search_can_use_greedy_nn_without_exact_fallback_when_graph_covers_limit() {
-        let records = vec![
+    fn vector_search_can_use_hnsw_without_exact_fallback_when_graph_covers_limit() {
+        let mut records = vec![
             record("a", "alpha", vec![1.0, 0.0]),
             record("b", "beta", vec![0.9, 0.1]),
+            record("c", "gamma", vec![0.8, 0.2]),
+            record("d", "delta", vec![0.0, 1.0]),
+            record("e", "epsilon", vec![-1.0, 0.0]),
         ];
+        for index in 0..80 {
+            records.push(record(&format!("far-{index:02}"), "far", vec![0.0, 1.0]));
+        }
         let mut artifact =
             build_vector_index("seg-1", 1, 77, CHECKSUM_VAL, &records).expect("vector index");
         artifact.ef_search = 2;
@@ -967,6 +1502,30 @@ mod tests {
             Some("a")
         );
         assert!(!report.exact_fallback_used);
-        assert_eq!(report.visited_count, report.field_entry_count);
+        assert!(report.visited_count < report.field_entry_count);
+    }
+
+    #[test]
+    fn filtered_hnsw_search_only_returns_allowed_records() {
+        let records = vec![
+            record("global-nearest", "alpha", vec![1.0, 0.0]),
+            record("allowed", "beta", vec![0.0, 1.0]),
+            record("other", "gamma", vec![-1.0, 0.0]),
+        ];
+        let artifact =
+            build_vector_index("seg-1", 1, 77, CHECKSUM_VAL, &records).expect("vector index");
+        let allowed = BTreeSet::from([("allowed".to_string(), 1)]);
+
+        let report =
+            artifact.search_vector_with_report_filtered("embedding", &[1.0, 0.0], 1, &allowed);
+
+        assert_eq!(
+            report.scores.first().map(|score| score.record_id.as_str()),
+            Some("allowed")
+        );
+        assert!(report
+            .scores
+            .iter()
+            .all(|score| allowed.contains(&(score.record_id.clone(), score.version_id))));
     }
 }

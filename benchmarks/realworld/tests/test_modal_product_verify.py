@@ -36,17 +36,15 @@ class ModalProductVerifyTests(unittest.TestCase):
             [command["name"] for command in commands],
             [
                 "cargo-fmt",
-                "quickstart-receipt-test",
                 "quickstart-doc-contract-test",
                 "platform-contract-doc-test",
                 "platform-conformance-quick",
                 "agent-memory-flight-recorder-build",
                 "agent-memory-flight-recorder",
-                "product-quickstart-skip-typescript",
             ],
         )
         self.assertEqual(
-            commands[-2]["argv"],
+            commands[-1]["argv"],
             [
                 "python3",
                 "-m",
@@ -58,52 +56,26 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "/tmp/tracedb-agent-memory-flight-recorder.md",
             ],
         )
-        self.assertEqual(commands[-2]["cwd"], "benchmarks/realworld")
-        self.assertEqual(
-            commands[-1]["argv"],
-            [
-                "cargo",
-                "run",
-                "-q",
-                "-p",
-                "tracedb-cli",
-                "--",
-                "product-quickstart",
-                "--skip-typescript",
-            ],
-        )
+        self.assertEqual(commands[-1]["cwd"], "benchmarks/realworld")
 
     def test_workspace_mode_extends_quickstart_ladder(self) -> None:
         module = load_module()
 
         command_names = [command["name"] for command in module.build_command_plan("workspace")]
 
-        self.assertIn("product-quickstart-skip-typescript", command_names)
         self.assertIn("agent-memory-flight-recorder-build", command_names)
         self.assertIn("agent-memory-flight-recorder", command_names)
-        self.assertIn("typescript-npm-ci", command_names)
         self.assertIn("tracedb-cli-demo-tests", command_names)
         self.assertIn("tracedb-testkit-usability-tests", command_names)
-        self.assertIn("rust-sdk-routing-tests", command_names)
         self.assertIn("query-field-rust-tests", command_names)
         self.assertIn("schema-validation-core-tests", command_names)
         self.assertIn("schema-validation-acceptance-tests", command_names)
-        self.assertIn("typescript-npm-public-gateway-smoke", command_names)
-        self.assertIn("python-sdk-unit-tests", command_names)
-        self.assertIn("python-sdk-install-smoke", command_names)
         self.assertIn("python-platform-conformance-tests", command_names)
-        self.assertIn("python-sdk-conformance", command_names)
         self.assertIn("traceql-sqlish-conformance", command_names)
         self.assertIn("api-parity-conformance", command_names)
         self.assertIn("graphql-native-conformance", command_names)
         self.assertIn("workspace-all-targets", command_names)
 
-        install_smoke = next(
-            command
-            for command in module.build_command_plan("workspace")
-            if command["name"] == "python-sdk-install-smoke"
-        )
-        self.assertEqual(install_smoke["argv"], ["python3", "clients/python/install_smoke.py"])
         sqlish_conformance = next(
             command
             for command in module.build_command_plan("workspace")
@@ -209,45 +181,6 @@ class ModalProductVerifyTests(unittest.TestCase):
             ],
         )
 
-    def test_only_rust_sdk_routing_runs_exact_http_client_regression(self) -> None:
-        module = load_module()
-
-        commands = module.build_command_plan("workspace", only="rust-sdk-routing-tests")
-
-        self.assertEqual([command["name"] for command in commands], ["rust-sdk-routing-tests"])
-        self.assertEqual(
-            commands[0]["argv"],
-            [
-                "cargo",
-                "test",
-                "-p",
-                "tracedb-sdk",
-                "--test",
-                "http_client",
-                "managed_client_defaults_branch_id_from_database_id_into_json_posts",
-                "--",
-                "--exact",
-                "--nocapture",
-            ],
-        )
-
-    def test_only_typescript_gateway_smoke_runs_install_and_gateway_smoke(self) -> None:
-        module = load_module()
-
-        commands = module.build_command_plan("workspace", only="typescript_gateway_smoke")
-
-        self.assertEqual(
-            [command["name"] for command in commands],
-            [
-                "typescript-npm-ci",
-                "typescript-npm-public-gateway-smoke",
-            ],
-        )
-        self.assertEqual(commands[0]["argv"], ["npm", "ci"])
-        self.assertEqual(commands[0]["cwd"], "clients/typescript")
-        self.assertEqual(commands[1]["argv"], ["npm", "run", "gateway-smoke"])
-        self.assertEqual(commands[1]["cwd"], "clients/typescript")
-
     def test_only_agent_memory_flight_recorder_runs_build_and_demo(self) -> None:
         module = load_module()
 
@@ -329,14 +262,13 @@ class ModalProductVerifyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown --only command"):
             module.build_command_plan("workspace", only="does_not_exist")
 
-    def test_reduced_quickstart_receipt_contract(self) -> None:
+    def test_core_quickstart_receipt_contract(self) -> None:
         module = load_module()
         receipt = {
             "ok": True,
             "mode": "local-product-regression",
             "scope": "local_only",
             "report_file": "/workspace/TraceDB/target/tracedb/product-quickstart.json",
-            "typescript_enabled": False,
             "claims": {
                 "sql_module": "not_implemented",
                 "managed_cloud": "not_checked",
@@ -344,8 +276,8 @@ class ModalProductVerifyTests(unittest.TestCase):
             },
             "human_summary": {
                 "status": "passed",
-                "steps_passed": 6,
-                "steps_total": 6,
+                "steps_passed": 4,
+                "steps_total": 4,
                 "failed_step": None,
             },
             "steps": {
@@ -353,26 +285,22 @@ class ModalProductVerifyTests(unittest.TestCase):
                 "embedded_verify": {"ok": True},
                 "http_demo": {"ok": True},
                 "local_doctor": {"ok": True},
-                "rust_sdk_quickstart": {"ok": True},
-                "python_sdk_smoke": {"ok": True},
             },
         }
 
-        summary = module.validate_reduced_quickstart_receipt(
+        summary = module.validate_core_quickstart_receipt(
             json.dumps(receipt),
             receipt,
         )
 
-        self.assertEqual(summary["steps_passed"], 6)
-        self.assertEqual(summary["typescript_enabled"], False)
-        self.assertEqual(summary["skipped_typescript_steps"], 3)
+        self.assertEqual(summary["steps_passed"], 4)
 
         bad_receipt = dict(receipt)
         bad_receipt["steps"] = dict(receipt["steps"])
-        bad_receipt["steps"]["typescript_check"] = {"ok": True}
+        bad_receipt["steps"]["sdk_conformance"] = {"ok": True}
 
-        with self.assertRaisesRegex(AssertionError, "typescript_check"):
-            module.validate_reduced_quickstart_receipt(
+        with self.assertRaisesRegex(AssertionError, "sdk_conformance"):
+            module.validate_core_quickstart_receipt(
                 json.dumps(bad_receipt),
                 bad_receipt,
             )

@@ -1,6 +1,6 @@
 # TraceDB Codex CLI Handoff & Developer Reference
 
-This document summarizes the TraceDB developer environment, command-line interfaces, and verification runbooks. It acts as a concise handoff guide for maintaining, testing, and verifying the TraceDB engine and its SDKs.
+This document summarizes the TraceDB developer environment, command-line interfaces, and verification runbooks. It acts as a concise handoff guide for maintaining, testing, and verifying the TraceDB core engine. SDK verification is now owned by sibling standalone repositories.
 
 ---
 
@@ -15,8 +15,8 @@ Developers working on TraceDB must navigate several environment-specific constra
    - **Constraint:** Homebrew prevents direct `pip install` modifications on the system Python environment.
    - **Workaround:** All Python package testing, editable installs, and conformance runner environments must use temporary virtual environments (e.g., `benchmarks/realworld/.venv/` or `/tmp/` virtualenvs).
 3. **Node/npm Tooling:**
-   - **Constraint:** Required for compiling and type-checking the generated TypeScript SDK client (`clients/typescript/`).
-   - **Workaround:** If Node is unavailable in the execution context, commands can be run with `--skip-typescript` to bypass JS/TS steps.
+   - **Constraint:** TypeScript/JavaScript SDK tooling is owned by `../tracedb-js`, not this core repo.
+   - **Workaround:** Run JS/TS SDK package checks and smokes from `../tracedb-js`; the core product gate no longer depends on Node/npm.
 
 ---
 
@@ -27,12 +27,12 @@ The primary entry point is the Rust-based `tracedb` CLI (compiled from `crates/t
 ### Core Engine & Demo Commands
 - **`tracedb demo`:** Starts an embedded local database instance, writes a demo record, scans and retrieves it, and prints a JSON result summary. Runs in-memory.
 - **`tracedb verify`:** Verifies the embedded database state written by a prior `demo` command in the same data directory.
-- **`tracedb http-demo`:** Starts a managed local loopback server, drives the Rust SDK client through standard HTTP routes (schema apply, batch ingest, query, explain, delete, compact, snapshot, restore), and prints a unified JSON summary.
+- **`tracedb http-demo`:** Starts a managed local loopback server, drives the core HTTP product path (schema apply, batch ingest, query, explain, delete, compact, snapshot, restore), and prints a unified JSON summary.
 - **`tracedb serve`:** Launches the HTTP engine daemon (e.g., `tracedb serve --data <dir> --bind 127.0.0.1:8090`).
 
 ### Diagnostics & Verification
 - **`tracedb doctor http`:** Drives read-only diagnostic checks against a live TraceDB server endpoint. Retrieves `/v1/health`, `/v1/ready`, `/v1/databases`, `/v1/branches`, `/v1/metrics/public-safe`, and `/v1/admin/jobs`.
-- **`tracedb product-regression`:** Runs the local product regression gate (embedded demo, HTTP demo, local doctor diagnostics, Rust SDK quickstart, TypeScript typechecks/smokes).
+- **`tracedb product-regression`:** Runs the local core product regression gate (embedded demo, embedded verify, HTTP demo, and local doctor diagnostics). SDK checks run in sibling standalone repos.
 - **`tracedb product-quickstart`:** A wrapper for `product-regression` that defaults the output report to `target/tracedb/product-quickstart.json` and returns parseable JSON stdout.
 
 ---
@@ -49,8 +49,8 @@ cargo run -p tracedb-cli -- --data /tmp/tracedb-embedded-demo demo
 cargo run -p tracedb-cli -- --data /tmp/tracedb-embedded-demo verify
 ```
 
-### Runbook 2: One-Command Local HTTP SDK Demo
-Orchestrate a server lifecycle and drive the Rust SDK over HTTP using a single command:
+### Runbook 2: One-Command Local HTTP Demo
+Orchestrate a server lifecycle and drive the core HTTP product path using a single command:
 ```bash
 cargo run -q -p tracedb-cli -- --data /tmp/tracedb-http-demo http-demo
 ```
@@ -72,16 +72,13 @@ Execute the complete set of local smoketests. This command is run on every commi
 # Run all checks, writing a JSON report to a predictable location
 cargo run -p tracedb-cli -- product-regression --report-file target/tracedb/regression-report.json
 
-# Skip TypeScript verification steps (if Node.js is not installed)
-cargo run -p tracedb-cli -- product-regression --skip-typescript
-
-# Execute a single targeted regression step
-cargo run -p tracedb-cli -- product-regression --only rust_sdk_quickstart
+# Execute a single targeted core regression step
+cargo run -p tracedb-cli -- product-regression --only http_demo
 
 # Inject a failure into a step to verify CI/CD error-reporting behavior
 cargo run -p tracedb-cli -- product-regression --inject-failure embedded_demo
 ```
-*Supported step names for `--only` and `--inject-failure`: `embedded_demo`, `embedded_verify`, `http_demo`, `local_doctor`, `rust_sdk_quickstart`, `typescript_check`, `typescript_http_smoke`, `typescript_gateway_smoke`.*
+*Supported core step names for `--only` and `--inject-failure`: `embedded_demo`, `embedded_verify`, `http_demo`, `local_doctor`.*
 
 ### Runbook 5: Remote Linux Product Verification (Modal)
 When local macOS binary execution is blocked, use Modal to verify the workspace in a Linux container:
@@ -89,51 +86,27 @@ When local macOS binary execution is blocked, use Modal to verify the workspace 
 # Run the fast quickstart verifier lane (fmt, quickstart receipt, etc.)
 modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json
 
-# Run the complete workspace verifier (builds SDKs, runs full unit & integration tests)
+# Run the complete workspace verifier (builds core crates and runs full unit & integration tests)
 modal run scripts/modal_product_verify.py --mode workspace --summary-json /tmp/tracedb-modal-product-workspace.json
 ```
 
 ### Runbook 6: SDK & Language Conformance Testing
 
-#### TypeScript SDK (`clients/typescript/`)
+SDK conformance is now externally owned by sibling standalone repositories:
+
+- Rust SDK: `../tracedb-rust`
+- Python SDK: `../tracedb-python`
+- TypeScript/JavaScript SDK: `../tracedb-js`
+
+Run package checks, HTTP smokes, gateway smokes, endpoint quickstarts, and SDK
+Platform Contract conformance from those repositories. The core repo validates
+the HTTP direct, TraceQL, GraphQL, and SQL-ish compatibility lanes against
+`../tracedb-protocol` and its `tracedb-protocol.lock`:
+
 ```bash
-cd clients/typescript/
-npm ci
-
-# Typecheck and run the local generated client fake-fetch smoke
-npm run check
-
-# Run the local HTTP smoke tests (starts a child engine server)
-npm run http-smoke
-
-# Run the gateway smoke tests (tests token authorization and routing catalogs)
-npm run gateway-smoke
-
-# Run the TypeScript endpoint-driven quickstart
-npm run quickstart -- --url http://127.0.0.1:8090 --token dev-token --admin-dir /tmp/ts-admin-scratch
-```
-
-#### Python SDK (`clients/python/`)
-```bash
-# Establish a clean virtualenv
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-
-# Run Python client unit tests
-python3 -m unittest clients/python/tests/test_client.py
-
-# Run Python client HTTP smoke tests
-python3 clients/python/http_smoke.py
-```
-
-#### Platform Conformance Suite
-Validate scenario-based JSON contracts (idempotency, errors, routing) across the HTTP direct interface and all client SDKs:
-```bash
-# Test direct HTTP endpoints against a local server
 python3 scripts/platform_conformance.py --surface http_direct --url http://127.0.0.1:8090
-
-# Test Python SDK client conformance
-python3 scripts/platform_conformance.py --surface python_sdk --url http://127.0.0.1:8090
+python3 scripts/platform_conformance.py --surface traceql --url http://127.0.0.1:8090
+python3 scripts/platform_conformance.py --surface graphql --url http://127.0.0.1:8090
 ```
 
 ---

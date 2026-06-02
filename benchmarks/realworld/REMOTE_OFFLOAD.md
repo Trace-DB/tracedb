@@ -74,9 +74,9 @@ Provider-backed runs add OpenRouter embedding metadata and
 Do not collapse all ingest numbers into one claim. TraceDB exposes two HTTP
 ingest modes:
 
-- `per_record` (default): one durable TraceDB commit per record.
-- `batch`: one `put-batch` request, one epoch, and one WAL commit for the whole
-  dataset load.
+- `batch` (default): one `put-batch` request, one epoch, and one WAL commit for
+  the whole dataset load.
+- `per_record`: one durable TraceDB commit per record.
 
 PostgreSQL and pgvector controls in this suite currently use one bulk
 transaction. Treat `ingest_transaction_total_latency_ms` as the transaction-shape

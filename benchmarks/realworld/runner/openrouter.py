@@ -17,7 +17,6 @@ from .experiment import ExperimentRecorder, redact
 from .metrics import mrr_at_k, ndcg_at_k, recall_at_k
 from .types import BenchQuery, BenchRecord, DatasetBundle
 
-
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_EMBED_MODEL = "qwen/qwen3-embedding-8b"
 DEFAULT_COMPARE_EMBED_MODELS = ["perplexity/pplx-embed-v1-0.6b"]
@@ -173,7 +172,9 @@ def config_from_args(args: Any, lab_root: Path) -> OpenRouterConfig:
     return OpenRouterConfig(
         mode=mode,
         cap_name=cap_name,
-        base_url=(os.environ.get("OPENROUTER_BASE_URL") or DEFAULT_BASE_URL).rstrip("/"),
+        base_url=(os.environ.get("OPENROUTER_BASE_URL") or DEFAULT_BASE_URL).rstrip(
+            "/"
+        ),
         api_key=os.environ.get("OPENROUTER_API_KEY"),
         embed_model=embed_model,
         compare_embed_models=compare_models,
@@ -232,10 +233,15 @@ class OpenRouterClient:
         payload = self._request_json("GET", "/embeddings/models")
         data = payload.get("data", []) if isinstance(payload, dict) else []
         models = [item for item in data if isinstance(item, dict)]
-        self.model_metadata = {str(item.get("id")): item for item in models if item.get("id")}
+        self.model_metadata = {
+            str(item.get("id")): item for item in models if item.get("id")
+        }
         self._observe(
             "openrouter.embedding_models",
-            {"model_count": len(models), "selected": self.config.selected_embedding_models()},
+            {
+                "model_count": len(models),
+                "selected": self.config.selected_embedding_models(),
+            },
         )
         return models
 
@@ -248,7 +254,9 @@ class OpenRouterClient:
                 "OpenRouter embedding model(s) unavailable: " + ", ".join(missing)
             )
 
-    def embed_texts(self, model: str, texts: list[str], batch_size: int = 64) -> list[list[float]]:
+    def embed_texts(
+        self, model: str, texts: list[str], batch_size: int = 64
+    ) -> list[list[float]]:
         embeddings: list[list[float]] = []
         for start in range(0, len(texts), batch_size):
             batch = texts[start : start + batch_size]
@@ -273,15 +281,15 @@ class OpenRouterClient:
         )
         self.stats["chat_request_count"] += 1
         content = (
-            payload.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "{}")
+            payload.get("choices", [{}])[0].get("message", {}).get("content", "{}")
         )
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
             parsed = {"raw": content}
-        self._observe("openrouter.judge", {"model": self.config.judge_model, "response": parsed})
+        self._observe(
+            "openrouter.judge", {"model": self.config.judge_model, "response": parsed}
+        )
         return parsed
 
     def rerank(
@@ -364,7 +372,9 @@ class OpenRouterClient:
                             "base_url": self.config.base_url,
                             "model": model,
                             "dimensions": len(embedding),
-                            "input_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                            "input_sha256": hashlib.sha256(
+                                text.encode("utf-8")
+                            ).hexdigest(),
                             "embedding": embedding,
                         },
                         sort_keys=True,
@@ -398,7 +408,9 @@ class OpenRouterClient:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return self.cache_dir / f"{digest}.json"
 
-    def _request_json(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request_json(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         url = f"{self.config.base_url}{path}"
         encoded = None if body is None else json.dumps(body).encode("utf-8")
         headers = {
@@ -410,7 +422,9 @@ class OpenRouterClient:
         last_error: Exception | None = None
         for attempt in range(1, 4):
             self.stats["request_count"] += 1
-            request = urllib.request.Request(url, data=encoded, method=method, headers=headers)
+            request = urllib.request.Request(
+                url, data=encoded, method=method, headers=headers
+            )
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
                     payload = json.loads(response.read().decode("utf-8") or "{}")
@@ -418,19 +432,25 @@ class OpenRouterClient:
                     return payload
             except urllib.error.HTTPError as error:
                 payload = error.read().decode("utf-8", errors="replace")
-                last_error = OpenRouterError(f"HTTP {error.code} from {path}: {redact(payload)}")
+                last_error = OpenRouterError(
+                    f"HTTP {error.code} from {path}: {redact(payload)}"
+                )
                 if error.code == 429:
                     self.stats["rate_limit_events"] += 1
                 if error.code not in {429, 500, 502, 503, 504}:
                     break
             except urllib.error.URLError as error:
-                last_error = OpenRouterError(f"OpenRouter request failed for {path}: {error}")
+                last_error = OpenRouterError(
+                    f"OpenRouter request failed for {path}: {error}"
+                )
             self._observe(
                 "openrouter.retry",
                 {"path": path, "attempt": attempt, "reason": str(last_error)},
             )
             time.sleep(0.1 * attempt)
-        raise OpenRouterError(str(last_error or f"OpenRouter request failed for {path}"))
+        raise OpenRouterError(
+            str(last_error or f"OpenRouter request failed for {path}")
+        )
 
     def _account_usage(self, payload: dict[str, Any]) -> None:
         usage = payload.get("usage")
@@ -459,7 +479,9 @@ def maybe_apply_openrouter_embeddings(
         return dataset, _disabled_stats(config, "disabled by --openrouter-mode off")
     if not config.api_key:
         if config.mode == "required":
-            raise OpenRouterError("OPENROUTER_API_KEY is required when --openrouter-mode required")
+            raise OpenRouterError(
+                "OPENROUTER_API_KEY is required when --openrouter-mode required"
+            )
         return dataset, _disabled_stats(config, "OPENROUTER_API_KEY not configured")
 
     caps = config.caps
@@ -467,9 +489,12 @@ def maybe_apply_openrouter_embeddings(
         raise OpenRouterError(
             f"OpenRouter cap {config.cap_name} allows {caps['max_records']} records, got {len(dataset.records)}"
         )
-    if len(dataset.queries) > caps["max_queries"]:
-        raise OpenRouterError(
-            f"OpenRouter cap {config.cap_name} allows {caps['max_queries']} queries, got {len(dataset.queries)}"
+    query_cap_notes: list[str] = []
+    source_queries = dataset.queries
+    if len(source_queries) > caps["max_queries"]:
+        source_queries = source_queries[: caps["max_queries"]]
+        query_cap_notes.append(
+            f"OpenRouter query set capped to {caps['max_queries']} queries by the {config.cap_name} cap"
         )
 
     client = OpenRouterClient(config, lab_root / ".cache" / "openrouter", recorder)
@@ -478,7 +503,9 @@ def maybe_apply_openrouter_embeddings(
     selected_models = config.selected_embedding_models()
     client.ensure_models_available(selected_models)
     primary_model = selected_models[0]
-    texts = [record.text() for record in dataset.records] + [query.text for query in dataset.queries]
+    texts = [record.text() for record in dataset.records] + [
+        query.text for query in source_queries
+    ]
     embeddings = client.embed_texts(primary_model, texts)
     raw_record_embeddings = embeddings[: len(dataset.records)]
     raw_query_embeddings = embeddings[len(dataset.records) :]
@@ -497,7 +524,7 @@ def maybe_apply_openrouter_embeddings(
     ]
     queries = [
         replace(query, vector=embedding)
-        for query, embedding in zip(dataset.queries, query_embeddings, strict=True)
+        for query, embedding in zip(source_queries, query_embeddings, strict=True)
     ]
     dimensions = len(record_embeddings[0]) if record_embeddings else 0
     if len(selected_models) > 1 and texts:
@@ -507,16 +534,20 @@ def maybe_apply_openrouter_embeddings(
             if recorder:
                 recorder.observe(
                     "openrouter.embedding_compare",
-                    {"primary_model": primary_model, "compare_model": model, "sample_count": len(sample)},
-            )
+                    {
+                        "primary_model": primary_model,
+                        "compare_model": model,
+                        "sample_count": len(sample),
+                    },
+                )
 
     rerank_metrics = _evaluate_rerank(client, config, records, queries)
 
-    if dataset.kind == "embedded_movies" and dataset.records and dataset.queries:
+    if dataset.kind == "embedded_movies" and dataset.records and queries:
         prompt = (
             "Score whether this movie document is relevant to the query as JSON with keys "
             "relevance and reason.\n"
-            f"Query: {dataset.queries[0].text}\nDocument: {dataset.records[0].title} {dataset.records[0].body[:500]}"
+            f"Query: {queries[0].text}\nDocument: {dataset.records[0].title} {dataset.records[0].body[:500]}"
         )
         client.judge_json(prompt)
 
@@ -535,6 +566,7 @@ def maybe_apply_openrouter_embeddings(
         queries=queries,
         notes=[
             *dataset.notes,
+            *query_cap_notes,
             f"OpenRouter embeddings applied with {primary_model}",
             (
                 f"Provider-native embeddings were {native_dimensions} dimensions; "
@@ -560,15 +592,22 @@ def maybe_apply_openrouter_embeddings(
             "embedding_dimensions": dimensions,
             "provider_native_embedding_dimensions": native_dimensions,
             "requested_embedding_dimensions": config.embedding_dimensions,
-            "model_metadata": {model: client.model_metadata.get(model, {}) for model in selected_models},
+            "model_metadata": {
+                model: client.model_metadata.get(model, {}) for model in selected_models
+            },
             "rerank_model": config.rerank_model,
+            "query_cap_applied": len(query_cap_notes) > 0,
+            "source_query_count": len(dataset.queries),
+            "embedded_query_count": len(queries),
             "rerank_metrics": rerank_metrics,
         }
     )
     return enriched, stats
 
 
-def _fit_embedding_dimensions(values: list[float], dimensions: int | None) -> list[float]:
+def _fit_embedding_dimensions(
+    values: list[float], dimensions: int | None
+) -> list[float]:
     if dimensions is None or len(values) <= dimensions:
         return values
     reduced = values[:dimensions]

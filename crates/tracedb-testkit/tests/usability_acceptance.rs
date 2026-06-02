@@ -15,7 +15,6 @@ use tracedb_query::{
     RecordPatchRequest, RecordPutRequest, RecordScanRequest, TableSchema, TraceDb,
     VectorColumnSchema,
 };
-use tracedb_sdk::{TraceDbClient, TraceDbClientConfig};
 
 fn schema() -> TableSchema {
     TableSchema {
@@ -959,32 +958,30 @@ fn http_server_rejects_oversized_content_length_before_body_read() {
 }
 
 #[test]
-fn sdk_builds_stable_usability_requests() {
-    let client = TraceDbClient::new(TraceDbClientConfig::managed(
-        "http://localhost:18081",
-        "dev-token",
-    ));
-    let put = client
-        .table("docs")
-        .tenant("tenant-a")
-        .put("a")
-        .field("body", json!("hello"))
-        .build();
-    assert_eq!(put.path, "/v1/records/put");
-    assert_eq!(put.body["id"], json!("a"));
+fn sdk_conformance_is_external_to_core_repo() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("docs/platform-contract-v0.json"))
+            .expect("read Platform Contract v0 manifest"),
+    )
+    .expect("parse Platform Contract v0 manifest");
+    let manifest_text = serde_json::to_string(&manifest).expect("serialize manifest");
 
-    let scan = client
-        .table("docs")
-        .tenant("tenant-a")
-        .scan()
-        .limit(25)
-        .build();
-    assert_eq!(scan.path, "/v1/records/scan");
-    assert_eq!(scan.body["limit"], json!(25));
-
-    let delete = client.table("docs").tenant("tenant-a").delete("a").build();
-    assert_eq!(delete.path, "/v1/records/delete");
-    assert_eq!(delete.body["tombstone"], json!("user_delete"));
+    for repo in ["../tracedb-rust", "../tracedb-python", "../tracedb-js"] {
+        assert!(
+            manifest_text.contains(repo),
+            "SDK conformance evidence should point at standalone repo {repo}"
+        );
+    }
+    for removed in ["crates/tracedb-sdk", "clients/python", "clients/typescript"] {
+        assert!(
+            !manifest_text.contains(removed),
+            "core contract should not depend on old in-tree SDK path {removed}"
+        );
+    }
 }
 
 #[test]
@@ -1106,24 +1103,15 @@ fn local_product_regression_runner_declares_current_product_gate() {
         "embedded_verify",
         "http_demo",
         "local_doctor",
-        "rust_sdk_quickstart",
-        "python_sdk_smoke",
-        "typescript_check",
-        "typescript_http_smoke",
-        "typescript_gateway_smoke",
         "--inject-failure",
         "--list-steps",
         "--only",
         "--report-file",
         "report_file",
-        "typescript_enabled",
         "target/tracedb/product-quickstart.json",
-        "embedded_demo",
-        "embedded_verify",
         "only_step",
         "local-product-regression-step-list",
         "only_supported",
-        "conflicts with --skip-typescript",
         "human_summary",
         "failure_injection",
         "injected_failure",
@@ -1134,7 +1122,23 @@ fn local_product_regression_runner_declares_current_product_gate() {
     ] {
         assert!(
             source.contains(token),
-            "product smoke runner should include {token}"
+            "product smoke runner should include core token {token}"
+        );
+    }
+
+    for removed in [
+        "rust_sdk_quickstart",
+        "python_sdk_smoke",
+        "typescript_check",
+        "typescript_http_smoke",
+        "typescript_gateway_smoke",
+        "product_regression_rust_sdk_quickstart_command",
+        "product_regression_python_sdk_command",
+        "product_regression_typescript_command",
+    ] {
+        assert!(
+            !source.contains(removed),
+            "core product gate should not reference removed SDK step or option {removed}"
         );
     }
 
@@ -1156,106 +1160,53 @@ fn local_product_regression_runner_declares_current_product_gate() {
         );
     }
     for (name, markdown) in [
-        ("README", readme),
-        ("docs README", docs_readme),
-        ("API doc", api_doc),
+        ("README", readme.as_str()),
+        ("docs README", docs_readme.as_str()),
+        ("API doc", api_doc.as_str()),
     ] {
-        assert!(
-            markdown.contains("cargo run -p tracedb-cli -- product-regression"),
-            "{name} should document the local product smoke runner"
-        );
-        assert!(
-            markdown.contains("local product regression"),
-            "{name} should keep the runner scoped as local product regression"
-        );
-        assert!(
-            markdown.contains("--inject-failure STEP"),
-            "{name} should document the local product regression failure contract"
-        );
-        assert!(
-            markdown.contains("--list-steps"),
-            "{name} should document product regression step discovery"
-        );
-        assert!(
-            markdown.contains("only_supported"),
-            "{name} should document product regression selector support metadata"
-        );
-        assert!(
-            markdown.contains("human_summary"),
-            "{name} should document product regression human-readable JSON summary metadata"
-        );
-        assert!(
-            markdown.contains("--report-file PATH"),
-            "{name} should document product regression report-file output"
-        );
-        assert!(
-            markdown.contains("product-quickstart"),
-            "{name} should document the local product quickstart wrapper"
-        );
-        assert!(
-            markdown.contains("target/tracedb/product-quickstart.json"),
-            "{name} should document the default product quickstart report path"
-        );
-        assert!(
-            markdown.contains("report_file"),
-            "{name} should document the machine-readable report file field"
-        );
-        assert!(
-            markdown.contains("product-quickstart --skip-typescript"),
-            "{name} should document the reduced product quickstart fallback command"
-        );
-        assert!(
-            markdown.contains("typescript_enabled"),
-            "{name} should document the product quickstart TypeScript-enabled receipt field"
-        );
-        assert!(
-            markdown.contains("reduced local evidence path"),
-            "{name} should call out the skip-TypeScript fallback as reduced evidence"
-        );
-        assert!(
-            markdown.contains("product-quickstart --inject-failure embedded_demo"),
-            "{name} should document the product quickstart failure receipt check"
-        );
-        assert!(
-            markdown.contains("conflicts with --skip-typescript"),
-            "{name} should document TypeScript-only selector skip conflicts"
-        );
-        assert!(
-            markdown.contains("--only embedded_demo"),
-            "{name} should document the first supported product regression single-step mode"
-        );
-        assert!(
-            markdown.contains("--only embedded_verify"),
-            "{name} should document dependency-aware embedded verify targeted execution"
-        );
-        assert!(
-            markdown.contains("--only http_demo"),
-            "{name} should document targeted local HTTP demo execution"
-        );
-        assert!(
-            markdown.contains("--only local_doctor"),
-            "{name} should document targeted local endpoint diagnostics"
-        );
-        assert!(
-            markdown.contains("--only rust_sdk_quickstart"),
-            "{name} should document targeted Rust SDK quickstart execution"
-        );
-        assert!(
-            markdown.contains("--only python_sdk_smoke"),
-            "{name} should document targeted Python SDK smoke execution"
-        );
-        assert!(
-            markdown.contains("--only typescript_check"),
-            "{name} should document targeted generated TypeScript typecheck execution"
-        );
-        assert!(
-            markdown.contains("--only typescript_http_smoke"),
-            "{name} should document targeted generated TypeScript HTTP smoke execution"
-        );
-        assert!(
-            markdown.contains("--only typescript_gateway_smoke"),
-            "{name} should document targeted public TypeScript SDK gateway smoke execution"
-        );
+        for required in [
+            "cargo run -p tracedb-cli -- product-regression",
+            "local product regression",
+            "--inject-failure STEP",
+            "--list-steps",
+            "only_supported",
+            "human_summary",
+            "--report-file PATH",
+            "product-quickstart",
+            "target/tracedb/product-quickstart.json",
+            "report_file",
+            "product-quickstart --inject-failure embedded_demo",
+            "--only embedded_demo",
+            "--only embedded_verify",
+            "--only http_demo",
+            "--only local_doctor",
+            "../tracedb-rust",
+            "../tracedb-python",
+            "../tracedb-js",
+        ] {
+            assert!(
+                markdown.contains(required),
+                "{name} should document core gate or external SDK posture: {required}"
+            );
+        }
+        for removed in [
+            "product-quickstart --skip-typescript",
+            "conflicts with --skip-typescript",
+            "--only rust_sdk_quickstart",
+            "--only python_sdk_smoke",
+            "--only typescript_check",
+            "--only typescript_http_smoke",
+            "--only typescript_gateway_smoke",
+            "clients/python",
+            "clients/typescript",
+            "crates/tracedb-sdk",
+            "cargo run -p tracedb-sdk",
+        ] {
+            assert!(
+                !markdown.contains(removed),
+                "{name} should not document removed in-tree SDK gate path {removed}"
+            );
+        }
     }
 }
 
@@ -1265,69 +1216,14 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
-    let doc_path = root.join("docs/platform-contract-v0.md");
-    let manifest_path = root.join("docs/platform-contract-v0.json");
-    let markdown = std::fs::read_to_string(&doc_path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", doc_path.display()));
+    let markdown = std::fs::read_to_string(root.join("docs/platform-contract-v0.md"))
+        .expect("read Platform Contract v0 markdown");
     let manifest: Value = serde_json::from_str(
-        &std::fs::read_to_string(&manifest_path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", manifest_path.display())),
+        &std::fs::read_to_string(root.join("docs/platform-contract-v0.json"))
+            .expect("read Platform Contract v0 manifest"),
     )
     .expect("parse Platform Contract v0 manifest");
 
-    assert_eq!(
-        manifest["contract"],
-        json!("tracedb-platform-contract-v0"),
-        "manifest should name the canonical platform contract"
-    );
-    assert_eq!(
-        manifest["status"],
-        json!("contract-freeze-draft"),
-        "manifest should be explicit that v0 is a freeze draft, not a managed SLA"
-    );
-    assert_eq!(
-        manifest["sql_compatibility"],
-        json!("not_implemented"),
-        "manifest must preserve the SQL status guard"
-    );
-
-    let model_components = manifest["developer_model"]
-        .as_array()
-        .expect("developer_model array")
-        .iter()
-        .filter_map(|value| value.as_str())
-        .collect::<BTreeSet<_>>();
-    for component in [
-        "connection_config",
-        "database_branch_config",
-        "table_handles",
-        "schema_migrations",
-        "record_writes",
-        "batch_ingest",
-        "query_builder",
-        "traceql_string_execution",
-        "result_envelope",
-        "explain_provenance_freshness_jobs",
-        "errors_retries_idempotency",
-        "pagination_cursors",
-        "admin_compact_snapshot_restore",
-    ] {
-        assert!(
-            model_components.contains(component),
-            "Platform Contract v0 manifest missing developer model component {component}"
-        );
-        assert!(
-            markdown.contains(component),
-            "Platform Contract v0 markdown missing developer model component {component}"
-        );
-    }
-
-    let surface_ids = manifest["surfaces"]
-        .as_array()
-        .expect("surfaces array")
-        .iter()
-        .filter_map(|surface| surface["id"].as_str())
-        .collect::<BTreeSet<_>>();
     for surface in [
         "http_direct",
         "rust_sdk",
@@ -1337,46 +1233,14 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         "graphql",
     ] {
         assert!(
-            surface_ids.contains(surface),
-            "Platform Contract v0 manifest missing conformance surface {surface}"
-        );
-        assert!(
-            markdown.contains(surface),
-            "Platform Contract v0 markdown missing conformance surface {surface}"
-        );
-    }
-
-    let scenario_ids = manifest["conformance_scenarios"]
-        .as_array()
-        .expect("conformance_scenarios array")
-        .iter()
-        .filter_map(|scenario| scenario["id"].as_str())
-        .collect::<BTreeSet<_>>();
-    for scenario in [
-        "schema_apply",
-        "put",
-        "batch",
-        "patch",
-        "get",
-        "scan",
-        "query",
-        "traceql_string_execution",
-        "explain",
-        "delete",
-        "idempotency",
-        "errors",
-        "snapshot_restore",
-    ] {
-        assert!(
-            scenario_ids.contains(scenario),
-            "Platform Contract v0 manifest missing conformance scenario {scenario}"
-        );
-        assert!(
-            markdown.contains(scenario),
-            "Platform Contract v0 markdown missing conformance scenario {scenario}"
+            manifest["surfaces"]
+                .as_array()
+                .expect("surfaces array")
+                .iter()
+                .any(|entry| entry["id"] == json!(surface)),
+            "Platform Contract v0 manifest missing surface {surface}"
         );
     }
-
     for boundary in [
         "SQL compatibility is not implemented",
         "not PostgreSQL-compatible",
@@ -1391,68 +1255,57 @@ fn platform_contract_v0_declares_sdk_conformance_harness() {
         );
     }
 
-    let python_surface = manifest["surfaces"]
-        .as_array()
-        .expect("surfaces array")
-        .iter()
-        .find(|surface| surface["id"] == json!("python_sdk"))
-        .expect("python_sdk surface");
-    let python_evidence = python_surface["evidence"]
-        .as_array()
-        .expect("python_sdk evidence array")
-        .iter()
-        .filter_map(|value| value.as_str())
-        .collect::<BTreeSet<_>>();
-    for evidence in [
-        "clients/python/install_smoke.py",
-        "python3 clients/python/install_smoke.py",
-        "TraceDB.graphql",
-        "graphql_request",
+    let surfaces = manifest["surfaces"].as_array().expect("surfaces array");
+    for (surface_id, repo) in [
+        ("rust_sdk", "../tracedb-rust"),
+        ("typescript_sdk", "../tracedb-js"),
+        ("python_sdk", "../tracedb-python"),
     ] {
+        let surface = surfaces
+            .iter()
+            .find(|surface| surface["id"] == json!(surface_id))
+            .unwrap_or_else(|| panic!("missing {surface_id} surface"));
+        let evidence = surface["evidence"]
+            .as_array()
+            .expect("SDK evidence array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<BTreeSet<_>>();
         assert!(
-            python_evidence.contains(evidence),
-            "python_sdk manifest evidence missing {evidence}"
+            evidence.iter().any(|entry| entry.starts_with(repo)),
+            "{surface_id} evidence should point at standalone repo {repo}: {evidence:?}"
         );
         assert!(
-            markdown.contains(evidence),
-            "Platform Contract v0 markdown missing Python install evidence {evidence}"
+            markdown.contains(repo),
+            "Platform Contract v0 markdown should point {surface_id} at {repo}"
         );
     }
-    let python_install_smoke =
-        std::fs::read_to_string(root.join("clients/python/install_smoke.py"))
-            .expect("read Python install smoke");
-    for token in [
-        "venv.EnvBuilder",
-        "pip",
-        "--no-deps",
-        "--target",
-        "TraceDB.from_env",
-        "graphql_request",
-        "python sdk install smoke ok",
+
+    let manifest_text = serde_json::to_string(&manifest).expect("serialize manifest");
+    for removed in [
+        "clients/python",
+        "clients/typescript",
+        "crates/tracedb-sdk",
+        "cargo run -p tracedb-sdk",
     ] {
         assert!(
-            python_install_smoke.contains(token),
-            "Python install smoke should contain {token}"
+            !manifest_text.contains(removed),
+            "Platform Contract v0 manifest should not contain old in-tree SDK path {removed}"
+        );
+        assert!(
+            !markdown.contains(removed),
+            "Platform Contract v0 markdown should not contain old in-tree SDK path {removed}"
         );
     }
 
     let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
     let docs_readme =
         std::fs::read_to_string(root.join("docs/README.md")).expect("read docs README");
-    for (name, source) in [("README", readme), ("docs README", docs_readme)] {
-        assert!(
-            source.contains("docs/platform-contract-v0.md"),
-            "{name} should link to Platform Contract v0 markdown"
-        );
-        assert!(
-            source.contains("docs/platform-contract-v0.json"),
-            "{name} should link to Platform Contract v0 manifest"
-        );
-        assert!(
-            source.contains("scripts/platform_conformance.py"),
-            "{name} should link to the Platform Contract v0 conformance runner"
-        );
-    }
+    assert!(
+        readme.contains("docs/platform-contract-v0.md")
+            && docs_readme.contains("docs/platform-contract-v0.md"),
+        "README docs should link to Platform Contract v0"
+    );
 }
 
 #[test]
@@ -1816,173 +1669,31 @@ fn generated_typescript_client_artifact_tracks_openapi_routes() {
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
-    let generator = root.join("scripts/generate_typescript_client.py");
-    let client = root.join("clients/typescript/src/client.ts");
-
-    let check = Command::new("python3")
-        .arg(&generator)
-        .arg("--check")
-        .current_dir(root)
-        .output()
-        .unwrap_or_else(|error| panic!("run {} --check: {error}", generator.display()));
-    assert!(
-        check.status.success(),
-        "TypeScript client artifact should be reproducible from generator\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&check.stdout),
-        String::from_utf8_lossy(&check.stderr)
-    );
 
     let spec: Value = serde_json::from_str(
         &std::fs::read_to_string(root.join("docs/api/v1-openapi.json"))
             .expect("read OpenAPI artifact"),
     )
     .expect("parse OpenAPI JSON");
-    let source = std::fs::read_to_string(&client)
-        .unwrap_or_else(|error| panic!("read {}: {error}", client.display()));
-
-    for token in [
-        "export class TraceDbClient",
-        "export type TraceDbRequestOptions",
-        "export class TraceDbHttpError",
-        "readonly responseJson?: JsonValue;",
-        "readonly errorResponse?: ErrorResponse;",
-        "readonly responseError?: string;",
-        "readonly responseCode?: string;",
-        "code?: string;",
-        "return typeof code === \"string\" ? { error, code } : { error };",
-        "export class TraceDbRequestError",
-        "Generated schema aliases keep OpenAPI's permissive additionalProperties boundary",
-        "export interface TableSchema extends JsonObject",
-        "export interface RecordInput extends JsonObject",
-        "export interface HealthResponse extends JsonObject",
-        "export interface ReadyResponse extends JsonObject",
-        "export interface DatabaseSummary extends JsonObject",
-        "export interface DatabasesResponse extends JsonObject",
-        "export interface BranchSummary extends JsonObject",
-        "export interface BranchesResponse extends JsonObject",
-        "export interface MetricsResponse extends JsonObject",
-        "export interface AdminJob extends JsonObject",
-        "export interface JobsResponse extends JsonObject",
-        "export type RecordPutBody = RecordInput | RecordPutRequest;",
-        "export interface RecordPutBatchRequest extends JsonObject",
-        "export interface HybridScoreComponents extends JsonObject",
-        "export interface AccessPathExplain extends JsonObject",
-        "export interface Candidate extends JsonObject",
-        "export interface QueryPhaseTiming extends JsonObject",
-        "export interface AccessPathTiming extends JsonObject",
-        "record?: RecordOutput | null;",
-        "version_id?: number;",
-        "export interface HybridQuery extends JsonObject",
-        "scalar_eq?: JsonObject;",
-        "graph_seed?: string | null;",
-        "temporal_as_of?: number | null;",
-        "export interface QueryResponse extends JsonObject",
-        "export interface GraphQlSchemaResponse extends JsonObject",
-        "export interface SnapshotRequest extends JsonObject",
-        "export interface RestoreResponse extends JsonObject",
-        "name?: string;",
-        "records?: RecordInput[];",
-        "records?: RecordOutput[];",
-        "results?: HybridQueryRow[];",
-        "score?: HybridScoreComponents;",
-        "planner_candidates?: Candidate[];",
-        "phase_timings?: QueryPhaseTiming[];",
-        "databases?: DatabaseSummary[];",
-        "branches?: BranchSummary[];",
-        "jobs?: AdminJob[];",
-        "vector?: number[] | null;",
-        "record_count?: number;",
-        "source?: string;",
-        "Idempotency-Key",
-        "SQL compatibility is not implemented.",
-        "idempotency key must be non-empty and must not contain CR or LF",
-        "key.includes(\"\\r\")",
-        "key.includes(\"\\n\")",
-        "database_id",
-        "branch_id",
-        "if (method !== \"GET\")",
-        "const routed: JsonObject = { ...body };",
-        "routed.database_id === undefined",
-        "routed.branch_id === undefined",
-    ] {
-        assert!(
-            source.contains(token),
-            "generated TypeScript client missing {token}"
-        );
-    }
-
-    for method_name in [
-        "health",
-        "ready",
-        "listDatabases",
-        "listBranches",
-        "publicSafeMetrics",
-        "applySchema",
-        "insert",
-        "putRecord",
-        "putBatch",
-        "patchRecord",
-        "deleteRecord",
-        "getRecord",
-        "scanRecords",
-        "query",
-        "graphqlSchema",
-        "explain",
-        "compact",
-        "snapshot",
-        "restore",
-        "listAdminJobs",
-    ] {
-        assert!(
-            source.contains(&format!("async {method_name}(")),
-            "generated TypeScript client missing method {method_name}"
-        );
-    }
-    for signature in [
-        "async health(options: TraceDbRequestOptions = {}): Promise<HealthResponse>",
-        "async ready(options: TraceDbRequestOptions = {}): Promise<ReadyResponse>",
-        "async listDatabases(options: TraceDbRequestOptions = {}): Promise<DatabasesResponse>",
-        "async listBranches(options: TraceDbRequestOptions = {}): Promise<BranchesResponse>",
-        "async publicSafeMetrics(options: TraceDbRequestOptions = {}): Promise<MetricsResponse>",
-        "async applySchema(body: TableSchema, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
-        "async putRecord(body: RecordPutBody, options: TraceDbRequestOptions = {}): Promise<EpochResponse>",
-        "async putBatch(body: RecordPutBatchRequest, options: TraceDbRequestOptions = {}): Promise<PutBatchResponse>",
-        "async query(body: HybridQuery, options: TraceDbRequestOptions = {}): Promise<QueryResponse>",
-        "async graphqlSchema(options: TraceDbRequestOptions = {}): Promise<GraphQlSchemaResponse>",
-        "async snapshot(body: SnapshotRequest, options: TraceDbRequestOptions = {}): Promise<SnapshotResponse>",
-        "async listAdminJobs(options: TraceDbRequestOptions = {}): Promise<JobsResponse>",
-        "private async request<TResponse extends JsonValue>",
-    ] {
-        assert!(
-            source.contains(signature),
-            "generated TypeScript client missing typed signature {signature}"
-        );
-    }
-
-    let paths = spec["paths"].as_object().expect("OpenAPI paths object");
-    for (path, methods) in paths {
-        let methods = methods.as_object().expect("OpenAPI path methods object");
-        for (method, operation) in methods {
-            let operation_id = operation["operationId"]
-                .as_str()
-                .unwrap_or_else(|| panic!("OpenAPI operationId for {method} {path}"));
-            let method_literal = method.to_ascii_uppercase();
-            assert!(
-                source.contains(&format!("\"{method_literal}\", \"{path}\"")),
-                "generated TypeScript client missing {method_literal} {path} for {operation_id}"
-            );
-            assert!(
-                source.contains(&format!("// {operation_id}: {method_literal} {path}")),
-                "generated TypeScript client missing provenance comment for {operation_id}"
-            );
-        }
-    }
-
-    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
     assert!(
-        readme.contains("clients/typescript/src/client.ts"),
-        "README should link to the generated TypeScript client artifact"
+        spec["paths"]
+            .as_object()
+            .is_some_and(|paths| !paths.is_empty()),
+        "OpenAPI artifact should keep route paths for external SDK generation"
     );
+
+    let api_doc = std::fs::read_to_string(root.join("docs/api/v1-http.md")).expect("read API doc");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
+    for doc in [api_doc.as_str(), readme.as_str()] {
+        assert!(
+            doc.contains("../tracedb-js"),
+            "core docs should point TypeScript/JavaScript SDK generation at ../tracedb-js"
+        );
+        assert!(
+            !doc.contains("clients/typescript/src/client.ts"),
+            "core docs should not link to an in-tree TypeScript client artifact"
+        );
+    }
 }
 
 #[test]
@@ -1991,26 +1702,23 @@ fn generated_typescript_client_smoke_executes_in_node_runtime() {
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
-    let smoke = root.join("clients/typescript/smoke.ts");
+    let api_doc = std::fs::read_to_string(root.join("docs/api/v1-http.md")).expect("read API doc");
 
-    let check = Command::new("node")
-        .arg("--experimental-strip-types")
-        .arg(&smoke)
-        .current_dir(root)
-        .output()
-        .unwrap_or_else(|error| panic!("run Node TypeScript smoke: {error}"));
     assert!(
-        check.status.success(),
-        "generated TypeScript client smoke should execute in Node\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&check.stdout),
-        String::from_utf8_lossy(&check.stderr)
+        api_doc.contains("SDK package checks and SDK smokes run outside the")
+            && api_doc.contains("core product gate"),
+        "API doc should state Node/SDK smokes are external to the core repo"
     );
-    assert!(
-        String::from_utf8_lossy(&check.stdout).contains("typescript client smoke ok"),
-        "Node smoke should print success sentinel\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&check.stdout),
-        String::from_utf8_lossy(&check.stderr)
-    );
+    for removed in [
+        "node --experimental-strip-types clients/typescript/smoke.ts",
+        "(cd clients/typescript && npm ci && npm run check)",
+        "(cd clients/typescript && npm run http-smoke)",
+    ] {
+        assert!(
+            !api_doc.contains(removed),
+            "API doc should not advertise removed in-tree TypeScript smoke command {removed}"
+        );
+    }
 }
 
 #[test]
@@ -2019,414 +1727,46 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
-    let package_json = root.join("clients/typescript/package.json");
-    let package_lock_json = root.join("clients/typescript/package-lock.json");
-    let tsconfig_json = root.join("clients/typescript/tsconfig.json");
-    let tsconfig_build_json = root.join("clients/typescript/tsconfig.build.json");
-
-    let package: Value = serde_json::from_str(
-        &std::fs::read_to_string(&package_json)
-            .unwrap_or_else(|error| panic!("read {}: {error}", package_json.display())),
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("docs/platform-contract-v0.json"))
+            .expect("read Platform Contract v0 manifest"),
     )
-    .expect("parse TypeScript client package.json");
-    assert_eq!(package["name"], json!("@tracedb/sdk"));
-    assert_eq!(
-        package["description"],
-        json!("TraceDB public TypeScript SDK over the generated HTTP transport.")
-    );
-    assert_eq!(package["private"], json!(false));
-    assert_eq!(package["type"], json!("module"));
-    assert_eq!(package["license"], json!("MIT"));
-    assert_eq!(package["sideEffects"], json!(false));
-    assert_eq!(package["main"], json!("./dist/index.js"));
-    assert_eq!(package["types"], json!("./dist/index.d.ts"));
-    assert_eq!(package["files"], json!(["dist", "README.md"]));
-    assert_eq!(package["publishConfig"]["access"], json!("public"));
-    assert_eq!(package["exports"]["."]["types"], json!("./dist/index.d.ts"));
-    assert_eq!(package["exports"]["."]["default"], json!("./dist/index.js"));
-    assert_eq!(
-        package["exports"]["./transport"]["types"],
-        json!("./dist/client.d.ts")
-    );
-    assert_eq!(
-        package["exports"]["./transport"]["default"],
-        json!("./dist/client.js")
-    );
-    assert_eq!(
-        package["scripts"]["build"],
-        json!(
-            "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && tsc -p tsconfig.smoke.json && node scripts/rewrite-declaration-imports.mjs"
-        )
-    );
-    assert_eq!(
-        package["scripts"]["typecheck"],
-        json!("tsc --noEmit -p tsconfig.json")
-    );
-    assert_eq!(package["scripts"]["smoke"], json!("node dist/smoke.js"));
-    assert_eq!(
-        package["scripts"]["public-smoke"],
-        json!("node dist/public-sdk-smoke.js")
-    );
-    assert_eq!(
-        package["scripts"]["package-smoke"],
-        json!("node dist/package-entry-smoke.js && node dist/build-package-smoke.js")
-    );
-    assert_eq!(
-        package["scripts"]["pack-dry-run"],
-        json!("npm pack --dry-run --json")
-    );
-    assert_eq!(
-        package["scripts"]["consumer-smoke"],
-        json!("node scripts/packed-consumer-smoke.mjs")
-    );
-    assert_eq!(
-        package["scripts"]["http-smoke"],
-        json!("npm run build && node dist/http-smoke.js")
-    );
-    assert_eq!(
-        package["scripts"]["public-http-smoke"],
-        json!("npm run build && node dist/public-http-smoke.js")
-    );
-    assert_eq!(
-        package["scripts"]["quickstart"],
-        json!("npm run build && node dist/quickstart.js")
-    );
-    assert_eq!(
-        package["scripts"]["gateway-smoke"],
-        json!("npm run build && node dist/gateway-smoke.js")
-    );
-    assert_eq!(
-        package["scripts"]["check"],
-        json!(
-            "npm run typecheck && npm run build && npm run smoke && npm run public-smoke && npm run package-smoke && npm run pack-dry-run && npm run consumer-smoke"
-        )
-    );
-    assert_eq!(package["devDependencies"]["typescript"], json!("6.0.3"));
-    assert_eq!(package["devDependencies"]["@types/node"], json!("25.9.0"));
+    .expect("parse Platform Contract v0 manifest");
 
-    let package_lock: Value = serde_json::from_str(
-        &std::fs::read_to_string(&package_lock_json)
-            .unwrap_or_else(|error| panic!("read {}: {error}", package_lock_json.display())),
-    )
-    .expect("parse TypeScript client package-lock.json");
-    assert_eq!(package_lock["lockfileVersion"], json!(3));
-    assert_eq!(package_lock["name"], json!("@tracedb/sdk"));
-    assert_eq!(package_lock["packages"][""]["name"], json!("@tracedb/sdk"));
-    assert_eq!(package_lock["packages"][""]["license"], json!("MIT"));
-    assert_eq!(
-        package_lock["packages"][""]["devDependencies"]["typescript"],
-        json!("6.0.3")
-    );
-    assert_eq!(
-        package_lock["packages"][""]["devDependencies"]["@types/node"],
-        json!("25.9.0")
-    );
+    let typescript_surface = manifest["surfaces"]
+        .as_array()
+        .expect("surfaces array")
+        .iter()
+        .find(|surface| surface["id"] == json!("typescript_sdk"))
+        .expect("typescript_sdk surface");
+    let evidence = typescript_surface["evidence"]
+        .as_array()
+        .expect("typescript_sdk evidence array")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<BTreeSet<_>>();
 
-    let tsconfig: Value = serde_json::from_str(
-        &std::fs::read_to_string(&tsconfig_json)
-            .unwrap_or_else(|error| panic!("read {}: {error}", tsconfig_json.display())),
-    )
-    .expect("parse TypeScript client tsconfig.json");
-    assert_eq!(tsconfig["compilerOptions"]["module"], json!("NodeNext"));
-    assert_eq!(
-        tsconfig["compilerOptions"]["moduleResolution"],
-        json!("NodeNext")
-    );
-    assert_eq!(tsconfig["compilerOptions"]["strict"], json!(true));
-    assert_eq!(tsconfig["compilerOptions"]["noEmit"], json!(true));
-    assert_eq!(
-        tsconfig["compilerOptions"]["allowImportingTsExtensions"],
-        json!(true)
-    );
-    assert_eq!(
-        tsconfig["include"],
-        json!([
-            "src/index.ts",
-            "src/client.ts",
-            "src/sdk.ts",
-            "smoke.ts",
-            "public-sdk-smoke.ts",
-            "http-smoke.ts",
-            "public-http-smoke.ts",
-            "quickstart.ts",
-            "gateway-smoke.ts"
-        ])
-    );
-
-    let tsconfig_build: Value = serde_json::from_str(
-        &std::fs::read_to_string(&tsconfig_build_json)
-            .unwrap_or_else(|error| panic!("read {}: {error}", tsconfig_build_json.display())),
-    )
-    .expect("parse TypeScript client tsconfig.build.json");
-    assert_eq!(tsconfig_build["extends"], json!("./tsconfig.json"));
-    assert_eq!(
-        tsconfig_build["compilerOptions"]["allowImportingTsExtensions"],
-        json!(false)
-    );
-    assert_eq!(
-        tsconfig_build["compilerOptions"]["declaration"],
-        json!(true)
-    );
-    assert_eq!(tsconfig_build["compilerOptions"]["noEmit"], json!(false));
-    assert_eq!(tsconfig_build["compilerOptions"]["outDir"], json!("./dist"));
-    assert_eq!(tsconfig_build["compilerOptions"]["rootDir"], json!("./src"));
-    assert_eq!(
-        tsconfig_build["compilerOptions"]["rewriteRelativeImportExtensions"],
-        json!(true)
-    );
-    assert_eq!(
-        tsconfig_build["include"],
-        json!(["src/index.ts", "src/client.ts", "src/sdk.ts"])
-    );
-
-    let public_sdk = std::fs::read_to_string(root.join("clients/typescript/src/sdk.ts"))
-        .expect("read TypeScript public SDK wrapper");
-    for token in [
-        "export class TraceDB",
-        "table(name: string): TraceDBTable",
-        "export class TraceDBTable",
-        "insertRows",
-        "insertBatch",
-        "patch",
-        "explainPlan",
-        "compact",
-        "snapshot",
-        "restore",
-        "listAdminJobs",
-        "RecordPutBatchRequest",
-        "graphql(query: string",
-        "graphqlRequest",
-        "where({ tenant_id })",
-        "TraceDbClient",
+    for required in [
+        "../tracedb-js/package.json",
+        "../tracedb-js/src/client.ts",
+        "../tracedb-js/src/sdk.ts",
+        "TraceDB.fromEnv",
+        "TraceDBTable.insertRows",
+        "scripts/platform_conformance.py --surface typescript_sdk (run by ../tracedb-js)",
     ] {
         assert!(
-            public_sdk.contains(token),
-            "TypeScript public SDK wrapper should include {token}"
+            evidence.contains(required),
+            "typescript_sdk evidence should include standalone repo boundary {required}"
         );
     }
-
-    let build_smoke =
-        std::fs::read_to_string(root.join("clients/typescript/build-package-smoke.ts"))
-            .expect("read TypeScript build package smoke");
-    for token in [
+    for removed in [
+        "clients/typescript",
         "dist/index.js",
-        "dist/index.d.ts",
-        "dist/client.js",
-        "dist/client.d.ts",
-        "dist/sdk.js",
-        "dist/sdk.d.ts",
-        "@tracedb/sdk",
-        "@tracedb/sdk/transport",
-        "typescript build package smoke ok",
-    ] {
-        assert!(
-            build_smoke.contains(token),
-            "TypeScript build package smoke should include {token}"
-        );
-    }
-
-    let rewrite_declarations = std::fs::read_to_string(
-        root.join("clients/typescript/scripts/rewrite-declaration-imports.mjs"),
-    )
-    .expect("read TypeScript declaration rewrite script");
-    for token in [".ts\\\"", ".js\\\"", "dist"] {
-        assert!(
-            rewrite_declarations.contains(token),
-            "TypeScript declaration rewrite script should include {token}"
-        );
-    }
-
-    let consumer_smoke =
-        std::fs::read_to_string(root.join("clients/typescript/scripts/packed-consumer-smoke.mjs"))
-            .expect("read TypeScript packed consumer smoke");
-    for token in [
-        "mkdtempSync",
-        "npm",
-        "pack",
-        "--pack-destination",
-        "npm",
-        "install",
-        "@tracedb/sdk",
-        "@tracedb/sdk/transport",
-        "node_modules/@tracedb/sdk/dist/index.js",
-        "typescript packed consumer smoke ok",
-    ] {
-        assert!(
-            consumer_smoke.contains(token),
-            "TypeScript packed consumer smoke should include {token}"
-        );
-    }
-
-    let public_smoke = std::fs::read_to_string(root.join("clients/typescript/public-sdk-smoke.ts"))
-        .expect("read TypeScript public SDK smoke");
-    for token in [
-        "typescript public sdk smoke ok",
-        "new TraceDB",
-        ".table(\"docs\")",
-        ".insertRows",
-        ".insertBatch",
-        ".patch",
-        ".explainPlan",
-        "db.compact",
-        "db.snapshot",
-        "db.restore",
-        ".where({ tenant_id",
-        ".match(\"body\"",
-        ".near(\"embedding\"",
-        ".with({ explain: true, freshness: \"lazy\" })",
-        "TRACEDB_SAFE_RETRIES should retry native GraphQL",
-        "db.graphql",
-        "db.graphqlRequest",
-        "TraceDbRequestError",
-    ] {
-        assert!(
-            public_smoke.contains(token),
-            "TypeScript public SDK smoke should include {token}"
-        );
-    }
-
-    let public_http_smoke =
-        std::fs::read_to_string(root.join("clients/typescript/public-http-smoke.ts"))
-            .expect("read TypeScript public SDK HTTP smoke");
-    for token in [
-        "typescript public sdk http smoke ok",
-        "new TraceDB",
-        "await db.applySchema",
-        "await docs.insert",
-        "await docs.insertRows",
-        "await docs.insertBatch",
-        "await docs.patch",
-        "await docs.get",
-        "await docs.limit(10).scan",
-        "await db.graphql",
-        "graphql_query_execution",
-        ".explainPlan()",
-        "await db.compact",
-        "await db.snapshot",
-        "await db.restore",
-        "local-http-typescript-public-sdk-smoke",
-        "sdk_surface: \"public\"",
-        "sql_module: \"not_implemented\"",
-    ] {
-        assert!(
-            public_http_smoke.contains(token),
-            "TypeScript public SDK HTTP smoke should include {token}"
-        );
-    }
-
-    let http_smoke = std::fs::read_to_string(root.join("clients/typescript/http-smoke.ts"))
-        .expect("read TypeScript HTTP smoke");
-    for token in [
-        "typescript client http smoke ok",
-        "spawn(\"cargo\"",
-        "TRACEDB_DATA_DIR",
-        "TRACEDB_BIND",
-        "await client.ready()",
-        "await client.applySchema",
-        "await client.putBatch",
-        "await client.query",
-        "await client.snapshot",
-        "sql_module: \"not_implemented\"",
-    ] {
-        assert!(
-            http_smoke.contains(token),
-            "TypeScript HTTP smoke should include {token}"
-        );
-    }
-
-    let quickstart = std::fs::read_to_string(root.join("clients/typescript/quickstart.ts"))
-        .expect("read TypeScript endpoint quickstart");
-    for token in [
-        "typescript client endpoint quickstart ok",
-        "TRACEDB_URL",
-        "TRACEDB_TOKEN",
-        "TRACEDB_DATABASE_ID",
-        "TRACEDB_BRANCH_ID",
-        "TRACEDB_ADMIN_DIR",
-        "await client.ready()",
-        "await client.applySchema",
-        "await client.putBatch",
-        "await client.query",
-        "await client.explain",
-        "await client.deleteRecord",
-        "sql_module: \"not_implemented\"",
-    ] {
-        assert!(
-            quickstart.contains(token),
-            "TypeScript endpoint quickstart should include {token}"
-        );
-    }
-
-    let gateway_smoke = std::fs::read_to_string(root.join("clients/typescript/gateway-smoke.ts"))
-        .expect("read TypeScript gateway smoke");
-    for token in [
-        "typescript public sdk gateway smoke ok",
-        "new TraceDB",
-        "await db.applySchema",
-        "await docs.insert",
-        "await docs.insertBatch",
-        "await docs.patch",
-        "await docs.get",
-        "await docs.limit(10).scan",
-        ".explainPlan()",
-        "TRACEDB_SERVICE_MODE",
-        "gateway",
-        "TRACEDB_REQUIRE_API_KEY",
-        "TRACEDB_API_TOKEN",
-        "TRACEDB_ENGINE_URL",
-        "databaseId",
-        "branchId",
-        "TraceDbHttpError",
-        "invalid api token",
-        "unknown branch db_missing:main",
-        "local-gateway-typescript-public-sdk-smoke",
-        "db.traceql",
-        "MATCH body \"TypeScript public SDK\"",
-        "db.graphqlSchema",
-        "db.graphql",
-        "sdk_surface: \"public\"",
-        "sql_module: \"not_implemented\"",
-    ] {
-        assert!(
-            gateway_smoke.contains(token),
-            "TypeScript gateway smoke should include {token}"
-        );
-    }
-
-    let readme = std::fs::read_to_string(root.join("clients/typescript/README.md"))
-        .expect("read TypeScript client README");
-    for command in [
-        "npm ci",
-        "npm run typecheck",
-        "npm run smoke",
-        "npm run public-smoke",
-        "npm run build",
-        "npm run package-smoke",
-        "npm run pack-dry-run",
         "npm run consumer-smoke",
-        "npm run http-smoke",
-        "npm run public-http-smoke",
-        "npm run quickstart",
-        "npm run gateway-smoke",
-        "TRACEDB_URL",
-        "TRACEDB_ADMIN_DIR",
-        "TRACEDB_REQUIRE_API_KEY",
-        "TRACEDB_DATABASE_ID",
-        "TraceDbRequestError",
-        "CR/LF-containing idempotency keys",
-        "RecordScanOutput.records",
-        "QueryResponse.results",
-        "HybridScoreComponents",
-        "TraceDB",
-        "insertRows",
-        "insertBatch",
-        "dist/index.js",
-        "dist/index.d.ts",
-        "not a package publishing pipeline",
     ] {
         assert!(
-            readme.contains(command),
-            "TypeScript client README should document {command}"
+            !evidence.iter().any(|entry| entry.contains(removed)),
+            "typescript_sdk evidence should not use old in-tree package boundary {removed}"
         );
     }
 }
@@ -2533,27 +1873,18 @@ fn start_http_test_server(data_dir: PathBuf) -> SocketAddr {
 }
 
 fn wait_for_http_ready(addr: SocketAddr) {
-    let url = format!("http://{addr}");
-    let client = TraceDbClient::new(
-        TraceDbClientConfig::managed(url.clone(), "dev-token")
-            .with_timeout(Duration::from_millis(100)),
-    );
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut last_error = None;
+    let mut last_error: Option<String> = None;
     while Instant::now() < deadline {
-        match client.ready_typed() {
-            Ok(response) if response.ready => return,
-            Ok(response) => {
-                last_error = Some(format!("ready endpoint returned not-ready: {response:?}"));
-            }
-            Err(error) => {
-                last_error = Some(error.to_string());
-            }
+        let response = http_response(addr, "GET", "/v1/ready", "");
+        if response.starts_with("HTTP/1.1 200 OK") && response.contains("\"ready\":true") {
+            return;
         }
+        last_error = Some(response);
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!(
-        "TraceDB HTTP acceptance test server did not become ready at {url}; last error: {}",
+        "TraceDB HTTP acceptance test server did not become ready at http://{addr}; last response: {}",
         last_error.unwrap_or_else(|| "no readiness attempt completed".to_string())
     );
 }

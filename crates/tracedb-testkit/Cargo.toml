@@ -38,5 +38,4 @@ tracedb-worker = { path = "../tracedb-worker" }
 tracedb-segment-server = { path = "../tracedb-segment-server" }
 tracedb-cache = { path = "../tracedb-cache" }
 tracedb-metering = { path = "../tracedb-metering" }
-tracedb-sdk = { path = "../tracedb-sdk" }
 tracedb-bench = { path = "../tracedb-bench" }

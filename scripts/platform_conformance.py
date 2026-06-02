@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -17,7 +16,10 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = Path("docs/platform-contract-v0.json")
-DEFAULT_SURFACES = ["http_direct", "rust_sdk"]
+DEFAULT_SURFACES = ["http_direct"]
+PYTHON_SDK_REPO_ENV = "TRACEDB_PYTHON_SDK_REPO"
+TYPESCRIPT_SDK_REPO_ENV = "TRACEDB_TYPESCRIPT_SDK_REPO"
+RUST_SDK_REPO_ENV = "TRACEDB_RUST_SDK_REPO"
 TENANT_A_ACTOR_HEADERS = {
     "x-tracedb-tenant-id": "tenant-a",
     "x-tracedb-database-id": "local",
@@ -25,7 +27,8 @@ TENANT_A_ACTOR_HEADERS = {
     "x-tracedb-token-identity": "platform-conformance",
     "x-tracedb-request-id": "platform-conformance",
 }
-PYTHON_SDK_CONFORMANCE_EVIDENCE = "installed package + clients/python/http_smoke.py"
+PYTHON_SDK_CONFORMANCE_EVIDENCE = "installed standalone package + http_smoke.py"
+RUST_SDK_CONFORMANCE_EVIDENCE = "standalone Rust SDK quickstart"
 TRACEQL_NATIVE_CONFORMANCE_EVIDENCE = "POST /v1/traceql native TraceDB command statements"
 GRAPHQL_NATIVE_CONFORMANCE_EVIDENCE = "POST /v1/graphql native GraphQL data/errors envelope"
 TRACEQL_SQLISH_CONFORMANCE_EVIDENCE = "POST /v1/traceql bounded SQL-ish SELECT adapter"
@@ -1340,19 +1343,17 @@ def run_command(
     }
 
 
-def map_rust_sdk_product_summary(
+def map_rust_sdk_quickstart_summary(
     manifest: dict[str, Any],
-    product_summary: dict[str, Any],
+    quickstart: dict[str, Any],
 ) -> dict[str, Any]:
-    step = product_summary.get("steps", {}).get("rust_sdk_quickstart", {})
-    quickstart = step.get("summary", {})
     quickstart_steps = quickstart.get("steps", {})
     error_envelope = quickstart.get("error_envelope", {})
     records_put = quickstart.get("records_put")
     traceql_result_count = quickstart.get("traceql_result_count")
 
     def step_passed(name: str) -> bool:
-        return step.get("ok") is True and quickstart.get("ok") is True and quickstart_steps.get(name) is True
+        return quickstart.get("ok") is True and quickstart_steps.get(name) is True
 
     def error_envelope_passed() -> bool:
         return (
@@ -1441,7 +1442,7 @@ def map_rust_sdk_product_summary(
         "rust_sdk",
         "checked",
         scenarios,
-        evidence=["cargo run -q -p tracedb-cli -- product-regression --only rust_sdk_quickstart"],
+        evidence=[RUST_SDK_CONFORMANCE_EVIDENCE],
     )
 
 
@@ -1831,24 +1832,85 @@ def map_graphql_http_summary(
     )
 
 
+def standalone_sdk_repo(repo_root: Path, env_var: str, fallback_name: str) -> Path:
+    override = os.environ.get(env_var, "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return (repo_root.parent / fallback_name).resolve()
+
+
+def sdk_repo_not_found_report(
+    manifest: dict[str, Any],
+    surface_id: str,
+    repo_path: Path,
+    env_var: str,
+) -> dict[str, Any]:
+    return empty_surface_report(
+        manifest,
+        surface_id,
+        "not_run",
+        f"standalone SDK repo not found at {repo_path}; set {env_var} to override",
+    )
+
+
 def run_rust_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    sdk_repo = standalone_sdk_repo(repo_root, RUST_SDK_REPO_ENV, "tracedb-rust")
+    if not sdk_repo.exists():
+        return sdk_repo_not_found_report(manifest, "rust_sdk", sdk_repo, RUST_SDK_REPO_ENV)
     with tempfile.TemporaryDirectory(prefix="tracedb-rust-sdk-conformance-") as temp_dir:
-        command = run_command(
-            [
-                "cargo",
-                "run",
-                "-q",
-                "-p",
-                "tracedb-cli",
-                "--",
-                "product-regression",
-                "--only",
-                "rust_sdk_quickstart",
-                "--data-root",
-                temp_dir,
-            ],
-            repo_root,
+        temp = Path(temp_dir)
+        data_dir = temp / "data"
+        admin_dir = temp / "admin"
+        admin_dir.mkdir(parents=True, exist_ok=True)
+        bind = f"127.0.0.1:{free_port()}"
+        base_url = f"http://{bind}"
+        env = os.environ.copy()
+        env.update(
+            {
+                "TRACEDB_BIND": bind,
+                "TRACEDB_DATA_DIR": str(data_dir),
+                "TRACEDB_SERVICE_MODE": "engine",
+                "CARGO_TERM_COLOR": "never",
+                "CARGO_INCREMENTAL": "0",
+            }
         )
+        process = subprocess.Popen(
+            ["cargo", "run", "-q", "-p", "tracedb-server"],
+            cwd=repo_root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_for_ready(base_url, process)
+            command = run_command(
+                [
+                    "cargo",
+                    "run",
+                    "-q",
+                    "--example",
+                    "quickstart",
+                    "--",
+                    "--url",
+                    base_url,
+                    "--token",
+                    "dev-token",
+                    "--timeout-ms",
+                    "5000",
+                    "--safe-retries",
+                    "1",
+                    "--idempotency-retries",
+                    "1",
+                    "--admin-dir",
+                    str(admin_dir),
+                ],
+                sdk_repo,
+                env_extra={"TRACEDB_CORE_REPO": str(repo_root)},
+            )
+        finally:
+            stop_process(process)
     if not command["ok"]:
         return finalize_surface(
             "rust_sdk",
@@ -1857,16 +1919,21 @@ def run_rust_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str,
                 scenario_result(
                     scenario_id,
                     "failed",
-                    reason=f"rust_sdk product-regression failed: {command['stderr_tail']}",
+                    reason=(
+                        "rust_sdk standalone quickstart failed: "
+                        f"stdout={command['stdout'][-12_000:]} stderr={command['stderr_tail']}"
+                    ),
                 )
                 for scenario_id in contract_scenario_ids(manifest)
             ],
             evidence=[json.dumps({"command": command["argv"], "returncode": command["returncode"]})],
         )
-    product_summary = json.loads(command["stdout"])
-    surface = map_rust_sdk_product_summary(manifest, product_summary)
+    quickstart_summary = json.loads(command["stdout"])
+    surface = map_rust_sdk_quickstart_summary(manifest, quickstart_summary)
     surface["command"] = {
         "argv": command["argv"],
+        "cwd": str(sdk_repo),
+        "env": {"TRACEDB_CORE_REPO": str(repo_root)},
         "duration_s": command["duration_s"],
         "returncode": command["returncode"],
     }
@@ -1874,6 +1941,9 @@ def run_rust_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str,
 
 
 def run_typescript_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    sdk_repo = standalone_sdk_repo(repo_root, TYPESCRIPT_SDK_REPO_ENV, "tracedb-js")
+    if not sdk_repo.exists():
+        return sdk_repo_not_found_report(manifest, "typescript_sdk", sdk_repo, TYPESCRIPT_SDK_REPO_ENV)
     with tempfile.TemporaryDirectory(prefix="tracedb-typescript-sdk-conformance-") as temp_dir:
         summary_path = Path(temp_dir) / "typescript-sdk-smoke.json"
         command = run_command(
@@ -1885,7 +1955,8 @@ def run_typescript_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dic
                 "--summary-json",
                 str(summary_path),
             ],
-            repo_root / "clients" / "typescript",
+            sdk_repo,
+            env_extra={"TRACEDB_CORE_REPO": str(repo_root)},
         )
         if not command["ok"]:
             return finalize_surface(
@@ -1908,22 +1979,16 @@ def run_typescript_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dic
     surface = map_typescript_sdk_smoke_summary(manifest, smoke_summary)
     surface["command"] = {
         "argv": command["argv"],
-        "cwd": str(repo_root / "clients" / "typescript"),
+        "cwd": str(sdk_repo),
+        "env": {"TRACEDB_CORE_REPO": str(repo_root)},
         "duration_s": command["duration_s"],
         "returncode": command["returncode"],
     }
     return surface
 
 
-def install_python_sdk_package_for_conformance(repo_root: Path, temp_dir: Path) -> tuple[Path, dict[str, Any]]:
-    source_dir = repo_root / "clients" / "python"
-    package_dir = temp_dir / "python-sdk-package"
+def install_python_sdk_package_for_conformance(source_dir: Path, temp_dir: Path) -> tuple[Path, dict[str, Any]]:
     target_dir = temp_dir / "python-sdk-site"
-    shutil.copytree(
-        source_dir,
-        package_dir,
-        ignore=shutil.ignore_patterns("build", "*.egg-info", "__pycache__"),
-    )
     command = run_command(
         [
             sys.executable,
@@ -1934,7 +1999,7 @@ def install_python_sdk_package_for_conformance(repo_root: Path, temp_dir: Path) 
             "--no-deps",
             "--target",
             str(target_dir),
-            str(package_dir),
+            str(source_dir),
         ],
         temp_dir,
     )
@@ -1942,10 +2007,13 @@ def install_python_sdk_package_for_conformance(repo_root: Path, temp_dir: Path) 
 
 
 def run_python_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    sdk_repo = standalone_sdk_repo(repo_root, PYTHON_SDK_REPO_ENV, "tracedb-python")
+    if not sdk_repo.exists():
+        return sdk_repo_not_found_report(manifest, "python_sdk", sdk_repo, PYTHON_SDK_REPO_ENV)
     with tempfile.TemporaryDirectory(prefix="tracedb-python-sdk-conformance-") as temp_dir:
         temp_path = Path(temp_dir)
         summary_path = Path(temp_dir) / "python-sdk-smoke.json"
-        target_dir, install_command = install_python_sdk_package_for_conformance(repo_root, temp_path)
+        target_dir, install_command = install_python_sdk_package_for_conformance(sdk_repo, temp_path)
         if not install_command["ok"]:
             return finalize_surface(
                 "python_sdk",
@@ -1969,14 +2037,15 @@ def run_python_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[st
         command = run_command(
             [
                 sys.executable,
-                "clients/python/http_smoke.py",
+                str(sdk_repo / "http_smoke.py"),
                 "--summary-json",
                 str(summary_path),
             ],
-            repo_root,
+            sdk_repo,
             env_extra={
                 "PYTHONPATH": str(target_dir),
                 "TRACEDB_PYTHON_IMPORT_MODE": "installed",
+                "TRACEDB_CORE_REPO": str(repo_root),
             },
         )
         if not command["ok"]:
@@ -2012,6 +2081,7 @@ def run_python_sdk_surface(manifest: dict[str, Any], repo_root: Path) -> dict[st
         "env": {
             "PYTHONPATH": str(target_dir),
             "TRACEDB_PYTHON_IMPORT_MODE": "installed",
+            "TRACEDB_CORE_REPO": str(repo_root),
         },
         "duration_s": command["duration_s"],
         "returncode": command["returncode"],
@@ -2236,7 +2306,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--surface",
         action="append",
         dest="surfaces",
-        help="Surface id to run. Defaults to http_direct and rust_sdk.",
+        help="Surface id to run. Defaults to http_direct.",
     )
     parser.add_argument("--summary-json", help="Optional path to write the JSON report.")
     return parser.parse_args(argv)

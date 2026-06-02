@@ -13,11 +13,11 @@ from pathlib import Path
 LAB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB_ROOT))
 
-from runner.adapters.mongodb import MongoAdapter
 from runner.adapters.milvus import MilvusAdapter
-from runner.adapters.qdrant import QdrantAdapter
+from runner.adapters.mongodb import MongoAdapter
 from runner.adapters.opensearch import OpenSearchAdapter
 from runner.adapters.pgvector import PgVectorAdapter
+from runner.adapters.qdrant import QdrantAdapter
 from runner.adapters.tracedb import TraceDbAdapter
 from runner.datasets import generated_dataset, load_dataset
 from runner.experiment import ExperimentRecorder
@@ -222,7 +222,10 @@ class FakeTraceDb:
                             "fields": dict(record.get("fields", {})),
                             "deleted": False,
                         }
-                    response = {"epoch": len(owner.records), "record_count": len(records)}
+                    response = {
+                        "epoch": len(owner.records),
+                        "record_count": len(records),
+                    }
                     if include_write_timing:
                         response["write_timing"] = {
                             "total_ms": 8.0,
@@ -249,7 +252,11 @@ class FakeTraceDb:
                     record = owner.records.get(key)
                     self._json(
                         200,
-                        {"record": None if record is None or record["deleted"] else record},
+                        {
+                            "record": None
+                            if record is None or record["deleted"]
+                            else record
+                        },
                     )
                     return
                 if self.path == "/v1/records/patch":
@@ -272,9 +279,17 @@ class FakeTraceDb:
                         {"path": self.path, "explain": payload.get("explain")}
                     )
                     results = self._matching_results(payload)
-                    self._json(200, self._explain(payload, results), self._server_timing_headers())
+                    self._json(
+                        200,
+                        self._explain(payload, results),
+                        self._server_timing_headers(),
+                    )
                     return
-                if self.path in {"/v1/admin/compact", "/v1/admin/snapshot", "/v1/admin/restore"}:
+                if self.path in {
+                    "/v1/admin/compact",
+                    "/v1/admin/snapshot",
+                    "/v1/admin/restore",
+                }:
                     self._json(200, {"ok": True})
                     return
                 if self.path == "/v1/records/delete":
@@ -294,7 +309,9 @@ class FakeTraceDb:
                         continue
                     if record["tenant_id"] != payload["tenant_id"]:
                         continue
-                    if fields.get("category") != payload.get("scalar_eq", {}).get("category"):
+                    if fields.get("category") != payload.get("scalar_eq", {}).get(
+                        "category"
+                    ):
                         continue
                     results.append({"record_id": record["record_id"]})
                 return results
@@ -487,7 +504,9 @@ class FakeMongoCollection:
     def create_index(self, keys: list[tuple[str, int]]) -> None:
         self.indexes.append(keys)
 
-    def find(self, filter_doc: dict[str, object], _projection: dict[str, int]) -> "FakeMongoCursor":
+    def find(
+        self, filter_doc: dict[str, object], _projection: dict[str, int]
+    ) -> "FakeMongoCursor":
         matches = []
         for document in self.documents:
             metadata = document.get("metadata", {})
@@ -507,7 +526,9 @@ class FakeMongoCursor:
         self.rows = rows
 
     def sort(self, _sort_spec: list[tuple[str, int]]) -> "FakeMongoCursor":
-        self.rows.sort(key=lambda row: (-float(row.get("rating", 0.0)), str(row.get("id", ""))))
+        self.rows.sort(
+            key=lambda row: (-float(row.get("rating", 0.0)), str(row.get("id", "")))
+        )
         return self
 
     def limit(self, limit: int) -> "FakeMongoCursor":
@@ -608,12 +629,18 @@ class AdapterHardeningTests(unittest.TestCase):
                 ("mteb/scifact", ("default",), "test"): FakeDataset(
                     [{"query-id": "sci-q", "corpus-id": "sci-1", "score": 1.0}]
                 ),
-                ("mteb/CodeSearchNetRetrieval", ("python-corpus",), "test"): FakeDataset(
+                (
+                    "mteb/CodeSearchNetRetrieval",
+                    ("python-corpus",),
+                    "test",
+                ): FakeDataset(
                     [{"id": "code-1", "title": "", "text": "def parse_trace(): pass"}]
                 ),
-                ("mteb/CodeSearchNetRetrieval", ("python-queries",), "test"): FakeDataset(
-                    [{"id": "code-q", "text": "parse a trace"}]
-                ),
+                (
+                    "mteb/CodeSearchNetRetrieval",
+                    ("python-queries",),
+                    "test",
+                ): FakeDataset([{"id": "code-q", "text": "parse a trace"}]),
                 ("mteb/CodeSearchNetRetrieval", ("python-qrels",), "test"): FakeDataset(
                     [{"query-id": "code-q", "corpus-id": "code-1", "score": 1}]
                 ),
@@ -641,7 +668,9 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn(("mteb/scifact", ("default",), "test"), calls)
         self.assertIn(("mteb/CodeSearchNetRetrieval", ("python-qrels",), "test"), calls)
 
-    def test_codesearchnet_codeaware_variant_materializes_path_and_identifier_terms(self) -> None:
+    def test_codesearchnet_codeaware_variant_materializes_path_and_identifier_terms(
+        self,
+    ) -> None:
         class FakeDataset(list):
             def shuffle(self, seed: int) -> "FakeDataset":
                 return self
@@ -651,7 +680,11 @@ class AdapterHardeningTests(unittest.TestCase):
 
         def fake_load_dataset(name: str, *configs: str, split: str):
             fixtures = {
-                ("mteb/CodeSearchNetRetrieval", ("python-corpus",), "test"): FakeDataset(
+                (
+                    "mteb/CodeSearchNetRetrieval",
+                    ("python-corpus",),
+                    "test",
+                ): FakeDataset(
                     [
                         {
                             "id": "repo/optimizer/nelder_mead.py#L459-L470",
@@ -660,7 +693,11 @@ class AdapterHardeningTests(unittest.TestCase):
                         }
                     ]
                 ),
-                ("mteb/CodeSearchNetRetrieval", ("python-queries",), "test"): FakeDataset(
+                (
+                    "mteb/CodeSearchNetRetrieval",
+                    ("python-queries",),
+                    "test",
+                ): FakeDataset(
                     [
                         {
                             "id": "code-q",
@@ -696,7 +733,9 @@ class AdapterHardeningTests(unittest.TestCase):
 
         self.assertEqual(body.kind, "codesearchnet_body")
         self.assertEqual(codeaware.kind, "codesearchnet_codeaware")
-        self.assertEqual(body.queries[0].expected_ids, codeaware.queries[0].expected_ids)
+        self.assertEqual(
+            body.queries[0].expected_ids, codeaware.queries[0].expected_ids
+        )
         self.assertNotIn("nelder_mead.py", body.records[0].body)
         self.assertIn("nelder", codeaware.records[0].body)
         self.assertIn("mead", codeaware.records[0].body)
@@ -705,7 +744,9 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("accept", codeaware.queries[0].text)
         self.assertIn("reflect", codeaware.queries[0].text)
         self.assertTrue(
-            any("code-aware lexical" in note for note in codeaware.relevance_label_notes),
+            any(
+                "code-aware lexical" in note for note in codeaware.relevance_label_notes
+            ),
             codeaware.relevance_label_notes,
         )
 
@@ -839,12 +880,16 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["disk_bytes_after_ingest"], 2048)
         self.assertEqual(metrics["disk_bytes_after_workload"], 2048)
         self.assertEqual(len(result["query_results"]), len(dataset.queries))
-        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["query_id"], dataset.queries[0].query_id
+        )
         self.assertEqual(
             result["query_results"][0]["expected_ids"],
             dataset.queries[0].expected_ids,
         )
-        self.assertEqual(len(result["query_results"][0]["actual_ids"]), dataset.queries[0].top_k)
+        self.assertEqual(
+            len(result["query_results"][0]["actual_ids"]), dataset.queries[0].top_k
+        )
         self.assertIn("recall_at_k", result["query_results"][0])
 
     def test_pgvector_reports_ingest_query_and_storage_metrics(self) -> None:
@@ -852,7 +897,9 @@ class AdapterHardeningTests(unittest.TestCase):
         old_psycopg = sys.modules.get("psycopg")
         old_dsn = os.environ.get("BENCH_PGVECTOR_DSN")
         sys.modules["psycopg"] = fake_psycopg
-        os.environ["BENCH_PGVECTOR_DSN"] = "postgresql://bench:bench@127.0.0.1:25433/bench"
+        os.environ["BENCH_PGVECTOR_DSN"] = (
+            "postgresql://bench:bench@127.0.0.1:25433/bench"
+        )
         try:
             dataset = generated_dataset(16, 42)
             result = PgVectorAdapter().run(
@@ -886,9 +933,14 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("ingest_commit_latency_p95_ms", result["metrics"])
         self.assertIn("setup_latency_p95_ms", result["metrics"])
         self.assertIn("query_latency_p95_ms", result["metrics"])
-        self.assertEqual(result["metrics"]["latency_p95_ms"], result["metrics"]["query_latency_p95_ms"])
+        self.assertEqual(
+            result["metrics"]["latency_p95_ms"],
+            result["metrics"]["query_latency_p95_ms"],
+        )
         self.assertEqual(len(result["query_results"]), len(dataset.queries))
-        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["query_id"], dataset.queries[0].query_id
+        )
         self.assertEqual(
             result["query_results"][0]["expected_ids"],
             dataset.queries[0].expected_ids,
@@ -963,7 +1015,9 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["disk_bytes_after_ingest"], 4096)
         self.assertEqual(metrics["disk_bytes_after_workload"], 4096)
         self.assertEqual(len(result["query_results"]), len(dataset.queries))
-        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["query_id"], dataset.queries[0].query_id
+        )
         self.assertEqual(
             result["query_results"][0]["expected_ids"],
             dataset.queries[0].expected_ids,
@@ -1018,8 +1072,12 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["disk_bytes_after_ingest"], 73_728)
         self.assertEqual(metrics["disk_bytes_after_workload"], 73_728)
         self.assertEqual(metrics["mongodb_dbstats_data_size_bytes"], 12_288)
-        self.assertEqual(metrics["mongodb_dbstats_data_size_bytes_after_ingest"], 12_288)
-        self.assertEqual(metrics["mongodb_dbstats_data_size_bytes_after_workload"], 12_288)
+        self.assertEqual(
+            metrics["mongodb_dbstats_data_size_bytes_after_ingest"], 12_288
+        )
+        self.assertEqual(
+            metrics["mongodb_dbstats_data_size_bytes_after_workload"], 12_288
+        )
         self.assertEqual(metrics["mongodb_dbstats_storage_size_bytes"], 73_728)
         self.assertEqual(
             metrics["mongodb_dbstats_storage_size_bytes_after_ingest"], 73_728
@@ -1028,14 +1086,24 @@ class AdapterHardeningTests(unittest.TestCase):
             metrics["mongodb_dbstats_storage_size_bytes_after_workload"], 73_728
         )
         self.assertEqual(metrics["mongodb_dbstats_index_size_bytes"], 4_096)
-        self.assertEqual(metrics["mongodb_dbstats_index_size_bytes_after_ingest"], 4_096)
-        self.assertEqual(metrics["mongodb_dbstats_index_size_bytes_after_workload"], 4_096)
+        self.assertEqual(
+            metrics["mongodb_dbstats_index_size_bytes_after_ingest"], 4_096
+        )
+        self.assertEqual(
+            metrics["mongodb_dbstats_index_size_bytes_after_workload"], 4_096
+        )
         self.assertEqual(metrics["mongodb_dbstats_total_size_bytes"], 77_824)
-        self.assertEqual(metrics["mongodb_dbstats_total_size_bytes_after_ingest"], 77_824)
-        self.assertEqual(metrics["mongodb_dbstats_total_size_bytes_after_workload"], 77_824)
+        self.assertEqual(
+            metrics["mongodb_dbstats_total_size_bytes_after_ingest"], 77_824
+        )
+        self.assertEqual(
+            metrics["mongodb_dbstats_total_size_bytes_after_workload"], 77_824
+        )
         self.assertEqual(metrics["mongodb_data_dir_bytes"], 0)
         self.assertEqual(len(result["query_results"]), len(dataset.queries))
-        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["query_id"], dataset.queries[0].query_id
+        )
         self.assertEqual(
             result["query_results"][0]["expected_ids"],
             dataset.queries[0].expected_ids,
@@ -1047,7 +1115,9 @@ class AdapterHardeningTests(unittest.TestCase):
             result["notes"],
         )
 
-    def test_mongodb_keeps_dbstats_storage_when_data_dir_bytes_are_available(self) -> None:
+    def test_mongodb_keeps_dbstats_storage_when_data_dir_bytes_are_available(
+        self,
+    ) -> None:
         fake_pymongo = FakePyMongo(
             storage_bytes=73_728,
             data_size_bytes=12_288,
@@ -1123,7 +1193,9 @@ class AdapterHardeningTests(unittest.TestCase):
             os.environ["TRACEDB_HTTP_BEARER_TOKEN"] = "bench-token"
             thread.start()
             host, port = server.server_address
-            response = request_json("POST", f"http://{host}:{port}/v1/query", {"q": "x"})
+            response = request_json(
+                "POST", f"http://{host}:{port}/v1/query", {"q": "x"}
+            )
         finally:
             if old_token is None:
                 os.environ.pop("TRACEDB_HTTP_BEARER_TOKEN", None)
@@ -1175,12 +1247,18 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(response, {"ok": True})
         self.assertEqual(calls["count"], 2)
 
-    def test_tracedb_adapter_distinguishes_local_and_remote_snapshot_paths(self) -> None:
+    def test_tracedb_adapter_distinguishes_local_and_remote_snapshot_paths(
+        self,
+    ) -> None:
         adapter = TraceDbAdapter()
 
         self.assertTrue(adapter._is_local_http_url("http://127.0.0.1:8080"))
         self.assertTrue(adapter._is_local_http_url("http://localhost:8080"))
-        self.assertFalse(adapter._is_local_http_url("https://tracedb-engine-production.up.railway.app"))
+        self.assertFalse(
+            adapter._is_local_http_url(
+                "https://tracedb-engine-production.up.railway.app"
+            )
+        )
         self.assertEqual(adapter._path_token("railway/run:alpha"), "railway_run_alpha")
 
     def test_tracedb_cli_surface_reports_measured_command_metrics(self) -> None:
@@ -1188,7 +1266,9 @@ class AdapterHardeningTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 cli = Path(temp_dir) / "tracedb"
-                cli.write_text("#!/bin/sh\nprintf '{\"ok\":true}\\n'\n", encoding="utf-8")
+                cli.write_text(
+                    "#!/bin/sh\nprintf '{\"ok\":true}\\n'\n", encoding="utf-8"
+                )
                 cli.chmod(0o755)
                 os.environ["TRACEDB_CLI"] = str(cli)
 
@@ -1215,6 +1295,65 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("cli_latency_p99_ms", result["metrics"])
         self.assertTrue(
             any("cli_command_count=4" in note for note in result["notes"]),
+            result["notes"],
+        )
+
+    def test_tracedb_http_surface_does_not_use_in_memory_without_opt_in(self) -> None:
+        old_url = os.environ.get("TRACEDB_HTTP_URL")
+        try:
+            os.environ.pop("TRACEDB_HTTP_URL", None)
+            result = TraceDbAdapter().run(
+                generated_dataset(8, 42),
+                RunConfig(
+                    profile="smoke",
+                    target=["tracedb"],
+                    surfaces=["http"],
+                    require_services=False,
+                    repo_root=".",
+                    run_id="no-in-memory-fallback",
+                ),
+            )
+        finally:
+            if old_url is None:
+                os.environ.pop("TRACEDB_HTTP_URL", None)
+            else:
+                os.environ["TRACEDB_HTTP_URL"] = old_url
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["metrics"]["query_count"], 0)
+        self.assertNotIn("query_results", result)
+        self.assertTrue(
+            any("explicitly use --surface in-memory" in note for note in result["notes"]),
+            result["notes"],
+        )
+
+    def test_tracedb_in_memory_surface_is_explicit_opt_in(self) -> None:
+        old_url = os.environ.get("TRACEDB_HTTP_URL")
+        try:
+            os.environ.pop("TRACEDB_HTTP_URL", None)
+            dataset = generated_dataset(8, 42)
+            result = TraceDbAdapter().run(
+                dataset,
+                RunConfig(
+                    profile="smoke",
+                    target=["tracedb"],
+                    surfaces=["in-memory"],
+                    require_services=False,
+                    repo_root=".",
+                    run_id="explicit-in-memory",
+                ),
+            )
+        finally:
+            if old_url is None:
+                os.environ.pop("TRACEDB_HTTP_URL", None)
+            else:
+                os.environ["TRACEDB_HTTP_URL"] = old_url
+
+        self.assertTrue(result["available"], result["notes"])
+        self.assertEqual(result["metrics"]["query_count"], len(dataset.queries))
+        self.assertIn("query_results", result)
+        self.assertTrue(
+            any("in-memory search metrics computed" in note for note in result["notes"]),
             result["notes"],
         )
 
@@ -1258,9 +1397,10 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("admin_snapshot_latency_p95_ms", result["metrics"])
         self.assertIn("admin_restore_latency_p95_ms", result["metrics"])
         self.assertEqual(result["metrics"]["freshness_query_count"], 2)
-        self.assertEqual(result["metrics"]["ingest_transaction_count"], 12)
-        self.assertEqual(result["metrics"]["per_record_durable_transaction_count"], 12)
-        self.assertEqual(result["metrics"]["batch_transaction_count"], 0)
+        self.assertEqual(result["metrics"]["ingest_transaction_count"], 1)
+        self.assertEqual(result["metrics"]["per_record_durable_transaction_count"], 0)
+        self.assertEqual(result["metrics"]["batch_transaction_count"], 1)
+        self.assertEqual(result["metrics"]["batch_transaction_record_count"], 12)
         self.assertIn("freshness_query_latency_p95_ms", result["metrics"])
         self.assertGreaterEqual(result["metrics"]["disk_bytes"], 128)
         self.assertEqual(
@@ -1273,7 +1413,9 @@ class AdapterHardeningTests(unittest.TestCase):
             result["notes"],
         )
 
-    def test_tracedb_http_surface_reports_query_phase_and_storage_attribution(self) -> None:
+    def test_tracedb_http_surface_reports_query_phase_and_storage_attribution(
+        self,
+    ) -> None:
         fake = FakeTraceDb().start()
         old_url = os.environ.get("TRACEDB_HTTP_URL")
         old_data_dir = os.environ.get("TRACEDB_HTTP_DATA_DIR")
@@ -1315,8 +1457,12 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(metrics["query_phase_access_path_build_latency_p95_ms"], 2.5)
         self.assertEqual(metrics["query_phase_fusion_latency_p95_ms"], 0.75)
         self.assertEqual(metrics["query_phase_materialization_latency_p95_ms"], 0.5)
-        self.assertEqual(metrics["query_access_path_lexicalpath_build_latency_p95_ms"], 1.5)
-        self.assertEqual(metrics["query_access_path_vectorpath_open_latency_p95_ms"], 0.5)
+        self.assertEqual(
+            metrics["query_access_path_lexicalpath_build_latency_p95_ms"], 1.5
+        )
+        self.assertEqual(
+            metrics["query_access_path_vectorpath_open_latency_p95_ms"], 0.5
+        )
         self.assertEqual(metrics["query_server_engine_latency_p95_ms"], 0.04)
         self.assertEqual(metrics["query_server_engine_core_latency_p95_ms"], 0.08)
         self.assertEqual(metrics["query_server_explain_build_latency_p95_ms"], 0.09)
@@ -1364,7 +1510,9 @@ class AdapterHardeningTests(unittest.TestCase):
             request for request in fake.query_requests if request["path"] == "/v1/query"
         ]
         explain_endpoint_calls = [
-            request for request in fake.query_requests if request["path"] == "/v1/explain"
+            request
+            for request in fake.query_requests
+            if request["path"] == "/v1/explain"
         ]
         self.assertGreaterEqual(
             len([request for request in query_calls if request["explain"] is False]),
@@ -1388,22 +1536,32 @@ class AdapterHardeningTests(unittest.TestCase):
             result["metrics"]["query_output_probe_explain_endpoint_query_count"],
             3,
         )
-        self.assertEqual(result["metrics"]["query_output_probe_result_id_mismatch_count"], 0)
         self.assertEqual(
-            result["metrics"]["query_output_probe_explain_returned_count_mismatch_count"],
+            result["metrics"]["query_output_probe_result_id_mismatch_count"], 0
+        )
+        self.assertEqual(
+            result["metrics"][
+                "query_output_probe_explain_returned_count_mismatch_count"
+            ],
             0,
         )
         self.assertEqual(
-            result["metrics"]["query_output_probe_required_explain_field_missing_count"],
+            result["metrics"][
+                "query_output_probe_required_explain_field_missing_count"
+            ],
             0,
         )
         self.assertEqual(
-            result["metrics"]["query_output_probe_explain_false_explain_returned_count"],
+            result["metrics"][
+                "query_output_probe_explain_false_explain_returned_count"
+            ],
             0,
         )
         self.assertEqual(result["metrics"]["query_phase_probe_sample_count"], 3)
         self.assertEqual(result["metrics"]["query_access_path_probe_sample_count"], 3)
-        probe_requests = fake.query_requests[result["metrics"]["query_count"] :]
+        probe_requests = fake.query_requests[
+            result["metrics"]["warmup_iterations"] + result["metrics"]["query_count"] :
+        ]
         probe_shapes = [
             "explain_endpoint"
             if request["path"] == "/v1/explain"
@@ -1444,7 +1602,9 @@ class AdapterHardeningTests(unittest.TestCase):
             response_meta["content_length_bytes"],
             int(headers["content-length"]),
         )
-        self.assertEqual(response_meta["body_bytes"], response_meta["content_length_bytes"])
+        self.assertEqual(
+            response_meta["body_bytes"], response_meta["content_length_bytes"]
+        )
         self.assertEqual(response_meta["content_length_missing"], 0)
         self.assertEqual(response_meta["content_length_mismatch"], 0)
         for key in [
@@ -1466,7 +1626,9 @@ class AdapterHardeningTests(unittest.TestCase):
             response_meta["response_header_wait_ms"],
         )
 
-    def test_tracedb_http_surface_reports_response_size_and_client_overhead_attribution(self) -> None:
+    def test_tracedb_http_surface_reports_response_size_and_client_overhead_attribution(
+        self,
+    ) -> None:
         fake = FakeTraceDb().start()
         old_url = os.environ.get("TRACEDB_HTTP_URL")
         try:
@@ -1497,7 +1659,9 @@ class AdapterHardeningTests(unittest.TestCase):
             metrics["query_http_response_content_length_bytes_p95"],
         )
         self.assertEqual(metrics["query_http_response_content_length_missing_count"], 0)
-        self.assertEqual(metrics["query_http_response_content_length_mismatch_count"], 0)
+        self.assertEqual(
+            metrics["query_http_response_content_length_mismatch_count"], 0
+        )
         self.assertIn("query_http_response_body_read_latency_p95_ms", metrics)
         self.assertIn("query_http_response_decode_latency_p95_ms", metrics)
         self.assertIn("query_http_response_json_parse_latency_p95_ms", metrics)
@@ -1509,9 +1673,13 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertIn("query_http_client_response_header_wait_latency_p95_ms", metrics)
         self.assertIn("query_http_client_header_overhead_latency_p95_ms", metrics)
         self.assertIn("query_http_client_unattributed_overhead_latency_p95_ms", metrics)
-        self.assertGreater(metrics["query_output_probe_explain_false_body_bytes_p95"], 0)
+        self.assertGreater(
+            metrics["query_output_probe_explain_false_body_bytes_p95"], 0
+        )
         self.assertGreater(metrics["query_output_probe_explain_true_body_bytes_p95"], 0)
-        self.assertGreater(metrics["query_output_probe_explain_endpoint_body_bytes_p95"], 0)
+        self.assertGreater(
+            metrics["query_output_probe_explain_endpoint_body_bytes_p95"], 0
+        )
         self.assertLess(
             metrics["query_output_probe_explain_false_body_bytes_p95"],
             metrics["query_output_probe_explain_true_body_bytes_p95"],
@@ -1537,11 +1705,15 @@ class AdapterHardeningTests(unittest.TestCase):
             metrics,
         )
         self.assertEqual(
-            metrics["query_output_probe_explain_false_response_content_length_mismatch_count"],
+            metrics[
+                "query_output_probe_explain_false_response_content_length_mismatch_count"
+            ],
             0,
         )
         self.assertEqual(
-            metrics["query_output_probe_explain_endpoint_response_content_length_missing_count"],
+            metrics[
+                "query_output_probe_explain_endpoint_response_content_length_missing_count"
+            ],
             0,
         )
         self.assertTrue(
@@ -1549,7 +1721,9 @@ class AdapterHardeningTests(unittest.TestCase):
             result["notes"],
         )
 
-    def test_tracedb_http_surface_keeps_query_explain_observations_with_lean_query(self) -> None:
+    def test_tracedb_http_surface_keeps_query_explain_observations_with_lean_query(
+        self,
+    ) -> None:
         fake = FakeTraceDb().start()
         old_url = os.environ.get("TRACEDB_HTTP_URL")
         try:
@@ -1582,7 +1756,9 @@ class AdapterHardeningTests(unittest.TestCase):
             fake.stop()
 
         self.assertTrue(result["available"], result["notes"])
-        self.assertEqual(result["query_results"][0]["query_id"], dataset.queries[0].query_id)
+        self.assertEqual(
+            result["query_results"][0]["query_id"], dataset.queries[0].query_id
+        )
         self.assertIn("actual_ids", result["query_results"][0])
         self.assertIn("same_file_recall_at_k", result["query_results"][0])
         self.assertIn('"event_type": "tracedb.query_explain"', observations)
@@ -1592,7 +1768,9 @@ class AdapterHardeningTests(unittest.TestCase):
             result["metrics"]["query_count"],
         )
         self.assertEqual(
-            result["metrics"]["query_output_probe_explain_false_explain_returned_count"],
+            result["metrics"][
+                "query_output_probe_explain_false_explain_returned_count"
+            ],
             0,
         )
         self.assertTrue(
@@ -1604,7 +1782,7 @@ class AdapterHardeningTests(unittest.TestCase):
             result["notes"],
         )
 
-    def test_tracedb_http_surface_can_use_batch_ingest_mode(self) -> None:
+    def test_tracedb_http_surface_uses_batch_ingest_by_default(self) -> None:
         fake = FakeTraceDb().start()
         old_url = os.environ.get("TRACEDB_HTTP_URL")
         try:
@@ -1618,7 +1796,6 @@ class AdapterHardeningTests(unittest.TestCase):
                     require_services=False,
                     repo_root=".",
                     run_id="batch-ingest",
-                    tracedb_ingest_mode="batch",
                 ),
             )
         finally:
@@ -1638,8 +1815,12 @@ class AdapterHardeningTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["batch_transaction_record_count"], 12)
         self.assertIn("batch_transaction_total_latency_ms", result["metrics"])
         self.assertEqual(result["metrics"]["batch_phase_total_latency_p95_ms"], 8.0)
-        self.assertEqual(result["metrics"]["batch_phase_wal_total_latency_p95_ms"], 3.25)
-        self.assertEqual(result["metrics"]["batch_phase_manifest_total_latency_p95_ms"], 1.5)
+        self.assertEqual(
+            result["metrics"]["batch_phase_wal_total_latency_p95_ms"], 3.25
+        )
+        self.assertEqual(
+            result["metrics"]["batch_phase_manifest_total_latency_p95_ms"], 1.5
+        )
         for name, value in {
             "store_apply_validate_identity": 0.2,
             "store_apply_validate_vector": 0.3,
@@ -1830,13 +2011,18 @@ class AdapterHardeningTests(unittest.TestCase):
 
         self.assertEqual(report["control_status"], "external_control_available")
         self.assertEqual(report["number_to_beat"]["query_p95_ms"]["value"], 5.0)
-        self.assertEqual(report["number_to_beat"]["query_p95_ms"]["baseline"], "PostgreSQL")
+        self.assertEqual(
+            report["number_to_beat"]["query_p95_ms"]["baseline"], "PostgreSQL"
+        )
         self.assertEqual(report["number_to_beat"]["recall_at_5"]["value"], 0.5)
         self.assertEqual(report["number_to_beat"]["storage_bytes"]["value"], 1024.0)
         self.assertEqual(
             report["number_to_beat"]["storage_bytes"]["source_metric"], "disk_bytes"
         )
-        self.assertEqual(report["control_ledger"]["unavailable_external_controls"][0]["name"], "Qdrant")
+        self.assertEqual(
+            report["control_ledger"]["unavailable_external_controls"][0]["name"],
+            "Qdrant",
+        )
 
     def test_report_number_to_beat_prefers_query_scoped_latency(self) -> None:
         dataset = generated_dataset(24, 42)
@@ -1892,7 +2078,9 @@ class AdapterHardeningTests(unittest.TestCase):
         hybrid = load_dataset("generated_hybrid", 256, 42)
 
         self.assertEqual(hybrid.kind, "generated_hybrid")
-        self.assertEqual(hybrid.relevance_label_mode, "synthetic_text_vector_similarity")
+        self.assertEqual(
+            hybrid.relevance_label_mode, "synthetic_text_vector_similarity"
+        )
         self.assertEqual(hybrid.relevance_label_scope, "synthetic_retrieval_quality")
         self.assertTrue(
             any("text+vector" in note for note in hybrid.relevance_label_notes),

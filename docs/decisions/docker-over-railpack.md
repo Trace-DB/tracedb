@@ -10,7 +10,12 @@
 
 ## 1. Context and Problem Statement
 
-TraceDB compiles into multiple distinct service binaries (including the storage engine, API gateway, queue worker, and benchmark runners) from a single Rust workspace. To establish reliable testing and deployment loops, we must guarantee identical container image behavior across all operational surfaces. These surfaces include:
+TraceDB compiles into multiple distinct core service binaries, including the
+storage engine, API gateway, and queue worker. Benchmark/proof runners are now
+owned by the sibling `../tracedb-benchmarks` repository and target the core
+HTTP surfaces. To establish reliable testing and deployment loops, we must
+guarantee identical container image behavior across core operational surfaces.
+These surfaces include:
 * Local embedded development
 * Docker Compose local cloud environments
 * Railway production labs
@@ -27,7 +32,6 @@ We will use **Dockerfile builds** as the canonical build path for the following 
 * `tracedb-engine`
 * `tracedb-gateway`
 * `tracedb-worker`
-* `tracedb-bench`
 
 ---
 

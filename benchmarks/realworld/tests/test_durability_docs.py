@@ -9,6 +9,7 @@ DURABILITY_DOC = ROOT / "docs" / "durability-semantics-v0.md"
 class DurabilitySemanticsDocsTests(unittest.TestCase):
     def test_durability_semantics_v0_declares_recovery_and_non_guarantees(self) -> None:
         markdown = DURABILITY_DOC.read_text(encoding="utf-8")
+        normalized_markdown = " ".join(markdown.split())
 
         required_sections = [
             "# TraceDB Durability Semantics v0",
@@ -40,7 +41,7 @@ class DurabilitySemanticsDocsTests(unittest.TestCase):
             "source and target directories must differ",
         ]
         for claim in required_claims:
-            self.assertIn(claim, markdown)
+            self.assertIn(claim, normalized_markdown)
 
     def test_platform_contract_links_to_durability_semantics(self) -> None:
         contract = (ROOT / "docs" / "platform-contract-v0.md").read_text(

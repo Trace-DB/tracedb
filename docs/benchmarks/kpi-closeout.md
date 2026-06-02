@@ -1,10 +1,14 @@
 # TraceDB KPI Closeout & Benchmarks
 
 This document synthesizes the KPI observations, benchmark results, and scientific method logs for the TraceDB project. The primary source files include the TraceDB KPI Closeout Observations, TraceDB KPI Testing Loop, Modal DB Suite Benchmark Plan, and the Real-World Benchmark Lab.
+Current benchmark/proof harness ownership lives in the sibling
+`../tracedb-benchmarks` repository. This document is a historical core mirror
+of prior benchmark evidence and should not be treated as the active harness
+source of truth.
 
 ## Current System State
 As of the closeout checkpoint, TraceDB is functional as a development system, but it is not yet a product benchmark winner.
-- **Canonical Repository:** `/Users/zgrogan/Repos/tracedb`
+- **Historical Core Repository:** `/Users/zgrogan/Repos/tracedb`
 - **Benchmark Source Commit:** `88c9223acbf99060b918d23e41f8c77721ec202a` ("bench: split store apply write timing")
 - **Repo State at Benchmark:** Clean `main`, source_dirty `false`
 - **Working Surfaces:** 

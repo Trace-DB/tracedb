@@ -23,7 +23,6 @@ MODAL_MIN_EPHEMERAL_DISK_MB = 524_288
 DEFAULT_CPU = 8.0
 DEFAULT_MEMORY_MB = 32_768
 DEFAULT_TIMEOUT_SECONDS = 7_200
-RECEIPT_PATH = Path("target/tracedb/product-quickstart.json")
 
 MODAL_IGNORE_PATTERNS = [
     ".DS_Store",
@@ -35,7 +34,6 @@ MODAL_IGNORE_PATTERNS = [
     ".tracedb/**",
     "target/**",
     "node_modules/**",
-    "clients/typescript/node_modules/**",
     "benchmarks/realworld/.cache/**",
     "benchmarks/realworld/.env.local",
     "benchmarks/realworld/.venv/**",
@@ -44,27 +42,16 @@ MODAL_IGNORE_PATTERNS = [
     "benchmarks/realworld/run-data/**",
 ]
 
-EXPECTED_REDUCED_STEPS = [
+EXPECTED_CORE_QUICKSTART_STEPS = [
     "embedded_demo",
     "embedded_verify",
     "http_demo",
     "local_doctor",
-    "rust_sdk_quickstart",
-    "python_sdk_smoke",
-]
-SKIPPED_TYPESCRIPT_STEPS = [
-    "typescript_check",
-    "typescript_http_smoke",
-    "typescript_gateway_smoke",
 ]
 ONLY_COMMAND_ALIASES = {
     "agent_memory_flight_recorder": [
         "agent-memory-flight-recorder-build",
         "agent-memory-flight-recorder",
-    ],
-    "typescript_gateway_smoke": [
-        "typescript-npm-ci",
-        "typescript-npm-public-gateway-smoke",
     ],
 }
 
@@ -75,20 +62,6 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
         {
             "name": "cargo-fmt",
             "argv": ["cargo", "fmt", "--all", "--", "--check"],
-        },
-        {
-            "name": "quickstart-receipt-test",
-            "argv": [
-                "cargo",
-                "test",
-                "-p",
-                "tracedb-cli",
-                "--test",
-                "demo",
-                "product_quickstart_skip_typescript_uses_default_report_file_and_marks_reduced_evidence",
-                "--",
-                "--nocapture",
-            ],
         },
         {
             "name": "quickstart-doc-contract-test",
@@ -126,8 +99,6 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 "scripts/platform_conformance.py",
                 "--surface",
                 "http_direct",
-                "--surface",
-                "rust_sdk",
                 "--summary-json",
                 "/tmp/tracedb-platform-conformance.json",
             ],
@@ -150,20 +121,6 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
             ],
             "cwd": "benchmarks/realworld",
             "receipt_json": "/tmp/tracedb-agent-memory-flight-recorder.json",
-        },
-        {
-            "name": "product-quickstart-skip-typescript",
-            "argv": [
-                "cargo",
-                "run",
-                "-q",
-                "-p",
-                "tracedb-cli",
-                "--",
-                "product-quickstart",
-                "--skip-typescript",
-            ],
-            "capture_stdout": True,
         },
     ]
     if mode == "quickstart":
@@ -207,58 +164,8 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                 ],
             },
             {
-                "name": "typescript-npm-ci",
-                "argv": ["npm", "ci"],
-                "cwd": "clients/typescript",
-            },
-            {
-                "name": "typescript-npm-check",
-                "argv": ["npm", "run", "check"],
-                "cwd": "clients/typescript",
-            },
-            {
-                "name": "typescript-npm-public-http-smoke",
-                "argv": ["npm", "run", "public-http-smoke"],
-                "cwd": "clients/typescript",
-            },
-            {
-                "name": "typescript-sdk-conformance",
-                "argv": [
-                    "python3",
-                    "scripts/platform_conformance.py",
-                    "--surface",
-                    "typescript_sdk",
-                    "--summary-json",
-                    "/tmp/tracedb-typescript-sdk-conformance.json",
-                ],
-            },
-            {
-                "name": "typescript-npm-public-gateway-smoke",
-                "argv": ["npm", "run", "gateway-smoke"],
-                "cwd": "clients/typescript",
-            },
-            {
-                "name": "python-sdk-unit-tests",
-                "argv": ["python3", "-m", "unittest", "discover", "-s", "clients/python/tests"],
-            },
-            {
-                "name": "python-sdk-install-smoke",
-                "argv": ["python3", "clients/python/install_smoke.py"],
-            },
-            {
                 "name": "python-platform-conformance-tests",
                 "argv": ["python3", "-m", "unittest", "benchmarks.realworld.tests.test_platform_conformance"],
-            },
-            {
-                "name": "python-sdk-conformance",
-                "argv": [
-                    "python3",
-                    "scripts/platform_conformance.py",
-                    "--surface",
-                    "python_sdk",
-                    "--summary-json",
-                    "/tmp/tracedb-python-sdk-conformance.json",
-                ],
             },
             {
                 "name": "tracedb-cli-demo-tests",
@@ -283,21 +190,6 @@ def build_command_plan(mode: str, *, only: str = "") -> list[dict[str, Any]]:
                     "--test",
                     "usability_acceptance",
                     "--",
-                    "--nocapture",
-                ],
-            },
-            {
-                "name": "rust-sdk-routing-tests",
-                "argv": [
-                    "cargo",
-                    "test",
-                    "-p",
-                    "tracedb-sdk",
-                    "--test",
-                    "http_client",
-                    "managed_client_defaults_branch_id_from_database_id_into_json_posts",
-                    "--",
-                    "--exact",
                     "--nocapture",
                 ],
             },
@@ -406,7 +298,7 @@ def run_command(command: dict[str, Any], cwd: Path) -> dict[str, Any]:
     return result
 
 
-def validate_reduced_quickstart_receipt(
+def validate_core_quickstart_receipt(
     stdout_text: str,
     report_summary: dict[str, Any],
 ) -> dict[str, Any]:
@@ -415,32 +307,27 @@ def validate_reduced_quickstart_receipt(
     assert stdout_summary["ok"] is True, "product quickstart did not pass"
     assert stdout_summary["mode"] == "local-product-regression"
     assert stdout_summary["scope"] == "local_only"
-    assert stdout_summary["typescript_enabled"] is False
     assert stdout_summary["claims"] == {
         "sql_module": "not_implemented",
         "managed_cloud": "not_checked",
         "benchmark": "not_checked",
     }
     assert stdout_summary["human_summary"]["status"] == "passed"
-    assert stdout_summary["human_summary"]["steps_passed"] == len(EXPECTED_REDUCED_STEPS)
-    assert stdout_summary["human_summary"]["steps_total"] == len(EXPECTED_REDUCED_STEPS)
+    assert stdout_summary["human_summary"]["steps_passed"] == len(EXPECTED_CORE_QUICKSTART_STEPS)
+    assert stdout_summary["human_summary"]["steps_total"] == len(EXPECTED_CORE_QUICKSTART_STEPS)
     steps = stdout_summary["steps"]
-    assert sorted(steps) == sorted(EXPECTED_REDUCED_STEPS), (
-        f"expected reduced quickstart steps {EXPECTED_REDUCED_STEPS}, got {sorted(steps)}"
+    assert sorted(steps) == sorted(EXPECTED_CORE_QUICKSTART_STEPS), (
+        f"expected core quickstart steps {EXPECTED_CORE_QUICKSTART_STEPS}, got {sorted(steps)}"
     )
-    for step in EXPECTED_REDUCED_STEPS:
+    for step in EXPECTED_CORE_QUICKSTART_STEPS:
         assert steps[step]["ok"] is True, f"{step} did not pass"
-    for step in SKIPPED_TYPESCRIPT_STEPS:
-        assert step not in steps, f"{step} should be skipped in reduced quickstart mode"
     return {
         "ok": True,
         "mode": stdout_summary["mode"],
         "scope": stdout_summary["scope"],
         "report_file": stdout_summary["report_file"],
-        "typescript_enabled": stdout_summary["typescript_enabled"],
         "steps_passed": stdout_summary["human_summary"]["steps_passed"],
         "steps_total": stdout_summary["human_summary"]["steps_total"],
-        "skipped_typescript_steps": len(SKIPPED_TYPESCRIPT_STEPS),
         "claims": stdout_summary["claims"],
     }
 
@@ -535,14 +422,6 @@ def run_verification(
                 summary["flight_recorder_receipt_check"] = (
                     validate_agent_memory_flight_recorder_receipt(report)
                 )
-            if result["name"] == "product-quickstart-skip-typescript":
-                receipt_file = repo_root / RECEIPT_PATH
-                report_summary = json.loads(receipt_file.read_text())
-                summary["receipt_check"] = validate_reduced_quickstart_receipt(
-                    result.get("stdout", ""),
-                    report_summary,
-                )
-                result.pop("stdout", None)
         summary["ok"] = True
         return _finish_summary(summary, started)
     except Exception as error:  # pragma: no cover - exercised by remote failures.

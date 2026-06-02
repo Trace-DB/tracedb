@@ -8,12 +8,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .base import (
-    BenchmarkAdapter,
-    command_exists,
-    in_memory_search_result,
-    query_result_record,
-)
 from ..http import request_json, request_json_with_response
 from ..metrics import (
     MetricRecorder,
@@ -24,6 +18,12 @@ from ..metrics import (
     same_file_recall_at_k,
 )
 from ..types import DatasetBundle, RunConfig
+from .base import (
+    BenchmarkAdapter,
+    command_exists,
+    in_memory_search_result,
+    query_result_record,
+)
 
 
 class TraceDbAdapter(BenchmarkAdapter):
@@ -31,17 +31,40 @@ class TraceDbAdapter(BenchmarkAdapter):
     role = "transactional hybrid database"
 
     def run(self, dataset: DatasetBundle, config: RunConfig) -> dict[str, Any]:
-        metrics, query_results = in_memory_search_result(dataset)
         notes = [
             "semantic workload executed against TraceDB-compatible generated corpus",
             f"surfaces requested: {', '.join(config.surfaces)}",
         ]
-        notes.extend(self._sdk_surface_notes(dataset, config))
-        if "cli" in config.surfaces:
-            cli_notes, cli_metrics = self._cli_surface_run(dataset, config)
-            notes.extend(cli_notes)
-            metrics.update(cli_metrics)
+
+        # Default metrics: start empty. HTTP measurements are the default when
+        # http/curl surfaces are requested. In-memory is only used when
+        # explicitly requested via --surface in-memory.
+        metrics: dict[str, Any] = {}
+        query_results: list[dict[str, Any]] = []
+        http_attempted = False
+
+        if "sdk" in config.surfaces:
+            sdk_notes = self._sdk_surface_notes(dataset, config)
+            notes.extend(sdk_notes)
+            if not any(note.startswith("surface unavailable") for note in sdk_notes):
+                metrics.update(
+                    {
+                        "sdk_request_builder_validated": 1,
+                        "ingest_count": 0,
+                        "query_count": 0,
+                        "failure_count": 0,
+                        "latency_p50_ms": 0.0,
+                        "latency_p95_ms": 0.0,
+                        "latency_p99_ms": 0.0,
+                        "recall_at_5": 0.0,
+                        "ndcg_at_5": 0.0,
+                        "mrr_at_5": 0.0,
+                        "disk_bytes": 0,
+                    }
+                )
+
         if "http" in config.surfaces or "curl" in config.surfaces:
+            http_attempted = True
             http_notes, http_metrics, http_query_results = self._http_surface_run(
                 dataset, config
             )
@@ -49,10 +72,40 @@ class TraceDbAdapter(BenchmarkAdapter):
             if http_metrics is not None:
                 metrics = http_metrics
                 query_results = http_query_results
-        metrics["failure_count"] = sum(1 for note in notes if note.startswith("surface unavailable"))
+        if "in-memory" in config.surfaces:
+            in_mem_metrics, in_mem_query_results = in_memory_search_result(dataset)
+            notes.append("in-memory search metrics computed (Python-side scoring)")
+            if not http_attempted or not metrics:
+                metrics = in_mem_metrics
+                query_results = in_mem_query_results
+            else:
+                # Record in-memory alongside HTTP for comparison
+                metrics.update(
+                    {f"in_memory_{key}": value for key, value in in_mem_metrics.items()}
+                )
+        if "cli" in config.surfaces:
+            cli_notes, cli_metrics = self._cli_surface_run(dataset, config)
+            notes.extend(cli_notes)
+            metrics.update(cli_metrics)
+
+        # Do not synthesize TraceDB results from Python-side scoring unless the
+        # caller explicitly requested --surface in-memory. If no real surface
+        # produced metrics, report the adapter unavailable instead of publishing
+        # fake TraceDB latency/quality numbers.
+        if not metrics:
+            return self.unavailable(
+                "no TraceDB measurement surface produced metrics; start a server and set TRACEDB_HTTP_URL, provide TRACEDB_CLI, or explicitly use --surface in-memory",
+                dataset,
+            )
+
+        metrics["failure_count"] = sum(
+            1 for note in notes if note.startswith("surface unavailable")
+        )
         return self.ok_result(dataset, metrics, notes, query_results=query_results)
 
-    def _sdk_surface_notes(self, dataset: DatasetBundle, _config: RunConfig) -> list[str]:
+    def _sdk_surface_notes(
+        self, dataset: DatasetBundle, _config: RunConfig
+    ) -> list[str]:
         if not dataset.records:
             return ["surface unavailable: sdk-style request builder had no records"]
         record = dataset.records[0]
@@ -122,7 +175,15 @@ class TraceDbAdapter(BenchmarkAdapter):
                 [cli, "--data", str(data_dir), "init"],
                 [cli, "--data", str(data_dir), "schema", "apply", str(schema_path)],
                 [cli, "--data", str(data_dir), "put", str(record_path)],
-                [cli, "--data", str(data_dir), "get", "bench_records", record.tenant_id, record.record_id],
+                [
+                    cli,
+                    "--data",
+                    str(data_dir),
+                    "get",
+                    "bench_records",
+                    record.tenant_id,
+                    record.record_id,
+                ],
             ]
             recorder = MetricRecorder()
             for command in commands:
@@ -155,7 +216,11 @@ class TraceDbAdapter(BenchmarkAdapter):
     ) -> tuple[list[str], dict[str, Any] | None, list[dict[str, Any]]]:
         url = os.environ.get("TRACEDB_HTTP_URL")
         if not url:
-            return ["surface unavailable: TRACEDB_HTTP_URL not set for HTTP/curl smoke"], None, []
+            return (
+                ["surface unavailable: TRACEDB_HTTP_URL not set for HTTP/curl smoke"],
+                None,
+                [],
+            )
         if not dataset.records:
             return ["surface unavailable: TraceDB HTTP smoke had no records"], None, []
         base_url = url.rstrip("/")
@@ -196,7 +261,11 @@ class TraceDbAdapter(BenchmarkAdapter):
         try:
             call("ready", "GET", "/ready", timeout=http_timeout)
         except Exception as error:
-            return [f"surface unavailable: TraceDB HTTP ready failed: {error}"], None, []
+            return (
+                [f"surface unavailable: TraceDB HTTP ready failed: {error}"],
+                None,
+                [],
+            )
 
         try:
             schema = {
@@ -241,15 +310,19 @@ class TraceDbAdapter(BenchmarkAdapter):
                             "records": [
                                 self._record_input(table, record)
                                 for record in dataset.records
-                            ]
+                            ],
                         },
                         timeout=admin_timeout,
                     ),
                 )
                 if int(batch_response.get("record_count", 0)) != len(dataset.records):
-                    return [
-                        "surface unavailable: TraceDB HTTP batch write returned an unexpected record_count"
-                    ], None, []
+                    return (
+                        [
+                            "surface unavailable: TraceDB HTTP batch write returned an unexpected record_count"
+                        ],
+                        None,
+                        [],
+                    )
                 _record_write_timing_metrics(
                     batch_response.get("write_timing"),
                     batch_phase_recorders,
@@ -264,10 +337,16 @@ class TraceDbAdapter(BenchmarkAdapter):
                             "POST",
                             "/v1/records/put",
                             self._record_input(table, record),
-                        )
+                        ),
                     )
             else:
-                return [f"surface unavailable: unsupported TraceDB ingest mode {ingest_mode}"], None, []
+                return (
+                    [
+                        f"surface unavailable: unsupported TraceDB ingest mode {ingest_mode}"
+                    ],
+                    None,
+                    [],
+                )
 
             first = dataset.records[0]
             fresh_get = call(
@@ -277,8 +356,14 @@ class TraceDbAdapter(BenchmarkAdapter):
                 {"table": table, "tenant_id": first.tenant_id, "id": first.record_id},
             )
             if fresh_get.get("record") is None:
-                return ["surface unavailable: TraceDB HTTP fresh write was not visible"], None, []
-            disk_bytes_after_ingest = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
+                return (
+                    ["surface unavailable: TraceDB HTTP fresh write was not visible"],
+                    None,
+                    [],
+                )
+            disk_bytes_after_ingest = _directory_bytes(
+                os.environ.get("TRACEDB_HTTP_DATA_DIR")
+            )
             disk_bytes_after_ingest_by_top_level = _directory_top_level_bytes(
                 os.environ.get("TRACEDB_HTTP_DATA_DIR")
             )
@@ -286,10 +371,18 @@ class TraceDbAdapter(BenchmarkAdapter):
                 "tenant isolation get",
                 "POST",
                 "/v1/records/get",
-                {"table": table, "tenant_id": "tenant-not-owned", "id": first.record_id},
+                {
+                    "table": table,
+                    "tenant_id": "tenant-not-owned",
+                    "id": first.record_id,
+                },
             )
             if isolated_get.get("record") is not None:
-                return ["surface unavailable: TraceDB HTTP tenant isolation failed"], None, []
+                return (
+                    ["surface unavailable: TraceDB HTTP tenant isolation failed"],
+                    None,
+                    [],
+                )
             call(
                 "record patch",
                 "POST",
@@ -308,12 +401,14 @@ class TraceDbAdapter(BenchmarkAdapter):
                 {"table": table, "tenant_id": first.tenant_id, "id": first.record_id},
             )
             if (
-                patched.get("record", {})
-                .get("fields", {})
-                .get("status")
+                patched.get("record", {}).get("fields", {}).get("status")
                 != "benchmark_patched"
             ):
-                return ["surface unavailable: TraceDB HTTP patch was not visible"], None, []
+                return (
+                    ["surface unavailable: TraceDB HTTP patch was not visible"],
+                    None,
+                    [],
+                )
             recalls = []
             ndcgs = []
             mrrs = []
@@ -346,8 +441,12 @@ class TraceDbAdapter(BenchmarkAdapter):
             query_output_probe_http_client_phase_recorders: dict[
                 str, dict[str, MetricRecorder]
             ] = {}
-            query_output_probe_response_timing_recorders: dict[str, dict[str, MetricRecorder]] = {}
-            query_output_probe_server_timing_recorders: dict[str, dict[str, MetricRecorder]] = {}
+            query_output_probe_response_timing_recorders: dict[
+                str, dict[str, MetricRecorder]
+            ] = {}
+            query_output_probe_server_timing_recorders: dict[
+                str, dict[str, MetricRecorder]
+            ] = {}
             query_output_probe_body_bytes: dict[str, list[float]] = {}
             query_output_probe_content_length_bytes: dict[str, list[float]] = {}
             query_output_probe_content_length_missing_counts: dict[str, int] = {}
@@ -444,7 +543,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                 )
                 _record_http_client_phase_metrics(
                     response_meta,
-                    query_output_probe_http_client_phase_recorders.setdefault(shape, {}),
+                    query_output_probe_http_client_phase_recorders.setdefault(
+                        shape, {}
+                    ),
                 )
                 query_output_probe_content_length_missing_counts[shape] = (
                     query_output_probe_content_length_missing_counts.get(shape, 0)
@@ -477,6 +578,23 @@ class TraceDbAdapter(BenchmarkAdapter):
                     + query_output_probe_shapes[:rotation]
                 )
 
+            # Warmup phase: run a few query iterations (discarded from
+            # measurements) to stabilize filesystem cache, connection
+            # pooling, and JIT.
+            warmup_iterations = 3
+            warmup_recorder = MetricRecorder()
+            if dataset.queries:
+                warmup_query = dataset.queries[0]
+                for _ in range(warmup_iterations):
+                    warmup_recorder.timed(
+                        lambda: call(
+                            "warmup query",
+                            "POST",
+                            "/v1/query",
+                            query_body(warmup_query, explain=False),
+                        )
+                    )
+
             for query_index, query in enumerate(dataset.queries):
                 result, response_headers, response_meta = timed(
                     query_recorder,
@@ -485,7 +603,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                         "POST",
                         "/v1/query",
                         query_body(query, explain=False),
-                    )
+                    ),
                 )
                 query_client_ms = query_recorder.latencies_ms[-1]
                 server_timings = _record_server_timing_metrics(
@@ -510,7 +628,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                 server_prewrite_ms = server_timings.get("prewrite_total")
                 if server_prewrite_ms is not None:
                     client_overhead_ms = max(query_client_ms - server_prewrite_ms, 0.0)
-                    query_http_client_overhead_recorder.latencies_ms.append(client_overhead_ms)
+                    query_http_client_overhead_recorder.latencies_ms.append(
+                        client_overhead_ms
+                    )
                     header_wait_ms = _float_metric(response_meta.get("header_wait_ms"))
                     if header_wait_ms is not None:
                         query_http_client_header_overhead_recorder.latencies_ms.append(
@@ -534,7 +654,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                 recall = recall_at_k(query.expected_ids, ids, query.top_k)
                 ndcg = ndcg_at_k(query.expected_ids, ids, query.top_k)
                 mrr = mrr_at_k(query.expected_ids, ids, query.top_k)
-                same_file_recall = same_file_recall_at_k(query.expected_ids, ids, query.top_k)
+                same_file_recall = same_file_recall_at_k(
+                    query.expected_ids, ids, query.top_k
+                )
                 query_results.append(query_result_record(query, ids))
                 recalls.append(recall)
                 ndcgs.append(ndcg)
@@ -590,11 +712,13 @@ class TraceDbAdapter(BenchmarkAdapter):
                 explain_endpoint_ms: float | None = None
                 for shape in query_output_probe_order(probe_index):
                     if shape == "explain_false":
-                        explain_false_result, explain_false_ms = call_query_output_probe(
-                            "explain_false",
-                            "query allow-dirty lean probe",
-                            "/v1/query",
-                            query_body(query, explain=False),
+                        explain_false_result, explain_false_ms = (
+                            call_query_output_probe(
+                                "explain_false",
+                                "query allow-dirty lean probe",
+                                "/v1/query",
+                                query_body(query, explain=False),
+                            )
                         )
                         if isinstance(explain_false_result.get("explain"), dict):
                             query_output_probe_explain_false_explain_returned_count += 1
@@ -620,9 +744,13 @@ class TraceDbAdapter(BenchmarkAdapter):
                     or explain_endpoint is None
                     or explain_endpoint_ms is None
                 ):
-                    return [
-                        "surface unavailable: TraceDB HTTP output-shape probe rotation failed"
-                    ], None, []
+                    return (
+                        [
+                            "surface unavailable: TraceDB HTTP output-shape probe rotation failed"
+                        ],
+                        None,
+                        [],
+                    )
                 query_output_probe_true_over_false_deltas.append(
                     explain_true_ms - explain_false_ms
                 )
@@ -630,14 +758,16 @@ class TraceDbAdapter(BenchmarkAdapter):
                     explain_endpoint_ms - explain_false_ms
                 )
                 explain_false_ids = [
-                    row.get("record_id") for row in explain_false_result.get("results", [])
+                    row.get("record_id")
+                    for row in explain_false_result.get("results", [])
                 ]
                 if [str(record_id) for record_id in explain_false_ids] != [
                     str(record_id) for record_id in ids
                 ]:
                     query_output_probe_result_id_mismatch_count += 1
                 explain_true_ids = [
-                    row.get("record_id") for row in explain_true_result.get("results", [])
+                    row.get("record_id")
+                    for row in explain_true_result.get("results", [])
                 ]
                 if [str(record_id) for record_id in explain_true_ids] != [
                     str(record_id) for record_id in ids
@@ -650,24 +780,31 @@ class TraceDbAdapter(BenchmarkAdapter):
                     missing
                 ) + len(endpoint_missing)
                 if missing or endpoint_missing:
-                    return [
-                        "surface unavailable: TraceDB HTTP output-shape explain missing "
-                        + ", ".join(missing + endpoint_missing)
-                    ], None, []
+                    return (
+                        [
+                            "surface unavailable: TraceDB HTTP output-shape explain missing "
+                            + ", ".join(missing + endpoint_missing)
+                        ],
+                        None,
+                        [],
+                    )
                 returned_count = _float_metric(explain.get("returned_count"))
                 endpoint_returned_count = _float_metric(
                     explain_endpoint.get("returned_count")
                 )
-                if returned_count is None or int(returned_count) != len(explain_true_ids):
-                    query_output_probe_explain_returned_count_mismatch_count += 1
-                if (
-                    endpoint_returned_count is None
-                    or int(endpoint_returned_count) != len(explain_true_ids)
+                if returned_count is None or int(returned_count) != len(
+                    explain_true_ids
                 ):
+                    query_output_probe_explain_returned_count_mismatch_count += 1
+                if endpoint_returned_count is None or int(
+                    endpoint_returned_count
+                ) != len(explain_true_ids):
                     query_output_probe_explain_returned_count_mismatch_count += 1
                 phase_total_ms = _explain_phase_total_ms(explain)
                 if phase_total_ms is not None:
-                    query_engine_phase_total_recorder.latencies_ms.append(phase_total_ms)
+                    query_engine_phase_total_recorder.latencies_ms.append(
+                        phase_total_ms
+                    )
                 _record_explain_timing_metrics(
                     explain,
                     query_phase_recorders,
@@ -676,7 +813,9 @@ class TraceDbAdapter(BenchmarkAdapter):
                 )
                 phase_timings = explain.get("phase_timings", [])
                 if isinstance(phase_timings, list):
-                    query_output_probe_phase_timing_counts.append(float(len(phase_timings)))
+                    query_output_probe_phase_timing_counts.append(
+                        float(len(phase_timings))
+                    )
                 access_path_timings = explain.get("access_path_timings", [])
                 if isinstance(access_path_timings, list):
                     query_output_probe_access_path_timing_counts.append(
@@ -736,11 +875,19 @@ class TraceDbAdapter(BenchmarkAdapter):
             timed(
                 admin_recorder,
                 lambda: admin_compact_recorder.timed(
-                    lambda: call("compact", "POST", "/v1/admin/compact", {}, timeout=admin_timeout)
+                    lambda: call(
+                        "compact",
+                        "POST",
+                        "/v1/admin/compact",
+                        {},
+                        timeout=admin_timeout,
+                    )
                 ),
             )
             if self._is_local_http_url(base_url):
-                with tempfile.TemporaryDirectory(prefix="tracedb-bench-http-snapshot-") as temp_dir:
+                with tempfile.TemporaryDirectory(
+                    prefix="tracedb-bench-http-snapshot-"
+                ) as temp_dir:
                     snapshot_dir = str(Path(temp_dir) / "snapshot")
                     restore_dir = str(Path(temp_dir) / "restore")
                     timed(
@@ -821,7 +968,11 @@ class TraceDbAdapter(BenchmarkAdapter):
                 },
             )
             if get_deleted.get("record") is not None:
-                return ["surface unavailable: TraceDB HTTP tombstone remained visible"], None, []
+                return (
+                    ["surface unavailable: TraceDB HTTP tombstone remained visible"],
+                    None,
+                    [],
+                )
 
             metrics = recorder.summary()
             for prefix, operation_summary in [
@@ -843,12 +994,18 @@ class TraceDbAdapter(BenchmarkAdapter):
             min_ndcg = min(ndcgs) if ndcgs else 0.0
             queries_below_full_recall = sum(1 for recall in recalls if recall < 1.0)
             queries_with_zero_recall = sum(1 for recall in recalls if recall == 0.0)
-            category_filter_applied = bool(dataset.queries) and off_category_result_count == 0
-            disk_bytes_after_workload = _directory_bytes(os.environ.get("TRACEDB_HTTP_DATA_DIR"))
+            category_filter_applied = (
+                bool(dataset.queries) and off_category_result_count == 0
+            )
+            disk_bytes_after_workload = _directory_bytes(
+                os.environ.get("TRACEDB_HTTP_DATA_DIR")
+            )
             disk_bytes_after_workload_by_top_level = _directory_top_level_bytes(
                 os.environ.get("TRACEDB_HTTP_DATA_DIR")
             )
-            ingest_transaction_count = 1 if ingest_mode == "batch" else len(dataset.records)
+            ingest_transaction_count = (
+                1 if ingest_mode == "batch" else len(dataset.records)
+            )
             ingest_transaction_total_ms = round(sum(ingest_recorder.latencies_ms), 3)
             if ingest_mode == "per_record":
                 ingest_mode_note = (
@@ -876,13 +1033,20 @@ class TraceDbAdapter(BenchmarkAdapter):
                     if ingest_mode == "batch"
                     else 0.0,
                     "query_count": len(dataset.queries),
+                    "warmup_iterations": warmup_iterations,
                     "freshness_query_count": len(freshness_query_recorder.latencies_ms),
                     "admin_compact_count": len(admin_compact_recorder.latencies_ms),
                     "admin_snapshot_count": len(admin_snapshot_recorder.latencies_ms),
                     "admin_restore_count": len(admin_restore_recorder.latencies_ms),
                     "failure_count": 0,
-                    "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
-                    "same_file_recall_at_5": round(sum(same_file_recalls) / len(same_file_recalls), 3) if same_file_recalls else 0.0,
+                    "recall_at_5": round(sum(recalls) / len(recalls), 3)
+                    if recalls
+                    else 0.0,
+                    "same_file_recall_at_5": round(
+                        sum(same_file_recalls) / len(same_file_recalls), 3
+                    )
+                    if same_file_recalls
+                    else 0.0,
                     "span_gap_count": span_gap_count,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
@@ -901,9 +1065,13 @@ class TraceDbAdapter(BenchmarkAdapter):
             metrics.update(
                 _recorder_metric_fields("query_phase", query_phase_recorders)
             )
-            metrics.update(_recorder_metric_fields("batch_phase", batch_phase_recorders))
+            metrics.update(
+                _recorder_metric_fields("batch_phase", batch_phase_recorders)
+            )
             metrics.update(_byte_metric_fields("batch_size", batch_size_metrics))
-            metrics.update(_single_recorder_metric_fields("query_http_client", query_recorder))
+            metrics.update(
+                _single_recorder_metric_fields("query_http_client", query_recorder)
+            )
             metrics.update(
                 _recorder_metric_fields(
                     "query_http_client",
@@ -956,7 +1124,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             metrics["query_http_response_content_length_mismatch_count"] = (
                 query_http_response_content_length_mismatch_count
             )
-            metrics.update(_recorder_metric_fields("query_server", query_server_timing_recorders))
+            metrics.update(
+                _recorder_metric_fields("query_server", query_server_timing_recorders)
+            )
             query_output_probe_order_balance_remainder = (
                 query_output_probe_count % len(query_output_probe_shapes)
                 if query_output_probe_count
@@ -966,7 +1136,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             metrics["query_output_probe_order_mode"] = (
                 "rotated_explain_false_explain_true_explain_endpoint"
             )
-            metrics["query_output_probe_shape_count"] = 3 if query_output_probe_count else 0
+            metrics["query_output_probe_shape_count"] = (
+                3 if query_output_probe_count else 0
+            )
             metrics["query_output_probe_replication_count"] = query_output_probe_count
             metrics["query_output_probe_randomized_order"] = 0
             metrics["query_output_probe_order_valid_for_latency_comparison"] = (
@@ -993,7 +1165,9 @@ class TraceDbAdapter(BenchmarkAdapter):
             metrics["query_observer_explain_count"] = query_explain_observer_count
             metrics["query_phase_probe_sample_count"] = query_output_probe_count
             metrics["query_access_path_probe_sample_count"] = query_output_probe_count
-            for shape, probe_recorder in sorted(query_output_probe_latency_recorders.items()):
+            for shape, probe_recorder in sorted(
+                query_output_probe_latency_recorders.items()
+            ):
                 metrics.update(
                     _single_recorder_metric_fields(
                         f"query_output_probe_{shape}_query",
@@ -1030,12 +1204,12 @@ class TraceDbAdapter(BenchmarkAdapter):
                         query_output_probe_server_timing_recorders.get(shape, {}),
                     )
                 )
-                metrics[f"query_output_probe_{shape}_response_content_length_missing_count"] = (
-                    query_output_probe_content_length_missing_counts.get(shape, 0)
-                )
-                metrics[f"query_output_probe_{shape}_response_content_length_mismatch_count"] = (
-                    query_output_probe_content_length_mismatch_counts.get(shape, 0)
-                )
+                metrics[
+                    f"query_output_probe_{shape}_response_content_length_missing_count"
+                ] = query_output_probe_content_length_missing_counts.get(shape, 0)
+                metrics[
+                    f"query_output_probe_{shape}_response_content_length_mismatch_count"
+                ] = query_output_probe_content_length_mismatch_counts.get(shape, 0)
             metrics.update(
                 _duration_distribution_metric_fields(
                     "query_output_probe_explain_true_over_false_delta",
@@ -1100,6 +1274,7 @@ class TraceDbAdapter(BenchmarkAdapter):
                 "TraceDB HTTP/curl records/query/delete smoke passed",
                 ingest_mode_note,
                 "TraceDB HTTP falsification checks passed: fresh-write, patch, tenant isolation, freshness modes, compact, snapshot, restore, explain, tombstone",
+                f"TraceDB HTTP query warmup: {warmup_iterations} iterations discarded before measurement",
                 "TraceDB HTTP retrieval diagnostics: "
                 f"min_recall_at_5={metrics['min_recall_at_5']}; "
                 f"queries_below_full_recall={queries_below_full_recall}; "
@@ -1126,7 +1301,10 @@ class TraceDbAdapter(BenchmarkAdapter):
                     f"phases={len(batch_phase_recorders)}; "
                     f"sizes={len(batch_size_metrics)}"
                 )
-            if query_server_timing_recorders or query_http_client_overhead_recorder.latencies_ms:
+            if (
+                query_server_timing_recorders
+                or query_http_client_overhead_recorder.latencies_ms
+            ):
                 notes.append(
                     "TraceDB HTTP server/client query attribution recorded: "
                     f"server_timing_fields={len(query_server_timing_recorders)}; "
@@ -1169,7 +1347,13 @@ class TraceDbAdapter(BenchmarkAdapter):
                 )
             return notes, metrics, query_results
         except Exception as error:
-            return [f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"], None, []
+            return (
+                [
+                    f"surface unavailable: TraceDB HTTP records/query/delete failed: {error}"
+                ],
+                None,
+                [],
+            )
 
     def _record_input(self, table: str, record: Any) -> dict[str, Any]:
         return {
@@ -1193,7 +1377,9 @@ class TraceDbAdapter(BenchmarkAdapter):
         return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
     def _path_token(self, value: str) -> str:
-        return "".join(character if character.isalnum() else "_" for character in value)[:80]
+        return "".join(
+            character if character.isalnum() else "_" for character in value
+        )[:80]
 
     def _float_env(self, name: str, default: float) -> float:
         try:
@@ -1259,7 +1445,9 @@ def _record_explain_timing_metrics(
         elapsed_ms = _float_metric(phase_timing.get("elapsed_ms"))
         if elapsed_ms is None:
             continue
-        phase_recorders.setdefault(phase, MetricRecorder()).latencies_ms.append(elapsed_ms)
+        phase_recorders.setdefault(phase, MetricRecorder()).latencies_ms.append(
+            elapsed_ms
+        )
     for access_path_timing in explain.get("access_path_timings", []):
         if not isinstance(access_path_timing, dict):
             continue
@@ -1313,7 +1501,10 @@ def _record_write_timing_metrics(
         ("total_without_manifest", total_without_manifest_ms),
         ("lock", _float_metric(timing.get("lock_ms"))),
         ("refresh_total", _float_metric(timing.get("refresh_total_ms"))),
-        ("refresh_manifest_read", _float_metric(timing.get("refresh_manifest_read_ms"))),
+        (
+            "refresh_manifest_read",
+            _float_metric(timing.get("refresh_manifest_read_ms")),
+        ),
         ("refresh_wal_tail", _float_metric(timing.get("refresh_wal_tail_ms"))),
         ("refresh_reopen", _float_metric(timing.get("refresh_reopen_ms"))),
         ("schema_lookup", _float_metric(timing.get("schema_lookup_ms"))),
@@ -1361,7 +1552,9 @@ def _record_write_timing_metrics(
     ]
     for name, value in phase_values:
         if value is not None:
-            phase_recorders.setdefault(name, MetricRecorder()).latencies_ms.append(value)
+            phase_recorders.setdefault(name, MetricRecorder()).latencies_ms.append(
+                value
+            )
     for source_name, metric_name in [
         ("wal_payload_bytes", "wal_payload_bytes"),
         ("wal_frame_bytes", "wal_frame_bytes"),
@@ -1418,9 +1611,9 @@ def _record_response_metadata_metrics(
     ]:
         value = _float_metric(response_meta.get(source_name))
         if value is not None:
-            timing_recorders.setdefault(metric_name, MetricRecorder()).latencies_ms.append(
-                value
-            )
+            timing_recorders.setdefault(
+                metric_name, MetricRecorder()
+            ).latencies_ms.append(value)
 
 
 def _record_http_client_phase_metrics(
@@ -1436,20 +1629,24 @@ def _record_http_client_phase_metrics(
     ]:
         value = _float_metric(response_meta.get(source_name))
         if value is not None:
-            timing_recorders.setdefault(metric_name, MetricRecorder()).latencies_ms.append(
-                value
-            )
+            timing_recorders.setdefault(
+                metric_name, MetricRecorder()
+            ).latencies_ms.append(value)
 
 
 def _single_recorder_metric_fields(
     prefix: str, recorder: MetricRecorder
 ) -> dict[str, float | int]:
     fields: dict[str, float | int] = {f"{prefix}_count": len(recorder.latencies_ms)}
-    fields.update({f"{prefix}_{key}": value for key, value in recorder.summary().items()})
+    fields.update(
+        {f"{prefix}_{key}": value for key, value in recorder.summary().items()}
+    )
     return fields
 
 
-def _response_byte_metric_fields(prefix: str, values: list[float]) -> dict[str, float | int]:
+def _response_byte_metric_fields(
+    prefix: str, values: list[float]
+) -> dict[str, float | int]:
     if not values:
         return {}
     return {
@@ -1459,7 +1656,9 @@ def _response_byte_metric_fields(prefix: str, values: list[float]) -> dict[str, 
     }
 
 
-def _numeric_distribution_metric_fields(prefix: str, values: list[float]) -> dict[str, float]:
+def _numeric_distribution_metric_fields(
+    prefix: str, values: list[float]
+) -> dict[str, float]:
     if not values:
         return {}
     return {
@@ -1469,7 +1668,9 @@ def _numeric_distribution_metric_fields(prefix: str, values: list[float]) -> dic
     }
 
 
-def _duration_distribution_metric_fields(prefix: str, values: list[float]) -> dict[str, float]:
+def _duration_distribution_metric_fields(
+    prefix: str, values: list[float]
+) -> dict[str, float]:
     if not values:
         return {}
     return {
@@ -1490,16 +1691,24 @@ def _recorder_metric_fields(
     return fields
 
 
-def _top_level_byte_metric_fields(prefix: str, values: dict[str, int]) -> dict[str, int]:
-    return {f"{prefix}_{name}": bytes_value for name, bytes_value in sorted(values.items())}
+def _top_level_byte_metric_fields(
+    prefix: str, values: dict[str, int]
+) -> dict[str, int]:
+    return {
+        f"{prefix}_{name}": bytes_value for name, bytes_value in sorted(values.items())
+    }
 
 
 def _byte_metric_fields(prefix: str, values: dict[str, int]) -> dict[str, int]:
-    return {f"{prefix}_{name}": bytes_value for name, bytes_value in sorted(values.items())}
+    return {
+        f"{prefix}_{name}": bytes_value for name, bytes_value in sorted(values.items())
+    }
 
 
 def _metric_token(value: str) -> str:
-    token = "".join(character.lower() if character.isalnum() else "_" for character in value)
+    token = "".join(
+        character.lower() if character.isalnum() else "_" for character in value
+    )
     return "_".join(part for part in token.split("_") if part)
 
 

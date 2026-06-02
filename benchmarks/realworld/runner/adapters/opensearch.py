@@ -13,6 +13,9 @@ from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
 from .base import BenchmarkAdapter, query_result_record
 
+# Number of warmup query iterations before measurement begins.
+WARMUP_ITERATIONS = 3
+
 
 class OpenSearchAdapter(BenchmarkAdapter):
     name = "opensearch"
@@ -74,6 +77,27 @@ class OpenSearchAdapter(BenchmarkAdapter):
                 with urllib.request.urlopen(request, timeout=10) as response:
                     response.read()
             recorder = MetricRecorder()
+            # Warmup phase: run a few query iterations (discarded from
+            # measurements) to stabilize filesystem cache and connection pooling.
+            if dataset.queries:
+                warmup_query = dataset.queries[0]
+                for _ in range(WARMUP_ITERATIONS):
+                    request_json(
+                        "POST",
+                        f"{base_url}/{index}/_search",
+                        {
+                            "size": warmup_query.top_k,
+                            "query": {
+                                "bool": {
+                                    "must": [{"match": {"body": warmup_query.text}}],
+                                    "filter": [
+                                        {"term": {"tenant_id": warmup_query.tenant_id}},
+                                        {"term": {"category": warmup_query.category}},
+                                    ],
+                                }
+                            },
+                        },
+                    )
             recalls = []
             ndcgs = []
             mrrs = []

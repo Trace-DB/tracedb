@@ -1,12 +1,23 @@
 # TraceDB Strategic Evaluation Report
 
-This directory contains a comprehensive strategic evaluation of **TraceDB**, conducted through two passes:
+This directory contains external AI-generated strategic evaluation reports of TraceDB.
+
+**These are reference material only.** They do not represent the official position, roadmap, or technical assessment of the TraceDB project. The reports were produced by an external AI system (Gemini) and are preserved here for historical reference and general interest.
+
+- Findings should be treated as **external opinions**, not project-endorsed conclusions.
+- Financial valuations in Pass 1 reports are explicitly **superseded** by the grounded Pass 2 analysis.
+- Code-level claims may not reflect the current state of the codebase.
+- For authoritative documentation, see the [TraceDB docs map](../README.md).
+
+---
+
+The evaluation was conducted through two passes:
 
 1. **Pass 1 (Multi-Agent Debate)**: Ten specialist personas across five perspectives — developer, infrastructure, compliance, investor, and go-to-market.
 2. **Pass 2 (Grounded Deep Analysis)**: Four targeted research agents examining engine hot paths (line-by-line), server scalability ceilings, competitive pricing/benchmarks with real market data, and hard codebase metrics.
 
 > [!IMPORTANT]
-> **The grounded valuation timeline (Pass 2) supersedes the financial claims in Pass 1 reports.** The Pass 1 reports contain useful qualitative analysis but their valuation figures ($20M–$25M seed) were not grounded in competitive data or code evidence. See the revised [Valuation Timeline](file:///Users/zgrogan/Repos/tracedb/docs/gemini-report/valuation_timeline.md) for evidence-backed numbers.
+> **The grounded valuation timeline (Pass 2) supersedes the financial claims in Pass 1 reports.** The Pass 1 reports contain useful qualitative analysis but their valuation figures ($20M–$25M seed) were not grounded in competitive data or code evidence. See the revised [Valuation Timeline](valuation_timeline.md) for evidence-backed numbers.
 
 ---
 
@@ -16,17 +27,17 @@ This directory contains a comprehensive strategic evaluation of **TraceDB**, con
 
 | Report | What It Covers |
 |:---|:---|
-| **[Valuation Timeline](file:///Users/zgrogan/Repos/tracedb/docs/gemini-report/valuation_timeline.md)** | Evidence-backed valuation ($100K–$250K current), competitive benchmarks, code-level bottleneck analysis, honest seed funding viability assessment, phased roadmap with specific LOC and line-number evidence |
+| **[Valuation Timeline](valuation_timeline.md)** | Evidence-backed valuation ($100K–$250K current), competitive benchmarks, code-level bottleneck analysis, honest seed funding viability assessment, phased roadmap with specific LOC and line-number evidence |
 
 ### Qualitative Analysis (Pass 1)
 
 | Report | What It Covers |
 |:---|:---|
-| [Developer & Architecture Review](file:///Users/zgrogan/Repos/tracedb/docs/gemini-report/developer_pov.md) | Code health, type safety, networking limits, query engine, SDK packaging |
-| [Infrastructure & Scaling Review](file:///Users/zgrogan/Repos/tracedb/docs/gemini-report/infrastructure_pov.md) | Resource planes, Mutex serialization, lock file sync, concurrency bottlenecks |
-| [Legal, Safety & Compliance Review](file:///Users/zgrogan/Repos/tracedb/docs/gemini-report/compliance_pov.md) | AI governance, unencrypted storage, audit log metadata leakage, policy bypass routes |
-| [Investor & Market Review](file:///Users/zgrogan/Repos/tracedb/docs/gemini-report/investor_pov.md) | Market sizing, competitive positioning, valuation structures (⚠️ superseded by grounded timeline) |
-| [Product & Go-To-Market Review](file:///Users/zgrogan/Repos/tracedb/docs/gemini-report/gtm_pov.md) | PLG vs. enterprise, MCP wedge, branching, serverless billing models |
+| [Developer & Architecture Review](developer_pov.md) | Code health, type safety, networking limits, query engine, SDK packaging |
+| [Infrastructure & Scaling Review](infrastructure_pov.md) | Resource planes, Mutex serialization, lock file sync, concurrency bottlenecks |
+| [Legal, Safety & Compliance Review](compliance_pov.md) | AI governance, unencrypted storage, audit log metadata leakage, policy bypass routes |
+| [Investor & Market Review](investor_pov.md) | Market sizing, competitive positioning, valuation structures (⚠️ superseded by grounded timeline) |
+| [Product & Go-To-Market Review](gtm_pov.md) | PLG vs. enterprise, MCP wedge, branching, serverless billing models |
 
 ---
 

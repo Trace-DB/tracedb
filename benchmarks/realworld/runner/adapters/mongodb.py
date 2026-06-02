@@ -9,6 +9,9 @@ from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
 from .base import BenchmarkAdapter, optional_import, query_result_record
 
+# Number of warmup query iterations before measurement begins.
+WARMUP_ITERATIONS = 3
+
 
 class MongoAdapter(BenchmarkAdapter):
     name = "mongodb"
@@ -45,6 +48,23 @@ class MongoAdapter(BenchmarkAdapter):
                     )
                 )
             storage_after_ingest = _storage_snapshot(database)
+            # Warmup phase: run a few query iterations (discarded from
+            # measurements) to stabilize filesystem cache and connection pooling.
+            if dataset.queries:
+                warmup_query = dataset.queries[0]
+                for _ in range(WARMUP_ITERATIONS):
+                    list(
+                        collection.find(
+                            {
+                                "tenant_id": warmup_query.tenant_id,
+                                "category": warmup_query.category,
+                                "metadata.nested.priority": {"$exists": True},
+                            },
+                            {"id": 1},
+                        )
+                        .sort([("rating", -1), ("id", 1)])
+                        .limit(warmup_query.top_k)
+                    )
             recalls = []
             ndcgs = []
             mrrs = []

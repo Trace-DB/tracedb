@@ -30,7 +30,6 @@ members = [
     "crates/tracedb-cache",
     "crates/tracedb-metering",
     "crates/tracedb-server",
-    "crates/tracedb-sdk",
     "crates/tracedb-cli",
     "crates/tracedb-bench",
     "crates/tracedb-testkit",

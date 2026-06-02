@@ -20,7 +20,12 @@ from .openrouter import (
 )
 from .report import build_report, write_json, write_markdown
 from .scaling import run_inprocess_scaling_compare, run_tracedb_scaling
-from .suite import build_suite_report, selected_scenarios, write_suite_json, write_suite_markdown
+from .suite import (
+    build_suite_report,
+    selected_scenarios,
+    write_suite_json,
+    write_suite_markdown,
+)
 from .suite_spec import (
     build_suite_gate,
     default_suite_spec,
@@ -36,14 +41,14 @@ try:
         build_railway_backup_receipt,
         build_railway_backup_verdict,
         build_railway_manifest,
-        build_railway_operation_receipt,
         build_railway_operation_plan,
+        build_railway_operation_receipt,
         build_railway_operator_runbook,
         build_railway_persistence_verdict,
         build_railway_runbook_verification,
+        load_railway_config,
         railway_operator_runbook_markdown,
         railway_runbook_verification_markdown,
-        load_railway_config,
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
         run_railway_stateful_smoke,
@@ -56,14 +61,14 @@ except ImportError:  # pragma: no cover - package import path used by unit disco
         build_railway_backup_receipt,
         build_railway_backup_verdict,
         build_railway_manifest,
-        build_railway_operation_receipt,
         build_railway_operation_plan,
+        build_railway_operation_receipt,
         build_railway_operator_runbook,
         build_railway_persistence_verdict,
         build_railway_runbook_verification,
+        load_railway_config,
         railway_operator_runbook_markdown,
         railway_runbook_verification_markdown,
-        load_railway_config,
         run_railway_endpoint_health,
         run_railway_snapshot_restore_check,
         run_railway_stateful_smoke,
@@ -79,17 +84,23 @@ def main(argv: list[str] | None = None) -> int:
     run = subcommands.add_parser("run", help="run a real-world benchmark profile")
     add_benchmark_args(run)
 
-    loop = subcommands.add_parser("loop", help="loop a benchmark and stop on falsification")
+    loop = subcommands.add_parser(
+        "loop", help="loop a benchmark and stop on falsification"
+    )
     add_benchmark_args(loop)
     loop.add_argument("--iterations", type=int, default=20)
     loop.add_argument("--stop-on-failure", action="store_true")
 
     doctor = subcommands.add_parser("doctor", help="inspect benchmark dependencies")
     doctor_subcommands = doctor.add_subparsers(dest="doctor_target", required=True)
-    openrouter = doctor_subcommands.add_parser("openrouter", help="inspect OpenRouter config")
+    openrouter = doctor_subcommands.add_parser(
+        "openrouter", help="inspect OpenRouter config"
+    )
     add_openrouter_args(openrouter)
 
-    suite = subcommands.add_parser("suite", help="run a scenario suite and aggregate reports")
+    suite = subcommands.add_parser(
+        "suite", help="run a scenario suite and aggregate reports"
+    )
     add_benchmark_args(suite)
     suite.set_defaults(records=None)
     suite.add_argument("--scenarios", default="all")
@@ -222,7 +233,9 @@ def main(argv: list[str] | None = None) -> int:
         "railway-receipt",
         help="write a non-mutating operator receipt for a manual Railway restart/redeploy",
     )
-    railway_receipt.add_argument("--operation", required=True, choices=["restart", "redeploy"])
+    railway_receipt.add_argument(
+        "--operation", required=True, choices=["restart", "redeploy"]
+    )
     railway_receipt.add_argument(
         "--status",
         default="passed",
@@ -243,7 +256,9 @@ def main(argv: list[str] | None = None) -> int:
         ],
     )
     railway_receipt.add_argument("--suite-id", default="")
-    railway_receipt.add_argument("--output-json", default="reports/railway-operation-receipt.json")
+    railway_receipt.add_argument(
+        "--output-json", default="reports/railway-operation-receipt.json"
+    )
     railway_receipt.add_argument(
         "--confirm-executed",
         action="store_true",
@@ -279,7 +294,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     railway_backup_receipt.add_argument("--suite-id", default="")
     railway_backup_receipt.add_argument("--backup-id", required=True)
-    railway_backup_receipt.add_argument("--output-json", default="reports/railway-backup-receipt.json")
+    railway_backup_receipt.add_argument(
+        "--output-json", default="reports/railway-backup-receipt.json"
+    )
     railway_backup_receipt.add_argument(
         "--confirm-created",
         action="store_true",
@@ -303,17 +320,21 @@ def main(argv: list[str] | None = None) -> int:
     railway_runbook.add_argument("--run-id", default="")
     railway_runbook.add_argument("--reports-dir", default="reports")
     railway_runbook.add_argument("--target", default="tracedb")
-    railway_runbook.add_argument("--surface", default="sdk")
-    railway_runbook.add_argument("--scenarios", default="sdk_cli_surface")
+    railway_runbook.add_argument("--surface", default="http")
+    railway_runbook.add_argument("--scenarios", default="http_falsification")
     railway_runbook.add_argument("--backup-receipt-json", default="")
     railway_runbook.add_argument("--operation-receipt-json", default="")
     railway_runbook.add_argument("--pre-manifest-json", default="")
     railway_runbook.add_argument("--marker-id", default="")
-    railway_runbook.add_argument("--operation", choices=["restart", "redeploy"], default="restart")
+    railway_runbook.add_argument(
+        "--operation", choices=["restart", "redeploy"], default="restart"
+    )
     railway_runbook.add_argument("--runbook-verification-json", default="")
     railway_runbook.add_argument("--runbook-verification-md", default="")
     railway_runbook.add_argument("--suite-baseline-dir", default="")
-    railway_runbook.add_argument("--output-json", default="reports/railway-runbook.json")
+    railway_runbook.add_argument(
+        "--output-json", default="reports/railway-runbook.json"
+    )
     railway_runbook.add_argument("--output-md", default="reports/railway-runbook.md")
 
     railway_runbook_verify = subcommands.add_parser(
@@ -336,13 +357,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Mark artifacts older than this many seconds stale; 0 disables age checks.",
     )
 
-    chat_demo = subcommands.add_parser("chat-demo", help="run the local chat-memory demo")
+    chat_demo = subcommands.add_parser(
+        "chat-demo", help="run the local chat-memory demo"
+    )
     chat_demo.add_argument("--data-dir", default="")
     chat_demo.add_argument("--tracedb-cli", default="")
     chat_demo.add_argument("--output-json", default="reports/chat-demo/latest.json")
     chat_demo.add_argument("--output-md", default="reports/chat-demo/latest.md")
 
-    scaling = subcommands.add_parser("tracedb-scaling", help="measure local TraceDB CLI open/recovery scaling")
+    scaling = subcommands.add_parser(
+        "tracedb-scaling", help="measure local TraceDB CLI open/recovery scaling"
+    )
     scaling.add_argument("--data-dir", default="")
     scaling.add_argument("--tracedb-cli", default="")
     scaling.add_argument("--records", default="128,512,1024")
@@ -361,10 +386,18 @@ def main(argv: list[str] | None = None) -> int:
     scaling_compare.add_argument("--baseline-label", default="baseline")
     scaling_compare.add_argument("--candidate-label", default="candidate")
     scaling_compare.add_argument("--min-repeats", type=int, default=2)
-    scaling_compare.add_argument("--required-write-improvement-pct", type=float, default=25.0)
-    scaling_compare.add_argument("--allowed-query-regression-pct", type=float, default=10.0)
-    scaling_compare.add_argument("--allowed-query-regression-ms", type=float, default=5.0)
-    scaling_compare.add_argument("--output-json", default="reports/scaling/comparison.json")
+    scaling_compare.add_argument(
+        "--required-write-improvement-pct", type=float, default=25.0
+    )
+    scaling_compare.add_argument(
+        "--allowed-query-regression-pct", type=float, default=10.0
+    )
+    scaling_compare.add_argument(
+        "--allowed-query-regression-ms", type=float, default=5.0
+    )
+    scaling_compare.add_argument(
+        "--output-json", default="reports/scaling/comparison.json"
+    )
     scaling_compare.add_argument("--output-md", default="reports/scaling/comparison.md")
 
     args = parser.parse_args(argv)
@@ -413,7 +446,14 @@ def add_benchmark_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--records", type=int, default=1000)
     parser.add_argument("--target", default="all")
-    parser.add_argument("--surface", default="sdk,cli,http,curl")
+    parser.add_argument(
+        "--surface",
+        default="http,curl",
+        help="Comma-separated adapter surfaces to exercise. "
+        "Use 'in-memory' to run Python-side scoring as the primary measurement "
+        "(or alongside HTTP for comparison). "
+        "Default: http,curl (real HTTP measurements).",
+    )
     parser.add_argument("--output-json", default="reports/latest.json")
     parser.add_argument("--output-md", default="reports/latest.md")
     parser.add_argument("--reports-dir", default="reports")
@@ -422,15 +462,17 @@ def add_benchmark_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-id", default="")
     parser.add_argument(
         "--tracedb-ingest-mode",
-        default="per_record",
+        default="batch",
         choices=["per_record", "batch"],
-        help="TraceDB HTTP ingest lane: per_record keeps one durable write per record; batch uses one atomic batch transaction.",
+        help="TraceDB HTTP ingest lane: batch uses one atomic batch transaction and is the fair default for single-transaction pgvector comparisons; per_record keeps one durable write per record.",
     )
     add_openrouter_args(parser)
 
 
 def add_openrouter_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--openrouter-mode", default="auto", choices=["auto", "off", "required"])
+    parser.add_argument(
+        "--openrouter-mode", default="auto", choices=["auto", "off", "required"]
+    )
     parser.add_argument(
         "--openrouter-cap",
         default="moderate",
@@ -573,7 +615,9 @@ def run_railway_runbook_verify(args: argparse.Namespace) -> int:
     output_md = _resolve_path(lab_root, args.output_md)
     write_json(verification, output_json)
     output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_md.write_text(railway_runbook_verification_markdown(verification), encoding="utf-8")
+    output_md.write_text(
+        railway_runbook_verification_markdown(verification), encoding="utf-8"
+    )
     print(f"wrote {output_json}")
     print(f"wrote {output_md}")
     return 0 if verification["status"] == "complete" else 1
@@ -632,7 +676,11 @@ def execute_benchmark(
         },
     )
 
-    selected = [adapter for adapter in all_adapters() if "all" in targets or adapter.name in targets]
+    selected = [
+        adapter
+        for adapter in all_adapters()
+        if "all" in targets or adapter.name in targets
+    ]
     if not selected:
         raise SystemExit(f"no adapters selected for target={args.target}")
 
@@ -706,7 +754,11 @@ def run_loop(args: argparse.Namespace) -> int:
             recorder.write_failure_case(iteration, seed, reason)
             (recorder.run_dir / "summary.json").write_text(
                 json.dumps(
-                    {"run_id": base_run_id, "status": "failed", "iterations": loop_summary},
+                    {
+                        "run_id": base_run_id,
+                        "status": "failed",
+                        "iterations": loop_summary,
+                    },
                     indent=2,
                     sort_keys=True,
                 )
@@ -720,7 +772,9 @@ def run_loop(args: argparse.Namespace) -> int:
         child_args = copy(args)
         child_args.run_id = f"{base_run_id}-iteration-{iteration}"
         try:
-            report, exit_code = execute_benchmark(child_args, seed=seed, run_id=child_args.run_id)
+            report, exit_code = execute_benchmark(
+                child_args, seed=seed, run_id=child_args.run_id
+            )
         except OpenRouterError as error:
             recorder.write_failure_case(iteration, seed, str(error))
             if args.stop_on_failure:
@@ -736,7 +790,9 @@ def run_loop(args: argparse.Namespace) -> int:
         loop_summary.append(summary)
         failed = exit_code != 0 or report["summary"]["failure_count"] > 0
         if failed:
-            recorder.write_failure_case(iteration, seed, f"benchmark failure in {child_args.run_id}")
+            recorder.write_failure_case(
+                iteration, seed, f"benchmark failure in {child_args.run_id}"
+            )
             if args.stop_on_failure:
                 return 1
 
@@ -766,7 +822,9 @@ def run_suite(args: argparse.Namespace) -> int:
         else None
     )
     if args.records is None:
-        args.records = explicit_suite_spec.default_records if explicit_suite_spec else 1000
+        args.records = (
+            explicit_suite_spec.default_records if explicit_suite_spec else 1000
+        )
     scenarios_value = args.scenarios
     if explicit_suite_spec is not None and scenarios_value == "all":
         scenarios_value = ",".join(explicit_suite_spec.scenarios)
@@ -777,7 +835,9 @@ def run_suite(args: argparse.Namespace) -> int:
         controls=parse_csv(args.target),
         records=args.records,
     )
-    runbook_verification = _load_or_write_railway_runbook_verification(args, lab_root, suite_dir)
+    runbook_verification = _load_or_write_railway_runbook_verification(
+        args, lab_root, suite_dir
+    )
     pre_execution_blocked = _railway_runbook_verification_blocks_execution(
         args,
         runbook_verification,
@@ -789,11 +849,15 @@ def run_suite(args: argparse.Namespace) -> int:
             child_args = copy(args)
             child_args.run_id = f"{suite_id}-{spec.scenario_id}"
             child_args.target = spec.target if args.target == "all" else args.target
-            child_args.surface = spec.surface if args.surface == "sdk,cli,http,curl" else args.surface
+            child_args.surface = (
+                spec.surface if args.surface == "http,curl" else args.surface
+            )
             child_args.output_json = str(suite_dir / f"{spec.scenario_id}.json")
             child_args.output_md = str(suite_dir / f"{spec.scenario_id}.md")
             try:
-                report, child_exit = execute_benchmark(child_args, run_id=child_args.run_id)
+                report, child_exit = execute_benchmark(
+                    child_args, run_id=child_args.run_id
+                )
             except OpenRouterError as error:
                 print(str(error), file=sys.stderr)
                 return 1
@@ -852,7 +916,9 @@ def _write_suite_outputs(
     exit_code: int,
     railway_runbook_verification: dict[str, Any] | None = None,
 ) -> int:
-    railway_manifest = _load_or_write_railway_manifest(args, lab_root, suite_dir, suite_id)
+    railway_manifest = _load_or_write_railway_manifest(
+        args, lab_root, suite_dir, suite_id
+    )
     artifact_paths = {
         "suite_json": "suite.json",
         "suite_md": "suite.md",
@@ -862,7 +928,9 @@ def _write_suite_outputs(
         artifact_paths["railway_manifest_json"] = "railway-manifest.json"
         artifact_paths["railway_artifacts_json"] = "railway-artifacts.json"
     if railway_runbook_verification is not None:
-        artifact_paths["railway_runbook_verification_json"] = "railway-runbook-verification.json"
+        artifact_paths["railway_runbook_verification_json"] = (
+            "railway-runbook-verification.json"
+        )
     regression_baseline, baseline_selection = _load_suite_baseline(
         args,
         lab_root,
@@ -875,7 +943,9 @@ def _write_suite_outputs(
         artifact_paths["suite_baseline_json"] = str(baseline_selection["path"])
         artifact_paths["suite_baseline_source"] = str(baseline_selection["source"])
         if baseline_selection.get("suite_id"):
-            artifact_paths["suite_baseline_suite_id"] = str(baseline_selection["suite_id"])
+            artifact_paths["suite_baseline_suite_id"] = str(
+                baseline_selection["suite_id"]
+            )
     elif getattr(args, "suite_baseline_dir", ""):
         artifact_paths["suite_baseline_dir"] = args.suite_baseline_dir
         artifact_paths["suite_baseline_source"] = "auto_latest_not_found"
@@ -1011,9 +1081,13 @@ def collect_failures(report: dict[str, Any]) -> list[str]:
     for baseline in report["baselines"]:
         metrics = baseline.get("metrics", {})
         if not baseline.get("available", False):
-            failures.append(f"{baseline['name']} unavailable: {'; '.join(baseline['notes'])}")
+            failures.append(
+                f"{baseline['name']} unavailable: {'; '.join(baseline['notes'])}"
+            )
         if int(metrics.get("failure_count", 0)) > 0:
-            failures.append(f"{baseline['name']} reported failure_count={metrics['failure_count']}")
+            failures.append(
+                f"{baseline['name']} reported failure_count={metrics['failure_count']}"
+            )
     return failures
 
 
@@ -1100,7 +1174,10 @@ def _load_or_write_railway_manifest(
             snapshot_restore=snapshot_restore,
             operation_plan=operation_plan,
         )
-        if args.railway_persistence_pre_manifest_json or args.railway_operation_receipt_json:
+        if (
+            args.railway_persistence_pre_manifest_json
+            or args.railway_operation_receipt_json
+        ):
             pre_manifest = _load_json_if_configured(
                 lab_root, args.railway_persistence_pre_manifest_json
             )
@@ -1113,7 +1190,9 @@ def _load_or_write_railway_manifest(
                 operation_receipt,
             )
         if args.railway_backup_receipt_json:
-            backup_receipt = _load_json_if_configured(lab_root, args.railway_backup_receipt_json)
+            backup_receipt = _load_json_if_configured(
+                lab_root, args.railway_backup_receipt_json
+            )
             manifest["backup_verdict"] = build_railway_backup_verdict(
                 manifest,
                 backup_receipt,
@@ -1130,7 +1209,9 @@ def _load_or_write_railway_manifest(
 
 def _write_railway_manifest(manifest: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _load_or_write_railway_runbook_verification(
@@ -1143,7 +1224,9 @@ def _load_or_write_railway_runbook_verification(
     path = _resolve_path(lab_root, args.railway_runbook_verification_json)
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("--railway-runbook-verification-json must contain a JSON object")
+        raise ValueError(
+            "--railway-runbook-verification-json must contain a JSON object"
+        )
     write_json(payload, suite_dir / "railway-runbook-verification.json")
     return payload
 

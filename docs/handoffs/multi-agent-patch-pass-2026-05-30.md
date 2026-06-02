@@ -61,9 +61,9 @@ Known local green gate from the blocker-closure pass:
 cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 cargo test --workspace --all-targets
-cd clients/typescript && npm run check
-python3 -m unittest discover -s clients/python/tests
-python3 -m unittest benchmarks.realworld.tests.test_modal_bench benchmarks.realworld.tests.test_suite_gate
+(cd ../tracedb-js && npm run check)
+(cd ../tracedb-python && python3 -m unittest discover -s tests)
+(cd ../tracedb-benchmarks/benchmarks/realworld && python3 -m unittest tests.test_modal_bench tests.test_suite_gate)
 cargo run -p tracedb-cli -- product-quickstart --report-file target/tracedb/product-quickstart.json
 TRACEDB_MASTER_KEY_B64=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= cargo run -p tracedb-cli -- product-quickstart --report-file target/tracedb/product-quickstart-encrypted.json
 cargo run -p tracedb-cli -- storage-index-jobs --report-file target/tracedb/storage-index-jobs.json

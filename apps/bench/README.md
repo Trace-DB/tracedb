@@ -7,6 +7,8 @@ drift. Explain every candidate.
 Thin wrapper for `tracedb-bench` workload descriptors and Railway benchmark
 jobs for 100k, 1M, 10M, codebase, document, and mixed metadata corpora.
 
+The bench binary lives in **`crates/tracedb-bench/`**.
+
 Current benchmark truth lives under `benchmarks/realworld/`. As of the
 `88c9223` closeout, the working lane is Modal actual-engine HTTP batch ingest
 against pgvector controls with exported bundles and source-provenance manifests.

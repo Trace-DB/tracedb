@@ -6,8 +6,8 @@
   "record_counts": [128, 1000, 10000],
   "dataset": "generated",
   "scenarios": ["http_falsification"],
-  "surfaces": ["http_direct", "python_sdk", "typescript_sdk", "rust_sdk"],
-  "adapters": ["http", "sdk"],
+  "surfaces": ["http_direct"],
+  "adapters": ["http"],
   "controls": ["tracedb"],
   "blocking_rules": {
     "correctness": true,

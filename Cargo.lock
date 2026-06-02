@@ -2188,6 +2188,8 @@ name = "tracedb-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "reqwest",
+ "serde",
  "serde_json",
  "tempfile",
  "tracedb-bench",
@@ -2196,7 +2198,6 @@ dependencies = [
  "tracedb-index",
  "tracedb-jobs",
  "tracedb-query",
- "tracedb-sdk",
  "tracedb-segment",
  "tracedb-server",
 ]
@@ -2380,6 +2381,7 @@ dependencies = [
  "tracedb-temporal",
  "tracedb-text",
  "tracedb-vector",
+ "tracing",
 ]
 
 [[package]]
@@ -2395,20 +2397,6 @@ name = "tracedb-schema"
 version = "0.1.0"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "tracedb-sdk"
-version = "0.1.0"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracedb-features",
- "tracedb-query",
- "tracedb-server",
 ]
 
 [[package]]
@@ -2501,7 +2489,6 @@ dependencies = [
  "tracedb-query",
  "tracedb-retrieval-core",
  "tracedb-schema",
- "tracedb-sdk",
  "tracedb-segment",
  "tracedb-segment-server",
  "tracedb-server",

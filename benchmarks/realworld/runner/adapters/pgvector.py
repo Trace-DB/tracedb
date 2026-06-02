@@ -3,9 +3,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .base import BenchmarkAdapter, optional_import, query_result_record
 from ..metrics import MetricRecorder, mrr_at_k, ndcg_at_k, recall_at_k
 from ..types import DatasetBundle, RunConfig
+from .base import BenchmarkAdapter, optional_import, query_result_record
+
+# Number of warmup query iterations before measurement begins.
+# Stabilizes filesystem cache, connection pooling, and query planner.
+WARMUP_ITERATIONS = 3
 
 
 class PgVectorAdapter(BenchmarkAdapter):
@@ -28,12 +32,45 @@ class PgVectorAdapter(BenchmarkAdapter):
                     commit_recorder = MetricRecorder()
                     query_recorder = MetricRecorder()
                     setup_recorder.timed(lambda: _setup_table(cur, dataset))
+
+                    # Ingest pattern: per-row INSERT statements inside a single
+                    # PostgreSQL transaction, committed once after all rows are
+                    # inserted.  This mirrors the "single bulk transaction" pattern
+                    # and is the fair comparison point for batch-mode adapters.
+                    # Per-row timing captures individual INSERT latency; the
+                    # commit_recorder captures the final COMMIT latency.
                     for record in dataset.records:
                         ingest_recorder.timed(
                             lambda record=record: _insert_record(cur, record, dataset)
                         )
                     commit_recorder.timed(conn.commit)
                     disk_bytes = _table_disk_bytes(cur)
+
+                    # Warmup phase: run a few query iterations (discarded from
+                    # measurements) to stabilize filesystem cache, connection
+                    # pooling, and query planner.
+                    if dataset.queries:
+                        warmup_query = dataset.queries[0]
+                        for _ in range(WARMUP_ITERATIONS):
+                            cur.execute(
+                                """
+                                SELECT id
+                                FROM bench_vectors
+                                WHERE tenant_id = %s AND category = %s
+                                ORDER BY embedding <=> %s::vector
+                                LIMIT %s
+                                """,
+                                (
+                                    warmup_query.tenant_id,
+                                    warmup_query.category,
+                                    _vector_literal(
+                                        warmup_query.vector,
+                                        dataset.embedding_dimensions,
+                                    ),
+                                    warmup_query.top_k,
+                                ),
+                            ).fetchall()
+
                     recalls = []
                     ndcgs = []
                     mrrs = []
@@ -51,14 +88,18 @@ class PgVectorAdapter(BenchmarkAdapter):
                                 (
                                     query.tenant_id,
                                     query.category,
-                                    _vector_literal(query.vector, dataset.embedding_dimensions),
+                                    _vector_literal(
+                                        query.vector, dataset.embedding_dimensions
+                                    ),
                                     query.top_k,
                                 ),
                             ).fetchall()
                         )
                         ids = [row[0] for row in rows]
                         query_results.append(query_result_record(query, ids))
-                        recalls.append(recall_at_k(query.expected_ids, ids, query.top_k))
+                        recalls.append(
+                            recall_at_k(query.expected_ids, ids, query.top_k)
+                        )
                         ndcgs.append(ndcg_at_k(query.expected_ids, ids, query.top_k))
                         mrrs.append(mrr_at_k(query.expected_ids, ids, query.top_k))
             query_summary = query_recorder.summary()
@@ -71,28 +112,16 @@ class PgVectorAdapter(BenchmarkAdapter):
             )
             metrics = dict(query_summary)
             metrics.update(
-                {
-                    f"query_{key}": value
-                    for key, value in query_summary.items()
-                }
+                {f"query_{key}": value for key, value in query_summary.items()}
             )
             metrics.update(
-                {
-                    f"ingest_{key}": value
-                    for key, value in ingest_summary.items()
-                }
+                {f"ingest_{key}": value for key, value in ingest_summary.items()}
             )
             metrics.update(
-                {
-                    f"setup_{key}": value
-                    for key, value in setup_summary.items()
-                }
+                {f"setup_{key}": value for key, value in setup_summary.items()}
             )
             metrics.update(
-                {
-                    f"ingest_commit_{key}": value
-                    for key, value in commit_summary.items()
-                }
+                {f"ingest_commit_{key}": value for key, value in commit_summary.items()}
             )
             metrics.update(
                 {
@@ -105,9 +134,12 @@ class PgVectorAdapter(BenchmarkAdapter):
                     "single_transaction_commit_latency_p95_ms": commit_summary[
                         "latency_p95_ms"
                     ],
+                    "warmup_iterations": WARMUP_ITERATIONS,
                     "query_count": len(dataset.queries),
                     "failure_count": 0,
-                    "recall_at_5": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
+                    "recall_at_5": round(sum(recalls) / len(recalls), 3)
+                    if recalls
+                    else 0.0,
                     "ndcg_at_5": round(sum(ndcgs) / len(ndcgs), 3) if ndcgs else 0.0,
                     "mrr_at_5": round(sum(mrrs) / len(mrrs), 3) if mrrs else 0.0,
                     "disk_bytes": disk_bytes,
@@ -118,8 +150,12 @@ class PgVectorAdapter(BenchmarkAdapter):
                 metrics,
                 [
                     "real pgvector metadata-filtered vector workload executed through psycopg",
-                    "pgvector ingest latency is per-row insert inside one bulk transaction; commit latency is reported separately",
+                    (
+                        "pgvector ingest: per-row INSERT inside one bulk transaction; "
+                        "commit latency reported separately; comparable to batch-mode adapters"
+                    ),
                     "pgvector storage bytes measured with pg_total_relation_size after load and index creation",
+                    f"pgvector query warmup: {WARMUP_ITERATIONS} iterations discarded before measurement",
                 ],
                 query_results=query_results,
             )
@@ -143,7 +179,9 @@ def _setup_table(cur: Any, dataset: DatasetBundle) -> None:
         )
         """
     )
-    cur.execute("CREATE INDEX bench_vectors_tenant_category ON bench_vectors (tenant_id, category)")
+    cur.execute(
+        "CREATE INDEX bench_vectors_tenant_category ON bench_vectors (tenant_id, category)"
+    )
 
 
 def _insert_record(cur: Any, record: Any, dataset: DatasetBundle) -> None:

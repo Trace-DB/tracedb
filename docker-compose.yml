@@ -1,3 +1,5 @@
+# ⚠️  These credentials are for LOCAL DEVELOPMENT ONLY.
+#     Override any value via environment variables before running docker compose up.
 name: tracedb-local-cloud
 
 services:
@@ -12,7 +14,7 @@ services:
       - TRACEDB_SERVICE_MODE=gateway
       - TRACEDB_BIND=0.0.0.0:8080
       - TRACEDB_ENGINE_URL=http://tracedb-engine:8080
-      - TRACEDB_CATALOG_URL=postgres://tracedb:tracedb@postgres-catalog:5432/tracedb_catalog
+      - TRACEDB_CATALOG_URL=postgres://${POSTGRES_USER:-tracedb}:${POSTGRES_PASSWORD:-tracedb}@postgres-catalog:5432/tracedb_catalog
       - TRACEDB_QUEUE_URL=redis://valkey-queue:6379
       - TRACEDB_BUCKET_ENDPOINT=http://minio-bucket:9000
       - TRACEDB_BUCKET_NAME=tracedb-local
@@ -90,8 +92,8 @@ services:
     image: postgres:16-alpine
     environment:
       - POSTGRES_DB=tracedb_catalog
-      - POSTGRES_USER=tracedb
-      - POSTGRES_PASSWORD=tracedb
+      - POSTGRES_USER=${POSTGRES_USER:-tracedb}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tracedb}
     ports:
       - "15432:5432"
     volumes:
@@ -117,8 +119,8 @@ services:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      - MINIO_ROOT_USER=tracedb
-      - MINIO_ROOT_PASSWORD=tracedb-local-password
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-tracedb}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-tracedb-local-password}
     ports:
       - "19000:9000"
       - "19001:9001"
@@ -140,7 +142,7 @@ services:
       - /bin/sh
       - -c
       - |
-        mc alias set local http://minio-bucket:9000 tracedb tracedb-local-password
+        mc alias set local http://minio-bucket:9000 ${MINIO_ROOT_USER:-tracedb} ${MINIO_ROOT_PASSWORD:-tracedb-local-password}
         mc mb --ignore-existing local/tracedb-local
         mc anonymous set none local/tracedb-local
 

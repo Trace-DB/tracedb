@@ -250,25 +250,34 @@ fn product_regression_runs_local_product_gate() {
     assert_eq!(summary["human_summary"]["status"], "passed");
     assert_eq!(
         summary["human_summary"]["message"],
-        "local product regression passed: 9/9 steps"
+        "local product regression passed: 4/4 steps"
     );
-    assert_eq!(summary["human_summary"]["steps_passed"], 9);
-    assert_eq!(summary["human_summary"]["steps_total"], 9);
+    assert_eq!(summary["human_summary"]["steps_passed"], 4);
+    assert_eq!(summary["human_summary"]["steps_total"], 4);
     assert_eq!(summary["human_summary"]["failed_step"], Value::Null);
+    let steps = summary["steps"].as_object().expect("steps object");
+    assert_eq!(steps.len(), 4);
     for step in [
         "embedded_demo",
         "embedded_verify",
         "http_demo",
         "local_doctor",
+    ] {
+        assert_eq!(
+            summary["steps"][step]["ok"], true,
+            "product-regression core step {step} should pass: {summary}"
+        );
+    }
+    for removed_step in [
         "rust_sdk_quickstart",
         "python_sdk_smoke",
         "typescript_check",
         "typescript_http_smoke",
         "typescript_gateway_smoke",
     ] {
-        assert_eq!(
-            summary["steps"][step]["ok"], true,
-            "product-regression step {step} should pass: {summary}"
+        assert!(
+            !steps.contains_key(removed_step),
+            "core product-regression should not run SDK step {removed_step}: {summary}"
         );
     }
     assert_eq!(
@@ -282,14 +291,6 @@ fn product_regression_runs_local_product_gate() {
     assert_eq!(
         summary["steps"]["local_doctor"]["summary"]["ready_wait"]["ok"],
         true
-    );
-    assert_eq!(
-        summary["steps"]["python_sdk_smoke"]["summary"]["mode"],
-        "python-sdk-http-smoke"
-    );
-    assert_eq!(
-        summary["steps"]["python_sdk_smoke"]["summary"]["sdk_surface"],
-        "python_sync"
     );
 }
 
@@ -559,7 +560,7 @@ fn storage_index_jobs_emit_machine_readable_default_report() {
 }
 
 #[test]
-fn product_quickstart_skip_typescript_uses_default_report_file_and_marks_reduced_evidence() {
+fn product_quickstart_runs_core_gate_with_default_report_file() {
     let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
         .lock()
         .expect("lock product regression smoke path");
@@ -567,7 +568,7 @@ fn product_quickstart_skip_typescript_uses_default_report_file_and_marks_reduced
         .lock()
         .expect("lock product quickstart report path");
     let temp = tempfile::tempdir().expect("tempdir");
-    let data_root = temp.path().join("quickstart-skip-typescript-data");
+    let data_root = temp.path().join("quickstart-core-data");
     let report_file = workspace_root().join("target/tracedb/product-quickstart.json");
     let _ = std::fs::remove_file(&report_file);
 
@@ -575,25 +576,22 @@ fn product_quickstart_skip_typescript_uses_default_report_file_and_marks_reduced
         .arg("product-quickstart")
         .arg("--data-root")
         .arg(&data_root)
-        .arg("--skip-typescript")
         .output()
-        .expect("run tracedb product-quickstart without TypeScript tooling");
+        .expect("run tracedb product-quickstart core gate");
 
     assert!(
         output.status.success(),
-        "product-quickstart --skip-typescript failed\nstdout:\n{}\nstderr:\n{}",
+        "product-quickstart failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let summary: Value =
-        serde_json::from_slice(&output.stdout).expect("product-quickstart skip json");
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("product-quickstart json");
     let report_summary = read_json_file(&report_file);
     assert_eq!(report_summary, summary);
     assert_eq!(summary["ok"], true);
     assert_eq!(summary["mode"], "local-product-regression");
     assert_eq!(summary["scope"], "local_only");
     assert_eq!(summary["report_file"], report_file.display().to_string());
-    assert_eq!(summary["typescript_enabled"], false);
     assert_eq!(summary["only_step"], Value::Null);
     assert_eq!(summary["failure_injection"], Value::Null);
     assert_eq!(summary["claims"]["sql_module"], "not_implemented");
@@ -602,37 +600,35 @@ fn product_quickstart_skip_typescript_uses_default_report_file_and_marks_reduced
     assert_eq!(summary["human_summary"]["status"], "passed");
     assert_eq!(
         summary["human_summary"]["message"],
-        "local product regression passed: 6/6 steps"
+        "local product regression passed: 4/4 steps"
     );
-    assert_eq!(summary["human_summary"]["steps_passed"], 6);
-    assert_eq!(summary["human_summary"]["steps_total"], 6);
-    assert_eq!(summary["human_summary"]["failed_step"], Value::Null);
-
+    assert_eq!(summary["human_summary"]["steps_passed"], 4);
+    assert_eq!(summary["human_summary"]["steps_total"], 4);
     let steps = summary["steps"]
         .as_object()
         .expect("product quickstart steps object");
-    assert_eq!(steps.len(), 6);
+    assert_eq!(steps.len(), 4);
     for step in [
         "embedded_demo",
         "embedded_verify",
         "http_demo",
         "local_doctor",
-        "rust_sdk_quickstart",
-        "python_sdk_smoke",
     ] {
         assert_eq!(
             steps[step]["ok"], true,
-            "product-quickstart --skip-typescript step {step} should pass: {summary}"
+            "product-quickstart core step {step} should pass: {summary}"
         );
     }
-    for skipped_step in [
+    for removed_step in [
+        "rust_sdk_quickstart",
+        "python_sdk_smoke",
         "typescript_check",
         "typescript_http_smoke",
         "typescript_gateway_smoke",
     ] {
         assert!(
-            !steps.contains_key(skipped_step),
-            "product-quickstart --skip-typescript should skip {skipped_step}: {summary}"
+            !steps.contains_key(removed_step),
+            "product-quickstart should not include SDK step {removed_step}: {summary}"
         );
     }
 }
@@ -647,7 +643,6 @@ fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary(
         .arg(temp.path())
         .arg("--report-file")
         .arg(&report_file)
-        .arg("--skip-typescript")
         .arg("--only")
         .arg("embedded_demo")
         .arg("--inject-failure")
@@ -689,40 +684,48 @@ fn product_regression_injected_failure_exits_nonzero_and_preserves_json_summary(
 }
 
 #[test]
-fn product_regression_only_typescript_conflicts_with_skip_typescript() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let data_root = temp.path().join("conflicting-typescript-only");
-    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
-        .arg("product-regression")
-        .arg("--data-root")
-        .arg(&data_root)
-        .arg("--skip-typescript")
-        .arg("--only")
-        .arg("typescript_check")
-        .output()
-        .expect("run tracedb product-regression with conflicting TypeScript flags");
-    assert!(
-        !output.status.success(),
-        "product-regression --only typescript_check --skip-typescript should fail before running Node tooling\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "conflicting TypeScript flags should not emit product-regression JSON: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(
-        !data_root.exists(),
-        "conflicting TypeScript flags should fail during option parsing before creating data roots"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(
-            "product-regression --only typescript_check conflicts with --skip-typescript"
-        ),
-        "stderr should explain conflicting TypeScript flags: {stderr}"
-    );
+fn product_regression_rejects_removed_sdk_only_selectors() {
+    for removed_step in [
+        "rust_sdk_quickstart",
+        "python_sdk_smoke",
+        "typescript_check",
+        "typescript_http_smoke",
+        "typescript_gateway_smoke",
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let data_root = temp.path().join(format!("removed-{removed_step}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
+            .arg("product-regression")
+            .arg("--data-root")
+            .arg(&data_root)
+            .arg("--only")
+            .arg(removed_step)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("run tracedb product-regression --only {removed_step}: {error}")
+            });
+        assert!(
+            !output.status.success(),
+            "product-regression --only {removed_step} should be rejected after SDK split\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "removed SDK selector {removed_step} should fail before emitting product-regression JSON: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            !data_root.exists(),
+            "removed SDK selector {removed_step} should fail during option parsing before creating data roots"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(removed_step)
+                && stderr.contains("unknown product-regression --only step"),
+            "stderr should explain removed/unknown SDK selector {removed_step}: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -763,12 +766,12 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
     assert_eq!(summary["human_summary"]["status"], "listed");
     assert_eq!(
         summary["human_summary"]["message"],
-        "local product regression steps listed: 9 steps; only_supported=9"
+        "local product regression steps listed: 4 steps; only_supported=4"
     );
-    assert_eq!(summary["human_summary"]["steps_total"], 9);
-    assert_eq!(summary["human_summary"]["only_supported"], 9);
+    assert_eq!(summary["human_summary"]["steps_total"], 4);
+    assert_eq!(summary["human_summary"]["only_supported"], 4);
     let steps = summary["steps"].as_array().expect("steps array");
-    assert_eq!(steps.len(), 9);
+    assert_eq!(steps.len(), 4);
     let step_names = steps
         .iter()
         .map(|step| step["name"].as_str().expect("step name"))
@@ -779,12 +782,7 @@ fn product_regression_list_steps_reports_gate_steps_without_running_them() {
             "embedded_demo",
             "embedded_verify",
             "http_demo",
-            "local_doctor",
-            "rust_sdk_quickstart",
-            "python_sdk_smoke",
-            "typescript_check",
-            "typescript_http_smoke",
-            "typescript_gateway_smoke",
+            "local_doctor"
         ]
     );
     for step in steps {
@@ -933,435 +931,6 @@ fn product_regression_only_local_doctor_runs_single_gate_step() {
         summary["steps"]["local_doctor"]["summary"]["sql_module"],
         "not_implemented"
     );
-}
-
-#[test]
-fn product_regression_only_rust_sdk_quickstart_runs_single_gate_step() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let data_root = temp.path().join("only-rust-sdk-quickstart");
-    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
-        .arg("product-regression")
-        .arg("--data-root")
-        .arg(&data_root)
-        .arg("--only")
-        .arg("rust_sdk_quickstart")
-        .output()
-        .expect("run tracedb product-regression Rust SDK quickstart step");
-    assert!(
-        output.status.success(),
-        "product-regression --only rust_sdk_quickstart failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let summary: Value = serde_json::from_slice(&output.stdout)
-        .expect("product-regression Rust SDK quickstart json");
-    assert_eq!(summary["ok"], true);
-    assert_eq!(summary["mode"], "local-product-regression");
-    assert_eq!(summary["scope"], "local_only");
-    assert_eq!(summary["only_step"], "rust_sdk_quickstart");
-    assert!(
-        summary["local_server_url"]
-            .as_str()
-            .is_some_and(|url| url.starts_with("http://127.0.0.1:")),
-        "rust_sdk_quickstart should report managed local server url: {summary}"
-    );
-    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
-    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
-    assert_eq!(summary["claims"]["benchmark"], "not_checked");
-    let steps = summary["steps"].as_object().expect("steps object");
-    assert_eq!(steps.len(), 1);
-    assert_eq!(summary["steps"]["rust_sdk_quickstart"]["ok"], true);
-    let sdk_summary = &summary["steps"]["rust_sdk_quickstart"]["summary"];
-    assert_eq!(sdk_summary["ok"], true);
-    assert_eq!(sdk_summary["mode"], "rust-sdk-quickstart");
-    assert!(
-        sdk_summary["server_url"]
-            .as_str()
-            .is_some_and(|url| url.starts_with("http://127.0.0.1:")),
-        "Rust SDK quickstart should report loopback server url: {sdk_summary}"
-    );
-    assert_eq!(sdk_summary["database_id"], Value::Null);
-    assert_eq!(sdk_summary["branch_id"], Value::Null);
-    assert_eq!(sdk_summary["table"], "docs");
-    assert_eq!(sdk_summary["tenant_id"], "tenant-a");
-    assert_eq!(sdk_summary["server_ready"], true);
-    assert_eq!(sdk_summary["idempotency_retries"], 1);
-    assert_eq!(sdk_summary["idempotency_keys"], true);
-    assert_eq!(sdk_summary["steps"]["health"], true);
-    assert_eq!(sdk_summary["steps"]["catalog"], true);
-    assert_eq!(sdk_summary["steps"]["metrics"], true);
-    assert_eq!(sdk_summary["steps"]["schema_apply"], true);
-    assert_eq!(sdk_summary["steps"]["put"], true);
-    assert_eq!(sdk_summary["steps"]["batch_ingest"], true);
-    assert_eq!(sdk_summary["steps"]["row_batch_ingest"], true);
-    assert_eq!(sdk_summary["steps"]["patch"], true);
-    assert_eq!(sdk_summary["steps"]["query"], true);
-    assert_eq!(sdk_summary["steps"]["traceql_string_execution"], true);
-    assert_eq!(sdk_summary["steps"]["delete"], true);
-    assert_eq!(sdk_summary["steps"]["error_envelope"], true);
-    assert_eq!(sdk_summary["steps"]["compact"], true);
-    assert_eq!(sdk_summary["steps"]["snapshot"], true);
-    assert_eq!(sdk_summary["steps"]["restore"], true);
-    assert_eq!(sdk_summary["steps"]["jobs"], true);
-    assert!(
-        sdk_summary["traceql_result_count"]
-            .as_u64()
-            .is_some_and(|count| count >= 1),
-        "Rust SDK quickstart should report TraceQL result evidence: {sdk_summary}"
-    );
-    assert_eq!(sdk_summary["traceql_explain"], true);
-    assert_eq!(sdk_summary["health_ok"], true);
-    assert!(sdk_summary["database_count"].as_u64().is_some());
-    assert!(sdk_summary["branch_count"].as_u64().is_some());
-    assert!(sdk_summary["metrics_latest_epoch"].as_u64().is_some());
-    assert!(sdk_summary["admin_job_count"].as_u64().is_some());
-    assert_eq!(sdk_summary["admin"]["requested"], true);
-    assert_eq!(sdk_summary["admin"]["compact"], true);
-    assert_eq!(sdk_summary["admin"]["snapshot"], true);
-    assert_eq!(sdk_summary["admin"]["restore"], true);
-    assert_eq!(sdk_summary["records_put"], 1);
-    assert_eq!(sdk_summary["records_batched"], 2);
-    assert_eq!(sdk_summary["records_row_batched"], 2);
-    assert_eq!(sdk_summary["records_inserted"], 3);
-    assert_eq!(sdk_summary["records_scanned"], 3);
-    assert_eq!(sdk_summary["patched"], true);
-    assert_eq!(sdk_summary["patched_status"], "reviewed");
-    assert_eq!(sdk_summary["error_envelope"]["status"], 400);
-    assert_eq!(sdk_summary["error_envelope"]["method"], "POST");
-    assert_eq!(sdk_summary["error_envelope"]["path"], "/v1/records/get");
-    assert_eq!(sdk_summary["sql_module"], "not_implemented");
-    let snapshot_target = sdk_summary["snapshot_target"]
-        .as_str()
-        .expect("snapshot target path");
-    let restore_target = sdk_summary["restore_target"]
-        .as_str()
-        .expect("restore target path");
-    assert!(Path::new(snapshot_target).starts_with(data_root.join("sdk-admin")));
-    assert!(Path::new(restore_target).starts_with(data_root.join("sdk-admin")));
-}
-
-#[test]
-fn product_regression_rust_sdk_quickstart_failure_preserves_child_summary() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let report_file = temp.path().join("failing-rust-sdk-quickstart.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
-        .current_dir(temp.path())
-        .arg("product-regression")
-        .arg("--data-root")
-        .arg("relative-product-regression-root")
-        .arg("--report-file")
-        .arg(&report_file)
-        .arg("--only")
-        .arg("rust_sdk_quickstart")
-        .output()
-        .expect("run tracedb product-regression failing Rust SDK quickstart step");
-    assert!(
-        !output.status.success(),
-        "product-regression --only rust_sdk_quickstart with child config failure should exit nonzero\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let summary: Value = serde_json::from_slice(&output.stdout)
-        .expect("product-regression failing Rust SDK quickstart json");
-    let report_summary = read_json_file(&report_file);
-    assert_eq!(report_summary, summary);
-    assert_eq!(summary["ok"], false);
-    assert_eq!(summary["mode"], "local-product-regression");
-    assert_eq!(summary["scope"], "local_only");
-    assert_eq!(summary["report_file"], report_file.display().to_string());
-    assert_eq!(summary["only_step"], "rust_sdk_quickstart");
-    assert_eq!(summary["failure_injection"], Value::Null);
-    assert_eq!(summary["human_summary"]["status"], "failed");
-    assert_eq!(
-        summary["human_summary"]["failed_step"],
-        "rust_sdk_quickstart"
-    );
-    let steps = summary["steps"].as_object().expect("steps object");
-    assert_eq!(steps.len(), 1);
-    let step = &summary["steps"]["rust_sdk_quickstart"];
-    assert_eq!(step["ok"], false);
-    assert_eq!(step["exit_code"], 1);
-    assert!(
-        step["stderr_tail"].as_str().is_some_and(
-            |stderr| stderr.contains("--admin-dir must be an absolute server-side path")
-        ),
-        "failing Rust SDK child should retain stderr tail: {summary}"
-    );
-    let sdk_summary = &step["summary"];
-    assert_eq!(sdk_summary["ok"], false);
-    assert_eq!(sdk_summary["mode"], "rust-sdk-quickstart");
-    assert_eq!(sdk_summary["phase"], "config");
-    assert_eq!(sdk_summary["error"]["kind"], "configuration");
-    assert!(
-        sdk_summary["error"]["message"].as_str().is_some_and(
-            |message| message.contains("--admin-dir must be an absolute server-side path")
-        ),
-        "failing Rust SDK child summary should preserve the quickstart error: {summary}"
-    );
-    assert_eq!(sdk_summary["admin"]["requested"], true);
-    assert_eq!(sdk_summary["steps"]["ready"], false);
-    assert_eq!(sdk_summary["sql_module"], "not_implemented");
-}
-
-#[test]
-fn product_regression_only_python_sdk_smoke_runs_single_gate_step() {
-    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
-        .lock()
-        .expect("lock product regression smoke path");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let data_root = temp.path().join("only-python-sdk-smoke");
-    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
-        .arg("product-regression")
-        .arg("--data-root")
-        .arg(&data_root)
-        .arg("--only")
-        .arg("python_sdk_smoke")
-        .output()
-        .expect("run tracedb product-regression Python SDK smoke step");
-    assert!(
-        output.status.success(),
-        "product-regression --only python_sdk_smoke failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let summary: Value =
-        serde_json::from_slice(&output.stdout).expect("product-regression Python SDK smoke json");
-    assert_eq!(summary["ok"], true);
-    assert_eq!(summary["mode"], "local-product-regression");
-    assert_eq!(summary["scope"], "local_only");
-    assert_eq!(summary["only_step"], "python_sdk_smoke");
-    assert_eq!(summary["local_server_url"], Value::Null);
-    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
-    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
-    assert_eq!(summary["claims"]["benchmark"], "not_checked");
-    let steps = summary["steps"].as_object().expect("steps object");
-    assert_eq!(steps.len(), 1);
-    assert_eq!(summary["steps"]["python_sdk_smoke"]["ok"], true);
-    assert_eq!(
-        summary["steps"]["python_sdk_smoke"]["command"],
-        "python3 clients/python/http_smoke.py"
-    );
-    assert!(
-        summary["steps"]["python_sdk_smoke"]["cwd"]
-            .as_str()
-            .is_some_and(|cwd| {
-                std::path::Path::new(cwd).join("Cargo.toml").is_file()
-                    && std::path::Path::new(cwd)
-                        .join("clients/python/http_smoke.py")
-                        .is_file()
-            }),
-        "python_sdk_smoke should run from the workspace root: {summary}"
-    );
-    let smoke_summary = &summary["steps"]["python_sdk_smoke"]["summary"];
-    assert_eq!(smoke_summary["ok"], true);
-    assert_eq!(smoke_summary["mode"], "python-sdk-http-smoke");
-    assert_eq!(smoke_summary["sdk_surface"], "python_sync");
-    assert_eq!(smoke_summary["steps"]["schema_apply"], true);
-    assert_eq!(smoke_summary["steps"]["put"], true);
-    assert_eq!(smoke_summary["steps"]["batch_ingest"], true);
-    assert_eq!(smoke_summary["steps"]["patch"], true);
-    assert_eq!(smoke_summary["steps"]["get"], true);
-    assert_eq!(smoke_summary["steps"]["scan"], true);
-    assert_eq!(smoke_summary["steps"]["query"], true);
-    assert_eq!(smoke_summary["steps"]["explain"], true);
-    assert_eq!(smoke_summary["steps"]["delete"], true);
-    assert_eq!(smoke_summary["steps"]["idempotency"], true);
-    assert_eq!(smoke_summary["steps"]["error_envelope"], true);
-    assert_eq!(smoke_summary["steps"]["compact"], true);
-    assert_eq!(smoke_summary["steps"]["snapshot"], true);
-    assert_eq!(smoke_summary["steps"]["restore"], true);
-    assert_eq!(smoke_summary["steps"]["jobs"], true);
-    assert_eq!(smoke_summary["records_put"], 1);
-    assert_eq!(smoke_summary["records_inserted"], 3);
-    assert_eq!(smoke_summary["records_scanned"], 3);
-    assert_eq!(smoke_summary["deleted_hidden"], true);
-    assert_eq!(smoke_summary["idempotency_conflict_status"], 409);
-    assert_eq!(smoke_summary["error_envelope"]["status"], 400);
-    assert_eq!(smoke_summary["sql_module"], "not_implemented");
-}
-
-#[test]
-fn product_regression_only_typescript_check_runs_single_gate_step() {
-    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
-        .lock()
-        .expect("lock product regression smoke path");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let data_root = temp.path().join("only-typescript-check");
-    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
-        .arg("product-regression")
-        .arg("--data-root")
-        .arg(&data_root)
-        .arg("--only")
-        .arg("typescript_check")
-        .output()
-        .expect("run tracedb product-regression TypeScript check step");
-    assert!(
-        output.status.success(),
-        "product-regression --only typescript_check failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let summary: Value =
-        serde_json::from_slice(&output.stdout).expect("product-regression TypeScript check json");
-    assert_eq!(summary["ok"], true);
-    assert_eq!(summary["mode"], "local-product-regression");
-    assert_eq!(summary["scope"], "local_only");
-    assert_eq!(summary["only_step"], "typescript_check");
-    assert_eq!(summary["local_server_url"], Value::Null);
-    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
-    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
-    assert_eq!(summary["claims"]["benchmark"], "not_checked");
-    let steps = summary["steps"].as_object().expect("steps object");
-    assert_eq!(steps.len(), 1);
-    assert_eq!(summary["steps"]["typescript_check"]["ok"], true);
-    assert_eq!(
-        summary["steps"]["typescript_check"]["command"],
-        "npm run check"
-    );
-    assert!(
-        summary["steps"]["typescript_check"]["cwd"]
-            .as_str()
-            .is_some_and(|cwd| cwd.ends_with("clients/typescript")),
-        "typescript_check should run inside clients/typescript: {summary}"
-    );
-}
-
-#[test]
-fn product_regression_only_typescript_http_smoke_runs_single_gate_step() {
-    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
-        .lock()
-        .expect("lock product regression smoke path");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let data_root = temp.path().join("only-typescript-http-smoke");
-    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
-        .arg("product-regression")
-        .arg("--data-root")
-        .arg(&data_root)
-        .arg("--only")
-        .arg("typescript_http_smoke")
-        .output()
-        .expect("run tracedb product-regression TypeScript HTTP smoke step");
-    assert!(
-        output.status.success(),
-        "product-regression --only typescript_http_smoke failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let summary: Value = serde_json::from_slice(&output.stdout)
-        .expect("product-regression TypeScript HTTP smoke json");
-    assert_eq!(summary["ok"], true);
-    assert_eq!(summary["mode"], "local-product-regression");
-    assert_eq!(summary["scope"], "local_only");
-    assert_eq!(summary["only_step"], "typescript_http_smoke");
-    assert_eq!(summary["local_server_url"], Value::Null);
-    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
-    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
-    assert_eq!(summary["claims"]["benchmark"], "not_checked");
-    let steps = summary["steps"].as_object().expect("steps object");
-    assert_eq!(steps.len(), 1);
-    assert_eq!(summary["steps"]["typescript_http_smoke"]["ok"], true);
-    assert_eq!(
-        summary["steps"]["typescript_http_smoke"]["command"],
-        "npm run public-http-smoke"
-    );
-    assert!(
-        summary["steps"]["typescript_http_smoke"]["cwd"]
-            .as_str()
-            .is_some_and(|cwd| cwd.ends_with("clients/typescript")),
-        "typescript_http_smoke should run inside clients/typescript: {summary}"
-    );
-    let smoke_summary = &summary["steps"]["typescript_http_smoke"]["summary"];
-    assert_eq!(smoke_summary["ok"], true);
-    assert_eq!(
-        smoke_summary["mode"],
-        "local-http-typescript-public-sdk-smoke"
-    );
-    assert_eq!(smoke_summary["sdk_surface"], "public");
-    assert_eq!(smoke_summary["steps"]["schema_apply"], true);
-    assert_eq!(smoke_summary["steps"]["batch_ingest"], true);
-    assert_eq!(smoke_summary["steps"]["row_batch_ingest"], true);
-    assert_eq!(smoke_summary["steps"]["patch"], true);
-    assert_eq!(smoke_summary["steps"]["query"], true);
-    assert_eq!(smoke_summary["steps"]["explain"], true);
-    assert_eq!(smoke_summary["steps"]["delete"], true);
-    assert_eq!(smoke_summary["steps"]["compact"], true);
-    assert_eq!(smoke_summary["steps"]["snapshot"], true);
-    assert_eq!(smoke_summary["steps"]["restore"], true);
-    assert_eq!(smoke_summary["records_inserted"], 4);
-    assert_eq!(smoke_summary["records_scanned"], 4);
-    assert_eq!(smoke_summary["deleted_hidden"], true);
-    assert_eq!(smoke_summary["sql_module"], "not_implemented");
-}
-
-#[test]
-fn product_regression_only_typescript_gateway_smoke_runs_single_gate_step() {
-    let _smoke_lock = PRODUCT_REGRESSION_SMOKE_LOCK
-        .lock()
-        .expect("lock product regression smoke path");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let data_root = temp.path().join("only-typescript-gateway-smoke");
-    let output = Command::new(env!("CARGO_BIN_EXE_tracedb"))
-        .arg("product-regression")
-        .arg("--data-root")
-        .arg(&data_root)
-        .arg("--only")
-        .arg("typescript_gateway_smoke")
-        .output()
-        .expect("run tracedb product-regression TypeScript gateway smoke step");
-    assert!(
-        output.status.success(),
-        "product-regression --only typescript_gateway_smoke failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let summary: Value = serde_json::from_slice(&output.stdout)
-        .expect("product-regression TypeScript gateway smoke json");
-    assert_eq!(summary["ok"], true);
-    assert_eq!(summary["mode"], "local-product-regression");
-    assert_eq!(summary["scope"], "local_only");
-    assert_eq!(summary["only_step"], "typescript_gateway_smoke");
-    assert_eq!(summary["local_server_url"], Value::Null);
-    assert_eq!(summary["claims"]["sql_module"], "not_implemented");
-    assert_eq!(summary["claims"]["managed_cloud"], "not_checked");
-    assert_eq!(summary["claims"]["benchmark"], "not_checked");
-    let steps = summary["steps"].as_object().expect("steps object");
-    assert_eq!(steps.len(), 1);
-    assert_eq!(summary["steps"]["typescript_gateway_smoke"]["ok"], true);
-    assert_eq!(
-        summary["steps"]["typescript_gateway_smoke"]["command"],
-        "npm run gateway-smoke"
-    );
-    assert!(
-        summary["steps"]["typescript_gateway_smoke"]["cwd"]
-            .as_str()
-            .is_some_and(|cwd| cwd.ends_with("clients/typescript")),
-        "typescript_gateway_smoke should run inside clients/typescript: {summary}"
-    );
-    let smoke_summary = &summary["steps"]["typescript_gateway_smoke"]["summary"];
-    assert_eq!(smoke_summary["ok"], true);
-    assert_eq!(
-        smoke_summary["mode"],
-        "local-gateway-typescript-public-sdk-smoke"
-    );
-    assert_eq!(smoke_summary["sdk_surface"], "public");
-    assert_eq!(smoke_summary["token_required"], true);
-    assert_eq!(smoke_summary["token_enforcement"], true);
-    assert_eq!(smoke_summary["routing_enforcement"], true);
-    assert_eq!(smoke_summary["database_id"], "db_local");
-    assert_eq!(smoke_summary["branch_id"], "db_local:main");
-    assert_eq!(smoke_summary["steps"]["schema_apply"], true);
-    assert_eq!(smoke_summary["steps"]["batch_ingest"], true);
-    assert_eq!(smoke_summary["steps"]["patch"], true);
-    assert_eq!(smoke_summary["steps"]["query"], true);
-    assert_eq!(smoke_summary["steps"]["explain"], true);
-    assert_eq!(smoke_summary["steps"]["delete"], true);
-    assert_eq!(smoke_summary["steps"]["compact"], true);
-    assert_eq!(smoke_summary["steps"]["snapshot"], true);
-    assert_eq!(smoke_summary["steps"]["restore"], true);
-    assert_eq!(smoke_summary["patched"], true);
-    assert_eq!(smoke_summary["patched_status"], "reviewed");
-    assert_eq!(smoke_summary["deleted_hidden"], true);
-    assert_eq!(smoke_summary["sql_module"], "not_implemented");
 }
 
 #[test]

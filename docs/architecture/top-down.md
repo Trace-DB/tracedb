@@ -67,9 +67,11 @@ The repository is structured as a Rust workspace with crates representing distin
 *   `tracedb-worker`: Thin CLI runner wrapper that consumes background jobs.
 *   `tracedb-catalog`: Managed database/branch catalogs and routing info.
 *   `tracedb-server`: Unix socket, HTTP, and gRPC server interfaces.
-*   `tracedb-sdk`: Programming interface bindings (Rust, Python, TS).
+*   SDK packages: split into sibling repositories (`../tracedb-rust`,
+    `../tracedb-python`, `../tracedb-js`, and planned `../tracedb-go`).
 *   `tracedb-cli`: Local management CLI.
-*   `tracedb-bench`: Benchmark harness.
+*   Benchmark/proof harnesses: owned by sibling repository
+    `../tracedb-benchmarks`.
 *   `tracedb-testkit`: Golden plans, synthetic test matrices, and crash injectors.
 
 ---

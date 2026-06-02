@@ -19,11 +19,11 @@ Local artifacts generated under `target/tracedb/`:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace --all-targets`
-- `npm run check` in `clients/typescript`
-- `python3 -m unittest discover -s clients/python/tests`
-- `python3 -m unittest benchmarks.realworld.tests.test_modal_bench benchmarks.realworld.tests.test_suite_gate`
+- `(cd ../tracedb-js && npm run check)`
+- `(cd ../tracedb-python && python3 -m unittest discover -s tests)`
+- `(cd ../tracedb-benchmarks/benchmarks/realworld && python3 -m unittest tests.test_modal_bench tests.test_suite_gate)`
 - `cargo run -p tracedb-cli -- product-quickstart --report-file target/tracedb/product-quickstart.json`
-- `TRACEDB_MASTER_KEY_B64=... cargo run -p tracedb-cli -- product-quickstart --skip-typescript --report-file target/tracedb/product-quickstart-encrypted.json`
+- `TRACEDB_MASTER_KEY_B64=... cargo run -p tracedb-cli -- product-quickstart --report-file target/tracedb/product-quickstart-encrypted.json`
 - `python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --surface typescript_sdk --surface python_sdk --surface traceql_sqlish --surface graphql --summary-json target/tracedb/platform-conformance-all.json`
 - `cargo run -p tracedb-cli -- storage-index-jobs --report-file target/tracedb/storage-index-jobs.json`
 

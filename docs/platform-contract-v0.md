@@ -45,11 +45,15 @@ The current wire contract is `docs/api/v1-http.md`; the current generated route
 artifact is `docs/api/v1-openapi.json`.
 The local durability boundary is `docs/durability-semantics-v0.md`.
 The initial executable conformance runner is `scripts/platform_conformance.py`.
+During the repo split, `../tracedb-protocol` is the authoritative source for
+`platform-contract-v0` and the HTTP `/v1` contract artifacts. This core copy is
+a validation mirror pinned by `tracedb-protocol.lock`.
 
 ## Boundaries
 
-- Status is `contract-freeze-draft`. This is a source-of-truth checklist for
-  SDK/adaptor work, not a managed-cloud SLA.
+- Status is `contract-freeze-draft`. During the split this file is the core
+  validation mirror for the protocol-owned source-of-truth checklist, not a
+  managed-cloud SLA.
 - SQL compatibility is not implemented; the bounded SQL-ish `SELECT` adapter
   under `/v1/traceql` is not a SQL engine.
 - TraceDB is not PostgreSQL-compatible. Future SQL-ish work must compile into
@@ -144,182 +148,32 @@ python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tr
 
 The `http_direct` lane uses raw stdlib HTTP requests against `tracedb-server`
 and now checks all 13 current v0 scenario IDs, including native
-`traceql_string_execution` through `POST /v1/traceql`. The `rust_sdk` lane maps
-the existing Rust SDK quickstart product path into the same manifest scenario
-IDs and now checks all 13 current IDs, including `traceql_string_execution`
-through `TraceDbClient::traceql_typed`; the quickstart batch scenario now uses
-the table-handle `insert_rows` helper while still posting the canonical
-`/v1/records/put-batch` body. The `typescript_sdk` lane runs the public
-TypeScript SDK smoke through `npm run public-http-smoke --
---summary-json ...` and maps schema apply, put, batch, patch, get, scan, query,
-TraceQL string execution, explain, delete, idempotency, errors, and
-snapshot/restore into the same scenario IDs. The `python_sdk` lane first
-installs a copied `clients/python` package into an isolated temporary pip
-`--target`, then runs `clients/python/http_smoke.py` with source-path imports
-disabled. It maps schema apply, put, batch, patch, get, scan, query, explain,
-TraceQL string execution, delete, idempotency, errors, and snapshot/restore
-into the same scenario IDs through the installed sync SDK, and the smoke also
-checks native GraphQL `data`/`errors` result/explain calls through
-`TraceDB.graphql()`. The `traceql` lane starts the HTTP server and exercises
-native TraceDB command statements for all 13 scenario IDs. The `graphql` lane
-starts the HTTP server and exercises native GraphQL operations for all 13
-scenario IDs. The `traceql_sqlish` lane starts the HTTP server, seeds minimal records through
+`traceql_string_execution` through `POST /v1/traceql`. SDK conformance lanes are
+externally owned by sibling standalone repositories: `../tracedb-rust`,
+`../tracedb-js`, and `../tracedb-python`. Those repos map the same manifest
+scenario IDs through their public clients and contribute SDK evidence back to
+this contract through external evidence paths. The core repo validates its
+HTTP, TraceQL, GraphQL, and SQL-ish compatibility lanes against the protocol
+lock; it does not shell into SDK packages or in-tree SDK paths for product
+regression.
+
+The `traceql` lane starts the HTTP server and exercises native TraceDB command
+statements for all 13 scenario IDs. The `graphql` lane starts the HTTP server
+and exercises native GraphQL operations for all 13 scenario IDs. The
+`traceql_sqlish` lane starts the HTTP server, seeds minimal records through
 canonical wire calls, and checks the bounded SQL-ish adapter through
-`/v1/traceql`. It reports
-`query`, `traceql_string_execution`, `explain`, and `errors` as passed, while
-schema/write/admin scenarios remain explicit `not_checked` results. Future
-surfaces must report unimplemented scenarios as `not_checked` rather than
-silently treating them as success.
-The bounded GraphQL compatibility lane remains available through
-`POST /v1/graphql/bounded`, but it is no longer the production GraphQL gate.
+`/v1/traceql`. It reports `query`, `traceql_string_execution`, `explain`, and
+`errors` as passed, while schema/write/admin scenarios remain explicit
+`not_checked` results. Future surfaces must report unimplemented scenarios as
+`not_checked` rather than silently treating them as success. The bounded GraphQL
+compatibility lane remains available through `POST /v1/graphql/bounded`, but it
+is no longer the production GraphQL gate.
 
-Current verified checkpoint: Modal workspace run `ap-YBjqjv9hV5dHkVb2AgJSud`
-passed 20/20 commands in 96.9s. Its `platform-conformance-quick` command
-reported `http_direct` 13/13 and `rust_sdk` 13/13, including
-`traceql_string_execution`; its `typescript-sdk-conformance` command reported
-`typescript_sdk` 13/13; and its `python-sdk-conformance` command reported
-`python_sdk` 13/13 with native TraceQL covered by installed-package smoke result
-and explain evidence. Its `python-sdk-conformance` command also exercised the
-installed Python SDK's generated GraphQL SDL export through
-`TraceDB.graphql_schema()` plus GraphQL result/explain calls through
-`TraceDB.graphql()`. Its `traceql-sqlish-conformance` command reported
-`traceql_sqlish` as `ok: true`, `complete: false`, with 4/13 scenarios passed
-and 9/13 intentionally `not_checked`. The current API parity branch promotes
-native `traceql` and native `graphql` to 13/13 conformance lanes; bounded
-GraphQL and SQL-ish SELECT remain compatibility evidence. Its
-`typescript-npm-public-http-smoke` command exercised the TypeScript public SDK
-through schema/write/read/query/admin flows plus `TraceDB.graphqlSchema()` over
-real HTTP, reporting `graphql_schema_export: true`, `docs` as the exported
-GraphQL schema table, `type DocsRow` as a schema token, native TraceQL, and
-GraphQL result/explain calls. Its
-`cargo test --workspace --all-targets` command included the generated GraphQL
-SDL unit test, HTTP GraphQL schema export test, Rust SDK `GraphQlQueryRequest`,
-sync `graphql_typed`, safe retry, async `graphql_typed`, and generated schema
-helper coverage; the Rust SDK `http_client` suite reported 49/49 tests passed,
-including `graphql_schema_typed_gets_generated_schema_response`,
-`graphql_schema_typed_retries_transient_read_failures_when_safe_retries_enabled`,
-and `async_client_graphql_schema_typed_gets_generated_schema_response`.
-
-The Rust SDK also has a first ergonomic reference layer over the same wire
-contract: `TraceDb::connect(config)?` returns the reference client, and
-`db.table("docs").tenant("tenant-a")` returns a `TableHandle`. Handles can
-execute table insert, batch insert, patch, get, scan, and delete calls, then
-enter the query builder with `query()` or the direct chaining helpers
-`where_eq`, `match_text`, `near`, `with_explain`, `limit`, `all()`, and
-`explain_plan()`. `TraceDbClient::traceql_typed` and `traceql_request_typed`
-send native TraceQL strings to `POST /v1/traceql` and decode the same
-`QueryResponse` envelope as `query_typed`. `TraceDbClient::graphql_schema`,
-`TraceDbClient::graphql_schema_typed`, and
-`TraceDbAsyncClient::graphql_schema_typed` read the generated SDL from
-`GET /v1/graphql/schema` and decode the same `GraphQlSchemaResponse` contract
-as HTTP direct. `TraceDbClient::graphql_typed` and `graphql_request_typed` send
-native GraphQL operations to `POST /v1/graphql`; bounded query-adapter helpers
-use `POST /v1/graphql/bounded`. These helpers compile into or reuse the existing
-`RecordInput`, `RecordPutBatchRequest`, record request, `TraceQlQueryRequest`,
-`GraphQlQueryRequest`, `GraphQlSchemaResponse`, and `HybridQuery` models; the
-raw HTTP methods remain available. `GraphQlSchemaResponse.execution` is the
-canonical wire field for the execution note; the Rust SDK accepts the older
-`execution_caveat` spelling as a backward-compatible alias but emits the current
-field in typed examples and tests.
-
-The TypeScript public SDK mirrors the generated GraphQL schema route through
-`TraceDB.graphqlSchema()` over the generated transport's `/v1/graphql/schema`
-method, native GraphQL operations through `TraceDB.graphql(query)` and
-`graphqlRequest({ query })` over `/v1/graphql`, and bounded query-adapter
-execution over `/v1/graphql/bounded`. This is public SDK access to generated SDL
-export, native TraceDB GraphQL root operations, and the bounded adapter; general
-GraphQL subscriptions remain unsupported.
-
-The Python sync SDK mirrors generated GraphQL SDL export through
-`TraceDB.graphql_schema()` over `GET /v1/graphql/schema`, native GraphQL
-operations through `TraceDB.graphql(query)` and
-`graphql_request({"query": query})` over `POST /v1/graphql`, and bounded
-query-adapter execution over `POST /v1/graphql/bounded`. This is sync SDK
-access to generated SDL export, native TraceDB GraphQL root operations, and the
-bounded adapter; async Python support and GraphQL subscriptions remain future.
-`TraceDbClientConfig::from_env()` now reads `TRACEDB_URL`, optional
-`TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
-`TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
-`TRACEDB_IDEMPOTENCY_RETRIES` so Rust callers can share the same connection and
-routing config boundary as the other SDK lanes.
-
-The TypeScript package now starts the public SDK layer in
-`clients/typescript/src/index.ts` and `clients/typescript/src/sdk.ts`.
-`@tracedb/sdk` exposes `TraceDB`; `@tracedb/sdk/transport` exposes the generated
-`TraceDbClient` transport subpath through built `dist` JS/declaration outputs.
-`new TraceDB({ url, token })` or
-`TraceDB.fromEnv()` wraps that transport and exposes table handles with
-`insert`, raw-contract `insertBatch`, row-oriented `insertRows`, `patch`, `get`,
-`scan`, `delete`, admin compact/snapshot/restore/jobs, `where`, `match`, `near`,
-`with`, `limit`, `all`, `explainPlan`, `traceql`, and `traceqlRequest`.
-`TraceDB.fromEnv()` reads
-`TRACEDB_URL`, optional `TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`,
-`TRACEDB_BRANCH_ID`, and `TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
-`TRACEDB_IDEMPOTENCY_RETRIES` so the TypeScript public SDK shares the same
-connection, routing, read-only retry, and keyed mutation/admin retry boundary as
-Rust. `safeRetries` only retries transient 5xx responses for blanket
-read-only routes: health/ready, get, scan, query, bounded GraphQL, and explain.
-Native TraceQL and native GraphQL are polymorphic operation routes: retry only
-when the payload is provably read-only, or when `idempotencyRetries` is enabled
-and the request carries a caller-provided `Idempotency-Key`. The wrapper is fake-fetch,
-build/pack, packed temp-consumer install, package-entry, and typecheck guarded
-and now has real local HTTP and gateway smokes through `npm run
-public-http-smoke` and `npm run gateway-smoke`.
-The public HTTP smoke now emits machine-readable idempotency, TraceQL
-result/explain, bounded GraphQL result/explain, raw-contract batch ingestion,
-row batch ingestion, and error-envelope evidence for
-`scripts/platform_conformance.py --surface typescript_sdk`; the generated
-transport remains available and remains the source of route methods.
-
-The Rust SDK reference layer now exposes row-oriented table ingestion alongside
-the raw typed methods. `TraceDbClient::table("docs").tenant("tenant-a")` and
-`TraceDb::connect(config)?.table("docs").tenant("tenant-a")` expose
-`insert_rows`, `insert_rows_with_options`, `insert_rows_with_id_field`, and
-`insert_rows_with_id_field_and_options`. These helpers accept normal
-`serde_json::Map` row dictionaries, copy them into the existing
-`RecordPutBatchRequest` shape, inject `tenant` and `id` fields consistently with
-raw `insert_batch`, and preserve `Idempotency-Key` behavior through
-`TraceDbRequestOptions`.
-
-The Python package now starts the sync-first AI/data SDK lane in
-`clients/python/tracedb/client.py`. `TraceDB(url, token="dev-token")` exposes
-table handles and a query builder with `insert`, raw-contract `insert_batch`,
-row-oriented `insert_rows`, `patch`, `get`, `scan`, `delete`, `where`,
-`match_text`, `near`, `with_options`, `limit`,
-`all`, and `explain_plan`, plus health/catalog/metrics/admin helpers. The
-stdlib-only SDK also exposes `TraceDB.from_env()` for `TRACEDB_URL`,
-`TRACEDB_TOKEN`, `TRACEDB_DATABASE_ID`, `TRACEDB_BRANCH_ID`,
-`TRACEDB_TIMEOUT_MS`, `TRACEDB_SAFE_RETRIES`, and
-`TRACEDB_IDEMPOTENCY_RETRIES`. `safe_retries` only retries transient 5xx
-responses for blanket read-only routes: health, ready, get, scan, query,
-bounded GraphQL, and explain. Native TraceQL and native GraphQL are polymorphic
-operation routes: retry only when the payload is provably read-only, or when
-`idempotency_retries` is enabled and the request carries a caller-provided
-`Idempotency-Key`; unkeyed writes and 4xx/conflict responses are not retried.
-`TraceDB.traceql(query)` and `traceql_request({"query": query})` execute native
-TraceQL strings through the canonical `POST /v1/traceql` route.
-`TraceDB.graphql(query)` and `graphql_request({"query": query})` execute native
-GraphQL operations through the canonical `POST /v1/graphql` route; bounded
-query-adapter execution stays on `POST /v1/graphql/bounded`.
-`insert_rows` is intentionally SDK-side ergonomics for AI/data rows; it copies
-row dictionaries into the existing `POST /v1/records/put-batch` request shape
-and supports `id_field` for custom row ids.
-The local package/unit lane is `python3 -m unittest discover -s
-clients/python/tests`; `python3 clients/python/install_smoke.py` prefers a
-temporary venv, installs `clients/python` with pip `--no-deps`, and runs a
-consumer from outside the repo to prove the installed `tracedb` package exports
-the public DX. When a remote image can run Python but lacks working `ensurepip`,
-the same smoke falls back to an isolated temporary pip `--target` install.
-Modal workspace verification runs both package lanes before the Python
-conformance smoke. The stdlib-only smoke `python3
-clients/python/http_smoke.py` starts a local
-`tracedb-server` and proves all required v0 contract scenarios through the
-Python surface. It is sync SDK contract evidence, not package publishing
-readiness, async support, managed-cloud proof, SQL compatibility, or full
-GraphQL adapter parity. The smoke is also promoted into the local product gate as
-`product-regression --only python_sdk_smoke`, so `product-quickstart
---skip-typescript` now retains Python SDK contract evidence while omitting only
-the TypeScript lanes.
+Current verified SDK checkpoints are tracked in their standalone repos. This
+core validation mirror keeps SDK surface IDs so conformance can be compared across
+languages, but evidence paths for `rust_sdk`, `typescript_sdk`, and
+`python_sdk` point to `../tracedb-rust`, `../tracedb-js`, and
+`../tracedb-python` respectively.
 
 Native TraceQL v0 now executes through `POST /v1/traceql` with a
 `TraceQlQueryRequest` body of `{ "query": string }`. The server parses
@@ -369,6 +223,58 @@ and `TraceDB.graphqlRequest()`; the Python SDK mirrors schema export with
 `graphql_request({"query": query})`. Bounded adapter execution is explicit
 through `/v1/graphql/bounded` helpers. Subscriptions remain unsupported.
 
+## Versioning Strategy
+
+### Current Status
+
+This document is `contract-freeze-draft` (v0). In core it is a validation mirror
+for protocol-owned SDK/adapter work, not a managed-cloud SLA.
+
+### v0 Rules
+
+During v0, **all changes must be additive-only**: new fields, new routes, new
+scenario IDs, and new surfaces are allowed. Removing or renaming existing
+fields, changing error-envelope shapes, or altering wire semantics is not
+permitted until v1.
+
+### v0 → v1 Transition
+
+Breaking changes require a new contract version (v1, v2, etc.). The transition
+from v0 to v1 will:
+
+1. Freeze the v0 contract document and manifest at their final state.
+2. Create `docs/platform-contract-v1.md` and `docs/platform-contract-v1.json`.
+3. SDKs update their lock files (see below) to the new version.
+4. v0 surfaces enter a deprecation window (minimum 2 release cycles) before
+   removal.
+
+### SDK Lock Files
+
+Each SDK maintains a `tracedb-protocol.lock` file (TOML) that pins to a
+specific contract version and revision:
+
+```toml
+repo = "https://github.com/Trace-DB/tracedb-protocol"
+revision = "4aac3d6d2fe2fda3bc31c87416a43c19b785b35b"
+contract = "platform-contract-v0"
+```
+
+The `scripts/validate_protocol_locks.py` script verifies that all discovered
+lock files reference the same contract and revision, and returns non-zero if
+they have drifted. In the multi-repo workspace, run it from `tracedb/` to scan
+siblings by default, or pass `--repo-root /path/to/Trace-DB/tracedb` for a
+single-repo check.
+
+### Deprecation Policy
+
+Deprecated fields, routes, or scenarios must survive a **minimum of 2 release
+cycles** before removal. During the deprecation window:
+
+- The field/route continues to function.
+- Documentation marks it as deprecated with the version that deprecated it.
+- SDKs emit a warning when deprecated paths are used (where feasible).
+- After the deprecation window, removal requires a contract version bump.
+
 ## Surface Implementation Rules
 
 - HTTP direct remains the source of wire truth.
@@ -396,22 +302,16 @@ cargo test -p tracedb-testkit --test usability_acceptance platform_contract_v0_d
 cargo test -p tracedb-query graphql_schema_sdl_is_generated_from_table_schema --no-run
 cargo test -p tracedb-testkit --test usability_acceptance http_graphql_endpoint_executes_bounded_query_through_hybrid_query --no-run
 cargo test -p tracedb-testkit --test usability_acceptance http_graphql_schema_exports_sdl_from_applied_table_schema --no-run
-cargo test -p tracedb-sdk --test http_client graphql_schema_typed_gets_generated_schema_response --no-run
-cargo test -p tracedb-sdk --test http_client graphql_schema_typed_retries_transient_read_failures_when_safe_retries_enabled --no-run
-cargo test -p tracedb-sdk --test http_client graphql_request_typed_posts_native_query_string --no-run
-cargo test -p tracedb-sdk --test http_client graphql_typed_retries_transient_read_failures_when_safe_retries_enabled --no-run
 python3 scripts/platform_conformance.py --surface graphql --summary-json /tmp/tracedb-graphql-conformance.json
-python3 scripts/platform_conformance.py --surface http_direct --surface rust_sdk --summary-json /tmp/tracedb-platform-conformance.json
-python3 scripts/platform_conformance.py --surface typescript_sdk --summary-json /tmp/tracedb-typescript-sdk-conformance.json
-python3 -m unittest discover -s clients/python/tests
-python3 clients/python/install_smoke.py
-python3 scripts/platform_conformance.py --surface python_sdk --summary-json /tmp/tracedb-python-sdk-conformance.json
+python3 scripts/platform_conformance.py --surface http_direct --summary-json /tmp/tracedb-platform-conformance.json
 python3 scripts/generate_openapi_v1.py --check
-python3 scripts/generate_typescript_client.py --check
-cargo run -p tracedb-cli -- product-quickstart --skip-typescript
+cargo run -p tracedb-cli -- product-quickstart
 modal run scripts/modal_product_verify.py --mode quickstart --summary-json /tmp/tracedb-modal-product-quickstart.json
-modal run scripts/modal_product_verify.py --mode workspace --only typescript_gateway_smoke --summary-json /tmp/tracedb-modal-gateway-smoke.json
 ```
+
+Run SDK conformance from the sibling standalone repositories instead of this
+core repo: `../tracedb-rust`, `../tracedb-python`, and `../tracedb-js`.
+
 
 Local macOS executable-policy failures are local environment evidence, not a
 contract failure. Use Modal for remote Linux product verification when the local

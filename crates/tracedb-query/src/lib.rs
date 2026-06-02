@@ -711,6 +711,7 @@ pub struct TraceDb {
     job_catalog: JobCatalog,
     last_recovery_torn_tail: Option<TornWalTail>,
     lexical_cache: Arc<Mutex<LexicalCorpusCache>>,
+    _engine_lock: EngineLock,
 }
 
 #[derive(Clone, Debug)]
@@ -928,9 +929,10 @@ impl TraceDb {
     pub fn open_with_options(dir: impl AsRef<Path>, options: TraceDbOpenOptions) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         initialize_layout(&dir)?;
+        let _engine_lock = EngineLock::acquire(&dir)?;
         let manifest_path = dir.join("manifest.tdb");
         let master_key = options.master_key()?;
-        if !manifest_path.exists() {
+        if !manifest_path.exists() && !manifest_path.with_extension("tdb.bak").exists() {
             let mut manifest = TraceDbManifest::empty(database_id_from_path(&dir));
             if let Some(master_key) = master_key.as_ref() {
                 let (_, metadata) = EncryptionContext::create(master_key, &manifest.database_id)?;
@@ -1052,6 +1054,7 @@ impl TraceDb {
             job_catalog,
             last_recovery_torn_tail: wal_scan.torn_tail,
             lexical_cache: Arc::new(Mutex::new(LexicalCorpusCache::default())),
+            _engine_lock,
         })
     }
 
@@ -2083,6 +2086,7 @@ impl TraceDb {
             explain.lexical_cache_misses = access_paths.lexical_cache_misses;
             explain.lexical_indexed_documents = access_paths.lexical_indexed_documents;
             explain.lexical_scored_documents = access_paths.lexical_scored_documents;
+            explain.exact_fallback_triggered |= access_paths.vector_exact_fallback_used;
             explain.planner_candidates = planner_candidates;
             timing.explain_build_ms += elapsed_ms(explain_build_started);
         }
@@ -3162,6 +3166,12 @@ struct QueryAccessPaths {
     lexical_cache_misses: usize,
     lexical_indexed_documents: usize,
     lexical_scored_documents: usize,
+    vector_exact_fallback_used: bool,
+}
+
+struct VectorIndexCandidateReport {
+    candidates: Vec<Candidate>,
+    exact_fallback_used: bool,
 }
 
 struct LexicalQueryReport {
@@ -3309,6 +3319,7 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> Result<Query
 
     let path_started = Instant::now();
     let mut vector_candidates = Vec::new();
+    let mut vector_exact_fallback_used = false;
     if let Some(vector_query) = vector_query {
         vector_candidates = visible
             .iter()
@@ -3340,15 +3351,17 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> Result<Query
                 })
             })
             .collect();
-        if let Some(index_candidates) = db.sealed_vector_candidates_from_index_artifacts(
+        if let Some(index_report) = db.sealed_vector_candidates_from_index_artifacts(
             schema,
             sealed_records,
             vector_field.as_deref(),
             &vector_query,
             fallback_candidate_limit,
         )? {
-            vector_candidates.extend(index_candidates);
+            vector_exact_fallback_used |= index_report.exact_fallback_used;
+            vector_candidates.extend(index_report.candidates);
         } else {
+            vector_exact_fallback_used = !sealed_records.is_empty();
             vector_candidates.extend(sealed_records.iter().filter_map(|record| {
                 segment_vector_score(schema, record, vector_field.as_deref(), &vector_query).map(
                     |score| {
@@ -3423,6 +3436,7 @@ fn query_access_paths(db: &TraceDb, input: QueryAccessInput<'_>) -> Result<Query
         lexical_cache_misses,
         lexical_indexed_documents,
         lexical_scored_documents,
+        vector_exact_fallback_used,
     })
 }
 
@@ -3434,9 +3448,12 @@ impl TraceDb {
         vector_field: Option<&str>,
         query: &[f32],
         limit: usize,
-    ) -> Result<Option<Vec<Candidate>>> {
+    ) -> Result<Option<VectorIndexCandidateReport>> {
         if sealed_records.is_empty() {
-            return Ok(Some(Vec::new()));
+            return Ok(Some(VectorIndexCandidateReport {
+                candidates: Vec::new(),
+                exact_fallback_used: false,
+            }));
         }
         let Some(vector) = selected_vector_column(schema, vector_field) else {
             return Ok(None);
@@ -3445,6 +3462,7 @@ impl TraceDb {
             .iter()
             .map(|record| ((record.record_id.clone(), record.version_id), record))
             .collect::<BTreeMap<_, _>>();
+        let allowed = eligible.keys().cloned().collect::<BTreeSet<_>>();
         let eligible_segment_ids = self
             .manifest
             .segments
@@ -3480,9 +3498,13 @@ impl TraceDb {
                 continue;
             };
             used_artifact = true;
-            let report = vector_artifact.search_vector_with_report(&vector.name, query, limit);
-            used_exact_fallback |=
-                report.exact_fallback_used || report.visited_count < report.field_entry_count;
+            let report = vector_artifact.search_vector_with_report_filtered(
+                &vector.name,
+                query,
+                limit,
+                &allowed,
+            );
+            used_exact_fallback |= report.exact_fallback_used;
             for score in report.scores {
                 let key = (score.record_id.clone(), score.version_id);
                 let Some(record) = eligible.get(&key).copied() else {
@@ -3530,7 +3552,10 @@ impl TraceDb {
             .then_with(|| left.record_id.cmp(&right.record_id))
             .then_with(|| left.version_id.cmp(&right.version_id))
         });
-        Ok(Some(candidates))
+        Ok(Some(VectorIndexCandidateReport {
+            candidates,
+            exact_fallback_used: used_exact_fallback,
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4045,10 +4070,6 @@ fn score_order(left: f32, right: f32) -> Ordering {
 
 fn initialize_layout(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)?;
-    let engine_lock = dir.join("engine.lock");
-    if !engine_lock.exists() {
-        File::create(engine_lock)?;
-    }
     for subdir in [
         "wal",
         "hot/rows",
@@ -4119,7 +4140,91 @@ impl WriteLock {
     }
 }
 
+struct EngineLock {
+    _file: std::fs::File,
+}
+
+impl Clone for EngineLock {
+    fn clone(&self) -> Self {
+        Self {
+            _file: self._file.try_clone().expect("engine lock file clone"),
+        }
+    }
+}
+
+impl std::fmt::Debug for EngineLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineLock").finish_non_exhaustive()
+    }
+}
+
+impl EngineLock {
+    fn acquire(dir: &std::path::Path) -> Result<Self> {
+        let path = dir.join("engine.lock");
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .map_err(TraceDbError::Io)?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|_error| {
+            TraceDbError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "Engine directory is already locked by another process. Check {} for the PID.",
+                    path.display()
+                ),
+            ))
+        })?;
+        file.set_len(0).map_err(TraceDbError::Io)?;
+        file.write_all(std::process::id().to_string().as_bytes())
+            .map_err(TraceDbError::Io)?;
+        file.write_all(b"\n").map_err(TraceDbError::Io)?;
+        file.sync_all().map_err(TraceDbError::Io)?;
+        Ok(Self { _file: file })
+    }
+}
+
 fn read_manifest(path: impl AsRef<Path>) -> Result<TraceDbManifest> {
+    let path = path.as_ref();
+    match read_manifest_inner(path) {
+        Ok(manifest) => Ok(manifest),
+        Err(err) if manifest_read_error_can_fallback(&err) => {
+            let bak_path = path.with_extension("tdb.bak");
+            if bak_path.exists() {
+                tracing::warn!(
+                    "manifest {} failed validation/read, falling back to {}",
+                    path.display(),
+                    bak_path.display()
+                );
+                read_manifest_inner(&bak_path)
+            } else {
+                Err(err)
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn manifest_read_error_can_fallback(err: &TraceDbError) -> bool {
+    let content_error = matches!(
+        err,
+        TraceDbError::ManifestCorruption(_) | TraceDbError::Json(_)
+    );
+    let readable_corruption_io = matches!(
+        err,
+        TraceDbError::Io(io)
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::InvalidData
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+    );
+    content_error || readable_corruption_io
+}
+
+fn read_manifest_inner(path: &Path) -> Result<TraceDbManifest> {
     let mut file = File::open(path)?;
     let mut body = String::new();
     file.read_to_string(&mut body)?;
@@ -4144,6 +4249,7 @@ fn write_manifest(path: impl AsRef<Path>, manifest: &mut TraceDbManifest) -> Res
     manifest.checksums.manifest_checksum = compute_manifest_checksum(manifest)?;
     let body = serde_json::to_vec_pretty(manifest)?;
     let path = path.as_ref();
+    copy_manifest_backup(path)?;
     let tmp_path = path.with_extension("tdb.tmp");
     let mut file = File::create(&tmp_path)?;
     file.write_all(&body)?;
@@ -4170,6 +4276,7 @@ fn write_manifest_with_timing(
     let bytes = body.len() as u64;
     let serialize_ms = elapsed_ms(serialize_started);
     let path = path.as_ref();
+    copy_manifest_backup(path)?;
     let tmp_path = path.with_extension("tdb.tmp");
     let write_started = Instant::now();
     let mut file = File::create(&tmp_path)?;
@@ -4197,6 +4304,32 @@ fn write_manifest_with_timing(
         rename_ms,
         sync_dir_ms,
     })
+}
+
+fn copy_manifest_backup(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    if let Err(err) = read_manifest_inner(path) {
+        if manifest_read_error_can_fallback(&err) {
+            tracing::warn!(
+                "not replacing manifest backup because {} is not valid: {}",
+                path.display(),
+                err
+            );
+            return Ok(());
+        }
+        return Err(err);
+    }
+
+    let bak_path = path.with_extension("tdb.bak");
+    fs::copy(path, &bak_path)?;
+    File::open(&bak_path)?.sync_all()?;
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 fn checkpoint_relative_path(epoch: Epoch) -> String {
@@ -7392,6 +7525,120 @@ mod tests {
             !String::from_utf8_lossy(&mixed_wal[wal_before.len()..]).contains("new encrypted body"),
             "new TDE-configured WAL frame must be encrypted"
         );
+    }
+
+    #[test]
+    fn opening_same_data_directory_twice_fails_with_lock_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = TraceDb::open(temp.path()).expect("first open");
+
+        let error = TraceDb::open(temp.path()).expect_err("second open should fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("already locked"),
+            "lock error should explain contention: {message}"
+        );
+        assert!(
+            message.contains("engine.lock"),
+            "lock error should identify the lock file: {message}"
+        );
+        assert!(
+            message.contains("PID"),
+            "lock error should point at the PID marker: {message}"
+        );
+
+        drop(db);
+        TraceDb::open(temp.path()).expect("open after first handle drops");
+    }
+
+    #[test]
+    fn engine_lock_writes_pid_and_preserves_existing_marker_on_contention() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = TraceDb::open(temp.path()).expect("open");
+        let lock_path = temp.path().join("engine.lock");
+        let expected_pid_marker = format!("{}\n", std::process::id());
+
+        assert_eq!(
+            fs::read_to_string(&lock_path).expect("pid marker"),
+            expected_pid_marker,
+            "engine lock should write the owning process PID after acquisition"
+        );
+
+        let existing_marker = "existing-owner-pid=424242\n";
+        fs::write(&lock_path, existing_marker).expect("overwrite marker while lock is held");
+        let error = TraceDb::open(temp.path()).expect_err("contended open should fail");
+        assert!(
+            error.to_string().contains("already locked"),
+            "unexpected contention error: {error}"
+        );
+        assert_eq!(
+            fs::read_to_string(&lock_path).expect("marker after failed open"),
+            existing_marker,
+            "failed lock acquisition must not truncate the existing lock marker"
+        );
+
+        drop(db);
+        TraceDb::open(temp.path()).expect("open after lock release");
+        assert_eq!(
+            fs::read_to_string(&lock_path).expect("pid marker after reacquire"),
+            expected_pid_marker,
+            "successful reacquisition should refresh the PID marker"
+        );
+    }
+
+    #[test]
+    fn open_uses_valid_manifest_backup_when_primary_is_corrupted() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        {
+            let mut db = TraceDb::open(temp.path()).expect("open");
+            db.apply_schema(schema()).expect("schema");
+            db.put(RecordPutRequest::new(record(
+                "backup-fallback",
+                "from backup fallback",
+            )))
+            .expect("put");
+        }
+
+        let manifest_path = temp.path().join("manifest.tdb");
+        let backup_path = manifest_path.with_extension("tdb.bak");
+        let backup_before = fs::read(&backup_path).expect("manifest backup exists");
+        read_manifest_inner(&backup_path).expect("manifest backup is valid");
+        fs::write(&manifest_path, b"{not valid json").expect("corrupt primary manifest");
+
+        let db = TraceDb::open(temp.path()).expect("open using backup manifest");
+        let restored = db
+            .get(RecordGetRequest::new("docs", "tenant-a", "backup-fallback"))
+            .expect("get restored record")
+            .expect("record restored from WAL after backup manifest fallback");
+        assert_eq!(restored.fields["body"], json!("from backup fallback"));
+        read_manifest_inner(&manifest_path).expect("primary manifest is rewritten valid");
+        assert_eq!(
+            fs::read(&backup_path).expect("backup after recovery"),
+            backup_before,
+            "recovery must not overwrite the only valid backup with the corrupt primary"
+        );
+        read_manifest_inner(&backup_path).expect("backup remains valid after recovery");
+    }
+
+    #[test]
+    fn manifest_write_keeps_primary_when_temp_write_fails() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = TraceDb::open(temp.path()).expect("open");
+        let manifest_path = temp.path().join("manifest.tdb");
+        let original_manifest = fs::read(&manifest_path).expect("primary manifest");
+        fs::create_dir(manifest_path.with_extension("tdb.tmp")).expect("block temp manifest path");
+
+        let mut manifest = db.inspect_manifest().expect("inspect manifest");
+        write_manifest(&manifest_path, &mut manifest).expect_err("temp write should fail");
+
+        assert_eq!(
+            fs::read(&manifest_path).expect("primary manifest after failed write"),
+            original_manifest,
+            "failed manifest write must leave the current primary manifest in place"
+        );
+        read_manifest_inner(&manifest_path).expect("primary manifest remains valid");
+        read_manifest_inner(&manifest_path.with_extension("tdb.bak"))
+            .expect("backup manifest remains valid");
     }
 
     #[test]

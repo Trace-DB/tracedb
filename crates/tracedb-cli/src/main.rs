@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use clap::{Args, Parser, Subcommand};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
@@ -17,12 +18,8 @@ use tracedb_core::{stable_body_hash, IdempotencyReceipt, IndexState, ARTIFACT_EN
 use tracedb_jobs::{JobKind, JobStatus, WorkerId};
 use tracedb_query::{
     FreshnessMode, HybridQuery, RecordDeleteRequest, RecordGetRequest, RecordInput,
-    RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanRequest, TableSchema,
-    TraceDb, TraceDbOpenOptions, VectorColumnSchema,
-};
-use tracedb_sdk::{
-    RestoreRequest, SnapshotRequest, TraceDbClient, TraceDbClientConfig, TraceDbClientError,
-    TraceDbRequestOptions,
+    RecordPatchRequest, RecordPutBatchRequest, RecordPutRequest, RecordScanOutput,
+    RecordScanRequest, TableSchema, TraceDb, TraceDbOpenOptions, VectorColumnSchema,
 };
 
 #[derive(Parser)]
@@ -740,6 +737,614 @@ struct HttpDoctorConfig {
     wait_ready_ms: u64,
 }
 
+#[derive(Clone, Debug)]
+struct HttpApiClientConfig {
+    url: String,
+    token: String,
+    database_id: Option<String>,
+    branch_id: Option<String>,
+    timeout_ms: u64,
+    safe_retries: u8,
+    idempotency_retries: u8,
+}
+
+impl HttpApiClientConfig {
+    fn managed(url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            token: token.into(),
+            database_id: None,
+            branch_id: None,
+            timeout_ms: 30_000,
+            safe_retries: 0,
+            idempotency_retries: 0,
+        }
+    }
+
+    fn with_database(mut self, database_id: impl Into<String>) -> Self {
+        self.database_id = Some(database_id.into());
+        self
+    }
+
+    fn with_branch(mut self, branch_id: impl Into<String>) -> Self {
+        self.branch_id = Some(branch_id.into());
+        self
+    }
+
+    fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout_ms = timeout.as_millis().clamp(1, u64::MAX as u128) as u64;
+        self
+    }
+
+    fn with_safe_retries(mut self, retries: u8) -> Self {
+        self.safe_retries = retries;
+        self
+    }
+
+    fn with_idempotency_retries(mut self, retries: u8) -> Self {
+        self.idempotency_retries = retries;
+        self
+    }
+
+    fn timeout(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms.max(1))
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct HttpApiRequestOptions {
+    idempotency_key: Option<String>,
+}
+
+impl HttpApiRequestOptions {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+}
+
+struct HttpApiClient {
+    config: HttpApiClientConfig,
+    http_client: reqwest::blocking::Client,
+}
+
+impl HttpApiClient {
+    fn new(config: HttpApiClientConfig) -> Self {
+        let http_client = reqwest::blocking::Client::builder()
+            .timeout(config.timeout())
+            .build()
+            .expect("TraceDB CLI HTTP API client configuration is valid");
+        Self {
+            config,
+            http_client,
+        }
+    }
+
+    fn ready(&self) -> Result<Value, HttpApiError> {
+        self.get_json("/v1/ready")
+    }
+
+    fn ready_typed(&self) -> Result<ReadyResponse, HttpApiError> {
+        self.get_typed("/v1/ready")
+    }
+
+    fn health(&self) -> Result<Value, HttpApiError> {
+        self.get_json("/v1/health")
+    }
+
+    fn list_databases(&self) -> Result<Value, HttpApiError> {
+        self.get_json("/v1/databases")
+    }
+
+    fn list_branches(&self) -> Result<Value, HttpApiError> {
+        self.get_json("/v1/branches")
+    }
+
+    fn public_safe_metrics(&self) -> Result<Value, HttpApiError> {
+        self.get_json("/v1/metrics/public-safe")
+    }
+
+    fn apply_schema_typed_with_options(
+        &self,
+        schema: &TableSchema,
+        options: &HttpApiRequestOptions,
+    ) -> Result<EpochResponse, HttpApiError> {
+        self.post_typed_with_options("/v1/schema/apply", schema, options)
+    }
+
+    fn put_batch_typed_with_options(
+        &self,
+        request: &RecordPutBatchRequest,
+        options: &HttpApiRequestOptions,
+    ) -> Result<PutBatchResponse, HttpApiError> {
+        self.post_typed_with_options("/v1/records/put-batch", request, options)
+    }
+
+    fn scan_typed(&self, request: &RecordScanRequest) -> Result<RecordScanOutput, HttpApiError> {
+        self.post_typed("/v1/records/scan", request)
+    }
+
+    fn query(&self, query: &HybridQuery) -> Result<Value, HttpApiError> {
+        self.post_json("/v1/query", query)
+    }
+
+    fn explain(&self, query: &HybridQuery) -> Result<Value, HttpApiError> {
+        self.post_json("/v1/explain", query)
+    }
+
+    fn delete_typed_with_options(
+        &self,
+        request: &RecordDeleteRequest,
+        options: &HttpApiRequestOptions,
+    ) -> Result<DeleteResponse, HttpApiError> {
+        self.post_typed_with_options("/v1/records/delete", request, options)
+    }
+
+    fn get_record_typed(
+        &self,
+        request: &RecordGetRequest,
+    ) -> Result<GetRecordResponse, HttpApiError> {
+        self.post_typed("/v1/records/get", request)
+    }
+
+    fn compact_typed_with_options(
+        &self,
+        options: &HttpApiRequestOptions,
+    ) -> Result<CompactResponse, HttpApiError> {
+        self.post_typed_with_options("/v1/admin/compact", &json!({}), options)
+    }
+
+    fn snapshot_typed_with_options(
+        &self,
+        request: &SnapshotRequest,
+        options: &HttpApiRequestOptions,
+    ) -> Result<SnapshotResponse, HttpApiError> {
+        self.post_typed_with_options("/v1/admin/snapshot", request, options)
+    }
+
+    fn restore_typed_with_options(
+        &self,
+        request: &RestoreRequest,
+        options: &HttpApiRequestOptions,
+    ) -> Result<RestoreResponse, HttpApiError> {
+        self.post_typed_with_options("/v1/admin/restore", request, options)
+    }
+
+    fn request_json(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, HttpApiError> {
+        self.request_json_with_options(method, path, body, &HttpApiRequestOptions::default())
+    }
+
+    fn request_json_with_options(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        options: &HttpApiRequestOptions,
+    ) -> Result<Value, HttpApiError> {
+        let attempts = self.request_attempts(method, path, body, options);
+        for attempt in 0..attempts {
+            match self.request_json_once(method, path, body, options) {
+                Ok(value) => return Ok(value),
+                Err(error) if http_api_error_is_retryable(&error) && attempt + 1 < attempts => {
+                    thread::sleep(http_api_retry_backoff_delay(attempt));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("request attempts should be at least one")
+    }
+
+    fn request_attempts(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        options: &HttpApiRequestOptions,
+    ) -> u8 {
+        if self.config.idempotency_retries > 0
+            && http_api_is_idempotent_retry_request(method, path)
+            && options
+                .idempotency_key
+                .as_deref()
+                .is_some_and(|key| !key.is_empty())
+        {
+            self.config.idempotency_retries.saturating_add(1)
+        } else if http_api_is_retry_safe_request(method, path, body) {
+            self.config.safe_retries.saturating_add(1)
+        } else {
+            1
+        }
+    }
+
+    fn request_json_once(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        options: &HttpApiRequestOptions,
+    ) -> Result<Value, HttpApiError> {
+        let method_value = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| {
+            HttpApiError::Request {
+                method: method.to_string(),
+                path: path.to_string(),
+                message: error.to_string(),
+            }
+        })?;
+        let request_path = self.request_path(path);
+        let url = self.request_url(method, &request_path)?;
+        let body_value = body.map(|body| self.request_body(body));
+        let mut request = self
+            .http_client
+            .request(method_value, &url)
+            .timeout(self.config.timeout())
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header("User-Agent", "tracedb-cli");
+        if !self.config.token.is_empty() {
+            request = request.bearer_auth(&self.config.token);
+        }
+        if let Some(database_id) = &self.config.database_id {
+            request = request.header("x-tracedb-database-id", database_id);
+        }
+        if let Some(branch_id) = &self.config.branch_id {
+            request = request.header("x-tracedb-branch-id", branch_id);
+        }
+        if let Some(key) = options.idempotency_key.as_deref() {
+            if key.is_empty() || key.contains('\r') || key.contains('\n') {
+                return Err(HttpApiError::Request {
+                    method: method.to_string(),
+                    path: request_path,
+                    message: "idempotency key must be non-empty and must not contain CR or LF"
+                        .to_string(),
+                });
+            }
+            request = request.header("Idempotency-Key", key);
+        }
+        if let Some(body_value) = &body_value {
+            request = request.json(body_value);
+        }
+        let response = request.send().map_err(|error| HttpApiError::Request {
+            method: method.to_string(),
+            path: request_path.clone(),
+            message: error.to_string(),
+        })?;
+        let status = response.status().as_u16();
+        let bytes = response.bytes().map_err(|error| HttpApiError::Request {
+            method: method.to_string(),
+            path: request_path.clone(),
+            message: error.to_string(),
+        })?;
+        if !(200..300).contains(&status) {
+            return Err(HttpApiError::HttpStatus {
+                method: method.to_string(),
+                path: request_path,
+                status,
+                body: String::from_utf8_lossy(&bytes).to_string(),
+            });
+        }
+        if bytes.is_empty() || bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(Value::Null);
+        }
+        serde_json::from_slice(&bytes).map_err(|error| HttpApiError::InvalidResponse {
+            method: method.to_string(),
+            path: request_path,
+            message: format!("invalid JSON body: {error}"),
+        })
+    }
+
+    fn get_json(&self, path: &str) -> Result<Value, HttpApiError> {
+        self.request_json("GET", path, None)
+    }
+
+    fn get_typed<T: DeserializeOwned>(&self, path: &str) -> Result<T, HttpApiError> {
+        decode_http_api_typed("GET", path, self.get_json(path)?)
+    }
+
+    fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<Value, HttpApiError> {
+        let value = serde_json::to_value(body).map_err(|error| HttpApiError::Request {
+            method: "POST".to_string(),
+            path: path.to_string(),
+            message: error.to_string(),
+        })?;
+        self.request_json("POST", path, Some(&value))
+    }
+
+    fn post_typed<T: Serialize, R: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> Result<R, HttpApiError> {
+        decode_http_api_typed("POST", path, self.post_json(path, body)?)
+    }
+
+    fn post_typed_with_options<T: Serialize, R: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &T,
+        options: &HttpApiRequestOptions,
+    ) -> Result<R, HttpApiError> {
+        let value = serde_json::to_value(body).map_err(|error| HttpApiError::Request {
+            method: "POST".to_string(),
+            path: path.to_string(),
+            message: error.to_string(),
+        })?;
+        decode_http_api_typed(
+            "POST",
+            path,
+            self.request_json_with_options("POST", path, Some(&value), options)?,
+        )
+    }
+
+    fn request_body(&self, body: &Value) -> Value {
+        let mut body = body.clone();
+        let Value::Object(object) = &mut body else {
+            return body;
+        };
+        if let Some(database_id) = &self.config.database_id {
+            object
+                .entry("database_id".to_string())
+                .or_insert_with(|| Value::String(database_id.clone()));
+        }
+        if !object.contains_key("branch_id") {
+            let branch_id = self.config.branch_id.clone().or_else(|| {
+                object
+                    .get("database_id")
+                    .and_then(Value::as_str)
+                    .map(|database_id| format!("{database_id}:main"))
+            });
+            if let Some(branch_id) = branch_id {
+                object.insert("branch_id".to_string(), Value::String(branch_id));
+            }
+        }
+        body
+    }
+
+    fn request_path(&self, path: &str) -> String {
+        let base_path = reqwest::Url::parse(&self.config.url)
+            .ok()
+            .map(|url| url.path().trim_end_matches('/').to_string())
+            .filter(|path| !path.is_empty() && path != "/")
+            .unwrap_or_default();
+        if base_path.is_empty() {
+            path.to_string()
+        } else {
+            format!("{}/{}", base_path, path.trim_start_matches('/'))
+        }
+    }
+
+    fn request_url(&self, method: &str, request_path: &str) -> Result<String, HttpApiError> {
+        let mut url =
+            reqwest::Url::parse(&self.config.url).map_err(|error| HttpApiError::Request {
+                method: method.to_string(),
+                path: request_path.to_string(),
+                message: error.to_string(),
+            })?;
+        let (path, query) = request_path
+            .split_once('?')
+            .map(|(path, query)| (path, Some(query)))
+            .unwrap_or((request_path, None));
+        url.set_path(path);
+        url.set_query(query);
+        Ok(url.to_string())
+    }
+}
+
+#[derive(Debug)]
+enum HttpApiError {
+    Request {
+        method: String,
+        path: String,
+        message: String,
+    },
+    InvalidResponse {
+        method: String,
+        path: String,
+        message: String,
+    },
+    HttpStatus {
+        method: String,
+        path: String,
+        status: u16,
+        body: String,
+    },
+}
+
+impl HttpApiError {
+    fn server_error(&self) -> Option<String> {
+        let Self::HttpStatus { body, .. } = self else {
+            return None;
+        };
+        serde_json::from_str::<Value>(body).ok().and_then(|value| {
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    }
+
+    fn server_error_code(&self) -> Option<String> {
+        let Self::HttpStatus { body, .. } = self else {
+            return None;
+        };
+        serde_json::from_str::<Value>(body).ok().and_then(|value| {
+            value
+                .get("code")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    }
+}
+
+impl std::fmt::Display for HttpApiError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Request {
+                method,
+                path,
+                message,
+            } => write!(formatter, "{method} {path} request failed: {message}"),
+            Self::InvalidResponse {
+                method,
+                path,
+                message,
+            } => write!(formatter, "{method} {path} invalid response: {message}"),
+            Self::HttpStatus {
+                method,
+                path,
+                status,
+                body,
+            } => write!(
+                formatter,
+                "{method} {path} failed with HTTP {status}: {body}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for HttpApiError {}
+
+#[derive(Debug, Deserialize)]
+struct ReadyResponse {
+    ready: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct EpochResponse {
+    epoch: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PutBatchResponse {
+    record_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteResponse {
+    deleted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetRecordResponse {
+    record: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactResponse {
+    compacted: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotRequest {
+    target: String,
+}
+
+impl SnapshotRequest {
+    fn new(target: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotResponse {
+    snapshot: bool,
+    target: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RestoreRequest {
+    source: String,
+    target: String,
+}
+
+impl RestoreRequest {
+    fn new(source: impl Into<String>, target: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RestoreResponse {
+    restored: bool,
+    target: String,
+}
+
+fn decode_http_api_typed<T: DeserializeOwned>(
+    method: &str,
+    path: &str,
+    value: Value,
+) -> Result<T, HttpApiError> {
+    serde_json::from_value(value).map_err(|error| HttpApiError::InvalidResponse {
+        method: method.to_string(),
+        path: path.to_string(),
+        message: error.to_string(),
+    })
+}
+
+fn http_api_retry_backoff_delay(attempt: u8) -> Duration {
+    let shift = u32::from(attempt).min(16);
+    let base_ms = 100_u64.saturating_mul(1_u64 << shift).min(5_000);
+    let jitter_quarter = base_ms / 4;
+    let jitter_range = jitter_quarter.saturating_mul(2).saturating_add(1);
+    let jitter_offset = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as u64
+        % jitter_range;
+    let delay_ms = base_ms
+        .saturating_sub(jitter_quarter)
+        .saturating_add(jitter_offset)
+        .clamp(1, 5_000);
+    Duration::from_millis(delay_ms)
+}
+
+fn http_api_is_retry_safe_request(method: &str, path: &str, _body: Option<&Value>) -> bool {
+    matches!(
+        (method, strip_query(path)),
+        ("GET", _)
+            | (
+                "POST",
+                "/v1/records/get" | "/v1/records/scan" | "/v1/query" | "/v1/explain"
+            )
+    )
+}
+
+fn http_api_is_idempotent_retry_request(method: &str, path: &str) -> bool {
+    matches!(
+        (method, strip_query(path)),
+        ("POST", "/v1/schema/apply")
+            | ("POST", "/v1/records/put-batch")
+            | ("POST", "/v1/records/delete")
+            | ("POST", "/v1/admin/compact")
+            | ("POST", "/v1/admin/snapshot")
+            | ("POST", "/v1/admin/restore")
+    )
+}
+
+fn strip_query(path: &str) -> &str {
+    path.split_once('?').map(|(path, _)| path).unwrap_or(path)
+}
+
+fn http_api_error_is_retryable(error: &HttpApiError) -> bool {
+    match error {
+        HttpApiError::Request { .. } => true,
+        HttpApiError::InvalidResponse { .. } => false,
+        HttpApiError::HttpStatus { status, .. } => *status >= 500,
+    }
+}
+
 fn regression_config_from_args(
     args: RegressionArgs,
 ) -> Result<ProductRegressionConfig, Box<dyn std::error::Error>> {
@@ -750,14 +1355,13 @@ fn regression_config_from_args(
     let report_file = args.report_file;
     let list_steps = args.list_steps;
     let only_step = args.only_step;
-    if skip_typescript {
-        if let Some(step) = only_step.as_deref() {
-            if product_regression_step_is_typescript(step) {
-                return Err(format!(
-                    "product-regression --only {step} conflicts with --skip-typescript; remove --skip-typescript or choose a non-TypeScript step"
-                )
-                .into());
-            }
+    if let Some(step) = only_step.as_deref() {
+        if !PRODUCT_REGRESSION_ONLY_STEPS.contains(&step) {
+            return Err(format!(
+                "unknown product-regression --only step {step}; expected one of {}",
+                PRODUCT_REGRESSION_ONLY_STEPS.join(", ")
+            )
+            .into());
         }
     }
     let cleanup_data = data_root.is_none() && !keep_data;
@@ -844,7 +1448,7 @@ fn api_parity_config_from_args(
 }
 
 fn run_http_doctor(config: HttpDoctorConfig) -> Value {
-    let mut client_config = TraceDbClientConfig::managed(config.url.clone(), config.token)
+    let mut client_config = HttpApiClientConfig::managed(config.url.clone(), config.token)
         .with_timeout(Duration::from_millis(config.timeout_ms))
         .with_safe_retries(config.safe_retries);
     if let Some(database_id) = &config.database_id {
@@ -853,7 +1457,7 @@ fn run_http_doctor(config: HttpDoctorConfig) -> Value {
     if let Some(branch_id) = &config.branch_id {
         client_config = client_config.with_branch(branch_id.clone());
     }
-    let client = TraceDbClient::new(client_config);
+    let client = HttpApiClient::new(client_config);
 
     let ready_wait = http_doctor_wait_for_ready(&client, config.wait_ready_ms);
     let health = http_doctor_check(|| client.health());
@@ -936,14 +1540,14 @@ fn query_component(value: &str) -> String {
         .collect()
 }
 
-fn http_doctor_check(probe: impl FnOnce() -> Result<Value, TraceDbClientError>) -> Value {
+fn http_doctor_check(probe: impl FnOnce() -> Result<Value, HttpApiError>) -> Value {
     match probe() {
         Ok(response) => json!({ "ok": true, "response": response }),
         Err(error) => http_doctor_error(error),
     }
 }
 
-fn http_doctor_wait_for_ready(client: &TraceDbClient, timeout_ms: u64) -> Value {
+fn http_doctor_wait_for_ready(client: &HttpApiClient, timeout_ms: u64) -> Value {
     if timeout_ms == 0 {
         return json!({
             "enabled": false,
@@ -983,7 +1587,7 @@ fn http_doctor_wait_for_ready(client: &TraceDbClient, timeout_ms: u64) -> Value 
     })
 }
 
-fn http_doctor_error(error: TraceDbClientError) -> Value {
+fn http_doctor_error(error: HttpApiError) -> Value {
     let server_error = error.server_error();
     let server_error_code = error.server_error_code();
     let mut value = json!({
@@ -997,7 +1601,7 @@ fn http_doctor_error(error: TraceDbClientError) -> Value {
         if let Some(server_error_code) = server_error_code {
             object.insert("server_error_code".to_string(), json!(server_error_code));
         }
-        if let TraceDbClientError::HttpStatus {
+        if let HttpApiError::HttpStatus {
             method,
             path,
             status,
@@ -1153,8 +1757,8 @@ fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::E
     let _server = LocalServerChild::start(data_dir, &bind.to_string())?;
 
     let url = format!("http://{bind}");
-    let client = TraceDbClient::new(
-        TraceDbClientConfig::managed(url.clone(), "dev-token")
+    let client = HttpApiClient::new(
+        HttpApiClientConfig::managed(url.clone(), "dev-token")
             .with_timeout(Duration::from_millis(500))
             .with_safe_retries(1)
             .with_idempotency_retries(1),
@@ -1174,15 +1778,15 @@ fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::E
                 table,
                 tenant,
                 "intro",
-                "TraceDB local HTTP SDK quickstart",
+                "TraceDB local HTTP API quickstart",
                 "published",
                 [1.0, 0.0, 0.0],
             ),
             demo_record(
                 table,
                 tenant,
-                "sdk",
-                "TraceDB SDK and HTTP API surface",
+                "api",
+                "TraceDB HTTP API surface",
                 "published",
                 [0.8, 0.2, 0.0],
             ),
@@ -1213,13 +1817,25 @@ fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::E
         freshness: FreshnessMode::Strict,
         explain: true,
     };
-    let query_response = client.query_typed(&query)?;
+    let query_response = client.query(&query)?;
     let query_ids = query_response
-        .results
-        .iter()
-        .map(|row| row.record_id.clone())
-        .collect::<Vec<_>>();
-    let explain = client.explain_typed(&query)?;
+        .get("results")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    row.get("record_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let explain = client.explain(&query)?;
+    let explain_returned_count = explain
+        .get("returned_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let delete = client.delete_typed_with_options(
         &RecordDeleteRequest::new(table, tenant, "ops").tombstone("http_demo_cleanup"),
         &http_demo_idempotency_options(&run_id, "delete-ops"),
@@ -1257,7 +1873,7 @@ fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::E
 
     print_json(json!({
         "ok": true,
-        "mode": "local-http-sdk-demo",
+        "mode": "local-http-api-demo",
         "server_url": url,
         "data_dir": data_dir,
         "table": table,
@@ -1280,7 +1896,7 @@ fn run_http_demo(data_dir: &std::path::Path) -> Result<(), Box<dyn std::error::E
         "records_scanned": scan.returned_count,
         "records_after_restore": restored_scan.returned_count,
         "query_result_ids": query_ids,
-        "explain_returned_count": explain.returned_count,
+        "explain_returned_count": explain_returned_count,
         "deleted_hidden": deleted_hidden,
         "snapshot_dir": snapshot.target,
         "restore_dir": restore.target,
@@ -1307,11 +1923,6 @@ const PRODUCT_REGRESSION_STEPS: &[&str] = &[
     "embedded_verify",
     "http_demo",
     "local_doctor",
-    "rust_sdk_quickstart",
-    "python_sdk_smoke",
-    "typescript_check",
-    "typescript_http_smoke",
-    "typescript_gateway_smoke",
 ];
 
 const PRODUCT_REGRESSION_ONLY_STEPS: &[&str] = PRODUCT_REGRESSION_STEPS;
@@ -2183,7 +2794,7 @@ fn storage_greedy_nn_vector_parity(
     let after = query_record_ids(&db, "", Some(vec![1.0, 0.0, 0.0]), "tenant-a")?;
     if before != after {
         return Err(
-            format!("greedy NN vector parity mismatch before={before:?} after={after:?}").into(),
+            format!("HNSW vector parity mismatch before={before:?} after={after:?}").into(),
         );
     }
     let vector_index = first_index_artifact(dir, &db, "vector")?;
@@ -2199,7 +2810,7 @@ fn storage_greedy_nn_vector_parity(
         return Err("vector artifact nearest neighbor did not match exact result".into());
     }
     Ok(json!({
-        "evidence": "segment-local deterministic greedy NN artifact matched exact vector query top result",
+        "evidence": "segment-local deterministic HNSW artifact matched vector query top result",
         "record_ids": after,
         "nearest": nearest.iter().map(|score| score.record_id.clone()).collect::<Vec<_>>(),
         "alpha_neighbors": neighbors,
@@ -2700,10 +3311,6 @@ fn first_index_artifact(
     )?)
 }
 
-fn product_regression_step_is_typescript(step: &str) -> bool {
-    step.starts_with("typescript_")
-}
-
 fn default_product_quickstart_report_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(product_regression_workspace_root()?.join(PRODUCT_QUICKSTART_REPORT_FILE))
 }
@@ -2732,7 +3339,6 @@ fn run_product_regression(
     let mut steps = serde_json::Map::new();
     let mut local_server_url = None;
     let cli = env::current_exe()?;
-    let workspace = product_regression_workspace_root()?;
     let embedded_dir = config
         .data_root
         .join("embedded")
@@ -2790,48 +3396,6 @@ fn run_product_regression(
         }
         return finish_product_regression(config, local_server_url, steps);
     }
-    if config.only_step.as_deref() == Some("rust_sdk_quickstart") {
-        let (bind, url) = product_regression_server_bind_and_url()?;
-        local_server_url = Some(url.clone());
-        {
-            let _server = LocalServerChild::start(&config.data_root.join("server-data"), &bind)?;
-            let sdk = product_regression_rust_sdk_quickstart_command(
-                &workspace,
-                &url,
-                &config.data_root.join("sdk-admin"),
-            )?;
-            let step = run_product_regression_step_or_injected(&config, "rust_sdk_quickstart", sdk);
-            steps.insert("rust_sdk_quickstart".to_string(), step);
-        }
-        return finish_product_regression(config, local_server_url, steps);
-    }
-    if config.only_step.as_deref() == Some("python_sdk_smoke") {
-        let command = product_regression_python_sdk_command(&workspace);
-        let step = run_product_regression_step_or_injected(&config, "python_sdk_smoke", command);
-        steps.insert("python_sdk_smoke".to_string(), step);
-        return finish_product_regression(config, local_server_url, steps);
-    }
-    if config.only_step.as_deref() == Some("typescript_check") {
-        let command = product_regression_typescript_command(&workspace, &["run", "check"]);
-        let step = run_product_regression_step_or_injected(&config, "typescript_check", command);
-        steps.insert("typescript_check".to_string(), step);
-        return finish_product_regression(config, local_server_url, steps);
-    }
-    if config.only_step.as_deref() == Some("typescript_http_smoke") {
-        let command =
-            product_regression_typescript_command(&workspace, &["run", "public-http-smoke"]);
-        let step =
-            run_product_regression_step_or_injected(&config, "typescript_http_smoke", command);
-        steps.insert("typescript_http_smoke".to_string(), step);
-        return finish_product_regression(config, local_server_url, steps);
-    }
-    if config.only_step.as_deref() == Some("typescript_gateway_smoke") {
-        let command = product_regression_typescript_command(&workspace, &["run", "gateway-smoke"]);
-        let step =
-            run_product_regression_step_or_injected(&config, "typescript_gateway_smoke", command);
-        steps.insert("typescript_gateway_smoke".to_string(), step);
-        return finish_product_regression(config, local_server_url, steps);
-    }
 
     for (name, command) in [
         (
@@ -2877,47 +3441,9 @@ fn run_product_regression(
         if !ok {
             server_step_failed = true;
         }
-
-        if !server_step_failed {
-            let sdk = product_regression_rust_sdk_quickstart_command(
-                &workspace,
-                &url,
-                &config.data_root.join("sdk-admin"),
-            )?;
-            let step = run_product_regression_step_or_injected(&config, "rust_sdk_quickstart", sdk);
-            let ok = product_regression_step_ok(&step);
-            steps.insert("rust_sdk_quickstart".to_string(), step);
-            if !ok {
-                server_step_failed = true;
-            }
-        }
     }
     if server_step_failed {
         return finish_product_regression(config, local_server_url, steps);
-    }
-
-    let python = product_regression_python_sdk_command(&workspace);
-    let step = run_product_regression_step_or_injected(&config, "python_sdk_smoke", python);
-    let ok = product_regression_step_ok(&step);
-    steps.insert("python_sdk_smoke".to_string(), step);
-    if !ok {
-        return finish_product_regression(config, local_server_url, steps);
-    }
-
-    if !config.skip_typescript {
-        for (name, args) in [
-            ("typescript_check", ["run", "check"]),
-            ("typescript_http_smoke", ["run", "public-http-smoke"]),
-            ("typescript_gateway_smoke", ["run", "gateway-smoke"]),
-        ] {
-            let command = product_regression_typescript_command(&workspace, &args);
-            let step = run_product_regression_step_or_injected(&config, name, command);
-            let ok = product_regression_step_ok(&step);
-            steps.insert(name.to_string(), step);
-            if !ok {
-                return finish_product_regression(config, local_server_url, steps);
-            }
-        }
     }
 
     finish_product_regression(config, local_server_url, steps)
@@ -2934,6 +3460,10 @@ fn finish_product_regression(
     let only_step = config.only_step.clone();
     let report_file = product_regression_report_file_json(config.report_file.as_deref());
     let human_summary = product_regression_human_summary(&steps, only_step.as_deref());
+    let typescript_enabled = !config.skip_typescript
+        && PRODUCT_REGRESSION_STEPS
+            .iter()
+            .any(|step| step.starts_with("typescript_"));
     let summary = json!({
         "ok": ok,
         "mode": "local-product-regression",
@@ -2946,7 +3476,7 @@ fn finish_product_regression(
         "only_step": only_step,
         "human_summary": human_summary,
         "local_server_url": local_server_url,
-        "typescript_enabled": !config.skip_typescript,
+        "typescript_enabled": typescript_enabled,
         "claims": {
             "sql_module": "not_implemented",
             "managed_cloud": "not_checked",
@@ -3039,54 +3569,6 @@ fn product_regression_local_doctor_command(cli: &std::path::Path, url: &str) -> 
             "db_local:main".into(),
         ],
     )
-}
-
-fn product_regression_rust_sdk_quickstart_command(
-    workspace: &std::path::Path,
-    url: &str,
-    admin_dir: &std::path::Path,
-) -> std::io::Result<Command> {
-    fs::create_dir_all(admin_dir)?;
-    let admin_dir_string = admin_dir.to_string_lossy().to_string();
-    let mut command = Command::new("cargo");
-    command.current_dir(workspace).args([
-        "run",
-        "-q",
-        "-p",
-        "tracedb-sdk",
-        "--example",
-        "quickstart",
-        "--",
-        "--url",
-        url,
-        "--token",
-        "dev-token",
-        "--timeout-ms",
-        "5000",
-        "--safe-retries",
-        "1",
-        "--idempotency-retries",
-        "1",
-        "--admin-dir",
-        &admin_dir_string,
-    ]);
-    Ok(command)
-}
-
-fn product_regression_python_sdk_command(workspace: &std::path::Path) -> Command {
-    let mut command = Command::new("python3");
-    command
-        .current_dir(workspace)
-        .args(["clients/python/http_smoke.py"]);
-    command
-}
-
-fn product_regression_typescript_command(workspace: &std::path::Path, args: &[&str]) -> Command {
-    let mut command = Command::new("npm");
-    command
-        .current_dir(workspace.join("clients/typescript"))
-        .args(args);
-    command
 }
 
 fn product_regression_step_list_summary(report_file: Option<&std::path::Path>) -> Value {
@@ -3251,19 +3733,17 @@ fn tail(text: &str, limit: usize) -> String {
     }
 }
 
-fn wait_for_ready(client: &TraceDbClient) -> Result<(), Box<dyn std::error::Error>> {
+fn wait_for_ready(client: &HttpApiClient) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_error = None;
     for _ in 0..50 {
         match client.ready_typed() {
             Ok(ready) if ready.ready => return Ok(()),
             Ok(_) => {}
-            Err(error) => last_error = Some(error),
+            Err(error) => last_error = Some(error.to_string()),
         }
         thread::sleep(Duration::from_millis(20));
     }
-    let message = last_error
-        .map(|error| error.to_string())
-        .unwrap_or_else(|| "server did not report ready".to_string());
+    let message = last_error.unwrap_or_else(|| "server did not report ready".to_string());
     Err(std::io::Error::new(
         std::io::ErrorKind::TimedOut,
         format!("timed out waiting for local http demo server: {message}"),
@@ -3301,8 +3781,8 @@ fn http_demo_run_id() -> Result<String, std::time::SystemTimeError> {
     Ok(format!("{}-{}", std::process::id(), elapsed.as_millis()))
 }
 
-fn http_demo_idempotency_options(run_id: &str, step: &str) -> TraceDbRequestOptions {
-    TraceDbRequestOptions::new().with_idempotency_key(format!("http-demo-{run_id}-{step}"))
+fn http_demo_idempotency_options(run_id: &str, step: &str) -> HttpApiRequestOptions {
+    HttpApiRequestOptions::new().with_idempotency_key(format!("http-demo-{run_id}-{step}"))
 }
 
 fn demo_schema(table: &str) -> TableSchema {

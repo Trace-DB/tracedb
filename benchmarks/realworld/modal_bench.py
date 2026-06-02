@@ -25,7 +25,6 @@ except ImportError:  # pragma: no cover - local tests should not require Modal.
 
 from runner.suite_spec import load_suite_spec, select_suite_baseline_json
 
-
 LAB_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = LAB_ROOT.parent.parent
 REMOTE_REPO = "/workspace/TraceDB"
@@ -132,16 +131,16 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "suite_spec": "benchmarks/realworld/suites/platform_pr.json",
         "records": 128,
         "target": "tracedb",
-        "surface": "sdk,cli,http,curl",
-        "scenarios": "sdk_cli_surface,http_falsification",
+        "surface": "http,curl",
+        "scenarios": "http_falsification",
         "tracedb_ingest_mode": "batch",
     },
     "platform_push_10k": {
         "suite_spec": "benchmarks/realworld/suites/platform_push_10k.json",
         "records": 10000,
         "target": "tracedb,postgres,pgvector,mongodb,qdrant,opensearch",
-        "surface": "sdk,cli,http,curl",
-        "scenarios": "sdk_cli_surface,http_falsification,search_rag_6",
+        "surface": "http,curl",
+        "scenarios": "http_falsification,search_rag_6",
         "tracedb_ingest_mode": "batch",
         "allow_large": True,
         "allow_external_controls": True,
@@ -164,8 +163,8 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "suite_spec": "benchmarks/realworld/suites/release_100k.json",
         "records": 100000,
         "target": "tracedb,postgres,pgvector,mongodb,qdrant,opensearch",
-        "surface": "sdk,cli,http,curl",
-        "scenarios": "sdk_cli_surface,http_falsification,search_rag_6",
+        "surface": "http,curl",
+        "scenarios": "http_falsification,search_rag_6",
         "tracedb_ingest_mode": "batch",
         "allow_large": True,
         "allow_external_controls": True,
@@ -183,8 +182,8 @@ SUITE_PRESETS: dict[str, dict[str, Any]] = {
         "records": 1000000,
         "dataset": "generated_hybrid",
         "target": "tracedb,pgvector,qdrant,opensearch",
-        "surface": "http_direct,rust_sdk,typescript_sdk,python_sdk,traceql,graphql",
-        "scenarios": "sdk_cli_surface,http_falsification,search_rag_6",
+        "surface": "http,curl",
+        "scenarios": "http_falsification,search_rag_6",
         "tracedb_ingest_mode": "batch",
         "allow_large": True,
         "allow_external_controls": True,
@@ -235,8 +234,8 @@ class ModalSmokeConfig:
     dataset: str = "generated"
     records: int = 128
     target: str = "tracedb"
-    surface: str = "sdk"
-    scenarios: str = "sdk_cli_surface"
+    surface: str = "http,curl"
+    scenarios: str = "http_falsification"
     suite_spec: str = ""
     suite_baseline_json: str = ""
     suite_baseline_dir: str = ""
@@ -262,7 +261,7 @@ class ModalSmokeConfig:
     railway_runbook_verification_required: bool = False
     openrouter_mode: str = "off"
     openrouter_cap: str = "moderate"
-    tracedb_ingest_mode: str = "per_record"
+    tracedb_ingest_mode: str = "batch"
     embedding_dimensions: str | None = None
     seed: int = 42
     reports_dir: str = DEFAULT_REPORTS_DIR
@@ -458,7 +457,9 @@ def validate_modal_image_kind(kind: str) -> str:
         "tracedb_controls",
     }
     if kind not in valid:
-        raise ValueError(f"{MODAL_IMAGE_KIND_ENV} must be one of {', '.join(sorted(valid))}")
+        raise ValueError(
+            f"{MODAL_IMAGE_KIND_ENV} must be one of {', '.join(sorted(valid))}"
+        )
     return kind
 
 
@@ -547,22 +548,35 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         command.extend(["--suite-spec", config.suite_spec])
     if config.suite_baseline_json:
         command.extend(["--suite-baseline-json", config.suite_baseline_json])
-        command.extend(["--regression-tolerance-pct", str(config.regression_tolerance_pct)])
         command.extend(
-            ["--regression-tolerance-absolute", str(config.regression_tolerance_absolute)]
+            ["--regression-tolerance-pct", str(config.regression_tolerance_pct)]
+        )
+        command.extend(
+            [
+                "--regression-tolerance-absolute",
+                str(config.regression_tolerance_absolute),
+            ]
         )
     elif config.suite_baseline_dir:
         command.extend(["--suite-baseline-dir", config.suite_baseline_dir])
-        command.extend(["--regression-tolerance-pct", str(config.regression_tolerance_pct)])
         command.extend(
-            ["--regression-tolerance-absolute", str(config.regression_tolerance_absolute)]
+            ["--regression-tolerance-pct", str(config.regression_tolerance_pct)]
+        )
+        command.extend(
+            [
+                "--regression-tolerance-absolute",
+                str(config.regression_tolerance_absolute),
+            ]
         )
     if config.railway_config_from_env:
         command.append("--railway-config-from-env")
     if config.railway_health_check:
         command.append("--railway-health-check")
         command.extend(
-            ["--railway-health-timeout-seconds", str(config.railway_health_timeout_seconds)]
+            [
+                "--railway-health-timeout-seconds",
+                str(config.railway_health_timeout_seconds),
+            ]
         )
     if config.railway_stateful_smoke:
         command.append("--railway-stateful-smoke")
@@ -575,7 +589,9 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
         if config.railway_stateful_read_only:
             command.append("--railway-stateful-read-only")
         if config.railway_stateful_marker_id:
-            command.extend(["--railway-stateful-marker-id", config.railway_stateful_marker_id])
+            command.extend(
+                ["--railway-stateful-marker-id", config.railway_stateful_marker_id]
+            )
     if config.railway_snapshot_restore_check:
         command.append("--railway-snapshot-restore-check")
         command.extend(
@@ -598,9 +614,13 @@ def build_suite_command(config: ModalSmokeConfig) -> list[str]:
             ]
         )
     if config.railway_operation_receipt_json:
-        command.extend(["--railway-operation-receipt-json", config.railway_operation_receipt_json])
+        command.extend(
+            ["--railway-operation-receipt-json", config.railway_operation_receipt_json]
+        )
     if config.railway_backup_receipt_json:
-        command.extend(["--railway-backup-receipt-json", config.railway_backup_receipt_json])
+        command.extend(
+            ["--railway-backup-receipt-json", config.railway_backup_receipt_json]
+        )
     if config.railway_runbook_verification_json:
         command.extend(
             [
@@ -627,38 +647,68 @@ def build_runner_env(
     env["BENCH_DISABLE_ENV_FILE"] = "1"
     if config.postgres_control:
         env[POSTGRES_DSN_ENV] = postgres_control_dsn(config)
-    elif config.require_services and target_needs_postgres(config) and not env.get(
-        POSTGRES_DSN_ENV
+    elif (
+        config.require_services
+        and target_needs_postgres(config)
+        and not env.get(POSTGRES_DSN_ENV)
     ):
-        raise ValueError(f"{POSTGRES_DSN_ENV} is required for required PostgreSQL control runs")
+        raise ValueError(
+            f"{POSTGRES_DSN_ENV} is required for required PostgreSQL control runs"
+        )
     if config.pgvector_control:
         env[PGVECTOR_DSN_ENV] = pgvector_control_dsn(config)
-    elif config.require_services and target_needs_pgvector(config) and not env.get(
-        PGVECTOR_DSN_ENV
+    elif (
+        config.require_services
+        and target_needs_pgvector(config)
+        and not env.get(PGVECTOR_DSN_ENV)
     ):
-        raise ValueError(f"{PGVECTOR_DSN_ENV} is required for required pgvector control runs")
+        raise ValueError(
+            f"{PGVECTOR_DSN_ENV} is required for required pgvector control runs"
+        )
     if config.qdrant_control:
         env[QDRANT_URL_ENV] = qdrant_control_url(config)
         env[QDRANT_STORAGE_DIR_ENV] = str(qdrant_control_data_dir(config))
-    elif config.require_services and target_needs_qdrant(config) and not env.get(QDRANT_URL_ENV):
-        raise ValueError(f"{QDRANT_URL_ENV} is required for required Qdrant control runs")
+    elif (
+        config.require_services
+        and target_needs_qdrant(config)
+        and not env.get(QDRANT_URL_ENV)
+    ):
+        raise ValueError(
+            f"{QDRANT_URL_ENV} is required for required Qdrant control runs"
+        )
     if config.opensearch_control:
         env[OPENSEARCH_URL_ENV] = opensearch_control_url(config)
         env[OPENSEARCH_STORAGE_DIR_ENV] = str(opensearch_control_data_dir(config))
-    elif config.require_services and target_needs_opensearch(config) and not env.get(
-        OPENSEARCH_URL_ENV
+    elif (
+        config.require_services
+        and target_needs_opensearch(config)
+        and not env.get(OPENSEARCH_URL_ENV)
     ):
-        raise ValueError(f"{OPENSEARCH_URL_ENV} is required for required OpenSearch control runs")
+        raise ValueError(
+            f"{OPENSEARCH_URL_ENV} is required for required OpenSearch control runs"
+        )
     if config.mongodb_control:
         env[MONGO_URI_ENV] = mongodb_control_uri(config)
         env[MONGO_STORAGE_DIR_ENV] = str(mongodb_control_data_dir(config))
-    elif config.require_services and target_needs_mongodb(config) and not env.get(MONGO_URI_ENV):
-        raise ValueError(f"{MONGO_URI_ENV} is required for required MongoDB control runs")
+    elif (
+        config.require_services
+        and target_needs_mongodb(config)
+        and not env.get(MONGO_URI_ENV)
+    ):
+        raise ValueError(
+            f"{MONGO_URI_ENV} is required for required MongoDB control runs"
+        )
     if config.milvus_control:
         env[MILVUS_URI_ENV] = milvus_control_uri(config)
         env[MILVUS_STORAGE_DIR_ENV] = str(milvus_control_data_dir(config))
-    elif config.require_services and target_needs_milvus(config) and not env.get(MILVUS_URI_ENV):
-        raise ValueError(f"{MILVUS_URI_ENV} is required for required Milvus control runs")
+    elif (
+        config.require_services
+        and target_needs_milvus(config)
+        and not env.get(MILVUS_URI_ENV)
+    ):
+        raise ValueError(
+            f"{MILVUS_URI_ENV} is required for required Milvus control runs"
+        )
     if config.tracedb_engine_control:
         env[TRACEDB_HTTP_URL_ENV] = tracedb_engine_http_url(config)
         env[TRACEDB_HTTP_DATA_DIR_ENV] = str(tracedb_engine_data_dir(config))
@@ -666,11 +716,15 @@ def build_runner_env(
 
 
 def postgres_control_dsn(config: ModalSmokeConfig) -> str:
-    return f"postgresql://tracedb:tracedb@127.0.0.1:{config.postgres_port}/tracedb_bench"
+    return (
+        f"postgresql://tracedb:tracedb@127.0.0.1:{config.postgres_port}/tracedb_bench"
+    )
 
 
 def pgvector_control_dsn(config: ModalSmokeConfig) -> str:
-    return f"postgresql://tracedb:tracedb@127.0.0.1:{config.pgvector_port}/tracedb_bench"
+    return (
+        f"postgresql://tracedb:tracedb@127.0.0.1:{config.pgvector_port}/tracedb_bench"
+    )
 
 
 def qdrant_control_url(config: ModalSmokeConfig) -> str:
@@ -718,7 +772,11 @@ def redacted_env(env: Mapping[str, str]) -> dict[str, str]:
     for key, value in env.items():
         if key in SENSITIVE_ENV_KEYS:
             redacted[key] = "[redacted]"
-        elif key.startswith("BENCH_") or key.startswith("OPENROUTER_") or key.startswith("TRACEDB_"):
+        elif (
+            key.startswith("BENCH_")
+            or key.startswith("OPENROUTER_")
+            or key.startswith("TRACEDB_")
+        ):
             redacted[key] = value
     return redacted
 
@@ -818,7 +876,9 @@ def resolve_modal_suite_baseline(
 ) -> tuple[ModalSmokeConfig, dict[str, Any] | None]:
     if config.suite_baseline_json or not config.suite_baseline_dir:
         return config, None
-    baseline_dir = _resolve_local_artifact_path(config.suite_baseline_dir, lab_root=lab_root)
+    baseline_dir = _resolve_local_artifact_path(
+        config.suite_baseline_dir, lab_root=lab_root
+    )
     suite_spec_id = _suite_spec_id_for_modal_config(config, lab_root=lab_root)
     selection = select_suite_baseline_json(
         baseline_dir,
@@ -861,18 +921,21 @@ def stage_modal_input_artifacts(
         artifact_path_text = getattr(config, field_name)
         if not artifact_path_text:
             continue
-        if artifact_path_text == remote_prefix or artifact_path_text.startswith(f"{remote_prefix}/"):
+        if artifact_path_text == remote_prefix or artifact_path_text.startswith(
+            f"{remote_prefix}/"
+        ):
             continue
 
-        source_path = _resolve_local_artifact_path(artifact_path_text, lab_root=lab_root)
+        source_path = _resolve_local_artifact_path(
+            artifact_path_text, lab_root=lab_root
+        )
         if not source_path.exists():
-            raise FileNotFoundError(f"{artifact_kind} artifact not found: {artifact_path_text}")
+            raise FileNotFoundError(
+                f"{artifact_kind} artifact not found: {artifact_path_text}"
+            )
 
         staged_path = (
-            lab_root
-            / MODAL_INPUT_ARTIFACTS_DIR
-            / run_segment
-            / artifact_filename
+            lab_root / MODAL_INPUT_ARTIFACTS_DIR / run_segment / artifact_filename
         )
         staged_path.parent.mkdir(parents=True, exist_ok=True)
         if source_path.resolve() != staged_path.resolve():
@@ -939,7 +1002,9 @@ def bundle_report_artifacts(
         raise FileNotFoundError(f"report run directory not found: {run_dir}")
     bundle_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     bundle = bundle_dir / f"{run_id}.tar.gz"
     with tarfile.open(bundle, "w:gz") as archive:
         archive.add(run_dir, arcname=run_id)
@@ -987,7 +1052,9 @@ def extract_control_summary(bundle_path: Path, run_id: str) -> dict[str, Any]:
     }
 
 
-def extract_scenario_metrics(suite: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def extract_scenario_metrics(
+    suite: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     baselines: dict[str, Any] = {}
     datasets: dict[str, Any] = {}
     for scenario in suite.get("scenarios", []):
@@ -1007,7 +1074,9 @@ def extract_scenario_metrics(suite: dict[str, Any]) -> tuple[dict[str, Any], dic
     return baselines, datasets
 
 
-def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT) -> dict[str, Any]:
+def run_suite_and_bundle(
+    config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT
+) -> dict[str, Any]:
     validate_config(config)
     _ensure_free_space(Path(config.bundle_dir), config.min_free_mb)
     reports_dir = Path(config.reports_dir)
@@ -1063,7 +1132,9 @@ def run_suite_and_bundle(config: ModalSmokeConfig, *, lab_root: Path = LAB_ROOT)
             stop_postgres_control(postgres_service)
         if tracedb_service is not None:
             stop_tracedb_engine_control(tracedb_service)
-    manifest = build_manifest(config, command, repo_root=lab_root.parent.parent, runner_env=env)
+    manifest = build_manifest(
+        config, command, repo_root=lab_root.parent.parent, runner_env=env
+    )
     manifest["process"] = {
         "returncode": completed.returncode,
         "stdout_tail": redact_sensitive_text(completed.stdout[-4000:], env),
@@ -1163,7 +1234,9 @@ def start_tracedb_engine_control(
                 process=process,
             )
         )
-        raise RuntimeError(f"TraceDB engine failed to become ready; log tail: {tail_file(log_path)}")
+        raise RuntimeError(
+            f"TraceDB engine failed to become ready; log tail: {tail_file(log_path)}"
+        )
     return TraceDbEngineControl(
         data_dir=data_dir,
         log_path=log_path,
@@ -1218,7 +1291,9 @@ def wait_for_qdrant_ready(base_url: str, *, timeout_seconds: float = 30.0) -> No
         except Exception as error:  # pragma: no cover - exercised in Modal.
             last_error = error
         time.sleep(0.1)
-    raise TimeoutError(f"{base_url}/readyz did not respond before timeout: {last_error}")
+    raise TimeoutError(
+        f"{base_url}/readyz did not respond before timeout: {last_error}"
+    )
 
 
 def wait_for_opensearch_ready(base_url: str, *, timeout_seconds: float = 60.0) -> None:
@@ -1327,7 +1402,9 @@ def start_qdrant_control(config: ModalSmokeConfig) -> QdrantControl:
         wait_for_qdrant_ready(qdrant_control_url(config))
     except Exception:
         stop_qdrant_control(service)
-        raise RuntimeError(f"Qdrant control failed to become ready; log tail: {tail_file(log_path)}")
+        raise RuntimeError(
+            f"Qdrant control failed to become ready; log tail: {tail_file(log_path)}"
+        )
     return service
 
 
@@ -1427,7 +1504,9 @@ def start_mongodb_control(config: ModalSmokeConfig) -> MongoDbControl:
         wait_for_mongodb_ready(mongodb_control_uri(config))
     except Exception:
         stop_mongodb_control(service)
-        raise RuntimeError(f"MongoDB control failed to become ready; log tail: {tail_file(log_path)}")
+        raise RuntimeError(
+            f"MongoDB control failed to become ready; log tail: {tail_file(log_path)}"
+        )
     return service
 
 
@@ -1438,7 +1517,9 @@ def opensearch_install_dir() -> Path:
     default_dir = Path(f"/opt/opensearch-{OPENSEARCH_VERSION}")
     if default_dir.exists():
         return default_dir
-    raise RuntimeError("OpenSearch install directory not found; install OpenSearch in the Modal image")
+    raise RuntimeError(
+        "OpenSearch install directory not found; install OpenSearch in the Modal image"
+    )
 
 
 def opensearch_config_path() -> Path:
@@ -1549,7 +1630,9 @@ def stop_milvus_control(_service: MilvusLiteControl) -> None:
     return None
 
 
-def start_postgres_service(*, run_id: str, port: int, service_name: str) -> PostgresControl:
+def start_postgres_service(
+    *, run_id: str, port: int, service_name: str
+) -> PostgresControl:
     data_dir = Path("/tmp") / f"tracedb-{service_name}-{run_id}"
     log_path = Path("/tmp") / f"tracedb-{service_name}-{run_id}.log"
     bin_dir = postgres_bin_dir()
@@ -1557,7 +1640,9 @@ def start_postgres_service(*, run_id: str, port: int, service_name: str) -> Post
     pg_ctl = bin_dir / "pg_ctl"
     createdb = shutil.which("createdb")
     if createdb is None:
-        raise RuntimeError("createdb not found; install postgresql-client in the Modal image")
+        raise RuntimeError(
+            "createdb not found; install postgresql-client in the Modal image"
+        )
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True)
@@ -1633,7 +1718,9 @@ def postgres_bin_dir() -> Path:
     raise RuntimeError("initdb not found; install postgresql in the Modal image")
 
 
-def _run_maybe_as_postgres(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_maybe_as_postgres(
+    command: list[str], *, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     if _running_as_root():
         shell_command = " ".join(shlex.quote(part) for part in command)
         command = ["su", "postgres", "-c", shell_command]
@@ -1655,17 +1742,21 @@ def _ensure_free_space(path: Path, min_free_mb: int) -> None:
     usage = os.statvfs(path)
     free_mb = (usage.f_bavail * usage.f_frsize) // (1024 * 1024)
     if free_mb < min_free_mb:
-        raise RuntimeError(f"free disk {free_mb} MiB is below required {min_free_mb} MiB")
+        raise RuntimeError(
+            f"free disk {free_mb} MiB is below required {min_free_mb} MiB"
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run a cost-guarded TraceDB Modal smoke benchmark")
+    parser = argparse.ArgumentParser(
+        description="Run a cost-guarded TraceDB Modal smoke benchmark"
+    )
     parser.add_argument("--run-id", default="modal-smoke")
     parser.add_argument("--records", type=int, default=128)
     parser.add_argument("--dataset", default="generated")
     parser.add_argument("--target", default="tracedb")
-    parser.add_argument("--surface", default="sdk")
-    parser.add_argument("--scenarios", default="sdk_cli_surface")
+    parser.add_argument("--surface", default="http,curl")
+    parser.add_argument("--scenarios", default="http_falsification")
     parser.add_argument("--suite-spec", default="")
     parser.add_argument("--suite-preset", choices=sorted(SUITE_PRESETS), default="")
     parser.add_argument("--suite-baseline-json", default="")
@@ -1677,11 +1768,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--railway-health-check", action="store_true")
     parser.add_argument("--railway-health-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--railway-stateful-smoke", action="store_true")
-    parser.add_argument("--railway-stateful-smoke-timeout-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--railway-stateful-smoke-timeout-seconds", type=float, default=5.0
+    )
     parser.add_argument("--railway-stateful-marker-id", default="")
     parser.add_argument("--railway-stateful-read-only", action="store_true")
     parser.add_argument("--railway-snapshot-restore-check", action="store_true")
-    parser.add_argument("--railway-snapshot-restore-timeout-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--railway-snapshot-restore-timeout-seconds", type=float, default=60.0
+    )
     parser.add_argument("--railway-snapshot-root", default="")
     parser.add_argument("--railway-verify-restored-marker", action="store_true")
     parser.add_argument("--railway-restart-redeploy-plan", action="store_true")
@@ -1690,12 +1785,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--railway-backup-receipt-json", default="")
     parser.add_argument("--railway-runbook-verification-json", default="")
     parser.add_argument("--railway-require-runbook-verification", action="store_true")
-    parser.add_argument("--openrouter-mode", default="off", choices=["auto", "off", "required"])
+    parser.add_argument(
+        "--openrouter-mode", default="off", choices=["auto", "off", "required"]
+    )
     parser.add_argument("--openrouter-cap", default="moderate")
     parser.add_argument(
         "--tracedb-ingest-mode",
-        default="per_record",
+        default="batch",
         choices=["per_record", "batch"],
+        help=(
+            "TraceDB ingest lane for suite commands. Default: batch "
+            "(single atomic batch transaction); per_record keeps one durable "
+            "commit per record."
+        ),
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-free-mb", type=int, default=20_000)
@@ -1784,7 +1886,8 @@ def _config_from_args(args: argparse.Namespace) -> ModalSmokeConfig:
         allow_external_controls=args.allow_external_controls
         or bool(preset.get("allow_external_controls", False)),
         allow_provider=args.allow_provider,
-        require_services=args.require_services or bool(preset.get("require_services", False)),
+        require_services=args.require_services
+        or bool(preset.get("require_services", False)),
         tracedb_engine_control=args.tracedb_engine_control,
         postgres_control=args.postgres_control,
         pgvector_control=args.pgvector_control,
@@ -1838,7 +1941,9 @@ def write_summary_json(summary: dict[str, Any], summary_json: str | None) -> Non
         return
     output_path = Path(summary_json).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _ensure_bundle_export_size(size_bytes: int, max_mb: int) -> None:
@@ -1985,9 +2090,7 @@ if modal is not None:
     def tracedb_engine_image(*extra_packages: str) -> modal.Image:
         return add_repo_source_for_build(
             rust_modal_base_image(*extra_packages)
-        ).run_commands(
-            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
-        )
+        ).run_commands(f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server")
 
     def add_pgvector_extension(base_image: modal.Image) -> modal.Image:
         return base_image.run_commands(
@@ -2015,9 +2118,7 @@ if modal is not None:
     def tracedb_pgvector_control_image() -> modal.Image:
         return add_repo_source_for_build(
             pgvector_package_image(rust_modal_base_image())
-        ).run_commands(
-            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
-        )
+        ).run_commands(f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server")
 
     def add_qdrant_binary(base_image: modal.Image) -> modal.Image:
         return base_image.run_commands(
@@ -2061,9 +2162,7 @@ if modal is not None:
     def tracedb_qdrant_control_image() -> modal.Image:
         return add_repo_source_for_build(
             add_qdrant_binary(rust_modal_base_image())
-        ).run_commands(
-            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
-        )
+        ).run_commands(f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server")
 
     def opensearch_control_image() -> modal.Image:
         return add_repo_source(add_opensearch_binary(modal_base_image()))
@@ -2071,9 +2170,7 @@ if modal is not None:
     def tracedb_opensearch_control_image() -> modal.Image:
         return add_repo_source_for_build(
             add_opensearch_binary(rust_modal_base_image())
-        ).run_commands(
-            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
-        )
+        ).run_commands(f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server")
 
     def mongodb_control_image() -> modal.Image:
         return add_repo_source(add_mongodb_binary(modal_base_image()))
@@ -2081,9 +2178,7 @@ if modal is not None:
     def tracedb_mongodb_control_image() -> modal.Image:
         return add_repo_source_for_build(
             add_mongodb_binary(rust_modal_base_image())
-        ).run_commands(
-            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
-        )
+        ).run_commands(f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server")
 
     def milvus_control_image() -> modal.Image:
         return modal_image()
@@ -2107,9 +2202,7 @@ if modal is not None:
                     add_qdrant_binary(pgvector_package_image(rust_modal_base_image()))
                 )
             )
-        ).run_commands(
-            f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server"
-        )
+        ).run_commands(f"cd {REMOTE_REPO} && cargo build --release -p tracedb-server")
 
     def selected_modal_image(kind: str) -> modal.Image:
         kind = validate_modal_image_kind(kind)
@@ -2160,7 +2253,9 @@ if modal is not None:
         **kwargs: Any,
     ) -> dict[str, Any]:
         config = ModalSmokeConfig(**kwargs)
-        summary = run_suite_and_bundle(config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld")
+        summary = run_suite_and_bundle(
+            config, lab_root=Path(REMOTE_REPO) / "benchmarks" / "realworld"
+        )
         if export_bundle:
             return attach_bundle_bytes(summary, max_mb=bundle_export_max_mb)
         return summary
@@ -2171,8 +2266,8 @@ if modal is not None:
         records: int = 128,
         dataset: str = "generated",
         target: str = "tracedb",
-        surface: str = "sdk",
-        scenarios: str = "sdk_cli_surface",
+        surface: str = "http,curl",
+        scenarios: str = "http_falsification",
         suite_spec: str = "",
         suite_preset: str = "",
         suite_baseline_json: str = "",
@@ -2199,7 +2294,7 @@ if modal is not None:
         railway_require_runbook_verification: bool = False,
         openrouter_mode: str = "off",
         openrouter_cap: str = "moderate",
-        tracedb_ingest_mode: str = "per_record",
+        tracedb_ingest_mode: str = "batch",
         seed: int = 42,
         min_free_mb: int = 20_000,
         allow_external_controls: bool = False,

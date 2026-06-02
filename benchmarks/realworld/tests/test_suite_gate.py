@@ -69,9 +69,8 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(spec.id, "platform_pr")
         self.assertEqual(spec.default_records, 128)
         self.assertEqual(spec.record_counts, [128, 1000])
-        self.assertIn("sdk_cli_surface", spec.scenarios)
-        self.assertIn("http_falsification", spec.scenarios)
-        self.assertIn("python_sdk", spec.surfaces)
+        self.assertEqual(spec.scenarios, ["http_falsification"])
+        self.assertEqual(spec.surfaces, ["http_direct", "traceql_sqlish", "graphql"])
         self.assertFalse(spec.requires_external_controls)
         self.assertFalse(spec.railway_required)
         self.assertEqual(spec.unsupported_coverage["sql_compatibility"], "unsupported")
@@ -149,7 +148,7 @@ class SuiteGateTests(unittest.TestCase):
 
         self.assertEqual(
             spec.surfaces,
-            ["http_direct", "rust_sdk", "typescript_sdk", "python_sdk", "traceql", "graphql"],
+            ["http_direct", "traceql", "graphql"],
         )
         self.assertEqual(spec.unsupported_coverage["graphql_mutations"], "unsupported")
 
@@ -201,7 +200,7 @@ class SuiteGateTests(unittest.TestCase):
         self.assertEqual(spec.dataset, "generated_hybrid")
         self.assertEqual(
             spec.surfaces,
-            ["http_direct", "rust_sdk", "typescript_sdk", "python_sdk", "traceql", "graphql"],
+            ["http_direct", "traceql", "graphql"],
         )
         self.assertEqual(spec.controls, ["tracedb", "pgvector", "qdrant", "opensearch"])
         self.assertTrue(spec.requires_external_controls)
@@ -211,9 +210,9 @@ class SuiteGateTests(unittest.TestCase):
         self.assertTrue(spec.railway["restart_required"])
         self.assertTrue(spec.railway["redeploy_required"])
         self.assertTrue(spec.railway["runbook_verification_required"])
+        self.assertFalse(spec.blocking_rules["sdk_parity"])
         for rule in [
             "correctness",
-            "sdk_parity",
             "supported_api_parity",
             "tenant_isolation",
             "tombstones",

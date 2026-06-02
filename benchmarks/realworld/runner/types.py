@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 VECTOR_DIMENSIONS = 8
 DETERMINISTIC_EMBEDDING_MODEL = "deterministic-vector-v1"
 
@@ -78,4 +77,4 @@ class RunConfig:
     run_id: str = ""
     reports_dir: str = "reports"
     observer: Any | None = None
-    tracedb_ingest_mode: str = "per_record"
+    tracedb_ingest_mode: str = "batch"

@@ -54,70 +54,38 @@ class PlatformConformanceTests(unittest.TestCase):
         self.assertIn("traceql_sqlish", module.contract_surface_ids(manifest))
         self.assertIn("graphql", module.contract_surface_ids(manifest))
 
-    def test_python_sdk_sync_package_declares_contract_surface(self) -> None:
-        package_root = ROOT / "clients" / "python"
+    def test_default_surfaces_are_core_http_only(self) -> None:
+        module = load_module()
 
-        self.assertTrue((package_root / "tracedb" / "__init__.py").exists())
-        self.assertTrue((package_root / "tracedb" / "client.py").exists())
-        self.assertTrue((package_root / "http_smoke.py").exists())
-        self.assertTrue((package_root / "README.md").exists())
-
-        client_source = (package_root / "tracedb" / "client.py").read_text()
-        for token in [
-            "class TraceDB",
-            "class TraceDBTable",
-            "class TraceDBQueryBuilder",
-            "class TraceDBHTTPError",
-            "def insert_batch",
-            "def with_options",
-            "Idempotency-Key",
-            "database_id",
-            "branch_id",
-            "safe_retries",
-            "TRACEDB_SAFE_RETRIES",
-        ]:
-            self.assertIn(token, client_source)
-
-        smoke_source = (package_root / "http_smoke.py").read_text()
-        self.assertIn("TRACEDB_PYTHON_IMPORT_MODE", smoke_source)
-        self.assertLess(
-            smoke_source.index("TRACEDB_PYTHON_IMPORT_MODE"),
-            smoke_source.index("from tracedb import"),
-        )
+        self.assertEqual(module.DEFAULT_SURFACES, ["http_direct"])
 
     def test_python_sdk_conformance_installs_package_before_http_smoke(self) -> None:
         script_source = SCRIPT.read_text()
 
         for token in [
             "install_python_sdk_package_for_conformance",
-            "shutil.copytree",
+            "TRACEDB_PYTHON_SDK_REPO",
+            "tracedb-python",
             "--target",
             "PYTHONPATH",
             "TRACEDB_PYTHON_IMPORT_MODE",
+            "TRACEDB_CORE_REPO",
             "installed",
             "sys.executable",
         ]:
             self.assertIn(token, script_source)
 
-    def test_typescript_public_http_smoke_declares_contract_evidence_output(self) -> None:
-        smoke_source = (ROOT / "clients" / "typescript" / "public-http-smoke.ts").read_text()
+    def test_typescript_sdk_conformance_uses_standalone_repo(self) -> None:
+        script_source = SCRIPT.read_text()
 
         for token in [
-            "--summary-json",
-            "idempotency",
-            "idempotency_conflict_status",
-            "error_envelope",
-            "TraceDbHttpError",
+            "TRACEDB_TYPESCRIPT_SDK_REPO",
+            "tracedb-js",
+            "TRACEDB_CORE_REPO",
+            "public-http-smoke",
         ]:
-            self.assertIn(token, smoke_source)
-
-    def test_typescript_gateway_smoke_allocates_gateway_port_after_engine_binds(self) -> None:
-        smoke_source = (ROOT / "clients" / "typescript" / "gateway-smoke.ts").read_text()
-
-        engine_ready_index = smoke_source.index('await waitForReady("tracedb engine"')
-        gateway_port_index = smoke_source.index("const gatewayPort = await freePort();")
-
-        self.assertLess(engine_ready_index, gateway_port_index)
+            self.assertIn(token, script_source)
+        self.assertNotIn("clients/typescript", script_source)
 
     def test_rust_sdk_product_summary_maps_to_contract_scenarios(self) -> None:
         module = load_module()
@@ -226,7 +194,7 @@ class PlatformConformanceTests(unittest.TestCase):
         scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
 
         self.assertEqual(surface["surface"], "python_sdk")
-        self.assertIn("installed package", " ".join(surface["evidence"]))
+        self.assertIn("installed standalone package", " ".join(surface["evidence"]))
         self.assertEqual(scenarios["schema_apply"]["status"], "passed")
         self.assertEqual(scenarios["put"]["status"], "passed")
         self.assertEqual(scenarios["batch"]["status"], "passed")

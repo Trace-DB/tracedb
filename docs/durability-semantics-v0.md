@@ -32,9 +32,10 @@ The local data directory contains the durability contract:
 
 - `manifest.tdb` stores database identity, branch identity, schemas, latest
   epoch, durable epoch, checkpoint epoch, manifest generation, module metadata,
-  segment/index metadata, and a manifest checksum. Manifest writes recompute
-  the checksum, write a temporary file, sync that file, rename it into place,
-  and sync the parent directory.
+  segment/index metadata, and a manifest checksum. Manifest writes rotate the
+  previous manifest to `manifest.tdb.bak`, recompute the checksum, write a
+  temporary file, sync that file, rename it into place, and sync the parent
+  directory.
 - `wal/000001.twal` stores WAL commit frames. Each mutation/admin state change
   that modifies engine records or schema is appended as a committed frame before
   the manifest advances. The append path writes the frame and calls
@@ -47,8 +48,9 @@ The local data directory contains the durability contract:
   magic prefix, payload checksum, schemas, records, and checkpoint epoch.
 - `segments/`, `indexes/`, `hot/`, and `jobs/` are copied by snapshot/backup
   helpers as part of the current local data directory shape.
-- `engine.lock` is a layout marker created on open. It is not an active
-  process-wide exclusive lock.
+- `engine.lock` is opened with a process-wide exclusive file lock during engine
+  open. A second active process using the same data directory fails fast instead
+  of writing concurrently.
 - `engine.write.lock` serializes TraceDB engine write sections. `000001.twal.lock`
   serializes WAL appends. Both are create-new lock files that are removed when
   their guards drop.
@@ -74,8 +76,9 @@ carry them.
 
 ## Recovery Semantics
 
-On open, TraceDB creates the data-directory layout, reads `manifest.tdb`, checks
-the manifest checksum, opens the WAL, and scans committed WAL frames. If
+On open, TraceDB creates the data-directory layout, acquires `engine.lock`, reads
+`manifest.tdb`, checks the manifest checksum, opens the WAL, and scans committed
+WAL frames. If
 `manifest.checkpoint_epoch` is nonzero, the engine reads the matching
 checkpoint first, checks the checkpoint frame/checksum, and rebuilds visible
 records from that checkpoint. It then replays WAL commits whose epoch is greater
@@ -109,11 +112,12 @@ The scanner treats these conditions as hard corruption, not best-effort replay:
 - invalid parent epoch
 - previous commit hash mismatch
 
-Manifest corruption is also hard failure. Missing manifest checksum, manifest
-checksum mismatch, checkpoint epoch greater than latest epoch, checkpoint epoch
-mismatch, missing checkpoint checksum, checkpoint checksum mismatch, unsupported
-checkpoint format, and checkpoint parse failure stop open instead of silently
-repairing state.
+Manifest corruption first attempts the rotated `manifest.tdb.bak` fallback.
+If both the current manifest and backup are unusable, missing manifest checksum,
+manifest checksum mismatch, checkpoint epoch greater than latest epoch,
+checkpoint epoch mismatch, missing checkpoint checksum, checkpoint checksum
+mismatch, unsupported checkpoint format, and checkpoint parse failure stop open
+instead of silently repairing state.
 
 ## Snapshot And Restore
 
@@ -149,9 +153,9 @@ body, the server returns `409` with code `idempotency_conflict`.
 The replay authority is local-engine-only and WAL/checkpoint-backed. Mutation
 routes embed receipts in the mutation WAL commit; successful admin responses
 record a receipt-only WAL entry. Receipts are scoped by method, path, key, body
-hash, actor tenant, database, branch, and token identity. They are not
-cross-replica, not shared across independent data directories, not a
-managed-cloud exactly-once guarantee, and not crash-atomic exactly-once across
+hash, actor tenant, database, branch, and token identity. They are not cross-replica,
+not shared across independent data directories, not a managed-cloud exactly-once
+guarantee, and not crash-atomic exactly-once across
 all failure points.
 
 SDK idempotency retries remain opt-in and only apply to mutation/admin requests

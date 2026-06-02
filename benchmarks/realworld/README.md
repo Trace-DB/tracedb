@@ -242,12 +242,13 @@ selected with `--surface sdk,cli,http,curl`.
 
 TraceDB HTTP ingest has two explicitly separate lanes:
 
-- `--tracedb-ingest-mode per_record` (default): one durable HTTP `put` and one
-  TraceDB WAL commit per record. This is the product durability lane and should
-  not be compared directly to PostgreSQL or pgvector bulk transactions.
-- `--tracedb-ingest-mode batch`: one HTTP `put-batch` request, one TraceDB epoch,
-  and one WAL commit for all records. This is the fairer transaction-shape lane
-  for pgvector/PostgreSQL controls that insert many rows before one `COMMIT`.
+- `--tracedb-ingest-mode batch` (default): one HTTP `put-batch` request, one
+  TraceDB epoch, and one WAL commit for all records. This is the fairer
+  transaction-shape lane for pgvector/PostgreSQL controls that insert many rows
+  before one `COMMIT`.
+- `--tracedb-ingest-mode per_record`: one durable HTTP `put` and one TraceDB WAL
+  commit per record. This is the product durability pressure lane and should not
+  be compared directly to PostgreSQL or pgvector bulk transactions.
 
 Reports keep both concepts visible with `ingest_transaction_count`,
 `ingest_transaction_total_latency_ms`, `per_record_durable_transaction_count`,
@@ -766,11 +767,11 @@ Use separate `TRACEDB_MODAL_APP_NAME` values and repeat suffixes for variance
 runs. Treat `query_latency_*`, `ingest_latency_*`, `disk_bytes`,
 `disk_bytes_after_workload`, `freshness_query_*`, and admin split metrics as
 separate KPI surfaces. pgvector ingest is per-row insert inside one bulk
-transaction; TraceDB per-record durable HTTP write remains the default pressure
-lane, while `--tracedb-ingest-mode batch` measures one TraceDB batch
-transaction. Use TraceDB `batch_transaction_total_latency_ms` against pgvector
-`ingest_transaction_total_latency_ms` for the fair transaction-total ingest
-comparison.
+transaction; TraceDB batch HTTP ingest is the default benchmark lane. Use
+`--tracedb-ingest-mode per_record` only when explicitly measuring per-record
+durable write pressure. Use TraceDB `batch_transaction_total_latency_ms` against
+pgvector `ingest_transaction_total_latency_ms` for the fair transaction-total
+ingest comparison.
 
 Current closeout checkpoint:
 
