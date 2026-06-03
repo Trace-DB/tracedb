@@ -1,0 +1,201 @@
+name: Deploy Railway (manual plan)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "Immutable GHCR image tag or digest to promote."
+        required: true
+        type: string
+      railway_environment:
+        description: "Railway environment name, for example staging or production."
+        required: true
+        default: "staging"
+        type: string
+      services:
+        description: "Comma-separated Railway services to plan, for example engine,gateway,worker."
+        required: true
+        default: "engine"
+        type: string
+      expose_engine_publicly:
+        description: "Diagnostic-only. Fails when engine is selected unless engine_public_exposure_ack is set."
+        required: true
+        default: false
+        type: boolean
+      run_smoke:
+        description: "Run post-deploy smoke if endpoint_url is provided."
+        required: true
+        default: true
+        type: boolean
+      endpoint_url:
+        description: "Optional deployed endpoint URL. When set with run_smoke, invokes post-deploy-smoke.yml."
+        required: false
+        default: ""
+        type: string
+      engine_public_exposure_ack:
+        description: "Required diagnostic string when exposing the engine: diagnostic-only-public-engine"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  plan:
+    name: Plan Railway promotion
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.railway_environment }}
+    concurrency:
+      group: deploy-railway-${{ inputs.railway_environment }}
+      cancel-in-progress: false
+    env:
+      IMAGE_REF: ${{ inputs.image_ref }}
+      RAILWAY_ENVIRONMENT: ${{ inputs.railway_environment }}
+      SERVICES: ${{ inputs.services }}
+      EXPOSE_ENGINE_PUBLICLY: ${{ inputs.expose_engine_publicly }}
+      ENGINE_PUBLIC_EXPOSURE_ACK: ${{ inputs.engine_public_exposure_ack }}
+      RUN_SMOKE: ${{ inputs.run_smoke }}
+      ENDPOINT_URL: ${{ inputs.endpoint_url }}
+      HAS_RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN != '' }}
+      HAS_RAILWAY_PROJECT_ID_SECRET: ${{ secrets.RAILWAY_PROJECT_ID != '' }}
+      HAS_RAILWAY_PROJECT_ID_VAR: ${{ vars.RAILWAY_PROJECT_ID != '' }}
+      HAS_RAILWAY_ENGINE_SERVICE_ID_SECRET: ${{ secrets.RAILWAY_ENGINE_SERVICE_ID != '' }}
+      HAS_RAILWAY_ENGINE_SERVICE_ID_VAR: ${{ vars.RAILWAY_ENGINE_SERVICE_ID != '' }}
+      HAS_RAILWAY_GATEWAY_SERVICE_ID_SECRET: ${{ secrets.RAILWAY_GATEWAY_SERVICE_ID != '' }}
+      HAS_RAILWAY_GATEWAY_SERVICE_ID_VAR: ${{ vars.RAILWAY_GATEWAY_SERVICE_ID != '' }}
+      HAS_RAILWAY_WORKER_SERVICE_ID_SECRET: ${{ secrets.RAILWAY_WORKER_SERVICE_ID != '' }}
+      HAS_RAILWAY_WORKER_SERVICE_ID_VAR: ${{ vars.RAILWAY_WORKER_SERVICE_ID != '' }}
+    steps:
+      - name: Validate Railway deploy inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$IMAGE_REF" in
+            ghcr.io/*@sha256:*|ghcr.io/*:*) ;;
+            *) echo "image_ref must be an immutable GHCR tag or digest, for example ghcr.io/org/repo:v1.2.3 or ghcr.io/org/repo@sha256:..." >&2; exit 1 ;;
+          esac
+          if [ -n "$ENDPOINT_URL" ]; then
+            case "$ENDPOINT_URL" in
+              http://*|https://*) ;;
+              *) echo "endpoint_url must start with http:// or https:// when provided" >&2; exit 1 ;;
+            esac
+          fi
+
+          normalized=$(python3 - <<'PY'
+          import os
+          services = [item.strip().lower() for item in os.environ["SERVICES"].split(",")]
+          services = [item for item in services if item]
+          allowed = {"engine", "gateway", "worker"}
+          unknown = sorted(set(services) - allowed)
+          if not services:
+              raise SystemExit("services must include at least one service")
+          if unknown:
+              raise SystemExit(f"unsupported services: {', '.join(unknown)}")
+          print(",".join(dict.fromkeys(services)))
+          PY
+          )
+          echo "Normalized services: $normalized"
+          echo "RAILWAY_SERVICES_NORMALIZED=$normalized" >> "$GITHUB_ENV"
+
+          if [ "$EXPOSE_ENGINE_PUBLICLY" = "true" ] && echo ",$normalized," | grep -q ",engine,"; then
+            if [ "$ENGINE_PUBLIC_EXPOSURE_ACK" != "diagnostic-only-public-engine" ]; then
+              echo "expose_engine_publicly=true with engine selected is blocked. Set engine_public_exposure_ack to diagnostic-only-public-engine for an explicit diagnostic-only run, or remove engine from services." >&2
+              exit 1
+            fi
+            echo "::warning::Engine public exposure acknowledged as diagnostic-only. Prefer private networking for normal Railway environments."
+          fi
+
+      - name: Print safe Railway promotion plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploy_ready="false"
+          if [ "$HAS_RAILWAY_TOKEN" = "true" ] && [ "$HAS_RAILWAY_PROJECT_ID_SECRET" = "true" -o "$HAS_RAILWAY_PROJECT_ID_VAR" = "true" ]; then
+            deploy_ready="true"
+          fi
+
+          {
+            echo "## Railway deploy plan (no changes applied)"
+            echo
+            echo "This workflow is a manual promotion stub. It does not run Railway CLI commands or mutate Railway resources."
+            echo
+            echo "### Requested promotion"
+            echo "- Railway environment: \`$RAILWAY_ENVIRONMENT\`"
+            echo "- Services: \`$RAILWAY_SERVICES_NORMALIZED\`"
+            echo "- Image ref: \`$IMAGE_REF\`"
+            echo "- Expose engine publicly: \`$EXPOSE_ENGINE_PUBLICLY\`"
+            echo "- Smoke requested: \`$RUN_SMOKE\`"
+            if [ -n "$ENDPOINT_URL" ]; then
+              echo "- Smoke endpoint: \`$ENDPOINT_URL\`"
+            else
+              echo "- Smoke endpoint: not provided; post-deploy smoke will be skipped."
+            fi
+            echo
+            echo "### Required Railway configuration"
+            echo "Configure these before replacing this stub with a guarded Railway deploy implementation:"
+            echo "- \`RAILWAY_TOKEN\`: required Railway API token. Present: \`$HAS_RAILWAY_TOKEN\`."
+            echo "- \`RAILWAY_PROJECT_ID\`: Railway project id. Present as secret: \`$HAS_RAILWAY_PROJECT_ID_SECRET\`; present as var: \`$HAS_RAILWAY_PROJECT_ID_VAR\`."
+            echo "- \`RAILWAY_ENGINE_SERVICE_ID\`: engine service id. Present as secret: \`$HAS_RAILWAY_ENGINE_SERVICE_ID_SECRET\`; present as var: \`$HAS_RAILWAY_ENGINE_SERVICE_ID_VAR\`."
+            echo "- \`RAILWAY_GATEWAY_SERVICE_ID\`: gateway service id. Present as secret: \`$HAS_RAILWAY_GATEWAY_SERVICE_ID_SECRET\`; present as var: \`$HAS_RAILWAY_GATEWAY_SERVICE_ID_VAR\`."
+            echo "- \`RAILWAY_WORKER_SERVICE_ID\`: worker service id. Present as secret: \`$HAS_RAILWAY_WORKER_SERVICE_ID_SECRET\`; present as var: \`$HAS_RAILWAY_WORKER_SERVICE_ID_VAR\`."
+            echo "- \`TRACEDB_SMOKE_TOKEN\`: optional bearer token used only by post-deploy smoke."
+            echo
+            echo "### GHCR image pinning"
+            echo "Promote release artifacts by immutable GHCR tag or digest only. Prefer digests when wiring Railway service image variables, for example \`ghcr.io/org/tracedb@sha256:<digest>\`."
+            echo
+            echo "### Guarded implementation placeholder"
+            echo "Deploy readiness based on configured token/project values: \`$deploy_ready\`. This stub intentionally stops at plan output."
+            echo "A future guarded job may resolve each selected service id, set the pinned GHCR image, and verify Railway reports the expected image digest before running smoke."
+            echo
+            echo "Do not expose the engine service publicly for normal operation; use private networking unless this is an acknowledged diagnostic run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record no-op deployment receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          receipt = {
+              "provider": "railway",
+              "railway_environment": os.environ["RAILWAY_ENVIRONMENT"],
+              "services": os.environ["RAILWAY_SERVICES_NORMALIZED"].split(","),
+              "image_ref": os.environ["IMAGE_REF"],
+              "expose_engine_publicly": os.environ["EXPOSE_ENGINE_PUBLICLY"] == "true",
+              "status": "planned-noop",
+              "mutated_resources": False,
+              "created_at": datetime.now(timezone.utc).isoformat(),
+          }
+          path = os.path.join(os.environ["RUNNER_TEMP"], "tracedb-railway-deploy-plan-receipt.json")
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(receipt, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          print(path)
+          PY
+
+      - name: Smoke skip notice
+        if: ${{ inputs.run_smoke && inputs.endpoint_url == '' }}
+        shell: bash
+        run: |
+          echo "run_smoke=true but endpoint_url is empty. Re-run this workflow with endpoint_url, or manually run Post-deploy smoke after promotion." >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: Post-deploy smoke
+    needs: plan
+    if: ${{ inputs.run_smoke && inputs.endpoint_url != '' }}
+    uses: ./.github/workflows/post-deploy-smoke.yml
+    with:
+      provider: railway
+      environment_name: ${{ inputs.railway_environment }}
+      endpoint_url: ${{ inputs.endpoint_url }}
+      image_ref: ${{ inputs.image_ref }}
+      database_id: ""
+      branch_id: ""
+      run_readonly_doctor: false
+    secrets:
+      TRACEDB_SMOKE_TOKEN: ${{ secrets.TRACEDB_SMOKE_TOKEN }}

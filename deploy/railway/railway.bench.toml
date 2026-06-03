@@ -1,7 +1,8 @@
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
-
-[deploy]
-startCommand = "tracedb-bench"
-restartPolicyType = "NEVER"
+# Intentionally no [deploy] startCommand here.
+#
+# Core TraceDB no longer ships a `tracedb-bench` binary. Benchmark and proof
+# harnesses are deferred to the sibling `../tracedb-benchmarks` repository.
+#
+# This file is retained as an operator note only. Do not attach it to a
+# release-active Railway service, and do not configure Railway to start a
+# nonexistent benchmark binary from this repo.

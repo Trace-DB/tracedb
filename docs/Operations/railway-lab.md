@@ -1,6 +1,6 @@
 # Railway Operations and Topology
 
-This document details the deployment topology, service routing configuration, storage volume mappings, object storage integration, and operational runbooks for TraceDB in the Railway lab environment. It describes a controlled hosted lab, not a production SaaS promise.
+This document details the deployment topology, service routing configuration, storage volume mappings, object storage integration, and operational runbooks for TraceDB in the Railway lab environment. It describes a controlled hosted lab for hosted-alpha/product-lab/simple microservices, not a production SaaS promise. Durable production and science workloads remain AWS-oriented.
 
 ---
 
@@ -43,6 +43,7 @@ flowchart TD
    * *Not used* for hot WAL or active query paging.
 7. **`../tracedb-benchmarks` (Benchmark/Proof Runner):**
    * Sibling repository that owns benchmark and proof harness execution against direct HTTP targets (gateway or engine).
+   * Core TraceDB no longer ships a `tracedb-bench` binary; the Railway bench TOML is documentation-only, not a release-active deploy config.
    * Direct engine targets are diagnostic-only and must not be presented as hosted-alpha ingress.
 
 ---
@@ -62,6 +63,13 @@ Private services communicate using internal dns resolution to avoid public egres
 * **Authentication Boundary:**
   * Public requests to the gateway require a bearer token (`TRACEDB_HTTP_BEARER_TOKEN` or `TRACEDB_API_TOKEN`).
   * The engine-only benchmark bypasses the gateway by setting `TRACEDB_SERVICE_MODE=engine` and exposing a temporary public port on the engine itself. This public engine exposure is diagnostic-only for benchmark or disk validation runs; remove it before treating the environment as gateway-fronted hosted-alpha access.
+  * Public ingress must be `tracedb-gateway`. Public engine exposure is diagnostic only.
+
+### Hybrid AWS + Railway
+
+Use Railway for gateway/simple microservice/lab deployments and AWS for durable or science workloads. A Railway `tracedb-gateway` may route to an AWS-hosted `tracedb-engine` only when the AWS engine endpoint is HTTPS-only, protected by an internal service-to-service token, and restricted by network controls such as a private path, allowlist, security group, or equivalent boundary.
+
+If those controls are not in place, keep `tracedb-gateway` and `tracedb-engine` on the same Railway private network for lab environments and route via `http://tracedb-engine.railway.internal:8080`.
 
 ### Role-Specific Environment Examples
 
@@ -73,7 +81,9 @@ Use the split templates under `deploy/railway/`:
 * `env.benchmark.example` for benchmark runner targets and optional external controls.
 
 Do not apply one role's full variable set to another service. Set tokens, DSNs,
-and S3 credentials through Railway variables or CI secrets.
+and S3 credentials through Railway variables or CI secrets. Postgres, Redis,
+and S3/object-storage variables are planned/optional unless the specific lab
+path being exercised has that integration fully wired.
 
 ---
 

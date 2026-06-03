@@ -1,0 +1,266 @@
+name: Post-deploy smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Deployment provider that owns this endpoint."
+        required: true
+        type: choice
+        options:
+          - aws
+          - railway
+          - other
+      environment_name:
+        description: "Environment name, for example staging or production."
+        required: true
+        type: string
+      endpoint_url:
+        description: "Base HTTPS URL for the deployed TraceDB API."
+        required: true
+        type: string
+      image_ref:
+        description: "Immutable GHCR image tag or digest that was promoted."
+        required: true
+        type: string
+      database_id:
+        description: "Optional database id used by readonly HTTP doctor."
+        required: false
+        default: ""
+        type: string
+      branch_id:
+        description: "Optional branch id used by readonly HTTP doctor."
+        required: false
+        default: ""
+        type: string
+      run_readonly_doctor:
+        description: "Build and run `cargo run -p tracedb-cli --bin tracedb -- doctor http`."
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      provider:
+        required: true
+        type: string
+      environment_name:
+        required: true
+        type: string
+      endpoint_url:
+        required: true
+        type: string
+      image_ref:
+        required: true
+        type: string
+      database_id:
+        required: false
+        default: ""
+        type: string
+      branch_id:
+        required: false
+        default: ""
+        type: string
+      run_readonly_doctor:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      TRACEDB_SMOKE_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke ${{ inputs.provider }} / ${{ inputs.environment_name }}
+    runs-on: ubuntu-latest
+    env:
+      PROVIDER: ${{ inputs.provider }}
+      ENVIRONMENT_NAME: ${{ inputs.environment_name }}
+      ENDPOINT_URL: ${{ inputs.endpoint_url }}
+      IMAGE_REF: ${{ inputs.image_ref }}
+      DATABASE_ID: ${{ inputs.database_id }}
+      BRANCH_ID: ${{ inputs.branch_id }}
+      TRACEDB_SMOKE_TOKEN: ${{ secrets.TRACEDB_SMOKE_TOKEN }}
+      RECEIPT_PATH: ${{ runner.temp }}/tracedb-post-deploy-smoke-receipt.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate smoke inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ENDPOINT_URL" in
+            http://*|https://*) ;;
+            *) echo "endpoint_url must start with http:// or https://" >&2; exit 1 ;;
+          esac
+          case "$IMAGE_REF" in
+            ghcr.io/*@sha256:*|ghcr.io/*:*) ;;
+            *) echo "image_ref should be a pinned GHCR tag or digest, for example ghcr.io/org/repo:v1.2.3 or ghcr.io/org/repo@sha256:..." >&2; exit 1 ;;
+          esac
+
+      - name: Probe /v1/health and /v1/ready
+        id: probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="${ENDPOINT_URL%/}"
+          status="success"
+          details="$RUNNER_TEMP/probe-details.jsonl"
+          : > "$details"
+
+          auth_args=()
+          if [ -n "$TRACEDB_SMOKE_TOKEN" ]; then
+            auth_args=(-H "Authorization: Bearer ${TRACEDB_SMOKE_TOKEN}")
+          fi
+
+          for route in /v1/health /v1/ready; do
+            body_file="$RUNNER_TEMP/${route#/}.json"
+            set +e
+            http_code=$(curl --silent --show-error --location --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 "${auth_args[@]}" --output "$body_file" --write-out "%{http_code}" "$endpoint$route")
+            curl_status=$?
+            set -e
+            if [ "$curl_status" -eq 0 ] && [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+              result="success"
+            else
+              result="failure"
+              status="failure"
+            fi
+            python3 - "$route" "$http_code" "$curl_status" "$result" "$body_file" >> "$details" <<'PY'
+          import json
+          import sys
+          route, http_code, curl_status, result, body_file = sys.argv[1:]
+          body = ""
+          try:
+              with open(body_file, "r", encoding="utf-8", errors="replace") as handle:
+                  body = handle.read(1000)
+          except OSError:
+              pass
+          print(json.dumps({
+              "route": route,
+              "http_code": http_code,
+              "curl_status": int(curl_status),
+              "status": result,
+              "body_preview": body,
+          }))
+          PY
+          done
+
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "details_path=$details" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ inputs.run_readonly_doctor }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ inputs.run_readonly_doctor }}
+
+      - name: Run readonly HTTP doctor
+        id: doctor
+        if: ${{ inputs.run_readonly_doctor }}
+        shell: bash
+        env:
+          TRACEDB_URL: ${{ inputs.endpoint_url }}
+          TRACEDB_TOKEN: ${{ secrets.TRACEDB_SMOKE_TOKEN }}
+          TRACEDB_DATABASE_ID: ${{ inputs.database_id }}
+          TRACEDB_BRANCH_ID: ${{ inputs.branch_id }}
+          TRACEDB_TIMEOUT_MS: "3000"
+          TRACEDB_SAFE_RETRIES: "2"
+          TRACEDB_WAIT_READY_MS: "0"
+        run: |
+          set -euo pipefail
+          # The CLI package is `tracedb-cli`; it exposes the `tracedb` binary.
+          # If this command changes in the future, disable run_readonly_doctor and use the /v1/health + /v1/ready receipt as the fallback.
+          output="$RUNNER_TEMP/readonly-doctor.json"
+          set +e
+          cargo run -p tracedb-cli --bin tracedb -- doctor http > "$output" 2>&1
+          doctor_status=$?
+          set -e
+          if [ "$doctor_status" -eq 0 ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+          fi
+          echo "output_path=$output" >> "$GITHUB_OUTPUT"
+
+      - name: Write smoke receipt
+        id: receipt
+        if: always()
+        shell: bash
+        env:
+          PROBE_STATUS: ${{ steps.probes.outputs.status }}
+          PROBE_DETAILS_PATH: ${{ steps.probes.outputs.details_path }}
+          DOCTOR_STATUS: ${{ steps.doctor.outputs.status }}
+          DOCTOR_OUTPUT_PATH: ${{ steps.doctor.outputs.output_path }}
+          RUN_READONLY_DOCTOR: ${{ inputs.run_readonly_doctor }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          probe_status = os.environ.get("PROBE_STATUS") or "not-run"
+          doctor_status = os.environ.get("DOCTOR_STATUS") or ("skipped" if os.environ.get("RUN_READONLY_DOCTOR") != "true" else "not-run")
+          overall = "success"
+          if probe_status != "success" or doctor_status not in ("success", "skipped"):
+              overall = "failure"
+
+          probes = []
+          details_path = os.environ.get("PROBE_DETAILS_PATH")
+          if details_path and os.path.exists(details_path):
+              with open(details_path, "r", encoding="utf-8") as handle:
+                  probes = [json.loads(line) for line in handle if line.strip()]
+
+          doctor_output = ""
+          doctor_output_path = os.environ.get("DOCTOR_OUTPUT_PATH")
+          if doctor_output_path and os.path.exists(doctor_output_path):
+              with open(doctor_output_path, "r", encoding="utf-8", errors="replace") as handle:
+                  doctor_output = handle.read(4000)
+
+          receipt = {
+              "provider": os.environ["PROVIDER"],
+              "environment_name": os.environ["ENVIRONMENT_NAME"],
+              "endpoint_url": os.environ["ENDPOINT_URL"],
+              "image_ref": os.environ["IMAGE_REF"],
+              "database_id": os.environ.get("DATABASE_ID") or None,
+              "branch_id": os.environ.get("BRANCH_ID") or None,
+              "status": overall,
+              "checks": {
+                  "http_probes": {"status": probe_status, "details": probes},
+                  "readonly_doctor": {
+                      "requested": os.environ.get("RUN_READONLY_DOCTOR") == "true",
+                      "status": doctor_status,
+                      "output_preview": doctor_output,
+                  },
+              },
+              "token": "redacted" if os.environ.get("TRACEDB_SMOKE_TOKEN") else None,
+              "github_run_url": os.environ["GITHUB_RUN_URL"],
+              "created_at": datetime.now(timezone.utc).isoformat(),
+          }
+          path = os.environ["RECEIPT_PATH"]
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(receipt, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          print(json.dumps({"receipt_path": path, "status": overall}, indent=2))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"status={overall}\n")
+          PY
+
+      - name: Upload smoke receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-deploy-smoke-${{ inputs.provider }}-${{ inputs.environment_name }}-${{ github.run_id }}
+          path: ${{ env.RECEIPT_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail if smoke failed
+        if: ${{ always() && steps.receipt.outputs.status != 'success' }}
+        shell: bash
+        run: |
+          echo "Post-deploy smoke failed. Download the receipt artifact for details." >&2
+          exit 1
