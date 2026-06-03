@@ -1,0 +1,94 @@
+# TraceDB AWS EC2/EBS alpha/lab single-host runtime.
+#
+# This compose file is intentionally conservative:
+# - the engine owns /data/tracedb and is bound to localhost only;
+# - the gateway and worker are optional profiles;
+# - public ingress should go through Caddy/TLS, not directly to the engine.
+
+name: tracedb-aws-alpha
+
+services:
+  tracedb-engine:
+    image: ${TRACEDB_IMAGE:-ghcr.io/trace-db/tracedb:v0.1.0}
+    command: ["tracedb-server"]
+    restart: unless-stopped
+    env_file:
+      - ./env.engine.example
+    environment:
+      TRACEDB_SERVICE_MODE: engine
+      TRACEDB_BIND: 0.0.0.0:8080
+      TRACEDB_DATA_DIR: /data/tracedb
+      TRACEDB_LOG_FORMAT: ${TRACEDB_LOG_FORMAT:-json}
+    ports:
+      # Local/private health and diagnostics only. Do not expose publicly.
+      - "127.0.0.1:${TRACEDB_ENGINE_HOST_PORT:-18081}:8080"
+    volumes:
+      - type: bind
+        source: ${TRACEDB_DATA_DIR_HOST:-/data/tracedb}
+        target: /data/tracedb
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  tracedb-gateway:
+    profiles: ["gateway"]
+    image: ${TRACEDB_IMAGE:-ghcr.io/trace-db/tracedb:v0.1.0}
+    command: ["tracedb-server"]
+    restart: unless-stopped
+    env_file:
+      - ./env.gateway.example
+    environment:
+      TRACEDB_SERVICE_MODE: gateway
+      TRACEDB_BIND: 0.0.0.0:8080
+      TRACEDB_ENGINE_URL: ${TRACEDB_ENGINE_URL:-http://tracedb-engine:8080}
+      TRACEDB_LOG_FORMAT: ${TRACEDB_LOG_FORMAT:-json}
+    ports:
+      # Local host port for Caddy or operator smoke checks.
+      - "127.0.0.1:${TRACEDB_GATEWAY_HOST_PORT:-18080}:8080"
+    depends_on:
+      tracedb-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  tracedb-worker:
+    profiles: ["worker"]
+    image: ${TRACEDB_IMAGE:-ghcr.io/trace-db/tracedb:v0.1.0}
+    command: ["tracedb-worker"]
+    restart: unless-stopped
+    env_file:
+      - ./env.worker.example
+    environment:
+      TRACEDB_SERVICE_MODE: worker
+      TRACEDB_ENGINE_URL: ${TRACEDB_ENGINE_URL:-http://tracedb-engine:8080}
+      TRACEDB_WORKER_ENGINE_URL: ${TRACEDB_WORKER_ENGINE_URL:-http://tracedb-engine:8080}
+      TRACEDB_LOG_FORMAT: ${TRACEDB_LOG_FORMAT:-json}
+    depends_on:
+      tracedb-engine:
+        condition: service_healthy
+
+  caddy:
+    profiles: ["gateway"]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      tracedb-gateway:
+        condition: service_healthy
+
+volumes:
+  caddy-data:
+  caddy-config:

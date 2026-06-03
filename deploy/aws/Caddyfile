@@ -1,0 +1,24 @@
+# TraceDB AWS alpha/lab public TLS example.
+#
+# DNS for api.trace-db.com must point at this EC2 host or load balancer before
+# Caddy can obtain a certificate. Keep the engine private whenever possible.
+
+api.trace-db.com {
+	encode zstd gzip
+
+	# Preferred public shape: Caddy -> gateway -> private engine.
+	reverse_proxy tracedb-gateway:8080
+
+	# Temporary diagnostic-only alternative, if the gateway is intentionally not
+	# running. Do not leave direct engine exposure in place for hosted-alpha ingress.
+	# reverse_proxy tracedb-engine:8080
+
+	# If this host sits behind an AWS load balancer that already terminates TLS,
+	# replace this site block with an internal HTTP listener and enforce TLS at the
+	# load balancer/security-group layer instead.
+
+	log {
+		output stdout
+		format json
+	}
+}
