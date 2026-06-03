@@ -129,6 +129,7 @@ jobs:
             fi
             python3 - "$route" "$http_code" "$curl_status" "$result" "$body_file" >> "$details" <<'PY'
           import json
+          import os
           import sys
           route, http_code, curl_status, result, body_file = sys.argv[1:]
           body = ""
@@ -137,6 +138,9 @@ jobs:
                   body = handle.read(1000)
           except OSError:
               pass
+          token = os.environ.get("TRACEDB_SMOKE_TOKEN")
+          if token:
+              body = body.replace(token, "[redacted]")
           print(json.dumps({
               "route": route,
               "http_code": http_code,
@@ -219,6 +223,9 @@ jobs:
           if doctor_output_path and os.path.exists(doctor_output_path):
               with open(doctor_output_path, "r", encoding="utf-8", errors="replace") as handle:
                   doctor_output = handle.read(4000)
+          token = os.environ.get("TRACEDB_SMOKE_TOKEN")
+          if token:
+              doctor_output = doctor_output.replace(token, "[redacted]")
 
           receipt = {
               "provider": os.environ["PROVIDER"],
