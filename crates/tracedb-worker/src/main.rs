@@ -63,6 +63,8 @@ async fn serve_healthcheck_worker() -> std::io::Result<()> {
     let app = Router::new()
         .route("/health", get(worker_health))
         .route("/ready", get(worker_health))
+        .route("/v1/health", get(worker_health))
+        .route("/v1/ready", get(worker_health))
         .route("/metrics", get(worker_metrics))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(bind).await?;

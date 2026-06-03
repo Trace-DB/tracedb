@@ -4,5 +4,5 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "tracedb-worker"
-healthcheckPath = "/v1/health"
+healthcheckPath = "/health"
 restartPolicyType = "ON_FAILURE"

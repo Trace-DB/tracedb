@@ -3,6 +3,6 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "tracedb-server"
+startCommand = "sh -c 'if [ \"$TRACEDB_SERVICE_MODE\" = \"worker\" ]; then exec tracedb-worker; else exec tracedb-server; fi'"
 healthcheckPath = "/v1/health"
 restartPolicyType = "ON_FAILURE"
