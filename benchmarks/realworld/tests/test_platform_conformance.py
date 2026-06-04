@@ -134,7 +134,10 @@ class PlatformConformanceTests(unittest.TestCase):
             },
         }
 
-        surface = module.map_rust_sdk_product_summary(manifest, product_summary)
+        surface = module.map_rust_sdk_quickstart_summary(
+            manifest,
+            product_summary["steps"]["rust_sdk_quickstart"]["summary"],
+        )
         scenarios = {scenario["id"]: scenario for scenario in surface["scenarios"]}
 
         self.assertEqual(surface["surface"], "rust_sdk")

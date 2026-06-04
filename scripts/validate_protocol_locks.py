@@ -9,7 +9,7 @@ the local protocol repo.
 Lock files are TOML (matching the existing ``tracedb-protocol.lock`` format)::
 
     repo = "https://github.com/Trace-DB/tracedb-protocol"
-    revision = "4aac3d6d2fe2fda3bc31c87416a43c19b785b35b"
+    revision = "833d3565dbc4cdc7cf678a64fca31204baa38f71"
     contract = "platform-contract-v0"
 
 Usage:
@@ -41,13 +41,27 @@ DEFAULT_SCAN_ROOT = (
     else CORE_REPO_ROOT
 )
 LOCK_GLOB = "**/tracedb-protocol.lock"
+IGNORED_LOCK_SCAN_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+}
 
 TOML_KV = re.compile(r'^(\w+)\s*=\s*"([^"]*)"')
 
 
 def find_lock_files(repo_root: Path) -> list[Path]:
-    """Return all tracedb-protocol.lock files under the repo."""
-    return sorted(p for p in repo_root.glob(LOCK_GLOB) if p.is_file())
+    """Return source-owned tracedb-protocol.lock files under the repo."""
+    return sorted(
+        p
+        for p in repo_root.glob(LOCK_GLOB)
+        if p.is_file() and not any(part in IGNORED_LOCK_SCAN_DIRS for part in p.parts)
+    )
 
 
 def parse_toml_lock(path: Path) -> dict[str, str]:

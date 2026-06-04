@@ -3,10 +3,12 @@ title: TraceDB Durability Semantics v0
 tags:
   - tracedb
   - durability
+  - idempotency
+  - wal
   - platform-contract
-status: draft
-type: contract-note
-updated: 2026-05-25
+status: contract-freeze
+type: durability-boundary
+updated: 2026-06-03
 ---
 
 # TraceDB Durability Semantics v0

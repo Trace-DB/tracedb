@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the checked-in TraceDB v1 TypeScript fetch client artifact."""
+"""Validate the external TraceDB TypeScript SDK generation boundary.
+
+The TypeScript SDK now lives in the sibling ``../tracedb-js`` package repo.
+This core script remains as a compatibility guard for old automation: it
+verifies the OpenAPI route inventory and the sibling generated client artifact,
+but it must not recreate deleted in-tree ``clients/typescript`` files.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +17,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 OPENAPI_ARTIFACT = ROOT / "docs" / "api" / "v1-openapi.json"
-CLIENT_ARTIFACT = ROOT / "clients" / "typescript" / "src" / "client.ts"
+IN_TREE_CLIENT_ARTIFACT = ROOT / "clients" / "typescript" / "src" / "client.ts"
+SIBLING_TYPESCRIPT_CLIENT_ARTIFACT = ROOT.parent / "tracedb-js" / "src" / "client.ts"
 
 METHOD_NAME_OVERRIDES = {
     "getHealth": "health",
@@ -494,21 +501,37 @@ def render_client() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="fail if the checked-in artifact is stale")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate OpenAPI routes and the external TypeScript SDK boundary",
+    )
     args = parser.parse_args()
 
-    rendered = render_client()
+    # Always render once so operation/order/schema regressions in OpenAPI remain
+    # visible to this guard even though core no longer writes the SDK artifact.
+    render_client()
     if args.check:
-        current = CLIENT_ARTIFACT.read_text() if CLIENT_ARTIFACT.exists() else ""
-        if current != rendered:
-            print(f"{CLIENT_ARTIFACT} is stale; run scripts/generate_typescript_client.py", flush=True)
+        if IN_TREE_CLIENT_ARTIFACT.exists():
+            print(
+                f"{IN_TREE_CLIENT_ARTIFACT} exists, but TypeScript SDK artifacts belong in ../tracedb-js",
+                flush=True,
+            )
+            return 1
+        if not SIBLING_TYPESCRIPT_CLIENT_ARTIFACT.exists():
+            print(
+                f"{SIBLING_TYPESCRIPT_CLIENT_ARTIFACT} is missing; run TypeScript SDK generation in ../tracedb-js",
+                flush=True,
+            )
             return 1
         return 0
 
-    CLIENT_ARTIFACT.parent.mkdir(parents=True, exist_ok=True)
-    CLIENT_ARTIFACT.write_text(rendered)
-    print(CLIENT_ARTIFACT)
-    return 0
+    print(
+        "TypeScript SDK generation is owned by ../tracedb-js; "
+        "run this script with --check from core or run SDK generation in the sibling repo.",
+        flush=True,
+    )
+    return 2
 
 
 if __name__ == "__main__":

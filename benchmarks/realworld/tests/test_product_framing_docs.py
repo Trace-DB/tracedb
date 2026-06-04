@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+ORG_ROOT = ROOT.parent
 
 REQUIRED_TAGLINE = "TraceDB is an AI-native transactional candidate-stream database."
 REQUIRED_MANIFESTO = (
@@ -86,10 +87,10 @@ class ProductFramingDocsTests(unittest.TestCase):
             ROOT / "docs" / "TraceDB.md",
             ROOT / "docs" / "api" / "v1-http.md",
             ROOT / "docs" / "platform-contract-v0.md",
-            ROOT / "clients" / "typescript" / "README.md",
-            ROOT / "clients" / "python" / "README.md",
+            ORG_ROOT / "tracedb-js" / "README.md",
+            ORG_ROOT / "tracedb-python" / "README.md",
         ]:
-            with self.subTest(path=path.relative_to(ROOT)):
+            with self.subTest(path=path):
                 self.assertIn(required_phrase, normalize(read_doc(path)))
 
     def test_http_stack_boundary_is_documented(self) -> None:
