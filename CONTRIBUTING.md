@@ -3,6 +3,10 @@
 Thank you for contributing to TraceDB. This document covers build/test
 conventions, project architecture, and where your help is most valuable.
 
+This repository is the downloadable TraceDB database distribution. It is not the
+proprietary hosted TraceDB service, operator console, deployment control plane,
+or production operations system.
+
 ## Code of Conduct
 
 Be respectful, constructive, and professional. Disagreements are fine;
@@ -106,4 +110,6 @@ and a number to beat.
 
 TraceDB is licensed under the **Functional Source License, Version 1.1, Apache
 2.0 Future License (FSL-1.1-ALv2)**. Contributions are subject to the same
-license. See the repository root for the full license text.
+license. This is source-available software with a future Apache-2.0 grant, not
+an OSI open-source license during the FSL period. See the repository root for
+the full license text.
