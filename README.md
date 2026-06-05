@@ -1,8 +1,17 @@
 # TraceDB
 
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE)
+[![Protocol: platform-contract-v0](https://img.shields.io/badge/protocol-platform--contract--v0-informational)](docs/platform-contract-v0.md)
+[![Docs](https://img.shields.io/badge/docs-trace--db.com-informational)](https://docs.trace-db.com)
+
 TraceDB is an AI-native transactional candidate-stream database.
 One logical record. One commit epoch. Many native views. No external sync
 drift. Explain every candidate.
+
+This repository is the downloadable TraceDB database distribution. The core
+engine is source-available under FSL-1.1-ALv2 with an Apache-2.0 future grant;
+see `LICENSE` for the exact terms. It is public product code, not the
+proprietary hosted TraceDB service implementation.
 
 The current core product surface is a local/embedded engine with CLI, HTTP,
 direct adapters, an OpenAPI mirror, product quickstart, durability semantics,
@@ -12,6 +21,12 @@ candidate streams over the same committed records, not external sync jobs.
 The authoritative protocol contract lives in `../tracedb-protocol`; standalone
 SDKs live in `../tracedb-rust`, `../tracedb-python`, and `../tracedb-js`;
 benchmark/proof harnesses live in `../tracedb-benchmarks`.
+
+Hosted TraceDB is a separate proprietary service that runs a stable TraceDB
+deployment behind the public API. The hosted service uses the same HTTP
+contract and SDKs documented here, but its operator console, control plane,
+deployment automation, account management, and production operations code are
+not part of this repository.
 
 TraceField is the memory/runtime research program that informs future runtime
 directions. It is not the current product and is not an implemented runtime in
