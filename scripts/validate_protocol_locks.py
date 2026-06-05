@@ -9,7 +9,7 @@ the local protocol repo.
 Lock files are TOML (matching the existing ``tracedb-protocol.lock`` format)::
 
     repo = "https://github.com/Trace-DB/tracedb-protocol"
-    revision = "51c33f416918d4b31ae1c17b3321497d6114623e"
+    revision = "4123a871e212acc97fd56aa218f57135df20b813"
     contract = "platform-contract-v0"
 
 Usage:
