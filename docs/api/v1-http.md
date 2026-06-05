@@ -16,9 +16,8 @@ One logical record. One commit epoch. Many native views. No external sync
 drift. Explain every candidate.
 
 This document tracks the current TraceDB `v1` HTTP product surface exposed by
-`tracedb-server` and allowed through `tracedb-gateway`. It is a working local
-API reference, not a managed-cloud SLA, not a benchmark claim, and not a SQL
-compatibility claim.
+`tracedb-server`. It is a working local API reference, not a managed-cloud SLA,
+not a benchmark claim, and not a SQL compatibility claim.
 
 The companion machine-readable artifact is `docs/api/v1-openapi.json`. Regenerate
 or check it from the repo root with:
@@ -74,16 +73,15 @@ SDK package checks and SDK smokes run outside the core product gate.
   is a separate opt-in policy for transient 5xx/timeout retries on mutating,
   admin, or polymorphic native operation routes and is only active when the
   individual request includes an `Idempotency-Key`.
-- Gateway metering, request logging, and rate limiting may still observe each
-  HTTP attempt.
+- Hosted TraceDB may add metering, request logging, rate limiting, and routing
+  outside this downloadable core repository.
 
 ## Current HTTP Stack Boundary
 
-The current HTTP stack boundary is explicit: `tracedb-server` and
-`tracedb-gateway` default to Tokio/Axum product paths with Tower body limits,
-timeouts, load shedding, concurrency limits, graceful shutdown, structured
-JSON tracing, and private engine-token enforcement where configured. Engine
-mode uses an async handle with serialized writes/admin work and cheap read
+The current HTTP stack boundary is explicit: `tracedb-server` exposes the local
+engine HTTP product path with Tokio/Axum, Tower body limits, timeouts, load
+shedding, concurrency limits, graceful shutdown, and structured JSON tracing.
+It uses an async handle with serialized writes/admin work and cheap read
 snapshots, so health, readiness, and public-safe metrics do not wait behind
 long query execution.
 
@@ -96,9 +94,9 @@ is not a complete managed-service runtime.
 ## Transport
 
 Requests and responses are JSON over HTTP/1.1. POST routes expect
-`Content-Type: application/json`. The local engine accepts requests directly;
-the gateway accepts the same product routes and forwards authorized requests to
-the engine.
+`Content-Type: application/json`. The local engine accepts requests directly.
+The hosted TraceDB service uses the same HTTP contract, but its routing and
+operations implementation is proprietary and outside this repository.
 
 The minimal SDK can add `database_id` and `branch_id` fields to object-shaped
 POST bodies when configured for managed routing. If only `database_id` is

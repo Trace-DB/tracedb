@@ -65,7 +65,7 @@ During its alpha phase, TraceDB does not try to replace every mature database fe
 *   **Distributed Consensus & Multi-Region Replication**: The focus is on a correct, single-writer stateful engine.
 *   **Advanced Analytical Warehouse Workloads**: Not designed for massive, arbitrary OLAP scanning.
 *   **Arbitrary Stored Procedures**: Parity with complex PL/pgSQL engines is out of scope.
-*   **Global Serverless Compute/Storage Split**: The alpha runs on Railway using a single stateful engine instance with a mounted persistent volume, verifying local durability, recovery, and indexing before splitting the planes.
+*   **Global Serverless Compute/Storage Split**: The alpha focuses on a correct single-writer stateful engine first, verifying local durability, recovery, and indexing before splitting compute and storage planes.
 
 ### What TraceDB MUST win at in Alpha:
 *   Correct, crash-safe, local and hosted AI-native app state.

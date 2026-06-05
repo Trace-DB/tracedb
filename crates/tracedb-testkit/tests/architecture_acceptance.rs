@@ -2,17 +2,13 @@ use serde_json::json;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 use tracedb_catalog::{BranchState, Catalog};
 use tracedb_core::Epoch;
 use tracedb_features::{FeatureFreshnessMode, FeatureLifecycle, FeatureLifecycleStatus};
-use tracedb_gateway::{Gateway, GatewayRequest, GatewayServerConfig};
 use tracedb_graph::{Edge, GraphStore};
 use tracedb_jobs::{JobCatalog, JobKind, JobStatus, WorkerId};
 use tracedb_keeper::{BranchWalService, CommitRequest};
-use tracedb_metering::{MeterKind, UsageMeter};
 use tracedb_policy::{AclEntry, ActorContext, Policy, VisibilityMode, VisibilityOracle};
 use tracedb_provenance::{Provenance, RetrievalAudit};
 use tracedb_query::TraceDb;
@@ -277,207 +273,6 @@ fn graph_temporal_provenance_and_retrieval_state_are_policy_safe() {
 }
 
 #[test]
-fn managed_plane_contracts_route_through_gateway_keeper_worker_and_metering() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let catalog_path = temp.path().join("catalog/catalog.json");
-    let mut catalog = Catalog::default();
-    let database = catalog
-        .create_database("org-a", "project-a", "memory", "us-west")
-        .expect("database");
-    let branch = catalog
-        .create_branch(&database.database_id, "main", None)
-        .expect("branch");
-    assert_eq!(branch.state, BranchState::Active);
-    catalog.save(&catalog_path).expect("save catalog");
-    let reloaded = Catalog::load(&catalog_path).expect("load catalog");
-    assert_eq!(
-        reloaded.branch(&branch.branch_id).expect("durable branch"),
-        &branch
-    );
-
-    let keeper_path = temp.path().join("keeper/main.json");
-    let mut keeper = BranchWalService::open(&keeper_path).expect("keeper");
-    let first = keeper
-        .commit(CommitRequest::new(&branch.branch_id, "idem-1", "insert a"))
-        .expect("first commit");
-    let retry = keeper
-        .commit(CommitRequest::new(&branch.branch_id, "idem-1", "insert a"))
-        .expect("idempotent retry");
-    assert_eq!(first.epoch, retry.epoch);
-    assert_eq!(keeper.commit_log().len(), 1);
-    let mut reopened_keeper = BranchWalService::open(&keeper_path).expect("reopen keeper");
-    let durable_retry = reopened_keeper
-        .commit(CommitRequest::new(&branch.branch_id, "idem-1", "insert a"))
-        .expect("durable idempotent retry");
-    assert_eq!(first, durable_retry);
-    assert_eq!(reopened_keeper.commit_log().len(), 1);
-
-    let mut meter = UsageMeter::default();
-    let gateway = Gateway::open(catalog.clone()).with_engine_url("http://127.0.0.1:0");
-    let response = gateway
-        .route(
-            GatewayRequest::query(&database.database_id, &branch.branch_id)
-                .with_bearer_token("secret-token"),
-            &mut meter,
-        )
-        .expect("route");
-    assert_eq!(response.engine_target.service_name, "tracedb-engine");
-    assert_eq!(meter.total(MeterKind::Request), 1);
-    let mismatch = gateway
-        .route(
-            GatewayRequest::query("other-db", &branch.branch_id).with_bearer_token("secret-token"),
-            &mut meter,
-        )
-        .unwrap_err();
-    assert!(mismatch.contains("does not belong"));
-
-    let engine_url = spawn_engine_stub();
-    let proxy_runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("proxy runtime");
-    let proxy_client = reqwest::Client::new();
-    let proxied = proxy_runtime
-        .block_on(tracedb_gateway::proxy_engine_request(
-            &proxy_client,
-            &engine_url,
-            "POST",
-            "/v1/query",
-            br#"{"table":"docs"}"#,
-            "application/json",
-            None,
-            &[],
-        ))
-        .expect("gateway proxy");
-    assert_eq!(proxied.status_code, 200);
-    assert!(String::from_utf8_lossy(&proxied.body).contains("\"engine\":true"));
-    let runtime_meter = Arc::new(Mutex::new(UsageMeter::default()));
-    let runtime_config = GatewayServerConfig {
-        bind: "127.0.0.1:0".to_string(),
-        engine_url: engine_url.clone(),
-        http_client: reqwest::Client::new(),
-        engine_internal_token: None,
-        required_token: None,
-        api_key_registry: None,
-        api_key_audit_log_path: None,
-        admin_token_hash: None,
-        catalog: reloaded,
-        meter: Arc::clone(&runtime_meter),
-        rate_limit_enabled: true,
-        rate_limit_requests: 10,
-        request_timeout: Duration::from_secs(30),
-        max_concurrent_requests: 1024,
-    };
-    let runtime_body = json!({
-        "database_id": database.database_id,
-        "branch_id": branch.branch_id,
-        "table": "docs",
-        "tenant_id": "tenant-a",
-        "top_k": 1,
-        "freshness": "Strict"
-    })
-    .to_string();
-    let runtime_request = format!(
-        "POST /v1/query HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer secret-token\r\ncontent-length: {}\r\n\r\n{}",
-        runtime_body.len(),
-        runtime_body
-    );
-    let runtime_response =
-        tracedb_gateway::handle_gateway_request_text(&runtime_request, runtime_config);
-    assert!(runtime_response.starts_with("HTTP/1.1 200 OK"));
-    assert!(runtime_response.contains("\"engine\":true"));
-    assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 1);
-
-    let batch_body = json!({
-        "database_id": database.database_id,
-        "branch_id": branch.branch_id,
-        "records": [{
-            "table": "docs",
-            "tenant_id": "tenant-a",
-            "id": "a",
-            "fields": {
-                "id": "a",
-                "tenant": "tenant-a",
-                "body": "gateway batch ingest",
-                "embedding": [1.0, 0.0]
-            }
-        }]
-    })
-    .to_string();
-    let batch_request = format!(
-        "POST /v1/records/put-batch HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer secret-token\r\nidempotency-key: gateway-batch-1\r\ncontent-length: {}\r\n\r\n{}",
-        batch_body.len(),
-        batch_body
-    );
-    let batch_config = GatewayServerConfig {
-        bind: "127.0.0.1:0".to_string(),
-        engine_url: engine_url.clone(),
-        http_client: reqwest::Client::new(),
-        engine_internal_token: None,
-        required_token: Some("secret-token".to_string()),
-        api_key_registry: None,
-        api_key_audit_log_path: None,
-        admin_token_hash: None,
-        catalog: catalog.clone(),
-        meter: Arc::clone(&runtime_meter),
-        rate_limit_enabled: true,
-        rate_limit_requests: 10,
-        request_timeout: Duration::from_secs(30),
-        max_concurrent_requests: 1024,
-    };
-    let batch_response = tracedb_gateway::handle_gateway_request_text(&batch_request, batch_config);
-    assert!(
-        batch_response.starts_with("HTTP/1.1 200 OK"),
-        "gateway should forward batch ingest route: {batch_response}"
-    );
-    assert!(batch_response.contains("\"path\":\"/v1/records/put-batch\""));
-    assert!(batch_response.contains("\"idempotency_key\":\"gateway-batch-1\""));
-    assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 2);
-
-    let admin_jobs_request = format!(
-        "GET /v1/admin/jobs?database_id={}&branch_id={} HTTP/1.1\r\nauthorization: Bearer secret-token\r\ncontent-length: 0\r\n\r\n",
-        database.database_id, branch.branch_id
-    );
-    let admin_jobs_config = GatewayServerConfig {
-        bind: "127.0.0.1:0".to_string(),
-        engine_url: engine_url.clone(),
-        http_client: reqwest::Client::new(),
-        engine_internal_token: None,
-        required_token: Some("secret-token".to_string()),
-        api_key_registry: None,
-        api_key_audit_log_path: None,
-        admin_token_hash: None,
-        catalog: catalog.clone(),
-        meter: Arc::clone(&runtime_meter),
-        rate_limit_enabled: true,
-        rate_limit_requests: 10,
-        request_timeout: Duration::from_secs(30),
-        max_concurrent_requests: 1024,
-    };
-    let admin_jobs_response =
-        tracedb_gateway::handle_gateway_request_text(&admin_jobs_request, admin_jobs_config);
-    assert!(
-        admin_jobs_response.starts_with("HTTP/1.1 200 OK"),
-        "gateway should route admin jobs with query metadata: {admin_jobs_response}"
-    );
-    assert!(admin_jobs_response.contains("\"path\":\"/v1/admin/jobs?"));
-    assert_eq!(runtime_meter.lock().unwrap().total(MeterKind::Request), 3);
-
-    let mut jobs = JobCatalog::default();
-    jobs.enqueue(JobKind::VerifyDatabase, "branch/main", "verify-main")
-        .expect("enqueue");
-    let report = tracedb_worker::run_once_through_engine_api(
-        &mut jobs,
-        WorkerId::new("worker-1"),
-        &engine_url,
-    )
-    .expect("worker");
-    assert!(report.used_private_engine_api);
-    assert!(report.engine_health_checked);
-    assert_eq!(report.engine_status_code, 200);
-}
-
-#[test]
 fn graph_and_temporal_query_paths_are_executable_not_only_registered() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut db = TraceDb::open(temp.path()).expect("open db");
@@ -583,31 +378,6 @@ fn segment_server_cache_query_and_bench_surfaces_are_executable_contracts() {
     assert_eq!(request.text_field.as_deref(), Some("content"));
     assert_eq!(request.vector_field.as_deref(), Some("embedding"));
     assert_eq!(request.freshness, FreshnessMode::Lazy);
-}
-
-#[test]
-fn railway_deploy_artifacts_exist_for_gateway_engine_worker_and_bench() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root");
-    for path in [
-        "deploy/railway/README.md",
-        "deploy/railway/env.gateway.example",
-        "deploy/railway/env.engine.example",
-        "deploy/railway/env.worker.example",
-        "deploy/railway/env.benchmark.example",
-        "deploy/railway/railway.gateway.toml",
-        "deploy/railway/railway.engine.toml",
-        "deploy/railway/railway.worker.toml",
-        "deploy/railway/railway.bench.toml",
-        "apps/gateway/README.md",
-        "apps/engine/README.md",
-        "apps/worker/README.md",
-        "apps/bench/README.md",
-    ] {
-        assert!(root.join(path).exists(), "missing {path}");
-    }
 }
 
 fn spawn_engine_stub() -> String {

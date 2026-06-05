@@ -68,13 +68,12 @@ a validation mirror pinned by `tracedb-protocol.lock`.
   `docs/durability-semantics-v0.md`; it is not a managed-cloud SLA, not
   cross-replica idempotency, and not crash-atomic exactly-once semantics.
 - The current HTTP stack boundary is local/development product proof:
-  `tracedb-server` and `tracedb-gateway` default to Tokio/Axum product paths
-  with Tower body limits, timeouts, load shedding, concurrency limits, graceful
-  shutdown, structured JSON tracing, and private engine-token enforcement where
-  configured. Legacy stdlib listener helpers remain for compatibility tests and
-  local harnesses. The HTTP routes remain the canonical wire contract, but the
-  server implementation does not provide TLS or HTTP/2 and is not a complete
-  managed-service runtime.
+  `tracedb-server` exposes the local engine HTTP product path with Tokio/Axum,
+  Tower body limits, timeouts, load shedding, concurrency limits, graceful
+  shutdown, and structured JSON tracing. Legacy stdlib listener helpers remain
+  for compatibility tests and local harnesses. The HTTP routes remain the
+  canonical wire contract, but the server implementation does not provide TLS
+  or HTTP/2 and is not a complete managed-service runtime.
 
 ## Developer Model
 

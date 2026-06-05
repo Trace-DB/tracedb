@@ -1,8 +1,0 @@
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
-
-[deploy]
-startCommand = "tracedb-server"
-healthcheckPath = "/v1/health"
-restartPolicyType = "ON_FAILURE"

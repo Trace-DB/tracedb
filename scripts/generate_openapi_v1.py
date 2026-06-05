@@ -540,7 +540,7 @@ def build_spec() -> dict[str, Any]:
         },
         "servers": [
             {"url": "http://127.0.0.1:8090", "description": "Local tracedb-server"},
-            {"url": "https://tracedb-engine-production.up.railway.app", "description": "Current Railway alpha engine"},
+            {"url": "https://api.trace-db.com", "description": "Hosted TraceDB API"},
         ],
         "security": [{"bearerAuth": []}],
         "tags": [

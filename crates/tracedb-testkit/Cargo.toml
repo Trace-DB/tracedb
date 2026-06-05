@@ -33,8 +33,6 @@ tracedb-memory-runtime = { path = "../tracedb-memory-runtime" }
 tracedb-std = { path = "../tracedb-std" }
 tracedb-catalog = { path = "../tracedb-catalog" }
 tracedb-keeper = { path = "../tracedb-keeper" }
-tracedb-gateway = { path = "../tracedb-gateway" }
-tracedb-worker = { path = "../tracedb-worker" }
 tracedb-segment-server = { path = "../tracedb-segment-server" }
 tracedb-cache = { path = "../tracedb-cache" }
 tracedb-metering = { path = "../tracedb-metering" }

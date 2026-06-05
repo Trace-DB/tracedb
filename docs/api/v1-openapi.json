@@ -3803,8 +3803,8 @@
       "url": "http://127.0.0.1:8090"
     },
     {
-      "description": "Current Railway alpha engine",
-      "url": "https://tracedb-engine-production.up.railway.app"
+      "description": "Hosted TraceDB API",
+      "url": "https://api.trace-db.com"
     }
   ],
   "tags": [

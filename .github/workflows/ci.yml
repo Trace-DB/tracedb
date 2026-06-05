@@ -37,17 +37,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  benchmark-gate:
-    name: Benchmark gate unit tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Run benchmark gate unit tests
-        run: python3 -m unittest benchmarks.realworld.tests.test_suite_gate
-
   contract-generation-drift:
     name: Contract generation drift
     runs-on: ubuntu-latest
@@ -85,17 +74,17 @@ jobs:
       - name: Start lite compose profile
         run: |
           docker tag tracedb-local:test tracedb-local:latest
-          docker compose --profile lite up -d tracedb-engine
-          docker compose --profile lite ps -a tracedb-engine
-          curl --retry 20 --retry-all-errors --retry-delay 3 -fsS http://localhost:18081/v1/health
+          docker compose up -d tracedb
+          docker compose ps -a tracedb
+          curl --retry 20 --retry-all-errors --retry-delay 3 -fsS http://localhost:18080/v1/health
       - name: Show lite compose logs
         if: failure()
         run: |
-          docker compose --profile lite ps -a
-          docker compose --profile lite logs tracedb-engine
+          docker compose ps -a
+          docker compose logs tracedb
       - name: Stop lite compose profile
         if: always()
-        run: docker compose --profile lite down -v --remove-orphans
+        run: docker compose down -v --remove-orphans
 
   audit:
     runs-on: ubuntu-latest

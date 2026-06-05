@@ -50,14 +50,13 @@ WAL/checkpoint-backed idempotency semantics for the local-first engine,
 including the current non-guarantees around cross-replica idempotency,
 crash-atomic exactly-once, and managed-cloud backup/DR.
 
-The current HTTP stack boundary is also explicit. `tracedb-server` and
-`tracedb-gateway` default to Tokio/Axum product paths with Tower body limits,
-timeouts, load shedding, concurrency limits, graceful shutdown, structured JSON
-tracing, and private engine-token enforcement where configured. Engine mode
-uses an async handle with serialized writes/admin work and cheap read snapshots.
-Legacy stdlib listener helpers remain for compatibility tests and local
-harnesses. The current server path does not provide TLS or HTTP/2 and is not a
-complete managed-service runtime.
+The current HTTP stack boundary is also explicit. `tracedb-server` exposes the
+local engine HTTP product path with Tokio/Axum, Tower body limits, timeouts,
+load shedding, concurrency limits, graceful shutdown, and structured JSON
+tracing. The server uses an async handle with serialized writes/admin work and
+cheap read snapshots. Legacy stdlib listener helpers remain for compatibility
+tests and local harnesses. The current server path does not provide TLS or
+HTTP/2 and is not a complete managed-service runtime.
 
 Run the core executable contract harness with:
 
