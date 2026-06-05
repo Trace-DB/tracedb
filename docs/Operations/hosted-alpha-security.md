@@ -61,13 +61,22 @@ TRACEDB_HOSTED_ALPHA=true
 TRACEDB_SERVICE_MODE=gateway
 TRACEDB_REQUIRE_API_KEY=true
 TRACEDB_API_TOKEN=<secret stored in provider secret manager>
+TRACEDB_API_KEYS_PATH=<provider-mounted private path, optional invite-alpha registry>
+TRACEDB_API_KEY_AUDIT_LOG_PATH=<provider-mounted private audit log path, optional>
+TRACEDB_GATEWAY_ADMIN_TOKEN=<secret stored in provider secret manager, required for key admin routes>
 TRACEDB_ENGINE_URL=http://<private-engine-host>:8080
 TRACEDB_ENGINE_INTERNAL_TOKEN=<shared internal secret>
 ```
 
 Clients and benchmark runners send the public API token as a bearer token. Local
 operator tooling commonly uses `TRACEDB_HTTP_BEARER_TOKEN`; the gateway secret
-that validates public access is `TRACEDB_API_TOKEN`.
+that validates legacy shared-token access is `TRACEDB_API_TOKEN`.
+
+When `TRACEDB_API_KEYS_PATH` is set, the gateway uses a file-backed invite-alpha
+API-key registry instead of treating the hosted API as self-serve. The registry
+stores only key hashes and metadata, not raw API keys. The one-time raw key is
+returned only from the admin create route and must be copied directly into the
+approved tester's secret store.
 
 ### Private engine
 
@@ -109,7 +118,7 @@ routing is ready. Hosted-alpha ingress evidence must target the gateway.
 
 ## Token Requirements
 
-### Public API token
+### Public API token and invite-alpha keys
 
 Hosted-alpha public gateway requests require a bearer token:
 
@@ -120,12 +129,57 @@ Authorization: Bearer <token>
 Operational requirements:
 
 - Set `TRACEDB_REQUIRE_API_KEY=true` on the gateway.
-- Store `TRACEDB_API_TOKEN` only in Railway variables, AWS Secrets Manager, SSM
-  Parameter Store, or a comparable secret manager.
+- For legacy one-token alpha, store `TRACEDB_API_TOKEN` only in Railway
+  variables, AWS Secrets Manager, SSM Parameter Store, or a comparable secret
+  manager.
+- For invite-alpha testers, configure `TRACEDB_API_KEYS_PATH` and issue one
+  `tdb_live_` key per tester through the gateway admin API.
+- Store only the registry file and audit log on private provider storage. Do
+  not commit either file.
 - Generate long, random, environment-specific tokens.
 - Do not reuse local, benchmark, staging, and customer-facing tokens.
 - Rotate immediately after accidental exposure in logs, shell history, reports,
   or issue trackers.
+
+Invite-alpha registry records track owner, optional email/org, scopes,
+database/branch/tenant binding, status, creation time, last-used time, usage
+count, and an optional request limit. This is enough for controlled alpha key
+distribution. It is not a billing system, customer dashboard, credit ledger, or
+self-serve cloud account model.
+
+### Gateway API-key admin API
+
+Gateway key-management routes are operator-only and require:
+
+```http
+Authorization: Bearer <TRACEDB_GATEWAY_ADMIN_TOKEN>
+```
+
+Supported invite-alpha routes:
+
+- `POST /v1/gateway/api-keys`: creates a key and returns the raw `tdb_live_...`
+  token once.
+- `GET /v1/gateway/api-keys`: lists sanitized key metadata without hashes or raw
+  tokens.
+- `POST /v1/gateway/api-keys/revoke`: revokes a key by `key_id`.
+
+The create body is JSON:
+
+```json
+{
+  "owner": "alpha-tester",
+  "email": "tester@example.com",
+  "org": "example",
+  "scopes": ["records:read", "records:write"],
+  "database_id": "db_local",
+  "branch_id": "db_local:main",
+  "tenant_id": "tenant-a",
+  "rate_limit_requests": 60000
+}
+```
+
+Do not expose these admin routes through public dashboards or support tooling
+until there is an operator approval gate and the audit log is retained.
 
 ### Internal engine token
 

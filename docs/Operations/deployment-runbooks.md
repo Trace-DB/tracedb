@@ -30,12 +30,19 @@ exposure change.
 - Engine private URL resolves from gateway and worker.
 - `TRACEDB_HOSTED_ALPHA=true` is set for hosted-alpha services.
 - `TRACEDB_REQUIRE_API_KEY=true` is set on gateway.
+- For invite-alpha key distribution, `TRACEDB_API_KEYS_PATH`,
+  `TRACEDB_API_KEY_AUDIT_LOG_PATH`, and `TRACEDB_GATEWAY_ADMIN_TOKEN` are set
+  on gateway and backed by private provider storage/secrets.
 - `TRACEDB_ENGINE_INTERNAL_TOKEN` is set on gateway, engine, and worker.
 - `tracedb-engine` is the only service with write access to `/data/tracedb`.
 
 ### Secret checks
 
 - `TRACEDB_API_TOKEN` is present only in provider secrets.
+- `TRACEDB_GATEWAY_ADMIN_TOKEN` is present only in provider secrets if key
+  administration is enabled.
+- API-key registry and audit-log files are private provider files, not repo
+  files, reports, or public docs artifacts.
 - `TRACEDB_ENGINE_INTERNAL_TOKEN` is present only in provider secrets.
 - `TRACEDB_MASTER_KEY_B64`, if used, is present only in provider secrets.
 - Postgres, Redis/Valkey, S3, Railway, AWS, OpenRouter, and benchmark secrets are
@@ -123,6 +130,24 @@ engine must agree.
 
 If the provider supports dual token validation in the future, use staged
 overlap. Until then, assume single-token cutover.
+
+### Invite-alpha API-key creation and revocation
+
+Use this only after `TRACEDB_API_KEYS_PATH`, `TRACEDB_API_KEY_AUDIT_LOG_PATH`,
+and `TRACEDB_GATEWAY_ADMIN_TOKEN` are configured on the gateway.
+
+1. Create one key per approved tester with `POST /v1/gateway/api-keys`.
+2. Copy the returned `tdb_live_...` token directly into the tester handoff or
+   secret store; it is shown once and is not stored in the registry.
+3. Confirm the registry file stores `token_hash_sha256` and not the raw token.
+4. Run an authenticated read/write smoke through `tracedb-gateway` using that
+   tester token.
+5. Confirm the audit log contains a `created` event and later usage updates
+   change `last_used_at_unix`/`usage_count` in the registry.
+6. Revoke with `POST /v1/gateway/api-keys/revoke` when access ends, a token is
+   suspected exposed, or a tester no longer needs access.
+7. Do not describe this as self-serve API-key management; it is manual
+   invite-alpha issuance.
 
 ### TDE master key handling
 

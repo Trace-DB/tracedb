@@ -109,6 +109,21 @@ railway up --service tracedb-gateway --detach -m "Deploy TraceDB gateway"
 railway domain --service tracedb-gateway --port 8080 --json
 ```
 
+For invite-alpha key distribution, keep `TRACEDB_API_TOKEN` as a small
+operator/internal smoke fallback and configure the per-tester registry with
+provider-private paths/secrets:
+
+```bash
+railway variables --service tracedb-gateway set \
+  TRACEDB_API_KEYS_PATH=/data/gateway/api-keys.json \
+  TRACEDB_API_KEY_AUDIT_LOG_PATH=/data/gateway/api-key-audit.jsonl \
+  TRACEDB_GATEWAY_ADMIN_TOKEN=<set-a-long-random-admin-token>
+```
+
+The registry stores `tdb_live_...` key hashes and metadata only. The raw key is
+returned once from `POST /v1/gateway/api-keys` and must never be committed,
+printed in reports, or reused across testers.
+
 The root `railway.toml` deploys an engine-shaped source-build diagnostic service.
 For gateway and worker services, either set the matching Railway dashboard start
 command or use the matching `deploy/railway/railway.*.toml` config path for that

@@ -10,11 +10,15 @@ use axum::{BoxError, Router};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::convert::Infallible;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tower::limit::ConcurrencyLimitLayer;
 use tower::load_shed::LoadShedLayer;
 use tower::timeout::TimeoutLayer;
@@ -152,6 +156,206 @@ impl Gateway {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ApiKeyRegistryFile {
+    pub keys: Vec<ApiKeyRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ApiKeyRegistry {
+    path: PathBuf,
+    file: ApiKeyRegistryFile,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiKeyRecord {
+    pub key_id: String,
+    pub prefix: String,
+    pub token_hash_sha256: String,
+    pub owner: String,
+    pub email: Option<String>,
+    pub org: Option<String>,
+    pub scopes: Vec<String>,
+    pub database_id: Option<String>,
+    pub branch_id: Option<String>,
+    pub tenant_id: Option<String>,
+    pub status: ApiKeyStatus,
+    pub created_at_unix: u64,
+    pub last_used_at_unix: Option<u64>,
+    pub revoked_at_unix: Option<u64>,
+    pub usage_count: u64,
+    pub rate_limit_requests: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ApiKeyStatus {
+    Active,
+    Revoked,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuthenticatedApiKey {
+    key_id: String,
+    database_id: Option<String>,
+    branch_id: Option<String>,
+    tenant_id: Option<String>,
+    scopes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+struct ApiKeyCreateRequest {
+    owner: String,
+    email: Option<String>,
+    org: Option<String>,
+    scopes: Option<Vec<String>>,
+    database_id: Option<String>,
+    branch_id: Option<String>,
+    tenant_id: Option<String>,
+    rate_limit_requests: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+struct ApiKeyRevokeRequest {
+    key_id: String,
+}
+
+impl ApiKeyRegistry {
+    pub fn load(path: impl Into<PathBuf>) -> std::io::Result<Self> {
+        let path = path.into();
+        let file = if path.exists() {
+            let body = fs::read(&path)?;
+            serde_json::from_slice(&body).map_err(std::io::Error::other)?
+        } else {
+            ApiKeyRegistryFile::default()
+        };
+        Ok(Self { path, file })
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let tmp_path = tmp_path(&self.path);
+        let body = serde_json::to_vec_pretty(&self.file).map_err(std::io::Error::other)?;
+        fs::write(&tmp_path, body)?;
+        fs::rename(&tmp_path, &self.path)?;
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+
+    fn create_key(
+        &mut self,
+        request: ApiKeyCreateRequest,
+    ) -> Result<(ApiKeyRecord, String), String> {
+        let owner = request.owner.trim();
+        if owner.is_empty() {
+            return Err("owner is required".to_string());
+        }
+        let secret = random_hex(32).map_err(|error| format!("failed to generate key: {error}"))?;
+        let token = format!("tdb_live_{secret}");
+        let key_id = format!("key_{}", &secret[..12]);
+        let prefix = token[..24.min(token.len())].to_string();
+        if self.file.keys.iter().any(|key| key.key_id == key_id) {
+            return Err("generated duplicate key id; retry create".to_string());
+        }
+        let record = ApiKeyRecord {
+            key_id,
+            prefix,
+            token_hash_sha256: token_hash_sha256(&token),
+            owner: owner.to_string(),
+            email: request.email,
+            org: request.org,
+            scopes: request
+                .scopes
+                .unwrap_or_else(|| vec!["records:read".to_string()]),
+            database_id: request.database_id,
+            branch_id: request.branch_id,
+            tenant_id: request.tenant_id,
+            status: ApiKeyStatus::Active,
+            created_at_unix: now_unix(),
+            last_used_at_unix: None,
+            revoked_at_unix: None,
+            usage_count: 0,
+            rate_limit_requests: request.rate_limit_requests,
+        };
+        self.file.keys.push(record.clone());
+        self.save().map_err(|error| error.to_string())?;
+        Ok((record, token))
+    }
+
+    fn authenticate_and_meter(&mut self, token: &str) -> ApiKeyAuthResult {
+        let token_hash = token_hash_sha256(token);
+        let Some(record) = self
+            .file
+            .keys
+            .iter_mut()
+            .find(|key| key.token_hash_sha256 == token_hash)
+        else {
+            return ApiKeyAuthResult::Unauthorized;
+        };
+        if record.status != ApiKeyStatus::Active {
+            return ApiKeyAuthResult::Unauthorized;
+        }
+        if record
+            .rate_limit_requests
+            .map(|limit| record.usage_count >= limit)
+            .unwrap_or(false)
+        {
+            return ApiKeyAuthResult::RateLimited(record.key_id.clone());
+        }
+        record.usage_count = record.usage_count.saturating_add(1);
+        record.last_used_at_unix = Some(now_unix());
+        let authenticated = AuthenticatedApiKey {
+            key_id: record.key_id.clone(),
+            database_id: record.database_id.clone(),
+            branch_id: record.branch_id.clone(),
+            tenant_id: record.tenant_id.clone(),
+            scopes: record.scopes.clone(),
+        };
+        if let Err(error) = self.save() {
+            return ApiKeyAuthResult::StorageError(error.to_string());
+        }
+        ApiKeyAuthResult::Authorized(authenticated)
+    }
+
+    fn revoke_key(&mut self, key_id: &str) -> Result<ApiKeyRecord, String> {
+        let Some(record) = self.file.keys.iter_mut().find(|key| key.key_id == key_id) else {
+            return Err(format!("unknown api key {key_id}"));
+        };
+        record.status = ApiKeyStatus::Revoked;
+        record.revoked_at_unix = Some(now_unix());
+        let record = record.clone();
+        self.save().map_err(|error| error.to_string())?;
+        Ok(record)
+    }
+
+    fn public_records(&self) -> Vec<Value> {
+        self.file
+            .keys
+            .iter()
+            .map(|record| sanitized_api_key_record(record))
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ApiKeyAuthResult {
+    Authorized(AuthenticatedApiKey),
+    Unauthorized,
+    RateLimited(String),
+    StorageError(String),
+}
+
 #[derive(Clone, Debug)]
 /// Configuration for the gateway server.
 pub struct GatewayServerConfig {
@@ -160,6 +364,9 @@ pub struct GatewayServerConfig {
     pub http_client: reqwest::Client,
     pub engine_internal_token: Option<String>,
     pub required_token: Option<String>,
+    pub api_key_registry: Option<Arc<Mutex<ApiKeyRegistry>>>,
+    pub api_key_audit_log_path: Option<PathBuf>,
+    pub admin_token_hash: Option<String>,
     pub catalog: Catalog,
     pub meter: Arc<Mutex<UsageMeter>>,
     pub rate_limit_enabled: bool,
@@ -172,25 +379,32 @@ impl GatewayServerConfig {
     pub fn from_env() -> Self {
         let engine_url = std::env::var("TRACEDB_ENGINE_URL")
             .unwrap_or_else(|_| "http://tracedb-engine.railway.internal:8080".to_string());
+        let api_key_registry = load_api_key_registry_from_env();
+        let require_api_key = std::env::var("TRACEDB_REQUIRE_API_KEY")
+            .map(|value| value == "true")
+            .unwrap_or(false);
+        let required_token = match std::env::var("TRACEDB_API_TOKEN") {
+            Ok(token) if require_api_key && !token.is_empty() => {
+                Some(bcrypt::hash(&token, bcrypt::DEFAULT_COST).expect("failed to hash API token"))
+            }
+            _ if require_api_key && api_key_registry.is_none() => {
+                panic!("TRACEDB_API_TOKEN must be set when TRACEDB_REQUIRE_API_KEY=true and TRACEDB_API_KEYS_PATH is not configured")
+            }
+            _ => None,
+        };
         Self {
             bind: bind_addr_from_env(),
             engine_url: engine_url.clone(),
             http_client: reqwest::Client::new(),
             engine_internal_token: engine_internal_token_from_env(),
-            required_token: if std::env::var("TRACEDB_REQUIRE_API_KEY")
-                .map(|value| value == "true")
-                .unwrap_or(false)
-            {
-                match std::env::var("TRACEDB_API_TOKEN") {
-                    Ok(token) if !token.is_empty() => Some(
-                        bcrypt::hash(&token, bcrypt::DEFAULT_COST)
-                            .expect("failed to hash API token"),
-                    ),
-                    _ => panic!("TRACEDB_API_TOKEN must be set when TRACEDB_REQUIRE_API_KEY=true"),
-                }
-            } else {
-                None
-            },
+            required_token,
+            api_key_registry,
+            api_key_audit_log_path: std::env::var_os("TRACEDB_API_KEY_AUDIT_LOG_PATH")
+                .map(PathBuf::from),
+            admin_token_hash: std::env::var("TRACEDB_GATEWAY_ADMIN_TOKEN")
+                .ok()
+                .filter(|token| !token.trim().is_empty())
+                .map(|token| token_hash_sha256(&token)),
             catalog: load_gateway_catalog(&engine_url),
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: std::env::var("TRACEDB_RATE_LIMIT_ENABLED")
@@ -390,12 +604,35 @@ async fn handle_gateway_request_core(
     inbound: GatewayInboundHeaders,
     body: Bytes,
 ) -> EngineHttpResponse {
+    if is_gateway_api_key_admin_route(method, path) {
+        return handle_api_key_admin_route(&config, method, path, inbound.bearer_token, &body);
+    }
+
+    let mut authenticated_key = None;
     if !is_auth_exempt_gateway_route(method, path) {
-        if rate_limit_exceeded(&config) {
-            return gateway_too_many_requests();
-        }
-        if let Err(error) = require_auth(&config, inbound.bearer_token.as_deref()) {
-            return error;
+        if config.api_key_registry.is_some() {
+            match authenticate_api_key_request(&config, inbound.bearer_token.as_deref()) {
+                ApiKeyRequestAuth::Authorized(key) => authenticated_key = Some(key),
+                ApiKeyRequestAuth::Unauthorized => {
+                    audit_api_key_event(&config, "auth_failed", None, "unauthorized");
+                    return gateway_unauthorized();
+                }
+                ApiKeyRequestAuth::RateLimited(key_id) => {
+                    audit_api_key_event(&config, "rate_limited", Some(&key_id), "blocked");
+                    return gateway_too_many_requests();
+                }
+                ApiKeyRequestAuth::StorageError(message) => {
+                    audit_api_key_event(&config, "auth_storage_error", None, &message);
+                    return gateway_server_error(message);
+                }
+            }
+        } else {
+            if rate_limit_exceeded(&config) {
+                return gateway_too_many_requests();
+            }
+            if let Err(error) = require_auth(&config, inbound.bearer_token.as_deref()) {
+                return error;
+            }
         }
     }
 
@@ -480,6 +717,7 @@ async fn handle_gateway_request_core(
                 inbound.bearer_token,
                 query,
                 &inbound.actor_headers,
+                authenticated_key.as_ref(),
             ) {
                 Ok(authorized) => {
                     let mut actor_headers = authorized.actor_headers;
@@ -506,6 +744,7 @@ async fn handle_gateway_request_core(
                 }
                 Err(GatewayRuntimeError::Unauthorized) => gateway_unauthorized(),
                 Err(GatewayRuntimeError::BadRequest(message)) => gateway_bad_request(message),
+                Err(GatewayRuntimeError::Forbidden(message)) => gateway_forbidden(message),
             }
         }
         _ => gateway_not_found(),
@@ -546,6 +785,15 @@ fn is_auth_exempt_gateway_route(method: &str, path: &str) -> bool {
     )
 }
 
+fn is_gateway_api_key_admin_route(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("GET", "/v1/gateway/api-keys")
+            | ("POST", "/v1/gateway/api-keys")
+            | ("POST", "/v1/gateway/api-keys/revoke")
+    )
+}
+
 fn is_gateway_admin_route(method: &str, path: &str) -> bool {
     matches!(
         (method, path),
@@ -576,6 +824,127 @@ fn require_auth(
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ApiKeyRequestAuth {
+    Authorized(AuthenticatedApiKey),
+    Unauthorized,
+    RateLimited(String),
+    StorageError(String),
+}
+
+fn authenticate_api_key_request(
+    config: &GatewayServerConfig,
+    bearer_token: Option<&str>,
+) -> ApiKeyRequestAuth {
+    let Some(token) = bearer_token else {
+        return ApiKeyRequestAuth::Unauthorized;
+    };
+    let Some(registry) = &config.api_key_registry else {
+        return ApiKeyRequestAuth::Unauthorized;
+    };
+    match registry
+        .lock()
+        .expect("api key registry lock")
+        .authenticate_and_meter(token)
+    {
+        ApiKeyAuthResult::Authorized(key) => ApiKeyRequestAuth::Authorized(key),
+        ApiKeyAuthResult::Unauthorized => ApiKeyRequestAuth::Unauthorized,
+        ApiKeyAuthResult::RateLimited(key_id) => ApiKeyRequestAuth::RateLimited(key_id),
+        ApiKeyAuthResult::StorageError(message) => ApiKeyRequestAuth::StorageError(message),
+    }
+}
+
+fn handle_api_key_admin_route(
+    config: &GatewayServerConfig,
+    method: &str,
+    path: &str,
+    bearer_token: Option<String>,
+    body: &[u8],
+) -> EngineHttpResponse {
+    if let Err(error) = require_admin_auth(config, bearer_token.as_deref()) {
+        return error;
+    }
+    let Some(registry) = &config.api_key_registry else {
+        return gateway_json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({
+                "error": "api key registry is not configured",
+                "code": "api_key_registry_unconfigured"
+            }),
+        );
+    };
+    match (method, path) {
+        ("GET", "/v1/gateway/api-keys") => {
+            let records = registry
+                .lock()
+                .expect("api key registry lock")
+                .public_records();
+            gateway_ok(json!({ "keys": records }))
+        }
+        ("POST", "/v1/gateway/api-keys") => {
+            let request = match serde_json::from_slice::<ApiKeyCreateRequest>(body) {
+                Ok(request) => request,
+                Err(error) => return gateway_bad_request(error.to_string()),
+            };
+            let result = registry
+                .lock()
+                .expect("api key registry lock")
+                .create_key(request);
+            match result {
+                Ok((record, token)) => {
+                    audit_api_key_event(config, "created", Some(&record.key_id), "ok");
+                    gateway_ok(json!({
+                        "key": sanitized_api_key_record(&record),
+                        "token": token,
+                        "token_display": "shown-once"
+                    }))
+                }
+                Err(error) => gateway_bad_request(error),
+            }
+        }
+        ("POST", "/v1/gateway/api-keys/revoke") => {
+            let request = match serde_json::from_slice::<ApiKeyRevokeRequest>(body) {
+                Ok(request) => request,
+                Err(error) => return gateway_bad_request(error.to_string()),
+            };
+            let result = registry
+                .lock()
+                .expect("api key registry lock")
+                .revoke_key(&request.key_id);
+            match result {
+                Ok(record) => {
+                    audit_api_key_event(config, "revoked", Some(&record.key_id), "ok");
+                    gateway_ok(json!({ "key": sanitized_api_key_record(&record) }))
+                }
+                Err(error) => gateway_bad_request(error),
+            }
+        }
+        _ => gateway_not_found(),
+    }
+}
+
+fn require_admin_auth(
+    config: &GatewayServerConfig,
+    bearer_token: Option<&str>,
+) -> Result<(), EngineHttpResponse> {
+    let Some(expected_hash) = &config.admin_token_hash else {
+        return Err(gateway_json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({
+                "error": "gateway admin token is not configured",
+                "code": "gateway_admin_unconfigured"
+            }),
+        ));
+    };
+    let Some(token) = bearer_token else {
+        return Err(gateway_unauthorized());
+    };
+    if token_hash_sha256(token) != *expected_hash {
+        return Err(gateway_unauthorized());
+    }
+    Ok(())
+}
+
 fn rate_limit_exceeded(config: &GatewayServerConfig) -> bool {
     config.rate_limit_enabled
         && config.meter.lock().unwrap().total(MeterKind::Request) >= config.rate_limit_requests
@@ -588,9 +957,11 @@ fn authorize_route_and_meter(
     bearer_token: Option<String>,
     query: Option<&str>,
     actor_headers: &GatewayActorHeaderOverrides,
+    authenticated_key: Option<&AuthenticatedApiKey>,
 ) -> Result<AuthorizedGatewayRoute, GatewayRuntimeError> {
     let mut ids = gateway_ids_from_request(body, query, actor_headers)?;
     ids.bearer_token = bearer_token;
+    apply_authenticated_key_scope(&mut ids, authenticated_key)?;
     let gateway = Gateway::open(config.catalog.clone()).with_engine_url(config.engine_url.clone());
     let mut meter = config.meter.lock().unwrap();
     let response = gateway
@@ -614,6 +985,46 @@ fn authorize_route_and_meter(
         target: response.engine_target,
         actor_headers: ids.actor_headers(),
     })
+}
+
+fn apply_authenticated_key_scope(
+    ids: &mut GatewayRequestIds,
+    authenticated_key: Option<&AuthenticatedApiKey>,
+) -> Result<(), GatewayRuntimeError> {
+    let Some(key) = authenticated_key else {
+        return Ok(());
+    };
+    if let Some(database_id) = &key.database_id {
+        if ids.database_id == "db_local" {
+            ids.database_id = database_id.clone();
+        } else if ids.database_id != *database_id {
+            return Err(GatewayRuntimeError::Forbidden(
+                "api key is not scoped to requested database".to_string(),
+            ));
+        }
+    }
+    if let Some(branch_id) = &key.branch_id {
+        if ids.branch_id == "db_local:main" || ids.branch_id == format!("{}:main", ids.database_id)
+        {
+            ids.branch_id = branch_id.clone();
+        } else if ids.branch_id != *branch_id {
+            return Err(GatewayRuntimeError::Forbidden(
+                "api key is not scoped to requested branch".to_string(),
+            ));
+        }
+    }
+    if let Some(tenant_id) = &key.tenant_id {
+        if ids.tenant_id == "local" {
+            ids.tenant_id = tenant_id.clone();
+        } else if ids.tenant_id != *tenant_id {
+            return Err(GatewayRuntimeError::Forbidden(
+                "api key is not scoped to requested tenant".to_string(),
+            ));
+        }
+    }
+    ids.token_identity = Some(key.key_id.clone());
+    ids.scopes = (!key.scopes.is_empty()).then(|| key.scopes.join(","));
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -802,6 +1213,7 @@ fn gateway_actor_header_overrides_from_header_map(
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum GatewayRuntimeError {
     Unauthorized,
+    Forbidden(String),
     BadRequest(String),
 }
 
@@ -1110,6 +1522,13 @@ fn gateway_forbidden(message: String) -> EngineHttpResponse {
     )
 }
 
+fn gateway_server_error(message: String) -> EngineHttpResponse {
+    gateway_json_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({ "error": message, "code": "internal_error" }),
+    )
+}
+
 fn gateway_too_many_requests() -> EngineHttpResponse {
     gateway_json_response(
         StatusCode::TOO_MANY_REQUESTS,
@@ -1133,6 +1552,93 @@ fn bad_request(message: String) -> String {
         body.len(),
         body
     )
+}
+
+fn load_api_key_registry_from_env() -> Option<Arc<Mutex<ApiKeyRegistry>>> {
+    let path = std::env::var_os("TRACEDB_API_KEYS_PATH").map(PathBuf::from)?;
+    let registry = ApiKeyRegistry::load(path).expect("failed to load TRACEDB_API_KEYS_PATH");
+    Some(Arc::new(Mutex::new(registry)))
+}
+
+fn sanitized_api_key_record(record: &ApiKeyRecord) -> Value {
+    json!({
+        "key_id": record.key_id,
+        "prefix": record.prefix,
+        "owner": record.owner,
+        "email": record.email,
+        "org": record.org,
+        "scopes": record.scopes,
+        "database_id": record.database_id,
+        "branch_id": record.branch_id,
+        "tenant_id": record.tenant_id,
+        "status": record.status,
+        "created_at_unix": record.created_at_unix,
+        "last_used_at_unix": record.last_used_at_unix,
+        "revoked_at_unix": record.revoked_at_unix,
+        "usage_count": record.usage_count,
+        "rate_limit_requests": record.rate_limit_requests,
+    })
+}
+
+fn audit_api_key_event(
+    config: &GatewayServerConfig,
+    event: &str,
+    key_id: Option<&str>,
+    status: &str,
+) {
+    let Some(path) = &config.api_key_audit_log_path else {
+        return;
+    };
+    let value = json!({
+        "event": event,
+        "key_id": key_id,
+        "status": status,
+        "created_at_unix": now_unix(),
+    });
+    if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{value}");
+    }
+}
+
+fn token_hash_sha256(token: &str) -> String {
+    hex_encode(&Sha256::digest(token.as_bytes()))
+}
+
+fn random_hex(byte_len: usize) -> std::io::Result<String> {
+    let mut bytes = vec![0u8; byte_len];
+    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(hex_encode(&bytes))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.to_path_buf();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!("{value}.tmp"))
+        .unwrap_or_else(|| "tmp".to_string());
+    tmp.set_extension(extension);
+    tmp
 }
 
 fn bind_addr_from_env() -> String {
@@ -1190,6 +1696,9 @@ mod tests {
             required_token: Some(
                 "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
             ),
+            api_key_registry: None,
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
             catalog: Catalog::default(),
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,
@@ -1235,6 +1744,9 @@ mod tests {
             required_token: Some(
                 "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
             ),
+            api_key_registry: None,
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
             catalog,
             meter,
             rate_limit_enabled: false,
@@ -1292,6 +1804,9 @@ mod tests {
             required_token: Some(
                 "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
             ),
+            api_key_registry: None,
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
             catalog,
             meter,
             rate_limit_enabled: false,
@@ -1339,6 +1854,9 @@ mod tests {
             required_token: Some(
                 "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
             ),
+            api_key_registry: None,
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
             catalog: Catalog::default(),
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: true,
@@ -1355,6 +1873,153 @@ mod tests {
         assert!(
             response.starts_with("HTTP/1.1 429 Too Many Requests"),
             "rate limit should reject before bcrypt auth work: {response}"
+        );
+    }
+
+    #[test]
+    fn gateway_admin_creates_file_backed_api_key_and_shows_secret_once() {
+        let key_path = unique_temp_path("tracedb-gateway-api-keys.json");
+        let audit_path = unique_temp_path("tracedb-gateway-api-key-audit.jsonl");
+        let mut catalog = Catalog::default();
+        let database = catalog
+            .create_database("org-a", "project-a", "local", "local")
+            .expect("database");
+        let branch = catalog
+            .create_branch(&database.database_id, "main", None)
+            .expect("branch");
+        let registry = Arc::new(Mutex::new(
+            ApiKeyRegistry::load(key_path.clone()).expect("registry"),
+        ));
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: "http://127.0.0.1:1".to_string(),
+            http_client: reqwest::Client::new(),
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: None,
+            api_key_registry: Some(registry),
+            api_key_audit_log_path: Some(audit_path.clone()),
+            admin_token_hash: Some(token_hash_sha256("admin-secret")),
+            catalog,
+            meter: Arc::new(Mutex::new(UsageMeter::default())),
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
+        };
+        let body = json!({
+            "owner": "alpha-tester",
+            "email": "tester@example.com",
+            "scopes": ["records:read", "records:write"],
+            "database_id": database.database_id,
+            "branch_id": branch.branch_id,
+            "tenant_id": "tenant-a",
+            "rate_limit_requests": 2
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/gateway/api-keys HTTP/1.1\r\nauthorization: Bearer admin-secret\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = handle_gateway_request_text(&request, config.clone());
+
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "create key should succeed: {response}"
+        );
+        let payload: Value = serde_json::from_str(response_body(&response)).expect("json");
+        let token = payload["token"].as_str().expect("one-time token");
+        assert!(token.starts_with("tdb_live_"));
+        let persisted = fs::read_to_string(&key_path).expect("persisted key file");
+        assert!(!persisted.contains(token));
+        assert!(persisted.contains("token_hash_sha256"));
+
+        let authorized = handle_gateway_request_text(
+            &format!("GET /v1/databases HTTP/1.1\r\nauthorization: Bearer {token}\r\n\r\n"),
+            config,
+        );
+        assert!(
+            authorized.starts_with("HTTP/1.1 200 OK"),
+            "created key should authorize metadata route: {authorized}"
+        );
+        let audit = fs::read_to_string(&audit_path).expect("audit log");
+        assert!(audit.contains("\"event\":\"created\""));
+    }
+
+    #[test]
+    fn file_backed_api_key_scope_controls_actor_headers() {
+        let engine = spawn_header_echo_engine();
+        let key_path = unique_temp_path("tracedb-gateway-scoped-api-keys.json");
+        let mut catalog = Catalog::default();
+        let database = catalog
+            .create_database("org-a", "project-a", "memory", "us-west")
+            .expect("database");
+        let branch = catalog
+            .create_branch(&database.database_id, "main", None)
+            .expect("branch");
+        let mut registry = ApiKeyRegistry::load(key_path.clone()).expect("registry");
+        let (record, token) = registry
+            .create_key(ApiKeyCreateRequest {
+                owner: "scoped-alpha".to_string(),
+                email: None,
+                org: None,
+                scopes: Some(vec!["records:read".to_string()]),
+                database_id: Some(database.database_id.clone()),
+                branch_id: Some(branch.branch_id.clone()),
+                tenant_id: Some("tenant-a".to_string()),
+                rate_limit_requests: Some(1),
+            })
+            .expect("created key");
+        let config = GatewayServerConfig {
+            bind: "127.0.0.1:0".to_string(),
+            engine_url: engine,
+            http_client: reqwest::Client::new(),
+            engine_internal_token: Some("engine-secret".to_string()),
+            required_token: None,
+            api_key_registry: Some(Arc::new(Mutex::new(registry))),
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
+            catalog,
+            meter: Arc::new(Mutex::new(UsageMeter::default())),
+            rate_limit_enabled: false,
+            rate_limit_requests: 10,
+            request_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 1024,
+        };
+        let body = json!({
+            "database_id": database.database_id,
+            "branch_id": branch.branch_id,
+            "tenant_id": "tenant-a",
+            "query": "FROM docs\nTENANT tenant-a\nLIMIT 1"
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/traceql HTTP/1.1\r\ncontent-type: application/json\r\nauthorization: Bearer {token}\r\nx-tracedb-token-identity: attacker\r\nx-tracedb-scopes: admin:*\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = handle_gateway_request_text(&request, config.clone());
+
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "scoped key should proxy: {response}"
+        );
+        assert!(response.contains(&format!(
+            "\"x-tracedb-token-identity\":\"{}\"",
+            record.key_id
+        )));
+        assert!(response.contains("\"x-tracedb-scopes\":\"records:read\""));
+        assert!(!response.contains("admin:*"));
+
+        let limited = handle_gateway_request_text(
+            &format!("GET /v1/databases HTTP/1.1\r\nauthorization: Bearer {token}\r\n\r\n"),
+            config,
+        );
+        assert!(
+            limited.starts_with("HTTP/1.1 429 Too Many Requests"),
+            "per-key limit should reject second request: {limited}"
         );
     }
 
@@ -1378,6 +2043,9 @@ mod tests {
             required_token: Some(
                 "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
             ),
+            api_key_registry: None,
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
             catalog,
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,
@@ -1434,6 +2102,9 @@ mod tests {
             required_token: Some(
                 "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
             ),
+            api_key_registry: None,
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
             catalog,
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,
@@ -1488,6 +2159,9 @@ mod tests {
             required_token: Some(
                 "$2b$12$ftS27l4bL6wPng/HGk1OC.RXk9EzdtnA1DDKGfZXTHpzc2mxA7W2C".to_string(),
             ),
+            api_key_registry: None,
+            api_key_audit_log_path: None,
+            admin_token_hash: None,
             catalog: Catalog::default(),
             meter: Arc::new(Mutex::new(UsageMeter::default())),
             rate_limit_enabled: false,
@@ -1534,6 +2208,24 @@ mod tests {
         assert_eq!(fields["request_id"], json!("request-1"));
         assert_eq!(fields["method"], json!("POST"));
         assert_eq!(fields["path"], json!("/v1/query"));
+    }
+
+    fn response_body(response: &str) -> &str {
+        response
+            .split("\r\n\r\n")
+            .nth(1)
+            .or_else(|| response.split("\n\n").nth(1))
+            .expect("response body")
+    }
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        let unique = format!(
+            "{}-{}-{}",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+            name
+        );
+        std::env::temp_dir().join(unique)
     }
 
     fn spawn_header_echo_engine() -> String {
