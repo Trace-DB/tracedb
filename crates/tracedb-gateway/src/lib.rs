@@ -343,7 +343,7 @@ impl ApiKeyRegistry {
         self.file
             .keys
             .iter()
-            .map(|record| sanitized_api_key_record(record))
+            .map(sanitized_api_key_record)
             .collect()
     }
 }
