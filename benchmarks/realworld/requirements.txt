@@ -1,7 +1,0 @@
-datasets>=3,<5
-opensearch-py>=2.7,<3
-psycopg[binary]>=3.2,<4
-pymongo>=4.10,<5
-pymilvus[milvus-lite]>=2.6,<3
-qdrant-client>=1.12,<2
-requests>=2.32,<3

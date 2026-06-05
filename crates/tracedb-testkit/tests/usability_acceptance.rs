@@ -985,29 +985,30 @@ fn sdk_conformance_is_external_to_core_repo() {
 }
 
 #[test]
-fn local_cloud_packaging_declares_cloud_shape_without_engine_volume_leaks() {
+fn local_compose_packaging_declares_single_engine_shape() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
     assert!(root.join("Dockerfile").exists());
     assert!(root.join("docker-compose.yml").exists());
-    assert!(root.join("docs/Operations/Local Cloud.md").exists());
 
     let compose = std::fs::read_to_string(root.join("docker-compose.yml")).unwrap();
-    for service in [
+    assert!(compose.contains("  tracedb:"));
+    assert!(compose.contains("command: [\"tracedb-server\"]"));
+    assert!(compose.contains("tracedb-data:/data/tracedb"));
+    for private_service in [
         "tracedb-gateway",
-        "tracedb-engine",
         "tracedb-worker",
         "postgres-catalog",
         "valkey-queue",
         "minio-bucket",
     ] {
-        assert!(compose.contains(service), "missing {service}");
+        assert!(
+            !compose.contains(private_service),
+            "public compose should not include private hosted service {private_service}"
+        );
     }
-    assert!(compose.contains("TRACEDB_SERVICE_MODE=engine"));
-    assert!(compose.contains("tracedb-data:/data/tracedb"));
-    assert!(!gateway_or_worker_mount_engine_data(&compose));
 }
 
 #[test]
@@ -1769,23 +1770,6 @@ fn typescript_sdk_package_declares_public_entrypoint_boundary() {
             "typescript_sdk evidence should not use old in-tree package boundary {removed}"
         );
     }
-}
-
-fn gateway_or_worker_mount_engine_data(compose: &str) -> bool {
-    let mut current_service = "";
-    for line in compose.lines() {
-        if line.starts_with("  tracedb-gateway:") {
-            current_service = "gateway";
-        } else if line.starts_with("  tracedb-worker:") {
-            current_service = "worker";
-        } else if line.starts_with("  tracedb-engine:") || line.starts_with("  postgres-catalog:") {
-            current_service = "";
-        }
-        if matches!(current_service, "gateway" | "worker") && line.contains("/data/tracedb") {
-            return true;
-        }
-    }
-    false
 }
 
 fn assert_http_contains(

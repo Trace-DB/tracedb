@@ -15,9 +15,7 @@ RUN mkdir -p /data/tracedb && chown -R tracedb:tracedb /data
 
 COPY --from=builder /workspace/target/release/tracedb /usr/local/bin/tracedb
 COPY --from=builder /workspace/target/release/tracedb-server /usr/local/bin/tracedb-server
-COPY --from=builder /workspace/target/release/tracedb-worker /usr/local/bin/tracedb-worker
 
-ENV TRACEDB_SERVICE_MODE=engine
 ENV TRACEDB_DATA_DIR=/data/tracedb
 
 EXPOSE 8080

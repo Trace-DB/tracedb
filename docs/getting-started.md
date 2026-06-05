@@ -99,6 +99,6 @@ SDK conformance surfaces are run from the sibling SDK repositories.
 - [Documentation map](README.md)
 - [Platform contract v0](platform-contract-v0.md)
 - [HTTP API reference](api/v1-http.md)
-- [Architecture overview](architecture/top-down.md)
+- [Kernel and module architecture](architecture/kernel-and-modules.md)
 - [Durability semantics](durability-semantics-v0.md)
 - [Contributing guide](../CONTRIBUTING.md)

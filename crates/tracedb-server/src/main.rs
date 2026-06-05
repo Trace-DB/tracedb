@@ -12,10 +12,6 @@ fn main() {
 
 fn run() -> std::io::Result<()> {
     tracedb_server::init_json_tracing("info");
-    let service_mode = env::var("TRACEDB_SERVICE_MODE").unwrap_or_else(|_| "engine".to_string());
-    if service_mode == "gateway" {
-        return tracedb_gateway::serve(tracedb_gateway::GatewayServerConfig::from_env());
-    }
     let data_dir = env::var_os("TRACEDB_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".tracedb"));

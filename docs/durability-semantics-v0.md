@@ -136,9 +136,9 @@ and rejects target paths inside the source tree; source and target directories
 must differ. The route-level error text is `source and target directories must differ`.
 
 Snapshots are local filesystem copies. The v0 snapshot API is intended for
-local scratch/admin workflows and Railway lab checks. It is not managed-cloud
-backup/DR, cross-region restore, point-in-time recovery across many WAL files,
-or a replacement for operator-managed backups.
+local scratch/admin workflows and controlled hosted-service checks. It is not
+managed-cloud backup/DR, cross-region restore, point-in-time recovery across
+many WAL files, or a replacement for operator-managed backups.
 
 Snapshot and restore route handlers run through the async engine handle with
 bounded admin work. That avoids request-path global mutex blocking for health,
@@ -185,8 +185,8 @@ require operator judgment instead of blind removal.
 
 ## Operator Checks
 
-For a local or Railway lab run, use these checks before making durability
-claims:
+For a local or hosted-service lab run, use these checks before making
+durability claims:
 
 - Run the platform/product gate that covers schema, writes, reads, query,
   delete, idempotency, snapshot, and restore for the surface under test.
@@ -201,5 +201,5 @@ claims:
 - Run `cargo run -p tracedb-cli -- durability-faults` for the local durability
   receipt at `target/tracedb/durability-faults.json`.
 - Keep exported performance or durability claims separate from internal-only
-  development evidence unless the Railway/Modal gate and backup receipt are
+  development evidence unless the relevant remote gate and backup receipt are
   present for that run.
