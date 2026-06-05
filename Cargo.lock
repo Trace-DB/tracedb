@@ -2215,22 +2215,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracedb-gateway"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bcrypt",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tracedb-catalog",
- "tracedb-metering",
- "tracing",
-]
-
-[[package]]
 name = "tracedb-graph"
 version = "0.1.0"
 dependencies = [
@@ -2418,7 +2402,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracedb-core",
- "tracedb-gateway",
  "tracedb-jobs",
  "tracedb-policy",
  "tracedb-query",
@@ -2463,7 +2446,6 @@ dependencies = [
  "tracedb-catalog",
  "tracedb-core",
  "tracedb-features",
- "tracedb-gateway",
  "tracedb-graph",
  "tracedb-jobs",
  "tracedb-keeper",
@@ -2484,7 +2466,6 @@ dependencies = [
  "tracedb-temporal",
  "tracedb-text",
  "tracedb-vector",
- "tracedb-worker",
 ]
 
 [[package]]
@@ -2505,20 +2486,6 @@ dependencies = [
  "serde_json",
  "tracedb-core",
  "tracedb-modules",
-]
-
-[[package]]
-name = "tracedb-worker"
-version = "0.1.0"
-dependencies = [
- "axum",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracedb-jobs",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
