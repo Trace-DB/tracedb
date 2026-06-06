@@ -16,8 +16,9 @@ jobs:
   ghcr:
     name: Publish GHCR image
     runs-on: ubuntu-latest
+    environment: ghcr
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Resolve image name
         id: image
         shell: bash
