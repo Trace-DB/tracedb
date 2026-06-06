@@ -190,8 +190,8 @@ enum DoctorCommands {
     Http {
         #[arg(long, env = "TRACEDB_URL")]
         url: Option<String>,
-        #[arg(long, env = "TRACEDB_TOKEN", default_value = "dev-token")]
-        token: String,
+        #[arg(long, env = "TRACEDB_TOKEN")]
+        token: Option<String>,
         #[arg(long, env = "TRACEDB_DATABASE_ID")]
         database_id: Option<String>,
         #[arg(long, env = "TRACEDB_BRANCH_ID")]
@@ -522,11 +522,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("missing --url or TRACEDB_URL for doctor http")?
                 .trim_end_matches('/')
                 .to_string();
+            let token = token.ok_or(
+                "missing --token or TRACEDB_TOKEN for doctor http — set an explicit token",
+            )?;
             let config = HttpDoctorConfig {
                 url,
-                token: token.clone(),
-                database_id: database_id.clone(),
-                branch_id: branch_id.clone(),
+                token,
+                database_id,
+                branch_id,
                 timeout_ms,
                 safe_retries,
                 wait_ready_ms,
