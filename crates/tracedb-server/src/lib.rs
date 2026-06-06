@@ -64,22 +64,24 @@ impl Default for EngineServerConfig {
 }
 
 impl EngineServerConfig {
-    pub fn from_env() -> Self {
+    pub fn from_env() -> std::io::Result<Self> {
         let internal_token = std::env::var("TRACEDB_ENGINE_INTERNAL_TOKEN")
             .ok()
             .or_else(|| std::env::var("TRACEDB_ENGINE_TOKEN").ok())
             .filter(|token| !token.trim().is_empty());
         let require_internal_token = bool_env("TRACEDB_REQUIRE_ENGINE_TOKEN", false)
             || bool_env("TRACEDB_HOSTED_ALPHA", false);
-        assert!(
-            internal_token.is_some() || !require_internal_token,
-            "TRACEDB_ENGINE_INTERNAL_TOKEN must be set when hosted/private engine mode is enabled"
-        );
-        Self {
+        if internal_token.is_none() && require_internal_token {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "TRACEDB_ENGINE_INTERNAL_TOKEN must be set when hosted/private engine mode is enabled",
+            ));
+        }
+        Ok(Self {
             internal_token,
             request_timeout: env_duration_ms("TRACEDB_REQUEST_TIMEOUT_MS", 30_000),
             max_concurrent_requests: env_usize("TRACEDB_MAX_CONCURRENT_REQUESTS", 1024).max(1),
-        }
+        })
     }
 
     pub fn with_internal_token(mut self, token: impl Into<String>) -> Self {
@@ -851,7 +853,7 @@ pub fn serve(db_path: impl AsRef<Path>, bind: &str) -> std::io::Result<()> {
     runtime.block_on(serve_async(
         db_path.as_ref().to_path_buf(),
         bind.to_string(),
-        EngineServerConfig::from_env(),
+        EngineServerConfig::from_env()?,
     ))
 }
 
@@ -933,7 +935,7 @@ async fn runtime_handle_error(error: BoxError) -> Response<Body> {
 }
 
 pub fn serve_listener(db_path: impl AsRef<Path>, listener: TcpListener) -> std::io::Result<()> {
-    serve_listener_with_config(db_path, listener, EngineServerConfig::from_env())
+    serve_listener_with_config(db_path, listener, EngineServerConfig::from_env()?)
 }
 
 pub fn serve_listener_with_config(
@@ -971,7 +973,7 @@ pub fn serve_listener_with_shutdown(
         db_path,
         listener,
         should_shutdown,
-        EngineServerConfig::from_env(),
+        EngineServerConfig::from_env()?,
     )
 }
 
@@ -1128,7 +1130,10 @@ async fn handle_request_text(
         .filter(|_| supports_http_idempotency(method, path))
         .map(|key| IdempotencyCacheKey::new(method, path, key, &actor));
     if let Some(cache_key) = idempotency_cache_key.as_ref() {
-        let cached_entry = idempotency_cache.lock().unwrap().get(cache_key);
+        let cached_entry = idempotency_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(cache_key);
         if let Some(entry) = cached_entry {
             if entry.body_hash == body_hash {
                 return Ok(entry.response);
@@ -1466,13 +1471,16 @@ async fn handle_request_text(
                 receipt.response = response.clone();
                 engine.record_idempotency_receipt(receipt).await?;
             }
-            idempotency_cache.lock().unwrap().insert(
-                cache_key,
-                IdempotencyEntry {
-                    body_hash,
-                    response: response.clone(),
-                },
-            );
+            idempotency_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(
+                    cache_key,
+                    IdempotencyEntry {
+                        body_hash,
+                        response: response.clone(),
+                    },
+                );
         }
     }
     Ok(response)

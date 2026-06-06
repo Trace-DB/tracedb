@@ -3589,7 +3589,12 @@ impl TraceDb {
             text_columns: selected_text_columns(schema, text_field),
         };
 
-        if let Some(corpus) = self.lexical_cache.lock().unwrap().get(&key) {
+        if let Some(corpus) = self
+            .lexical_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
             return LexicalQueryReport {
                 cache_hit: true,
                 cache_miss: false,
@@ -3604,7 +3609,10 @@ impl TraceDb {
                 &lexical_documents(schema, visible, sealed_records, text_field),
             );
         let indexed_documents = corpus.document_count();
-        self.lexical_cache.lock().unwrap().insert(key, corpus);
+        self.lexical_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, corpus);
         LexicalQueryReport {
             cache_hit: false,
             cache_miss: true,
@@ -3614,7 +3622,10 @@ impl TraceDb {
     }
 
     fn clear_lexical_cache(&self) {
-        self.lexical_cache.lock().unwrap().clear();
+        self.lexical_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
