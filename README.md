@@ -1,6 +1,6 @@
 # TraceDB
 
-[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Protocol: platform-contract-v0](https://img.shields.io/badge/protocol-platform--contract--v0-informational)](docs/platform-contract-v0.md)
 [![Docs](https://img.shields.io/badge/docs-trace--db.com-informational)](https://docs.trace-db.com)
 
@@ -8,10 +8,9 @@ TraceDB is an AI-native transactional candidate-stream database.
 One logical record. One commit epoch. Many native views. No external sync
 drift. Explain every candidate.
 
-This repository is the downloadable TraceDB database distribution. The core
-engine is source-available under FSL-1.1-ALv2 with an Apache-2.0 future grant;
-see `LICENSE` for the exact terms. It is public product code, not the
-proprietary hosted TraceDB service implementation.
+This repository is the downloadable TraceDB database distribution, licensed
+under [Apache-2.0](LICENSE). It is public product code, not the proprietary
+hosted TraceDB service implementation.
 
 The current core product surface is a local/embedded engine with CLI, HTTP,
 direct adapters, an OpenAPI mirror, product quickstart, durability semantics,

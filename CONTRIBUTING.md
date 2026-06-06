@@ -108,8 +108,6 @@ and a number to beat.
 
 ## License
 
-TraceDB is licensed under the **Functional Source License, Version 1.1, Apache
-2.0 Future License (FSL-1.1-ALv2)**. Contributions are subject to the same
-license. This is source-available software with a future Apache-2.0 grant, not
-an OSI open-source license during the FSL period. See the repository root for
-the full license text.
+TraceDB is licensed under the **Apache License, Version 2.0**. Contributions
+are subject to the same license. See the repository root for the full license
+text.

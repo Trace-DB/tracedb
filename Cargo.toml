@@ -35,7 +35,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-license = "FSL-1.1-ALv2"
+license = "Apache-2.0"
 version = "0.1.0"
 
 [workspace.dependencies]
