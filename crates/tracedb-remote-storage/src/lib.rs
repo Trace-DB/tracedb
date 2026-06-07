@@ -11,8 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use thiserror::Error;
 
-pub type StorageFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
+pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -312,10 +311,7 @@ impl<R: AwsStorageRuntime> ManifestStore for AwsReferenceStorage<R> {
         let runtime = &self.runtime;
         Box::pin(async move {
             match runtime
-                .s3_get_object(S3GetObject {
-                    bucket,
-                    key: path,
-                })
+                .s3_get_object(S3GetObject { bucket, key: path })
                 .await
             {
                 Ok(record) => serde_json::from_slice(&record.bytes)
@@ -368,10 +364,8 @@ impl<R: AwsStorageRuntime> ManifestStore for AwsReferenceStorage<R> {
                         });
                     }
                     PutCondition::IfMatchEtag(
-                        head.ok_or_else(|| StorageError::ObjectNotFound {
-                            key: path.clone(),
-                        })?
-                        .etag,
+                        head.ok_or_else(|| StorageError::ObjectNotFound { key: path.clone() })?
+                            .etag,
                     )
                 }
             };
@@ -387,7 +381,10 @@ impl<R: AwsStorageRuntime> ManifestStore for AwsReferenceStorage<R> {
                     metadata: BTreeMap::from([
                         ("database_id".to_string(), request.next.database_id),
                         ("branch_id".to_string(), request.next.branch_id),
-                        ("generation".to_string(), request.next.generation.to_string()),
+                        (
+                            "generation".to_string(),
+                            request.next.generation.to_string(),
+                        ),
                     ]),
                     condition,
                 })
@@ -417,7 +414,10 @@ impl<R: AwsStorageRuntime> LeaseStore for AwsReferenceStorage<R> {
                         holder: current.holder_id,
                     });
                 }
-                (PutCondition::IfMatchEtag(head.etag), current.fencing_token + 1)
+                (
+                    PutCondition::IfMatchEtag(head.etag),
+                    current.fencing_token + 1,
+                )
             } else {
                 (PutCondition::IfAbsent, 1)
             };
@@ -523,7 +523,9 @@ async fn load_lease<R: S3CompatibleStorageRuntime + ?Sized>(
     bucket: String,
     path: String,
 ) -> Result<LeaseRecord, StorageError> {
-    let record = runtime.s3_get_object(S3GetObject { bucket, key: path }).await?;
+    let record = runtime
+        .s3_get_object(S3GetObject { bucket, key: path })
+        .await?;
     serde_json::from_slice(&record.bytes).map_err(|error| StorageError::Provider(error.to_string()))
 }
 
@@ -548,7 +550,10 @@ async fn put_lease<R: S3CompatibleStorageRuntime + ?Sized>(
                 ("branch_id".to_string(), lease.branch_id),
                 ("holder_id".to_string(), lease.holder_id),
                 ("fencing_token".to_string(), lease.fencing_token.to_string()),
-                ("expires_at_unix".to_string(), lease.expires_at_unix.to_string()),
+                (
+                    "expires_at_unix".to_string(),
+                    lease.expires_at_unix.to_string(),
+                ),
             ]),
             condition,
         })
