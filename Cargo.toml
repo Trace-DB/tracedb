@@ -27,6 +27,7 @@ members = [
     "crates/tracedb-segment-server",
     "crates/tracedb-cache",
     "crates/tracedb-metering",
+    "crates/tracedb-remote-storage",
     "crates/tracedb-server",
     "crates/tracedb-cli",
     "crates/tracedb-testkit",

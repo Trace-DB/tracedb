@@ -20,6 +20,7 @@ uses the same HTTP contract, SDKs, and protocol docs.
 - [Kernel and Module Design](architecture/kernel-and-modules.md)
 - [Candidate Stream Planner](architecture/candidate-streams.md)
 - [Durability Semantics v0](durability-semantics-v0.md)
+- [Cloud Storage Foundation v0.1.1](cloud-storage-v0.1.1.md)
 
 ## API And Protocol
 

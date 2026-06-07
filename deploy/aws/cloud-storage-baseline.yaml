@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: TraceDB public runtime AWS storage baseline for S3-compatible durable objects.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: hosted-alpha
+    AllowedPattern: "^[a-z0-9-]+$"
+  BucketName:
+    Type: String
+    Description: Globally unique S3 bucket name for TraceDB durable objects.
+
+Resources:
+  TraceDbObjectBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-temporary-exports
+            Status: Enabled
+            Prefix: tmp/
+            ExpirationInDays: 14
+          - Id: transition-old-snapshots
+            Status: Enabled
+            Prefix: snapshots/
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+
+  TraceDbRuntimePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Least-privilege baseline for TraceDB runtime storage access.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TraceDbBucketListAccess
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt TraceDbObjectBucket.Arn
+          - Sid: TraceDbObjectAccess
+            Effect: Allow
+            Action:
+              - s3:DeleteObject
+              - s3:GetObject
+              - s3:GetObjectAttributes
+              - s3:PutObject
+            Resource: !Sub "${TraceDbObjectBucket.Arn}/*"
+
+Outputs:
+  ObjectBucketName:
+    Value: !Ref TraceDbObjectBucket
+  RuntimePolicyArn:
+    Value: !Ref TraceDbRuntimePolicy
