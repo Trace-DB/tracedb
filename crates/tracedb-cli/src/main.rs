@@ -1532,7 +1532,7 @@ fn http_doctor_wait_for_ready(client: &HttpApiClient, timeout_ms: u64) -> Value 
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let mut attempts = 0_u64;
-    let mut last_check = json!({ "ok": false, "error": "ready wait did not run" });
+    let mut last_check;
     loop {
         attempts += 1;
         let check = http_doctor_check(|| client.ready());

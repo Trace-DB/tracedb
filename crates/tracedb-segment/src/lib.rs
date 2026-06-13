@@ -68,7 +68,7 @@ impl ModuleBlockDescriptor {
         );
         Self {
             module_id,
-            module_version: "0.1.0".to_string(),
+            module_version: env!("CARGO_PKG_VERSION").to_string(),
             block_kind,
             codec_id,
             logical_row_count,

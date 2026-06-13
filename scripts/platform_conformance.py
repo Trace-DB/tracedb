@@ -39,8 +39,8 @@ TRACEQL_SQLISH_NOT_CHECKED_REASON = (
 GRAPHQL_HTTP_CONFORMANCE_EVIDENCE = "POST /v1/graphql/bounded bounded GraphQL query adapter"
 GRAPHQL_SCHEMA_CONFORMANCE_EVIDENCE = "GET /v1/graphql/schema generated SDL from TableSchema"
 GRAPHQL_HTTP_NOT_CHECKED_REASON = (
-    "GraphQL HTTP adapter surface only proves schema export/query/explain/error behavior; "
-    "write/admin scenarios remain HTTP/SDK surfaces; "
+    "Current bounded GraphQL adapter lane only proves schema export/query/explain/error behavior; "
+    "native GraphQL write/admin operations are covered by the native GraphQL surface, not this lane; "
     "this is not GraphQL resolver runtime or full adapter parity"
 )
 SERVER_READY_TIMEOUT_SECONDS = 120.0

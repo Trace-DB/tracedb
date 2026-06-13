@@ -1,0 +1,42 @@
+language: en-US
+tone_instructions: "Review like a database/runtime release engineer. Prioritize correctness, isolation, durability, and public API compatibility."
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  auto_review:
+    enabled: true
+    base_branches:
+      - "main"
+      - "master"
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+  path_filters:
+    - "!target/**"
+    - "!dist/**"
+  path_instructions:
+    - path: "crates/tracedb-server/**"
+      instructions: |
+        Focus on hosted boundary safety, actor headers, engine-token enforcement, retry/idempotency behavior, and route compatibility.
+    - path: "crates/tracedb-remote-storage/**"
+      instructions: |
+        Focus on S3-compatible semantics, manifest compare-and-swap, lease fencing, and self-host versus managed-cloud boundaries.
+    - path: "docs/**"
+      instructions: |
+        Flag unsupported public claims, hosted-service drift, benchmark overclaims, and any confusion between local runtime and managed TraceDB Cloud.
+    - path: "README.md"
+      instructions: |
+        Flag unsupported public claims, hosted-service drift, benchmark overclaims, and any confusion between local runtime and managed TraceDB Cloud.
+    - path: "scripts/platform_conformance.py"
+      instructions: |
+        Flag unsupported public claims, hosted-service drift, benchmark overclaims, and any confusion between local runtime and managed TraceDB Cloud.
+knowledge_base:
+  linear:
+    usage: "enabled"
+    team_keys:
+      - "TDB"
+chat:
+  integrations:
+    linear:
+      usage: "enabled"

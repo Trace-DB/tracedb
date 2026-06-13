@@ -2131,14 +2131,14 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tracedb-cache"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tracedb-segment-server",
 ]
 
 [[package]]
 name = "tracedb-catalog"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "reqwest",
@@ -2164,7 +2164,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "bincode",
@@ -2178,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-features"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-jobs",
@@ -2187,7 +2187,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-graph"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-modules",
@@ -2196,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bincode",
  "serde",
@@ -2209,14 +2209,14 @@ dependencies = [
 
 [[package]]
 name = "tracedb-jobs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "tracedb-keeper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-kernel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-core",
@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-log"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crc32fast",
  "fs2",
@@ -2245,21 +2245,21 @@ dependencies = [
 
 [[package]]
 name = "tracedb-memory-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "tracedb-metering"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "tracedb-module"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-modules",
@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-modules"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-core",
@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-planner"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2284,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-modules",
@@ -2292,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-provenance"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-modules",
@@ -2300,7 +2300,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-query"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "fs2",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-retrieval-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-modules",
@@ -2338,14 +2338,14 @@ dependencies = [
 
 [[package]]
 name = "tracedb-schema"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "tracedb-segment"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bincode",
  "serde",
@@ -2356,14 +2356,14 @@ dependencies = [
 
 [[package]]
 name = "tracedb-segment-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "tracedb-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-graphql",
  "axum",
@@ -2382,14 +2382,14 @@ dependencies = [
 
 [[package]]
 name = "tracedb-std"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tracedb-core",
 ]
 
 [[package]]
 name = "tracedb-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2399,7 +2399,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-temporal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracedb-modules",
@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-testkit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest",
  "serde_json",
@@ -2441,7 +2441,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-text"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "tracedb-vector"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
