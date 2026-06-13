@@ -74,7 +74,10 @@ fn typed_table_descriptor_covers_ai_native_data_model() {
             "text-embedding-3-large",
         ))
         .edge_table(EdgeTableDescriptor::new("mentions", "messages"))
-        .module_requirement(ModuleRequirement::new("tracedb-vector", "0.1.0"));
+        .module_requirement(ModuleRequirement::new(
+            "tracedb-vector",
+            env!("CARGO_PKG_VERSION"),
+        ));
 
     descriptor.validate().expect("descriptor validates");
     assert!(descriptor.requires_module("tracedb-vector"));
@@ -153,7 +156,7 @@ fn local_manifest_and_wal_carry_branch_and_managed_authority_fields() {
         .explain
         .module_versions
         .iter()
-        .any(|module| module == "tracedb-graph@0.1.0"));
+        .any(|module| module == &format!("tracedb-graph@{}", env!("CARGO_PKG_VERSION"))));
     assert!(output
         .explain
         .skipped_access_paths

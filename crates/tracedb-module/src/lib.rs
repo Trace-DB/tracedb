@@ -42,7 +42,7 @@ impl ModuleDescriptor {
     ) -> Self {
         Self {
             module_id: module_id.into(),
-            version: "0.1.0".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
             capability_level,
             trust_level: ModuleTrustLevel::FirstPartySigned,
             provided_types: Vec::new(),
