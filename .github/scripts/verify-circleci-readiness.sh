@@ -50,7 +50,38 @@ max_attempts = int(os.environ.get("CIRCLECI_READINESS_ATTEMPTS", "120"))
 sleep_seconds = int(os.environ.get("CIRCLECI_READINESS_SLEEP_SECONDS", "30"))
 require_fresh = os.environ.get("CIRCLECI_READINESS_REQUIRE_FRESH", "").lower() in {"1", "true", "yes"}
 fresh_grace_seconds = int(os.environ.get("CIRCLECI_READINESS_FRESH_GRACE_SECONDS", "600"))
-fresh_cutoff = datetime.now(timezone.utc) - timedelta(seconds=fresh_grace_seconds)
+
+
+def parse_time(value):
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def fresh_anchor():
+    configured = os.environ.get("CIRCLECI_READINESS_FRESH_AFTER", "").strip()
+    if configured:
+        return parse_time(configured)
+
+    event_path = os.environ.get("GITHUB_EVENT_PATH", "").strip()
+    if event_path:
+        try:
+            with open(event_path, encoding="utf-8") as event_file:
+                event = json.load(event_file)
+        except (OSError, json.JSONDecodeError):
+            event = {}
+        repository_pushed_at = (event.get("repository") or {}).get("pushed_at")
+        head_commit_timestamp = (event.get("head_commit") or {}).get("timestamp")
+        return parse_time(repository_pushed_at or head_commit_timestamp or "")
+
+    return None
+
+
+fresh_cutoff = None
+if require_fresh:
+    fresh_cutoff = (fresh_anchor() or datetime.now(timezone.utc)) - timedelta(
+        seconds=fresh_grace_seconds
+    )
 
 
 def load_candidates():
@@ -101,7 +132,13 @@ def get_pages(path):
 
 def is_named_match(candidate):
     name = candidate["name"].lower()
-    return any(name == check or name.endswith(check) for check in required_names)
+    return any(
+        name == check
+        or name.endswith(check)
+        or name.startswith(f"{check} /")
+        or name.startswith(f"{check}:")
+        for check in required_names
+    )
 
 def is_circleci(candidate):
     haystack = " ".join([
@@ -111,16 +148,11 @@ def is_circleci(candidate):
     ])
     return "circleci" in haystack
 
-def parse_time(value):
-    if not value:
-        return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
 def is_fresh(candidate):
     if not require_fresh:
         return True
     updated_at = parse_time(candidate["updated_at"])
-    return updated_at is not None and updated_at >= fresh_cutoff
+    return updated_at is not None and fresh_cutoff is not None and updated_at >= fresh_cutoff
 
 def find_matches(candidates):
     matches = [
@@ -152,12 +184,6 @@ for attempt in range(1, max_attempts + 1):
             print(f"- {candidate['name']}: {candidate['state']} {candidate['url']}", file=sys.stderr)
         sys.exit(1)
 
-    successes = [candidate for candidate in matches if candidate["state"] == "success"]
-    if successes:
-        for candidate in successes:
-            print(f"CircleCI readiness accepted: {candidate['name']} {candidate['state']} {candidate['url']}")
-        break
-
     pending = [candidate for candidate in matches if candidate["state"] in pending_states]
     if pending:
         if attempt < max_attempts:
@@ -167,6 +193,17 @@ for attempt in range(1, max_attempts + 1):
         for candidate in matches:
             print(f"- {candidate['name']}: {candidate['state']} {candidate['url']}", file=sys.stderr)
         sys.exit(1)
+
+    failures = [candidate for candidate in matches if candidate["state"] != "success"]
+    if failures:
+        print(f"CircleCI readiness check is not green for {sha}.", file=sys.stderr)
+        for candidate in matches:
+            print(f"- {candidate['name']}: {candidate['state']} {candidate['url']}", file=sys.stderr)
+        sys.exit(1)
+
+    for candidate in matches:
+        print(f"CircleCI readiness accepted: {candidate['name']} {candidate['state']} {candidate['url']}")
+    break
 
     print(f"CircleCI readiness check is not green for {sha}.", file=sys.stderr)
     for candidate in matches:

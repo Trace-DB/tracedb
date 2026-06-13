@@ -23,7 +23,7 @@ pub fn standard_module_manifests() -> Vec<ModuleManifest> {
     .into_iter()
     .map(|module_id| ModuleManifest {
         module_id: module_id.to_string(),
-        version: "0.1.0".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         trust_level: "FIRST_PARTY_SIGNED".to_string(),
     })
     .collect()

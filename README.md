@@ -296,15 +296,17 @@ same scenario manifest as a partial surface. `GET /v1/graphql/schema` exports
 bounded-adapter SDL from applied TraceDB table schema. Native
 `POST /v1/graphql` returns a GraphQL-style `data`/`errors` envelope for
 implemented TraceDB root fields, while `POST /v1/graphql/bounded` exposes the
-bounded query adapter over the same `HybridQuery` model. The current GraphQL
-conformance lane checks schema export, query, explain, and error behavior; it
-does not yet prove every native write/admin root field. Standalone SDK repos
-expose their own typed helpers for GraphQL schema export, native GraphQL
-operations, and bounded GraphQL adapter execution. This is TraceQL/query-adapter,
-native GraphQL operation, GraphQL SDL export, and bounded GraphQL query-adapter
-evidence; SQL compatibility, PostgreSQL compatibility, subscriptions, arbitrary
-resolver runtime, executable introspection, and full selection/projection parity
-remain unsupported.
+bounded query adapter over the same `HybridQuery` model. The current
+`--surface graphql` conformance lane drives the native GraphQL operation path,
+including read, write, snapshot, restore, and schema-apply root fields. Bounded
+SDL export, bounded query, explain, and bounded error behavior are covered by
+the HTTP contract and protocol suites rather than by that native lane.
+Standalone SDK repos expose their own typed helpers for GraphQL schema export,
+native GraphQL operations, and bounded GraphQL adapter execution. This is
+TraceQL/query-adapter, native GraphQL operation, GraphQL SDL export, and bounded
+GraphQL query-adapter evidence; SQL compatibility, PostgreSQL compatibility,
+subscriptions, arbitrary resolver runtime, executable introspection, and full
+selection/projection parity remain unsupported.
 
 The OpenAPI artifact is the source for generated SDK transport types in the
 standalone SDK repos. Core server-side runtime validation remains authoritative

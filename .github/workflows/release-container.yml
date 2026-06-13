@@ -36,6 +36,8 @@ jobs:
           REQUIRED_CIRCLECI_CHECK: "ci/circleci: circleci/tracedb"
           REQUIRED_CIRCLECI_CHECKS: "ci/circleci: circleci/tracedb,ci"
           CIRCLECI_READINESS_REQUIRE_FRESH: "true"
+          CIRCLECI_READINESS_FRESH_AFTER: ${{ github.event.repository.pushed_at }}
+          CIRCLECI_READINESS_FRESH_GRACE_SECONDS: "120"
         run: bash .github/scripts/verify-circleci-readiness.sh
       - name: Verify tag matches workspace version
         run: |

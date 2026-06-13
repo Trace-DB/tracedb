@@ -38,7 +38,7 @@ pub trait TraceDbModule {
     fn module_id(&self) -> &str;
 
     fn version(&self) -> &str {
-        "0.1.0"
+        env!("CARGO_PKG_VERSION")
     }
 
     fn types(&self) -> Vec<TypeDescriptor> {
