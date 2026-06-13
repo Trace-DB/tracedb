@@ -5792,12 +5792,10 @@ fn traceql_sqlish_select_from_str(input: &str) -> Result<HybridQuery> {
                 }
                 _ => return Err(invalid_sqlish("tenant_id must be a string value")),
             }
-        } else {
-            if scalar_eq.insert(field.to_string(), value).is_some() {
-                return Err(invalid_sqlish(format!(
-                    "WHERE field {field:?} cannot be specified more than once"
-                )));
-            }
+        } else if scalar_eq.insert(field.to_string(), value).is_some() {
+            return Err(invalid_sqlish(format!(
+                "WHERE field {field:?} cannot be specified more than once"
+            )));
         }
     }
 
