@@ -30,12 +30,43 @@ jobs:
       - run:
           name: Docker lite smoke
           command: |
+            cleanup() {
+              status=$?
+              if [ "$status" -ne 0 ]; then
+                docker compose ps -a tracedb || true
+                docker compose logs --no-color tracedb || true
+              fi
+              docker compose down -v --remove-orphans || true
+            }
+            trap cleanup EXIT
             docker build -t tracedb-local:test .
             docker tag tracedb-local:test tracedb-local:latest
             docker compose up -d tracedb
             docker compose ps -a tracedb
-            curl --retry 20 --retry-all-errors --retry-delay 3 -fsS http://localhost:18080/v1/health
+            container_id="$(docker compose ps -q tracedb)"
+            if [ -z "$container_id" ]; then
+              echo "tracedb compose container was not created"
+              exit 1
+            fi
+            health_status="unknown"
+            for _ in $(seq 1 60); do
+              health_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id")"
+              if [ "$health_status" = "healthy" ]; then
+                break
+              fi
+              if [ "$health_status" = "unhealthy" ] || [ "$health_status" = "exited" ]; then
+                echo "tracedb container reached terminal state: $health_status"
+                exit 1
+              fi
+              sleep 2
+            done
+            if [ "$health_status" != "healthy" ]; then
+              echo "tracedb container did not become healthy; last status: $health_status"
+              exit 1
+            fi
+            docker compose exec -T tracedb curl -fsS http://localhost:8080/v1/health
             docker compose down -v --remove-orphans
+            trap - EXIT
       - run:
           name: Cargo audit
           command: |
