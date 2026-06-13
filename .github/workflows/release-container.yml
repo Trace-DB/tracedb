@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
+  checks: read
+  statuses: read
 
 env:
   IMAGE_TITLE: tracedb
@@ -19,6 +23,30 @@ jobs:
     environment: ghcr
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify CircleCI readiness
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUIRED_CIRCLECI_CHECK: circleci/tracedb
+        run: bash .github/scripts/verify-circleci-readiness.sh
+      - name: Verify tag matches workspace version
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          text = open("Cargo.toml", encoding="utf-8").read()
+          match = re.search(r'^\[workspace\.package\]\s+.*?^version\s*=\s*"([^"]+)"', text, re.MULTILINE | re.DOTALL)
+          if not match:
+              print("Could not find workspace package version.", file=sys.stderr)
+              raise SystemExit(1)
+          expected = f"v{match.group(1)}"
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          if tag != expected:
+              print(f"Release tag {tag} does not match workspace version {expected}.", file=sys.stderr)
+              raise SystemExit(1)
+          PY
       - name: Resolve image name
         id: image
         shell: bash
@@ -41,9 +69,16 @@ jobs:
             org.opencontainers.image.title=${{ env.IMAGE_TITLE }}
             org.opencontainers.image.licenses=Apache-2.0
       - name: Build and publish image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ steps.image.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

@@ -72,23 +72,21 @@ GraphQL, and validates that local `tracedb-protocol.lock` files stay pinned to
 the protocol repo. SDK conformance lanes remain declared in the mirror so
 sibling SDK repos can compare against the same scenario IDs, but they are owned
 and run from the standalone SDK repos.
-GraphQL has a generated SDL export from applied `TableSchema` definitions
-through `GET /v1/graphql/schema`, plus a bounded `graphql_query_from_str`
-compiler primitive in `tracedb-query` and a bounded `POST /v1/graphql` HTTP
-adapter that compiles the query string into the same `HybridQuery` path as
-`/v1/query`. The `graphql` conformance lane checks schema export, query,
-explain, and error-envelope behavior, while write/admin scenarios remain
-explicit `not_checked` results. This is not GraphQL mutation support,
-subscription support, resolver runtime, GraphQL data-envelope execution, or
-full adapter parity. Rust SDK callers can use `TraceDbClient::graphql_schema`
-or `graphql_schema_typed` to inspect the generated SDL, then
-`TraceDbClient::graphql_typed` or `graphql_request_typed` with
-`GraphQlQueryRequest` to exercise the bounded query adapter. TypeScript SDK
-callers can use `TraceDB.graphqlSchema()` to inspect the generated SDL, then
-`TraceDB.graphql()` or `graphqlRequest({ query })`; Python SDK callers can use
-`TraceDB.graphql_schema()` to inspect the generated SDL, then
-`TraceDB.graphql()` or `graphql_request({"query": query})` to exercise the same
-bounded wire contract.
+GraphQL has two explicit HTTP surfaces. Native `POST /v1/graphql` executes
+implemented TraceDB root operations and returns a GraphQL-style `data`/`errors`
+envelope for read, write, and admin fields such as `get`, `query`, `put`,
+`snapshot`, and `restore`. Bounded `POST /v1/graphql/bounded` is the
+compatibility adapter: it compiles query-only table-field GraphQL into the same
+`HybridQuery` path as `/v1/query` and returns `QueryResponse`. The generated SDL
+for that bounded adapter is exported through `GET /v1/graphql/schema`.
+Subscriptions, arbitrary resolver runtime behavior, executable introspection,
+and full GraphQL selection/projection parity remain unsupported. Rust SDK
+callers can use `TraceDbClient::graphql_schema` or `graphql_schema_typed` to
+inspect the generated SDL, then use native `graphql_typed` /
+`graphql_request_typed` or bounded `bounded_graphql_typed` helpers as needed.
+TypeScript callers can use `TraceDB.graphql()` for native operations and
+`TraceDB.boundedGraphql()` for the bounded adapter; Python callers can use
+`TraceDB.graphql()` and `TraceDB.bounded_graphql()` respectively.
 
 ## Quickstart
 
@@ -292,17 +290,21 @@ The same parser also accepts the bounded SQL-ish adapter form
 `invalid SQL-ish` bad-request errors for unsupported constructs such as `JOIN`.
 The platform conformance harness now includes `traceql_string_execution`; HTTP
 direct passes that scenario through `/v1/traceql`; SDK lanes in the sibling
-standalone repos map the same scenario through their public clients. The dedicated `traceql_sqlish`
-lane checks the bounded SQL-ish adapter against the same scenario manifest as a
-partial surface. `GET /v1/graphql/schema` now exports generated SDL from
-applied TraceDB table schema, and `POST /v1/graphql` exposes a bounded GraphQL
-query adapter over the same `HybridQuery` model. The GraphQL conformance lane
-checks schema export, query, explain, and error behavior. Standalone SDK repos expose their own typed helpers for GraphQL schema export,
-native GraphQL operations, and bounded GraphQL adapter execution. This is TraceQL/query-adapter,
-GraphQL SDL export, and bounded GraphQL query-adapter evidence only; SQL compatibility,
-PostgreSQL compatibility, GraphQL mutation support, subscription support,
-resolver runtime, GraphQL data-envelope execution, and full adapter parity
-remain unimplemented.
+standalone repos map the same scenario through their public clients. The
+dedicated `traceql_sqlish` lane checks the bounded SQL-ish adapter against the
+same scenario manifest as a partial surface. `GET /v1/graphql/schema` exports
+bounded-adapter SDL from applied TraceDB table schema. Native
+`POST /v1/graphql` returns a GraphQL-style `data`/`errors` envelope for
+implemented TraceDB root fields, while `POST /v1/graphql/bounded` exposes the
+bounded query adapter over the same `HybridQuery` model. The current GraphQL
+conformance lane checks schema export, query, explain, and error behavior; it
+does not yet prove every native write/admin root field. Standalone SDK repos
+expose their own typed helpers for GraphQL schema export, native GraphQL
+operations, and bounded GraphQL adapter execution. This is TraceQL/query-adapter,
+native GraphQL operation, GraphQL SDL export, and bounded GraphQL query-adapter
+evidence; SQL compatibility, PostgreSQL compatibility, subscriptions, arbitrary
+resolver runtime, executable introspection, and full selection/projection parity
+remain unsupported.
 
 The OpenAPI artifact is the source for generated SDK transport types in the
 standalone SDK repos. Core server-side runtime validation remains authoritative

@@ -1,0 +1,55 @@
+version: 2.1
+
+jobs:
+  tracedb:
+    docker:
+      - image: cimg/rust:1.89
+    resource_class: large
+    steps:
+      - checkout
+      - setup_remote_docker
+      - restore_cache:
+          keys:
+            - cargo-v1-{{ checksum "Cargo.lock" }}
+            - cargo-v1-
+      - run:
+          name: Rust tests
+          command: cargo test --workspace --all-targets -- --test-threads=1
+      - run:
+          name: Clippy
+          command: cargo clippy --workspace -- -D warnings
+      - run:
+          name: Formatting
+          command: cargo fmt --all -- --check
+      - run:
+          name: OpenAPI drift
+          command: python3 scripts/generate_openapi_v1.py --check
+      - run:
+          name: Platform conformance smoke
+          command: python3 scripts/platform_conformance.py --surface http_direct --summary-json "${CIRCLE_ARTIFACTS:-/tmp}/tracedb-platform-conformance.json"
+      - run:
+          name: Docker lite smoke
+          command: |
+            docker build -t tracedb-local:test .
+            docker tag tracedb-local:test tracedb-local:latest
+            docker compose up -d tracedb
+            docker compose ps -a tracedb
+            curl --retry 20 --retry-all-errors --retry-delay 3 -fsS http://localhost:18080/v1/health
+            docker compose down -v --remove-orphans
+      - run:
+          name: Cargo audit
+          command: |
+            cargo install cargo-audit
+            cargo audit
+      - save_cache:
+          key: cargo-v1-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+            - ~/.cargo/git
+            - target
+
+workflows:
+  ci:
+    jobs:
+      - tracedb:
+          name: circleci/tracedb

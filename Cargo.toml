@@ -38,6 +38,9 @@ resolver = "2"
 edition = "2021"
 license = "Apache-2.0"
 version = "0.1.0"
+authors = ["Trace-DB"]
+repository = "https://github.com/Trace-DB/tracedb"
+homepage = "https://trace-db.com"
 
 [workspace.dependencies]
 axum = "0.8"
