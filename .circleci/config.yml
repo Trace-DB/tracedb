@@ -64,7 +64,7 @@ jobs:
               echo "tracedb container did not become healthy; last status: $health_status"
               exit 1
             fi
-            docker compose exec -T tracedb curl -fsS http://localhost:8080/v1/health
+            docker run --rm --network host curlimages/curl:8.13.0 -fsS http://127.0.0.1:18080/v1/health
             docker compose down -v --remove-orphans
             trap - EXIT
       - run:
@@ -84,3 +84,6 @@ workflows:
     jobs:
       - tracedb:
           name: circleci/tracedb
+          filters:
+            tags:
+              only: /^v.*/

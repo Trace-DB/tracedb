@@ -7,9 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
-  attestations: write
   checks: read
   statuses: read
 
@@ -21,6 +18,13 @@ jobs:
     name: Publish GHCR image
     runs-on: ubuntu-latest
     environment: ghcr
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      checks: read
+      statuses: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -28,7 +32,7 @@ jobs:
       - name: Verify CircleCI readiness
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          REQUIRED_CIRCLECI_CHECK: circleci/tracedb
+          REQUIRED_CIRCLECI_CHECK: "ci/circleci: circleci/tracedb"
         run: bash .github/scripts/verify-circleci-readiness.sh
       - name: Verify tag matches workspace version
         run: |
