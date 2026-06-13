@@ -25,6 +25,12 @@ reviews:
     - path: "docs/**"
       instructions: |
         Flag unsupported public claims, hosted-service drift, benchmark overclaims, and any confusion between local runtime and managed TraceDB Cloud.
+    - path: "README.md"
+      instructions: |
+        Flag unsupported public claims, hosted-service drift, benchmark overclaims, and any confusion between local runtime and managed TraceDB Cloud.
+    - path: "scripts/platform_conformance.py"
+      instructions: |
+        Flag unsupported public claims, hosted-service drift, benchmark overclaims, and any confusion between local runtime and managed TraceDB Cloud.
 knowledge_base:
   linear:
     usage: "enabled"
